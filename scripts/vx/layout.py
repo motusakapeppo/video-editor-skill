@@ -56,10 +56,10 @@ DEFAULT_PADDING_RATIO = 0.02
 # 60 px). Serve a tenere il testo dentro la cornice, che sta a 20 px dal bordo.
 DEFAULT_MARGIN_LR_RATIO = 0.055
 
-# Interlinea di libass per Arial Black: misurata, non assunta. `fs` * 1.20 e'
-# l'altezza di riga che libass riserva; il box dichiarato usa lo stesso valore
-# additivamente per outline*2, cosi' il box e' sempre >= dell'inchiostro reale.
-LINE_HEIGHT = 1.20
+# Interlinea dichiarata. Misurata su Antonio Bold: ascent 115 + descent 30 su 100
+# = 1.45 em. Il box dichiarato deve essere >= dell'inchiostro reale, altrimenti il
+# cancello protegge uno spazio che non esiste.
+LINE_HEIGHT = 1.45
 
 
 @dataclass(frozen=True)
@@ -155,7 +155,7 @@ class Layout:
         cosi' il cancello lo rifiuta invece di nasconderlo con un clip.
         """
         height = int(round(lines * font_px * LINE_HEIGHT + 2 * outline_px))
-        bottom = self.canvas.bottom - self.margin_v
+        bottom = self.canvas.bottom - self.margin_v + int(outline_px)
         top = bottom - height
         width = int(line_px)
         left = (self.canvas.w - width) // 2

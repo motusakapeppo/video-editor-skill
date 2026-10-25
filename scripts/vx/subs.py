@@ -50,27 +50,51 @@ __all__ = [
     "burn_filter",
     "transcript_stats",
     "measure_bbox",
+    "plate_filter",
     "declared_box",
     "wrap_text",
     "main",
 ]
 
 DEFAULT_MODEL = "small"
-DEFAULT_FONT = "Arial Black"
+DEFAULT_FONT = "Antonio"
 
-# Tipografia broadcast (specifica utente). Outline pieno sottile + ombra
-# staccata: il testo resta leggibile su maglietta bianca e riflessi sul muro
-# senza diventare un blocco. `ScaledBorderAndShadow: yes` fa scalare i valori con
-# la PlayRes, quindi 2 significa 2 pixel reali sulla delivery 1080x1440.
-OUTLINE_VERTICAL = 2
-SHADOW_VERTICAL = 1
+# Tipografia cinetica. Antonio (OFL) e' condensed: 0.387 em/carattere misurato sul
+# set di cue reale, 0.394 in maiuscolo. 0.42 e' il limite prudente usato per il box
+# dichiarato, cosi' il cancello 4 non protegge un ingombro ottimistico.
+#
+# BorderStyle 1 con Outline e Shadow a zero: il testo e' nudo, e la placca non la
+# disegna libass. La disegna `drawbox` nel burn, una sola per cue e larga quanto
+# l'inchiostro misurato — perche' con BorderStyle 3 libass dipinge un rettangolo
+# per OGNI riga, e due righe danno due blocchi di larghezza diversa (sembra un
+# errore, non uno stile).
+BORDER_STYLE_VERTICAL = 1
+BOX_PADDING_VERTICAL = 0
+BACK_COLOUR = "&H80000000"
+PLATE_PAD = 20
+PLATE_OPACITY = 0.65
+
+# Animazione: dissolvenza morbida ai due capi e pop-in dal 95% al 100%. Il pop
+# parte piu' piccolo e finisce esattamente al 100%, quindi non supera mai il box
+# dichiarato: il cancello 4 resta valido durante tutto l'animazione.
+FADE_MS = 90
+POP_MS = 180
+POP_FROM = 95
+ANIMATE = True
+
+# Rosso del beat: &HBBGGRR, quindi &H0000FF& = rosso pieno.
+BEAT_COLOUR = "&H0000FF&"
+BEAT_FLASH_MS = 70
+BEAT_MAX_PER_CUE = 4
+
+OUTLINE_VERTICAL = 0
+SHADOW_VERTICAL = 0
 OUTLINE_HORIZONTAL = 4
 SHADOW_HORIZONTAL = 2
 
 # Budget di caratteri per riga: con 2 righe e 960 px utili, 30 caratteri
-# permettono un corpo ~64 px invece dei 40 px necessari a stare su una riga sola.
-# Misurato: la cue piu' lunga e' 44 caratteri e senza a capo sborda il canvas di
-# 152 px (era il difetto a 0:00).
+# permettono un corpo piu' grande di una riga sola. Misurato: la cue piu' lunga e'
+# 44 caratteri.
 WRAP_CHARS_VERTICAL = 30
 MAX_LINES_VERTICAL = 2
 
@@ -83,7 +107,7 @@ _TRAILING = "\"'”’»)]}"
 # Arial Black uppercase advance is ~0.484 em/char (measured: "QUESTO È UN
 # TEST" @119px renders 935 px wide including outline).  0.50 is a safe upper
 # bound that keeps the longest cue clear of the frame edge.
-_CHAR_EM = 0.50
+_CHAR_EM = 0.34
 
 FILLERS = frozenset(
     {
@@ -520,20 +544,31 @@ def write_ass(
     outline: Optional[int] = None,
     shadow: Optional[int] = None,
     margin_lr: Optional[int] = None,
+    border_style: int = BORDER_STYLE_VERTICAL,
+    back_colour: str = BACK_COLOUR,
+    animate: bool = ANIMATE,
+    beats: Optional[Sequence[float]] = None,
 ) -> str:
     """Write an ASS file and return its absolute path (plain UTF-8, no BOM).
 
     `bottom_limit_px` is the highest Y (exclusive) the text block may reach. It is
     what `vx.layout` computes from the graphic overlays, and it overrides the
     platform-inset heuristic entirely: a measured limit beats a generic one.
+
+    `beats` are absolute times (seconds). Every beat falling inside a cue produces a
+    short colour flash on the text, so the caption pulses with the metric instead of
+    being a static plate. Off by default: it is a look, not a rule.
     """
     target = Path(dst)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     vertical = aspect not in ("16:9", "4:3")
     if vertical:
-        base = int(round(0.062 * out_h))
-        outline = OUTLINE_VERTICAL if outline is None else int(outline)
+        base = int(round(0.070 * out_h))
+        default_outline = (
+            BOX_PADDING_VERTICAL if border_style == 3 else OUTLINE_VERTICAL
+        )
+        outline = default_outline if outline is None else int(outline)
         shadow = SHADOW_VERTICAL if shadow is None else int(shadow)
         chars = WRAP_CHARS_VERTICAL if wrap_chars is None else int(wrap_chars)
         insets = PLATFORM_INSETS.get(platform, (0, 0, 0, 0))
@@ -553,12 +588,16 @@ def write_ass(
         chars = 42 if wrap_chars is None else int(wrap_chars)
         margin_v = 40
 
-    if style == "clean":
+    if style == "clean" and border_style == 1:
         outline = max(2, outline - 1)
         shadow = max(1, shadow - 1)
 
     if bottom_limit_px is not None:
-        margin_v = max(0, int(out_h) - int(bottom_limit_px))
+        # Con la placca (BorderStyle 3) MarginV àncora il glifo, ma lo sfondo
+        # dipinto si estende di `outline` px oltre: senza compensare, l'inchiostro
+        # visivo sfonda il limite pur con il testo dentro (misurato: 1212 vs 1207).
+        plate = int(outline) if int(border_style) == 3 else 0
+        margin_v = max(0, int(out_h) - int(bottom_limit_px) + plate)
 
     margin_lr = 60 if margin_lr is None else int(margin_lr)
     wrapped: List[List[str]] = [wrap_text(c.text, chars) for c in cues]
@@ -582,7 +621,7 @@ def write_ass(
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Vx,{font},{size},&H00FFFFFF,&H0000D7FF,&H00000000,"
-        f"&H80000000,-1,0,0,0,100,100,0,0,1,{outline},{shadow},2,"
+        f"{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,"
         f"{margin_lr},{margin_lr},{margin_v},1\n"
         "\n"
         "[Events]\n"
@@ -591,18 +630,47 @@ def write_ass(
     )
 
     pop = (
-        "{\\fscx100\\fscy100\\t(0,80,\\fscx108\\fscy108)\\t(80,160,\\fscx100\\fscy100)}"
+        (
+            f"{{\\fad({FADE_MS},{FADE_MS})"
+            f"\\fscx{POP_FROM}\\fscy{POP_FROM}"
+            f"\\t(0,{POP_MS},\\fscx100\\fscy100)}}"
+        )
+        if animate
+        else ""
     )
+
+    def beat_flashes(cue: Cue) -> str:
+        """Colour flashes on the beats that land inside this cue.
+
+        Times are relative to the event start, which is what `\\t` expects. The cap
+        keeps the override block short and stops a fast passage from strobing.
+        """
+        if not beats:
+            return ""
+        hits = [
+            b - cue.start
+            for b in beats
+            if 0.0 <= (b - cue.start) < (cue.end - cue.start)
+        ]
+        out = []
+        for offset in hits[:BEAT_MAX_PER_CUE]:
+            a = int(offset * 1000)
+            b = a + BEAT_FLASH_MS
+            out.append(f"\\t({a},{b},\\1c{BEAT_COLOUR})")
+            out.append(f"\\t({b},{b + BEAT_FLASH_MS},\\1c&HFFFFFF&)")
+        return "".join(out)
+
     lines: List[str] = []
     for cue, chunks in zip(cues, wrapped):
         if cue.end <= cue.start:
             continue
+        prefix = pop + (f"{{{beat_flashes(cue)}}}" if beats else "")
         if style == "karaoke":
-            body = pop + _karaoke_body(cue)
+            body = prefix + _karaoke_body(cue)
         elif len(chunks) > 1:
-            body = "\\N".join(_ass_escape(chunk) for chunk in chunks)
+            body = prefix + "\\N".join(_ass_escape(chunk) for chunk in chunks)
         else:
-            body = _clean_body(cue)
+            body = prefix + _clean_body(cue)
         lines.append(
             f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Vx,,0,0,0,,{body}"
         )
@@ -821,7 +889,7 @@ def measure_bbox(
             "w": int(xs.max() - xs.min() + 1) + 2 * pad,
             "h": int(ys.max() - ys.min() + 1) + 2 * pad,
         }
-        out["cues"].append({"index": i, "start": round(start, 3), "bbox": box})
+        out["cues"].append({"index": i, "start": round(start, 3), "end": round(end, 3), "bbox": box})
         x1, y1 = min(x1, box["x"]), min(y1, box["y"])
         x2, y2 = max(x2, box["x"] + box["w"]), max(y2, box["y"] + box["h"])
 
@@ -832,6 +900,45 @@ def measure_bbox(
         out["min_left"] = int(x1)
         out["ok"] = True
     return out
+
+
+def plate_filter(
+    ass_path,
+    *,
+    workdir=None,
+    pad: int = PLATE_PAD,
+    opacity: float = PLATE_OPACITY,
+    out_w: int = 1080,
+    out_h: int = 1440,
+    bottom_limit: Optional[int] = None,
+) -> str:
+    """drawbox chain that paints ONE plate per cue, under the text.
+
+    The geometry comes from the ink libass actually rendered, so the plate hugs the
+    words instead of guessing. With BorderStyle 3 libass would draw one box per
+    LINE, which is why this lives here: one cue, one rectangle.
+    """
+    ink = measure_bbox(ass_path, workdir=workdir, outline_px=0, shadow_px=0)
+    if not ink.get("ok"):
+        return ""
+    boxes = []
+    for cue in ink["cues"]:
+        box = cue.get("bbox")
+        if not box:
+            continue
+        x = max(0, box["x"] - pad)
+        y = max(0, box["y"] - pad)
+        w = min(out_w - x, box["w"] + 2 * pad)
+        h = box["h"] + 2 * pad
+        if bottom_limit is not None:
+            h = min(h, int(bottom_limit) - y)
+        if w <= 0 or h <= 0:
+            continue
+        boxes.append(
+            f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@{opacity:.2f}:t=fill"
+            f":enable='between(t,{cue['start']:.3f},{cue['end']:.3f})'"
+        )
+    return ",".join(boxes)
 
 
 # --------------------------------------------------------------------------- #
