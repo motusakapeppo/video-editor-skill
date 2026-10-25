@@ -35,26 +35,35 @@ MODEL = (
     / "face_detection_yunet_2023mar.onnx"
 )
 
-# Duotono non distruttivo, verificato àncora per àncora su rampa sintetica:
+# Duotono V2 approvato, verificato àncora per àncora su rampa sintetica:
 #
-#     L_in  RGB_out              L_out   dL      sat
-#     0.25  0.380 0.161 0.145    0.225   -0.025  0.619
-#     0.50  0.745 0.392 0.290    0.486   -0.014  0.611
-#     0.75  0.890 0.741 0.675    0.778   +0.028  0.242
-#     1.00  1.000 0.988 0.957    0.988   -0.012  0.043
+#     L_in  L_out   dL      sat     ruolo
+#     0.25  0.238   -0.012  0.698   ancora protetta (intoccata)
+#     0.50  0.503   +0.003  0.700   ancora protetta (intoccata)
+#     0.75  0.775   +0.025  0.458   ancora
+#     0.85  0.872   +0.022  0.270   lift solo-alte-luci
+#     1.00  0.990   -0.010  0.031   bianco protetto
 #
-# Sui frame reali: neri assoluti 5.6% (era 15.7%), saturazione mezzitoni 0.512,
-# saturazione alte luci 0.186 (la bandiera resta bianca), p99 0.850.
-# `curves=m` protegge i punti 0/1 prima del viraggio; il viraggio vero e' nelle
-# tre curve per canale, i cui àncore sono scelti per conservare la luma BT.601.
+#     |dL|max = 0.025 su tutte le 21 tacche (contratto <= 0.060).
+#
+# Su cinque frame reali: neri 0.6%, saturazione mezzitoni 0.654, saturazione alte
+# luci 0.354 (la bandiera resta bianca), p99 0.821.
+#
+# Le tre curve per canale sono RISOLTE, non scelte a occhio: dato il livello L e
+# la saturazione s, con b = 1-s e g = G/R,
+#
+#     K = 0.299 + 0.587g + 0.114(1-s)      R = L/K      G = gR      B = (1-s)R
+#
+# cosi' la luma BT.601 vale L per costruzione. Il master e' identita' fino a 0.50
+# (le due ancore protette) e alza solo sopra 0.85, che e' il lift approvato.
 # `colorbalance` e' stato misurato e scartato: a L_in 0.50 restituisce
 # 0.502/0.502/0.502, cioe' non vira i mezzitoni.
 DUOTONE = (
-    "curves=m='0/0 0.06/0.05 0.5/0.53 0.94/0.97 1/1',"
+    "curves=m='0/0 0.5/0.50 0.85/0.88 1/1',"
     "hue=s=0,"
-    "curves=r='0/0 0.25/0.40 0.5/0.72 0.75/0.86 1/1.0':"
-    "g='0/0 0.25/0.17 0.5/0.36 0.75/0.66 1/0.99':"
-    "b='0/0 0.25/0.15 0.5/0.26 0.75/0.58 1/0.96',"
+    "curves=r='0/0.0400 0.25/0.4401 0.5/0.8989 0.75/0.9419 1/1.0000':"
+    "g='0/0.0120 0.25/0.1761 0.5/0.3416 0.75/0.7064 1/0.9900':"
+    "b='0/0.0120 0.25/0.1320 0.5/0.2697 0.75/0.4710 1/0.9694',"
     "noise=alls=4:allf=t,vignette=PI/9"
 )
 
