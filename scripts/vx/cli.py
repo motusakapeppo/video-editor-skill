@@ -384,6 +384,7 @@ def _ingest(src: Path, args: argparse.Namespace) -> Dict[str, Any]:
     from . import probe as probe_mod
     from . import proxy as proxy_mod
     from . import report as report_io
+    from . import settings
     from . import triage
 
     fingerprint = winpath.source_fingerprint(str(src))
@@ -425,6 +426,7 @@ def _ingest(src: Path, args: argparse.Namespace) -> Dict[str, Any]:
     report_path = work / "report.json"
     rep["source"]["sha256"] = fingerprint["sha256"]
     rep["workdir"] = str(work)
+    rep["settings"] = settings.describe()
     rep["_path"] = str(report_path)
     rep["artifacts"] = {
         "proxy": proxy_path,
@@ -606,6 +608,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     report_io.write(built.to_dict(), work / "plan.json")
 
     # ---- preview on the proxy, then full-res delivery
+    winpath.heartbeat(work, "render_preview")
     _log("[run] render anteprima (proxy)")
     preview = render.render(
         built,
@@ -617,6 +620,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     _log(f"[run] anteprima: {preview['path']} ({preview['frames']} frame)")
 
+    winpath.heartbeat(work, "render_full")
     _log("[run] render finale (full-res)")
     final_plan = render.swap_proxy_to_full(built, media)
     final = render.render(
@@ -628,6 +632,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         crop_plan=crop,
     )
 
+    winpath.heartbeat(work, "qc")
     _log("[run] controllo qualita")
     result = qc.check_render(
         final_plan,
@@ -679,6 +684,18 @@ def cmd_run(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _apply_settings(args: argparse.Namespace) -> None:
+    """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
+    from . import settings
+
+    settings.apply(
+        settings.build(
+            settings_file=getattr(args, "settings", None),
+            overrides=getattr(args, "override", None) or [],
+        )
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="vx.py",
@@ -690,6 +707,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     def add(name: str, help_text: str) -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text)
+        p.add_argument(
+            "--settings",
+            default=None,
+            metavar="FILE",
+            help="profilo JSON per-job (sovrascrive il config)",
+        )
+        p.add_argument(
+            "--override",
+            action="append",
+            default=[],
+            metavar="CHIAVE=VALORE",
+            help="override puntuale, es. thresholds.jitter_shaky=0.5 (ripetibile)",
+        )
         return p
 
     p = add("doctor", "scansione ambiente e verdetto (Fase 1)")
@@ -839,6 +869,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     try:
+        _apply_settings(args)
         return int(args.func(args))
     except TriageRequired as exc:
         _out(exc.request)

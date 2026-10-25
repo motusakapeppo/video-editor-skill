@@ -180,6 +180,21 @@ def _limits(
 # --------------------------------------------------------------------------- #
 
 
+def _device_choice(device: Optional[str], compute_type: Optional[str]) -> dict:
+    """Explicit arguments win; otherwise ask the accel probe (verified by execution)."""
+    if device and compute_type:
+        return {"device": device, "compute_type": compute_type}
+    try:
+        from . import accel
+
+        target = accel.whisper_target(preferred=device or "")
+        if compute_type:
+            target = dict(target, compute_type=compute_type)
+        return target
+    except Exception:  # noqa: BLE001 - never block transcription on the probe
+        return {"device": "cpu", "compute_type": "int8"}
+
+
 def transcribe(
     path,
     *,
@@ -187,6 +202,8 @@ def transcribe(
     language: Optional[str] = None,
     vad: bool = True,
     max_duration: Optional[float] = None,
+    device: Optional[str] = None,
+    compute_type: Optional[str] = None,
 ) -> Transcript:
     """Run faster-whisper on `path` and normalise the words.
 
@@ -206,7 +223,11 @@ def transcribe(
         return tr
 
     try:
-        engine = WhisperModel(model, device="cpu", compute_type="int8")
+        target = _device_choice(device, compute_type)
+        tr.device = target["device"]
+        engine = WhisperModel(
+            model, device=target["device"], compute_type=target["compute_type"]
+        )
         segments, info = engine.transcribe(
             str(src),
             language=language,

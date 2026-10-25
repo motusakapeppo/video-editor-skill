@@ -48,6 +48,21 @@ PROXY_THREADS = min(8, max(2, (os.cpu_count() or 4) // 2))
 # --------------------------------------------------------------------------- #
 
 
+def _proxy_encoder(crf: int, preset: str) -> Dict[str, Any]:
+    """The proxy is scratch work: hardware wins, size does not matter."""
+    try:
+        from . import accel
+
+        return accel.pick("scratch", quality=crf, preset=preset)
+    except Exception:  # noqa: BLE001 - a probe failure must never block the proxy
+        return {
+            "name": "libx264",
+            "software": True,
+            "args": ["-c:v", "libx264", "-crf", str(crf), "-preset", preset],
+            "reason": "probe unavailable",
+        }
+
+
 def make_proxy(
     src,
     dst=None,
@@ -88,24 +103,19 @@ def make_proxy(
 
         before = source_fingerprint(src_p)
 
+        choice = _proxy_encoder(int(crf), str(preset))
         args: List[Any] = [
-            "-threads",
-            str(PROXY_THREADS),
             "-i",
             str(src_p),
             "-vf",
             f"scale={out_w}:{out_h}:flags={SCALE_FLAGS}",
-            "-c:v",
-            "libx264",
-            "-crf",
-            str(int(crf)),
-            "-preset",
-            str(preset),
+            *choice["args"],
             "-pix_fmt",
             "yuv420p",
-            "-x264-params",
-            X264_PROXY_PARAMS,
         ]
+        if choice["software"]:
+            args[1:1] = ["-threads", str(PROXY_THREADS)]
+            args += ["-x264-params", X264_PROXY_PARAMS]
         if info.has_audio:
             args += ["-c:a", "aac", "-b:a", "96k", "-ac", "2"]
         else:

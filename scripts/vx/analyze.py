@@ -57,6 +57,14 @@ _BRIGHT_LUMA = 255.0 - float(THRESHOLDS["luma_under"])
 # The early-hook window is three quarters of the hook window (4.0 -> 3.0).
 _EARLY_HOOK = float(THRESHOLDS["hook_window"]) * 0.75
 
+
+def refresh_from_settings(settings=None) -> None:
+    """Re-derive the two import-time constants after a settings override."""
+    global _BRIGHT_LUMA, _EARLY_HOOK
+    _BRIGHT_LUMA = 255.0 - float(THRESHOLDS["luma_under"])
+    _EARLY_HOOK = float(THRESHOLDS["hook_window"]) * 0.75
+
+
 # --------------------------------------------------------------------------- #
 # ffmpeg log parsing
 # --------------------------------------------------------------------------- #

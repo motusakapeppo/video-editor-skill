@@ -77,26 +77,47 @@ def work_root() -> Path:
 def make_workdir(
     source: str | Path, *, root: str | Path | None = None, subdirs: tuple[str, ...] = ()
 ) -> Path:
-    """<work_root>/<stem>-<sha8> with an advisory lock file."""
+    """<work_root>/<stem>-<sha8>, taken by liveness (see `vx.lock`), never by age."""
+    from . import lock as lock_mod
+    from . import settings
+
     fp = source_fingerprint(source)
     base = Path(root) if root else work_root()
     target = base / f"{safe_stem(Path(source).name)}-{fp['sha256'][:8]}"
     target.mkdir(parents=True, exist_ok=True)
     for name in ("proxy", "analysis", "subs", "stage", "out", "qc", *subdirs):
         (target / name).mkdir(exist_ok=True)
-    lock = target / ".lock"
-    if lock.exists():
-        age = time.time() - lock.stat().st_mtime
-        if age < 30 * 60:
-            raise VxError(f"workdir busy (lock age {int(age)}s): {target}")
-    lock.write_text(str(os.getpid()), encoding="utf-8")
+    beat = lock_mod.acquire(
+        target,
+        stage="ingest",
+        heartbeat_seconds=float(settings.get("lock.heartbeat_seconds", 30)),
+    )
+    _BEATS[str(target)] = beat
     (target / "source.json").write_text(
         __import__("json").dumps(fp, indent=2), encoding="utf-8"
     )
     return target
 
 
+_BEATS: dict = {}
+
+
+def heartbeat(workdir: str | Path, stage: str) -> None:
+    """Announce progress so a long render is visibly alive, not mistaken for a crash."""
+    beat = _BEATS.get(str(Path(workdir)))
+    if beat is not None:
+        beat.bump(stage)
+
+
 def clear_lock(workdir: str | Path) -> None:
-    lock = Path(workdir) / ".lock"
-    if lock.exists():
-        lock.unlink(missing_ok=True)
+    from . import lock as lock_mod
+
+    key = str(Path(workdir))
+    beat = _BEATS.pop(key, None)
+    if beat is not None:
+        lock_mod.release(beat)
+        return
+    info = lock_mod.read(workdir)
+    if info is not None and not lock_mod.state(workdir)["stale"]:
+        return
+    Path(workdir, lock_mod.LOCK_NAME).unlink(missing_ok=True)

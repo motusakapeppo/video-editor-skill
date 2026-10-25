@@ -38,7 +38,7 @@ from .winpath import ass_filter_path, same_fingerprint, source_fingerprint
 
 __all__ = ["check_render", "frame_count", "check_source_unchanged", "lufs_of"]
 
-LIMITS = {
+QC_DEFAULTS = {
     "duration_drift_ms": 40.0,
     "frame_count_delta": 1,
     "lufs_delta": 0.3,
@@ -46,9 +46,28 @@ LIMITS = {
     "av_start_ms": 20.0,
     "black_frames_edges": 2,
     "font_fallback_count": 0,
-    "cue_cps_max": float(THRESHOLDS["sub_max_cps"]),
-    "cue_lines_max": int(THRESHOLDS["sub_max_lines"]),
 }
+
+LIMITS = dict(QC_DEFAULTS)
+LIMITS["cue_cps_max"] = float(THRESHOLDS["sub_max_cps"])
+LIMITS["cue_lines_max"] = int(THRESHOLDS["sub_max_lines"])
+
+
+def refresh_from_settings(settings=None) -> None:
+    """Re-derive the limits after `settings.apply()` changed the threshold table."""
+    from . import settings as settings_mod
+
+    source = settings_mod.current() if settings is None else settings
+    qc_cfg = source.get("qc") or {}
+    for key, fallback in QC_DEFAULTS.items():
+        value = qc_cfg.get(key, fallback)
+        try:
+            LIMITS[key] = float(value) if isinstance(fallback, float) else int(value)
+        except (TypeError, ValueError):
+            LIMITS[key] = fallback
+    LIMITS["cue_cps_max"] = float(THRESHOLDS["sub_max_cps"])
+    LIMITS["cue_lines_max"] = int(THRESHOLDS["sub_max_lines"])
+
 
 _ASS_TIME = re.compile(r"^(\d+):(\d{2}):(\d{2})[.:](\d{1,3})$")
 _FONTSELECT = re.compile(r"fontselect:\s*\(([^,]+),[^)]*\)\s*->\s*([^,]+),")

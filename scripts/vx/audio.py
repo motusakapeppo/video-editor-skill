@@ -705,6 +705,45 @@ def _verdict(
     return "clean"
 
 
+def _vad_pass(path: str | Path, duration: float):
+    """Silero VAD when the model and onnxruntime are there; None otherwise."""
+    try:
+        from . import vad as vad_mod
+        from . import settings
+
+        cfg = settings.current().get("audio") or {}
+        if str(cfg.get("vad") or "silero") == "none":
+            return None
+        return vad_mod.detect(
+            path,
+            threshold=float(cfg.get("vad_threshold", 0.5)),
+            min_speech=float(cfg.get("vad_min_speech", 0.25)),
+            min_silence=float(cfg.get("vad_min_silence", 0.35)),
+        )
+    except Exception:  # noqa: BLE001 - VAD is an enhancement, never a hard dependency
+        return None
+
+
+def _vad_gaps(result, duration: float) -> List[Dict[str, float]]:
+    try:
+        from . import vad as vad_mod
+
+        return vad_mod.gaps_from(result.regions, duration or result.duration)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _music_confidence(ratio: float) -> float:
+    """The spectral detector only knows its mind at the extremes.
+
+    Close to the boundary it is guessing, so confidence is zero on purpose: the plan
+    refuses destructive work on a guess.
+    """
+    if 0.2 <= ratio <= 0.8:
+        return 0.0
+    return round(min(1.0, abs(ratio - 0.5) * 2.0), 3)
+
+
 def analyze_audio(path: str | Path) -> AudioAnalysis:
     """Full audio forensics pass. Never raises on a video without audio."""
     info = _audio_info(path)
@@ -729,6 +768,21 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
     peak, events = _peak_scan(path)
     music = music_detect(path)
 
+    speech_regions: List[Dict[str, float]] = []
+    vad_engine = "none"
+    snr_method = "p10-p90"
+    vad = _vad_pass(path, float(info.get("duration") or 0.0))
+    if vad is not None and vad.available and vad.regions:
+        speech_regions = list(vad.regions)
+        vad_engine = vad.engine
+        snr_method = "vad-masked"
+        noise = {
+            "noise_floor_dbfs": vad.noise_dbfs,
+            "speech_level_dbfs": vad.speech_dbfs,
+            "snr_db": vad.snr_db,
+        }
+        spans = [gap for gap in _vad_gaps(vad, float(info.get("duration") or 0.0)) if gap["duration"] >= float(THRESHOLDS["silence_min"])]
+
     return AudioAnalysis(
         noise_floor_dbfs=float(noise["noise_floor_dbfs"]),
         speech_level_dbfs=float(noise["speech_level_dbfs"]),
@@ -740,6 +794,10 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
         loudness=dict(loud),
         music_detected=bool(music["music_detected"]),
         music_ratio=float(music["music_ratio"]),
+        music_confidence=_music_confidence(float(music["music_ratio"])),
+        speech_regions=speech_regions,
+        vad_engine=vad_engine,
+        snr_method=snr_method,
         verdict=_verdict(noise, peak, loud),
     )
 

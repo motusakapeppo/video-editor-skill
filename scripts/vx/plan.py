@@ -744,6 +744,15 @@ def _sub_style(brief: dict, aspect: str, speech: dict) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _settings() -> Dict[str, Any]:
+    try:
+        from . import settings
+
+        return settings.current()
+    except Exception:  # noqa: BLE001 - plan must work without the settings layer
+        return {}
+
+
 def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> EditPlan:
     report = report if isinstance(report, dict) else {}
     brief = dict(brief or {})
@@ -778,8 +787,11 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
     loud_i, loud_tp = LOUDNESS_TARGETS[target_name]
 
     music_ratio = _num(audio.get("music_ratio")) or 0.0
+    music_confidence = _num(audio.get("music_confidence")) or 0.0
     word_count = _num(speech.get("word_count")) or 0.0
     music_only = music_ratio > 0.6 and word_count == 0
+    detector_floor = _num((_settings().get("audio") or {}).get("detector_min_confidence")) or 0.6
+    music_uncertain = music_confidence < detector_floor
     tone = brief.get("tone")
 
     treatments: List[Dict[str, Any]] = []
@@ -815,7 +827,16 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
 
     if "audio.noise.high" in known:
         denoise_params = {"noise_floor": -25.0, "fallback": "highpass=f=80"}
-        if music_ratio > 0.6:
+        if music_uncertain:
+            add(
+                "denoise",
+                "technical",
+                False,
+                denoise_params,
+                "audio.noise.high",
+                "detector musicale incerto: non distruggo il segnale",
+            )
+        elif music_ratio > 0.6:
             add(
                 "denoise",
                 "technical",
@@ -1163,7 +1184,16 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
             "fade_ms": THRESHOLDS["cut_fade_ms"],
             "max_cut_ratio": THRESHOLDS["dead_air_max_cut"],
         }
-        if music_ratio > 0.5:
+        if music_uncertain:
+            add(
+                "cut_silence",
+                "technical",
+                False,
+                cut_params,
+                cut_finding,
+                "detector musicale incerto: nessun taglio alla cieca",
+            )
+        elif music_ratio > 0.5:
             add(
                 "cut_silence",
                 "technical",

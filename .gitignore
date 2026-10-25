@@ -22,3 +22,8 @@ desktop.ini
 sample.mp4
 out/
 work/
+
+# artefatti prodotti dal test end-to-end
+examples/answers.json
+examples/brief.json
+examples/plan.json

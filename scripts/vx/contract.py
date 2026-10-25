@@ -88,6 +88,10 @@ THRESHOLDS = {
     "cut_fade_ms": 12,
 }
 
+# Floor of the settings cascade: `settings.apply()` mutates THRESHOLDS in place, so
+# this snapshot has to exist before anything can change it.
+DEFAULT_THRESHOLDS = dict(THRESHOLDS)
+
 CREATIVE_TREATMENTS = ("autoframe", "zoom", "hook_overlay", "fit")
 TECHNICAL_TREATMENTS = (
     "cut_silence",
@@ -266,6 +270,10 @@ class AudioAnalysis:
     loudness: Dict[str, Any] = field(default_factory=dict)
     music_detected: bool = False
     music_ratio: float = 0.0
+    music_confidence: float = 0.0
+    speech_regions: List[Dict[str, float]] = field(default_factory=list)
+    vad_engine: str = "none"
+    snr_method: str = "p10-p90"
     verdict: str = "unknown"
 
     def to_dict(self) -> Dict[str, Any]:

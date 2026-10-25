@@ -557,24 +557,32 @@ def _frame_count(path: Path) -> int:
         return 0
 
 
-def _encode_args(plan: EditPlan, precision: str) -> List[str]:
+def _encoder_for(plan: EditPlan, precision: str) -> Dict[str, Any]:
+    """Master goes to software, previews to the verified hardware encoder."""
+    from . import accel
+
     render_cfg = plan.render or {}
+    requested = str(render_cfg.get("encoder") or "")
     if precision == "proxy":
-        crf = int(_num(render_cfg.get("proxy_crf"), 23))
-        preset = str(render_cfg.get("proxy_preset") or "veryfast")
+        quality = int(_num(render_cfg.get("proxy_crf"), 23))
+        kind, preset = "scratch", "veryfast"
     else:
-        crf = int(_num(render_cfg.get("crf"), 18))
+        quality = int(_num(render_cfg.get("crf"), 18))
+        kind = "master"
         preset = str(render_cfg.get("preset") or "medium")
-    return [
-        "-c:v",
-        "libx264",
-        "-crf",
-        str(crf),
-        "-preset",
-        preset,
-        "-pix_fmt",
-        "yuv420p",
-    ]
+    choice = accel.pick(kind, quality=quality, preset=preset, preferred=requested)
+    return {
+        "name": choice["name"],
+        "software": choice["software"],
+        "args": list(choice["args"]),
+        "reason": choice["reason"],
+        "quality": quality,
+    }
+
+
+def _encode_args(plan: EditPlan, precision: str) -> List[str]:
+    choice = _encoder_for(plan, precision)
+    return [*choice["args"], "-pix_fmt", "yuv420p"]
 
 
 def render(
