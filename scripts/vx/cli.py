@@ -207,6 +207,31 @@ def _transcribe(
 # --------------------------------------------------------------------------- #
 
 
+def _layout_zone(out_w: int, out_h: int, overlay_paths: Optional[Sequence[str]]):
+    """Misura l'ingombro grafico, oppure None se nessun overlay e' dichiarato."""
+    from . import layout as layout_mod  # noqa: PLC0415
+
+    overlays = {Path(p).stem: p for p in (overlay_paths or [])}
+    if not overlays:
+        return None
+    return layout_mod.build(int(out_w), int(out_h), overlays)
+
+
+def _layout_gate(zone, ass_path: str) -> Dict[str, Any]:
+    """Cancello 4 sul box dichiarato. Solleva LayoutFailure (uscita 6) se collide."""
+    from . import gates  # noqa: PLC0415
+    from . import subs  # noqa: PLC0415
+
+    declared = subs.declared_box(ass_path)
+    box = zone.text_box(
+        lines=declared["lines"],
+        font_px=declared["font_px"],
+        line_px=declared["line_px"],
+        outline_px=declared["outline_px"],
+    )
+    return gates.layout(zone, box).to_dict()
+
+
 def cmd_subs(args: argparse.Namespace) -> int:
     from . import subs
 
@@ -225,6 +250,8 @@ def cmd_subs(args: argparse.Namespace) -> int:
         _log(f"[warn] {transcript.skipped_reason}")
 
     cues = subs.build_cues(transcript, style=args.style, aspect=aspect)
+
+    zone = _layout_zone(args.width, args.height, getattr(args, "overlay", None))
     ass = subs.write_ass(
         cues,
         out_dir / f"{stem}.ass",
@@ -233,7 +260,10 @@ def cmd_subs(args: argparse.Namespace) -> int:
         style=args.style,
         out_w=args.width,
         out_h=args.height,
+        bottom_limit_px=zone.text_limit_y if zone else None,
+        margin_lr=zone.margin_lr if zone else None,
     )
+    gate4 = _layout_gate(zone, ass) if zone else None
     srt = subs.write_srt(cues, out_dir / f"{stem}.srt")
     fonts = subs.verify_fonts(ass)
 
@@ -248,6 +278,8 @@ def cmd_subs(args: argparse.Namespace) -> int:
             "style": args.style,
             "fonts": fonts,
             "burn_filter": subs.burn_filter(ass),
+            "layout": zone.to_dict() if zone else None,
+            "gate4": gate4,
         }
     )
     return EXIT_OK
@@ -568,6 +600,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             max_cps=params.get("max_cps"),
         )
         stem = winpath.safe_stem(src.name)
+        zone = _layout_zone(
+            int(built.output.get("width") or 1080),
+            int(built.output.get("height") or 1920),
+            getattr(args, "overlay", None),
+        )
         ass = subs.write_ass(
             cues,
             work / "subs" / f"{stem}.ass",
@@ -576,7 +613,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             style=str(params.get("style") or "karaoke"),
             out_w=int(built.output.get("width") or 1080),
             out_h=int(built.output.get("height") or 1920),
+            bottom_limit_px=zone.text_limit_y if zone else None,
+            margin_lr=zone.margin_lr if zone else None,
         )
+        if zone is not None:
+            rep["artifacts"]["gate4"] = _layout_gate(zone, ass)
+            rep["artifacts"]["layout"] = zone.to_dict()
         srt = subs.write_srt(cues, work / "subs" / f"{stem}.srt")
         fonts = subs.verify_fonts(ass)
         subs_path = ass
@@ -644,8 +686,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         source_fp=state["fingerprint"],
     )
     report_io.write(result.to_dict(), work / "qc.json")
-    planned_total = sum(float(c["out"]) - float(c["in"]) for c in (final_plan.cuts or [])) or None
-    gates.post_render(final_plan, media, final["path"], workdir=work, planned_total=planned_total)
+    planned_total = (
+        sum(float(c["out"]) - float(c["in"]) for c in (final_plan.cuts or [])) or None
+    )
+    gates.post_render(
+        final_plan, media, final["path"], workdir=work, planned_total=planned_total
+    )
 
     rep["plan"] = final_plan.to_dict()
     rep["qc"] = result.to_dict()
@@ -772,6 +818,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--platform", default="tiktok")
     p.add_argument("--width", type=int, default=1080)
     p.add_argument("--height", type=int, default=1920)
+    p.add_argument(
+        "--overlay",
+        action="append",
+        default=None,
+        metavar="PNG",
+        help="asset grafico (con alpha) che occupa il quadrante inferiore; "
+        "ripetibile. Attiva la misura delle safe area e il cancello 4",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_subs)
 
@@ -851,6 +905,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="salta la trascrizione (nessun sottotitolo)",
     )
     p.add_argument("--keep-proxy", action="store_true")
+    p.add_argument(
+        "--overlay",
+        action="append",
+        default=None,
+        metavar="PNG",
+        help="asset grafico (con alpha) che occupa il quadrante inferiore; "
+        "ripetibile. Attiva la misura delle safe area e il cancello 4",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_run)
 
@@ -883,7 +945,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return EXIT_MISSING_DEP
     except QCFailure as exc:
         _out(exc.result)
-        return EXIT_QC_FAIL
+        return int(getattr(exc, "exit_code", EXIT_QC_FAIL))
     except RenderFailure as exc:
         _log(f"[render] {exc}")
         return EXIT_RENDER_FAIL

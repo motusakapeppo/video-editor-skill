@@ -393,27 +393,66 @@ def post_render(
     return result
 
 
+class LayoutFailure(contract.QCFailure):
+    """Gate 4 rifiuta il rendering: uscita 6, `contract.EXIT_RENDER_FAIL`.
+
+    Distinta da `QCFailure` perche' i cancelli 1 e 3 mappano su 5 (`EXIT_QC_FAIL`):
+    un file gia' scritto e' un'altra cosa da un rendering che non deve partire.
+    """
+
+    exit_code = contract.EXIT_RENDER_FAIL
+
+
 # --------------------------------------------------------------------------- #
 # Gate 4 — layout: testo contro grafica, prima di ffmpeg
 # --------------------------------------------------------------------------- #
 
 
-def layout(lay, text_box, *, crop_box=None) -> GateResult:
+def layout(lay, text_box, *, crop_box=None, require_graphic: bool = True) -> GateResult:
     """Static gate: the declared text box must not touch the declared graphic box.
 
     Runs before the filtergraph reaches ffmpeg, on *declarations* only, so a
-    collision costs a millisecond instead of a full render. A failure means the
-    process refuses to render (exit 6, `contract.EXIT_RENDER_FAIL`): the same
-    exit the pipeline uses for "render refused", because that is what it is.
+    collision costs a millisecond instead of a full render. Raises `LayoutFailure`,
+    which carries `exit_code = EXIT_RENDER_FAIL` (6): the render is refused.
 
-    `crop_box` is optional and only reported: at 3:4 on a 9:16 source the crop
-    already spans the full source width, so it cannot be widened and the check
-    documents the available pan room instead of pretending to fix it.
+    `require_graphic` is the anti-silent-pass rule. If overlays were declared but
+    none could be measured (missing alpha, OpenCV absent), `graphic` is None and an
+    overlap check would pass vacuously. No measurement means no evidence, so the
+    gate refuses instead of waving the render through.
     """
     result = GateResult("layout")
     canvas = lay.canvas
 
     graphic = getattr(lay, "graphic", None)
+    declared = int(getattr(lay, "declared", 0) or 0)
+    measured = int(getattr(lay, "measured", 0) or 0)
+
+    if require_graphic and declared > 0 and measured == 0:
+        result.checks.append(
+            Check(
+                "graphic_measured",
+                "fail",
+                measured,
+                f"> 0 su {declared}",
+                "overlay dichiarati ma nessuno misurabile: la fascia non e' nota, "
+                "il rendering non parte",
+            )
+        )
+        raise LayoutFailure(result.to_dict())
+
+    if graphic is None and declared > 0:
+        result.checks.append(
+            Check(
+                "graphic_measured",
+                "fail" if require_graphic else "skipped",
+                measured,
+                f"> 0 su {declared}",
+                "nessuna componente nella fascia inferiore",
+            )
+        )
+        if require_graphic:
+            raise LayoutFailure(result.to_dict())
+
     overlap = graphic.intersection(text_box) if graphic is not None else None
     result.checks.append(
         Check(
@@ -462,7 +501,7 @@ def layout(lay, text_box, *, crop_box=None) -> GateResult:
         )
 
     if not result.ok:
-        raise contract.QCFailure(result.to_dict())
+        raise LayoutFailure(result.to_dict())
     return result
 
 

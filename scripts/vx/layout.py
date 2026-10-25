@@ -120,6 +120,8 @@ class Layout:
     components: List[Dict[str, Any]] = field(default_factory=list)
     padding: int = 0
     margin_lr: int = 0
+    declared: int = 0
+    measured: int = 0
     notes: List[str] = field(default_factory=list)
 
     @property
@@ -169,6 +171,8 @@ class Layout:
             "padding": self.padding,
             "text_width_limit": self.text_width_limit,
             "components": self.components,
+            "declared_overlays": self.declared,
+            "measured_overlays": self.measured,
             "notes": self.notes,
         }
 
@@ -184,22 +188,42 @@ def measure_components(png: str | Path, *, alpha_min: int = 8) -> List[Rect]:
     Ritorna lista vuota (con nessuna eccezione) se il file manca o OpenCV non
     c'e': il chiamante tratta l'assenza come "nessun ingombro", non come errore.
     """
+    return [rect for rect, _ratio in _measured(png, alpha_min=alpha_min, split_px=None)]
+
+
+def _measured(
+    png: str | Path, *, alpha_min: int = 8, split_px: Optional[int] = None
+) -> List[Tuple[Rect, float]]:
+    """Componenti con la frazione di inchiostro sotto `split_px`.
+
+    La classificazione non puo' usare il centro del bbox: un arco, una U o un
+    nastro verticale hanno l'inchiostro in basso ma il bbox che sale oltre la
+    soglia, e verrebbero esclusi lasciando la loro fascia non riservata. Si conta
+    invece dove sta l'inchiostro davvero: `ratio` = pixel sotto lo split / pixel
+    totali della componente.
+    """
     path = Path(png)
     if not path.is_file():
         return []
     try:
         import cv2  # noqa: PLC0415 - opzionale, come in autoframe
+        import numpy as np  # noqa: PLC0415
     except Exception:  # noqa: BLE001
         return []
     img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if img is None or img.ndim != 3 or img.shape[2] != 4:
         return []
     mask = (img[:, :, 3] > int(alpha_min)).astype("uint8")
-    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
-    out: List[Rect] = []
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(mask, 8)
+    out: List[Tuple[Rect, float]] = []
     for i in range(1, count):  # 0 e' il fondo
-        x, y, w, h, _area = (int(v) for v in stats[i][:5])
-        out.append(Rect(x, y, w, h))
+        x, y, w, h, area = (int(v) for v in stats[i][:5])
+        if split_px is None:
+            ratio = 1.0 if y + h / 2.0 >= 0 else 0.0
+        else:
+            rows = np.where(labels == i)[0]
+            ratio = float((rows >= int(split_px)).mean()) if rows.size else 0.0
+        out.append((Rect(x, y, w, h), ratio))
     return out
 
 
@@ -242,19 +266,21 @@ def build(
     )
 
     band: List[Rect] = []
+    split_px = int(round(out_h * float(split_y)))
+    layout.declared = len(named)
     for name, path in named.items():
-        comps = measure_components(path)
+        comps = _measured(path, split_px=split_px)
         if not comps:
             layout.notes.append(f"{name}: nessuna componente alpha misurabile")
             continue
-        for rect in comps:
-            cy = rect.y + rect.h / 2.0
-            owned = cy >= out_h * float(split_y)
+        layout.measured += 1
+        for rect, ratio in comps:
+            owned = ratio >= 0.5
             layout.components.append(
                 {
                     "overlay": name,
                     "rect": rect.to_dict(),
-                    "centroid_y_ratio": round(cy / out_h, 4),
+                    "ink_below_split": round(ratio, 4),
                     "in_bottom_band": owned,
                 }
             )

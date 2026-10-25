@@ -50,6 +50,7 @@ __all__ = [
     "burn_filter",
     "transcript_stats",
     "measure_bbox",
+    "declared_box",
     "wrap_text",
     "main",
 ]
@@ -739,6 +740,7 @@ def measure_bbox(
     workdir=None,
     threshold: int = 24,
     outline_px: int = OUTLINE_VERTICAL,
+    shadow_px: int = SHADOW_VERTICAL,
 ) -> Dict[str, Any]:
     """Render every cue on black and measure the real ink box of the text.
 
@@ -812,11 +814,12 @@ def measure_bbox(
         if not len(xs):
             out["cues"].append({"index": i, "start": round(start, 3), "empty": True})
             continue
+        pad = int(outline_px) + int(shadow_px)
         box = {
-            "x": int(xs.min()) - int(outline_px),
-            "y": int(ys.min()) - int(outline_px),
-            "w": int(xs.max() - xs.min() + 1) + 2 * int(outline_px),
-            "h": int(ys.max() - ys.min() + 1) + 2 * int(outline_px),
+            "x": int(xs.min()) - pad,
+            "y": int(ys.min()) - pad,
+            "w": int(xs.max() - xs.min() + 1) + 2 * pad,
+            "h": int(ys.max() - ys.min() + 1) + 2 * pad,
         }
         out["cues"].append({"index": i, "start": round(start, 3), "bbox": box})
         x1, y1 = min(x1, box["x"]), min(y1, box["y"])
@@ -829,6 +832,60 @@ def measure_bbox(
         out["min_left"] = int(x1)
         out["ok"] = True
     return out
+
+
+# --------------------------------------------------------------------------- #
+# 5c. declared geometry — what the ASS promises, before anything is rendered
+# --------------------------------------------------------------------------- #
+
+_OVERRIDE = re.compile(r"\{[^}]*\}")
+
+
+def declared_box(ass_path) -> Dict[str, Any]:
+    """Read back the geometry the ASS declares.
+
+    Consumers need this to run a layout gate without duplicating the style-line
+    parsing: font size, outline/shadow, margins, and the widest rendered line
+    measured in characters. `line_px` converts the character count to pixels with
+    the same conservative advance the writer used, so the declared box is an upper
+    bound and never an optimistic one.
+    """
+    src = Path(ass_path)
+    text = src.read_text(encoding="utf-8", errors="replace")
+    w, h = _playres(text)
+    style = next((ln for ln in text.splitlines() if ln.startswith("Style:")), "")
+    fields = style.split(",")
+    font_px = int(fields[2]) if len(fields) > 2 else 0
+    outline_px = int(fields[16]) if len(fields) > 16 else 0
+    shadow_px = int(fields[17]) if len(fields) > 17 else 0
+    margin_lr = int(fields[19]) if len(fields) > 19 else 0
+    margin_v = int(fields[21]) if len(fields) > 21 else 0
+
+    lines = 1
+    widest = 0
+    for line in text.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        body = line.split(",", 9)[-1]
+        chunks = [
+            _OVERRIDE.sub("", chunk).strip()
+            for chunk in body.replace("\\N", "\n").split("\n")
+        ]
+        chunks = [c for c in chunks if c]
+        lines = max(lines, len(chunks) or 1)
+        widest = max(widest, max((len(c) for c in chunks), default=0))
+
+    return {
+        "playres": [w, h],
+        "font_px": font_px,
+        "outline_px": outline_px,
+        "shadow_px": shadow_px,
+        "margin_v": margin_v,
+        "margin_lr": margin_lr,
+        "lines": lines,
+        "widest_chars": widest,
+        "line_px": int(round(widest * font_px * _CHAR_EM)),
+    }
 
 
 # --------------------------------------------------------------------------- #
