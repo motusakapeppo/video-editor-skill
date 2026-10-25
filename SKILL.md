@@ -44,12 +44,15 @@ preset. Il sorgente non viene mai toccato.
 
 ## Setup
 
-Prima di qualsiasi lavoro servono quattro cose:
+Prima di qualsiasi lavoro serve questo:
 
 1. Un virtualenv Python 3.10+ con `opencv-python-headless mediapipe moviepy librosa soundfile scipy pydub faster-whisper pyyaml imageio-ffmpeg`.
 2. ffmpeg 8.x con libass, vidstab, loudnorm e silencedetect (es. build essentials di gyan.dev).
 3. Un `vx.config.json` accanto a `SKILL.md` (gitignored) oppure le variabili `VX_WORK`, `VX_VENV`, `VX_FFMPEG`, `VX_FFPROBE`, `VX_WHISPER_CACHE`, `VX_CONFIG`. Template: `vx.config.example.json`.
-4. `python scripts/vx.py doctor --json` deve stampare `"verdict": "ready"` prima di ogni lavoro.
+4. GPU opzionale per Whisper: `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`; senza, fallback CPU int8 motivato.
+5. `python scripts/vx.py doctor --json` deve stampare `"verdict": "ready"` prima di ogni lavoro.
+6. Ogni soglia e sovrascrivibile per job: `--override thresholds.jitter_shaky=0.5` (ripetibile) o `--settings profilo.json`.
+   Il valore effettivo finisce nel report. Accelerazione e VAD: `references/09-accelerazione-e-vad.md`.
 
 ## Ruolo
 
