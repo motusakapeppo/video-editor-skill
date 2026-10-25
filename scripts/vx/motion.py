@@ -45,6 +45,9 @@ __all__ = [
     "render_layer",
     "animation_box",
     "composite",
+    "PillowRenderer",
+    "renderer_for",
+    "render_video",
 ]
 
 # Lo scale non supera MAI 1.0: il pop parte dal 95% e atterra al 100%. Un pop che
@@ -544,3 +547,71 @@ def composite(
         "encoder_rc": enc.returncode,
         "encoder_tail": (enc.stderr.read() or b"").decode("utf-8", "replace")[-400:],
     }
+
+
+# --------------------------------------------------------------------------- #
+# doppio motore: stesso payload, due rasterizzatori
+# --------------------------------------------------------------------------- #
+
+
+class PillowRenderer:
+    """Motore veloce: Pillow su CPU, 27 ms/frame, ombra gaussiana reale."""
+
+    name = "pillow"
+
+    def __init__(self, payload: MotionPayload):
+        self.payload = payload
+        self._font = ImageFont.truetype(payload.font_path, payload.font_px)
+
+    def frame_rgba(self, t: float):
+        return render_layer(self.payload, None, t, font=self._font)
+
+    def font_info(self) -> Dict[str, Any]:
+        return audit_font(self.payload.font_path)
+
+    def close(self) -> None:
+        return None
+
+
+def renderer_for(payload: MotionPayload, engine: str = "pillow"):
+    """Factory. `chromium` importa Playwright solo quando lo si chiede davvero."""
+    key = (engine or "pillow").strip().lower()
+    if key == "pillow":
+        return PillowRenderer(payload)
+    if key == "chromium":
+        from .motion_browser import BrowserRenderer  # noqa: PLC0415
+
+        return BrowserRenderer(payload)
+    raise ValueError(f"engine sconosciuto: {engine!r} (attesi: pillow, chromium)")
+
+
+def render_video(
+    master: str | Path,
+    payload: MotionPayload,
+    out: str | Path,
+    *,
+    engine: str = "pillow",
+    crf: int = 20,
+    preset: str = "medium",
+) -> Dict[str, Any]:
+    """Unico ingresso: sceglie il motore, i Gate restano identici.
+
+    `pillow`  -> editoria, documentario, pulito: veloce e geometrico
+    `chromium` -> social, hype, virale: font variabili, CSS, backdrop-filter
+    """
+    renderer = renderer_for(payload, engine)
+    try:
+        if getattr(renderer, "name", "") == "pillow":
+            info = composite(master, payload, out, crf=crf, preset=preset)
+        else:
+            from .motion_browser import composite_browser  # noqa: PLC0415
+
+            info = composite_browser(master, payload, out, renderer,
+                                     crf=crf, preset=preset)
+        info["engine"] = getattr(renderer, "name", engine)
+        return info
+    finally:
+        try:
+            renderer.close()
+        except Exception:  # noqa: BLE001
+            pass
