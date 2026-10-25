@@ -128,8 +128,26 @@ def estimate(
         return Estimate(reason="onset envelope empty")
 
     baseline = float(env_low.mean()) + 1e-9
+
+    # Log-normal prior on the tempo (Ellis 2007): without it the comb search is
+    # monotonic in period and the answer sticks to the low edge of the range.
+    ac = librosa.autocorrelate(env_low, max_size=int(fps * 2.0))
+    lags = np.arange(ac.size, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lag_bpm = np.where(lags > 0, 60.0 * fps / np.maximum(lags, 1e-9), 0.0)
+    prior = np.exp(-0.5 * (np.log2(np.maximum(lag_bpm, 1e-9) / 110.0) / 0.9) ** 2)
+    in_range = (lag_bpm >= bpm_min) & (lag_bpm <= bpm_max)
+    salience = np.where(in_range, ac * prior, 0.0)
+    if not np.any(salience > 0):
+        return Estimate(
+            reason="no salience inside the tempo range", baseline=round(baseline, 4)
+        )
+    coarse = float(lag_bpm[int(np.argmax(salience))])
+
     scored: List[Dict[str, float]] = []
-    for bpm in np.arange(bpm_min, bpm_max + 0.01, 0.25):
+    for bpm in np.arange(
+        max(bpm_min, coarse * 0.94), min(bpm_max, coarse * 1.06) + 0.01, 0.1
+    ):
         score, phase = _grid_score(env_low, 60.0 / bpm * fps)
         if score > 0:
             scored.append(
@@ -174,33 +192,192 @@ def estimate(
     )
 
 
+METRICAL_RELATIONS = (0.5, 2.0 / 3.0, 0.75, 1.0, 4.0 / 3.0, 1.5, 2.0)
+
+PHASE_TOLERANCE_PERIOD = 1.0 / 16.0
+
+
 def session_bpm(estimates: Dict[str, Estimate]) -> Dict[str, Any]:
-    """Do the clips agree once octave equivalence (x0.5, x1, x2) is allowed?"""
+    """Do the clips belong to the same rhythmic family once metric level is allowed?
+
+    Octave equivalence (x0.5, x2) is the classic ambiguity, but a change of figuration
+    (triplets, double-time feel) moves the estimate by 2:3 or 3:4. Those ratios belong
+    to the same ecosystem and must not read as disagreement; the per-clip grid still
+    uses each clip's own tempo when cutting.
+    """
     bpms = [(label, est.bpm) for label, est in estimates.items() if est.bpm > 0]
     if not bpms:
         return {"bpm": 0.0, "agree": False, "detail": "no estimates"}
     reference_label, reference = max(bpms, key=lambda item: estimates[item[0]].contrast)
-    ratios, detail = [], []
+    ratios, detail, fractions = [], [], []
     for label, bpm in bpms:
         raw = bpm / reference
-        closest = min((0.5, 1.0, 2.0), key=lambda a: abs(raw - a))
+        closest = min(METRICAL_RELATIONS, key=lambda a: abs(raw - a))
+        effective = bpm / closest
+        period = 60.0 / effective if effective > 0 else 0.0
+        fraction = ((estimates[label].phase % period) / period) if period > 0 else 0.0
+        fractions.append(fraction)
         ratios.append(round(raw / closest, 4))
         detail.append(
             {
                 "label": label,
                 "bpm": bpm,
-                "octave": closest,
+                "metrical_relation": round(closest, 4),
                 "normalised_ratio": ratios[-1],
+                "effective_bpm": round(effective, 2),
+                "phase_s": estimates[label].phase,
+                "phase_fraction": round(fraction, 4),
+                "contrast": estimates[label].contrast,
+                "confident": estimates[label].confident,
             }
         )
-    spread = max(ratios) / min(ratios) if ratios else 1.0
+
+    def circular(a: float, b: float) -> float:
+        delta = abs(a - b) % 1.0
+        return min(delta, 1.0 - delta)
+
+    pairwise = []
+    for i in range(len(fractions)):
+        for j in range(i + 1, len(fractions)):
+            deviation = circular(fractions[i], fractions[j])
+            pairwise.append(
+                {
+                    "a": detail[i]["label"],
+                    "b": detail[j]["label"],
+                    "phase_deviation": round(deviation, 4),
+                    "within_tolerance": deviation <= PHASE_TOLERANCE_PERIOD,
+                }
+            )
+
+    spread = round(max(ratios) / min(ratios), 4) if ratios else 1.0
+    phase_ok = all(item["within_tolerance"] for item in pairwise) if pairwise else True
+    opaque = [row["label"] for row in detail if row["contrast"] < 1.35]
+    agree = phase_ok and not opaque
     return {
         "bpm": round(reference, 2),
         "reference": reference_label,
-        "agree": spread <= 1.02,
-        "spread": round(spread, 4),
+        "agree": agree,
+        "criterion": "phase coherence",
+        "phase_tolerance_period": PHASE_TOLERANCE_PERIOD,
+        "pairwise": pairwise,
+        "spread": spread,
+        "opaque_clips": opaque,
         "detail": detail,
-        "reason": "clips agree after octave normalisation"
-        if spread <= 1.02
-        else "clips disagree even after octave normalisation",
+        "phase_note": (
+            "cross-clip phase is decisive when the clips share a time origin; "
+            "on independent excerpts agreement can be chance and must be read as weak evidence"
+        ),
+        "reason": "grids superimpose within phase tolerance"
+        if agree
+        else "phase deviates beyond tolerance, or a clip is rhythmically opaque",
     }
+
+
+def _score_envelope(
+    env: Any, fps: float, bpm_min: float, bpm_max: float
+) -> tuple[float, float, float, float, List[Dict[str, float]]]:
+    """Tempo, phase, score, contrast for one onset envelope."""
+    import librosa
+
+    baseline = float(env.mean()) + 1e-9
+    ac = librosa.autocorrelate(env, max_size=int(fps * 2.0))
+    lags = np.arange(ac.size, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lag_bpm = np.where(lags > 0, 60.0 * fps / np.maximum(lags, 1e-9), 0.0)
+    prior = np.exp(-0.5 * (np.log2(np.maximum(lag_bpm, 1e-9) / 110.0) / 0.9) ** 2)
+    in_range = (lag_bpm >= bpm_min) & (lag_bpm <= bpm_max)
+    salience = np.where(in_range, ac * prior, 0.0)
+    if not np.any(salience > 0):
+        return 0.0, 0.0, 0.0, 0.0, []
+    coarse = float(lag_bpm[int(np.argmax(salience))])
+
+    scored: List[Dict[str, float]] = []
+    for bpm in np.arange(
+        max(bpm_min, coarse * 0.94), min(bpm_max, coarse * 1.06) + 0.01, 0.1
+    ):
+        score, phase = _grid_score(env, 60.0 / bpm * fps)
+        if score > 0:
+            scored.append(
+                {
+                    "bpm": round(float(bpm), 2),
+                    "score": round(score / baseline, 3),
+                    "phase_frames": float(phase),
+                }
+            )
+    if not scored:
+        return 0.0, 0.0, 0.0, 0.0, []
+    scored.sort(key=lambda item: item["score"], reverse=True)
+    best = scored[0]
+    second = next(
+        (c for c in scored[1:] if abs(c["bpm"] - best["bpm"]) > 2.0),
+        scored[1] if len(scored) > 1 else best,
+    )
+    contrast = best["score"] / max(second["score"], 1e-9)
+    return (
+        float(best["bpm"]),
+        float(best["phase_frames"]) / fps,
+        float(best["score"]),
+        float(contrast),
+        scored[:8],
+    )
+
+
+def estimate_best(
+    path: str,
+    *,
+    bpm_min: float = 60.0,
+    bpm_max: float = 200.0,
+    seconds: float = 120.0,
+) -> Estimate:
+    """Decode once, score the low band and the full band, keep the higher contrast.
+
+    A clip whose kick is weak carries its rhythm in the hats or in the vocal cadence:
+    the low band alone is then too poor and returns a confident-looking wrong answer.
+    """
+    import librosa
+
+    try:
+        y, sr = _decode(path, seconds)
+    except Exception as exc:  # noqa: BLE001
+        return Estimate(reason=f"{type(exc).__name__}: {exc}"[:180])
+    if y.size == 0:
+        return Estimate(reason="empty audio")
+
+    fps = sr / HOP
+    envelopes = {
+        "lowband": librosa.onset.onset_strength(
+            y=_lowband(y, sr), sr=sr, hop_length=HOP
+        ),
+        "fullband": librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP),
+    }
+    winner: Optional[Estimate] = None
+    for name, env in envelopes.items():
+        if env is None or env.size == 0:
+            continue
+        bpm, phase, score, contrast, candidates = _score_envelope(
+            env, fps, bpm_min, bpm_max
+        )
+        if bpm <= 0:
+            continue
+        candidate = Estimate(
+            bpm=bpm,
+            phase=round(phase, 4),
+            score=round(score, 3),
+            contrast=round(contrast, 3),
+            candidates=candidates,
+            method=f"comb-{name}+prior",
+            reason=""
+            if contrast >= 1.35
+            else "weak contrast between the best tempo and the runner-up",
+        )
+        if winner is None or candidate.contrast > winner.contrast:
+            winner = candidate
+
+    if winner is None:
+        return Estimate(reason="no band produced a usable estimate")
+    if winner.contrast < 1.35:
+        winner.reason = (
+            "rhythmically opaque: both bands stayed below 1.35 contrast, "
+            "rhythmic cuts must be blocked on this clip"
+        )
+    return winner
