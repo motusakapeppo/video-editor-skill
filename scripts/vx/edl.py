@@ -122,48 +122,47 @@ def build(
             ideal = src_in + wanted
             pool = _accents(grids.get(label), beats_per_bar)
             window = [(kind, a) for kind, a in pool if min_len <= a - src_in <= max_len]
-            chosen: Optional[tuple[str, float, bool]] = None
+            chosen: Optional[tuple[str, float]] = None
             for kind in ("bar", "beat", "onset"):
                 typed = [a for k, a in window if k == kind]
-                if not typed:
-                    continue
-                nearest = min(typed, key=lambda a: abs(a - ideal))
-                within = abs(nearest - ideal) <= tolerance
-                if within or kind == "onset":
-                    chosen = (kind, nearest, within)
+                if typed:
+                    chosen = (kind, min(typed, key=lambda a: abs(a - ideal)))
                     break
             if chosen is None:
                 boundary = ideal
                 cut_on = "unsnapped"
                 note = "nessun accento nella finestra: durata richiesta"
             else:
-                cut_on, boundary, within = chosen
+                cut_on, boundary = chosen
                 note = (
-                    ""
-                    if within
-                    else f"accento {cut_on} a {abs(boundary - ideal):.3f}s dall'ideale"
+                    f"costo {abs(boundary - ideal):.3f}s rispetto all'ideale"
+                    if cut_on != "bar"
+                    else ""
                 )
             duration = boundary - src_in
             edl.rhythmic_shots += 1
 
-        frames = int(round(duration * fps))
+        frame_in = int(round(cursor * fps))
+        frame_out = int(round((cursor + duration) * fps))
+        frames = max(1, frame_out - frame_in)
+        quantised = frames / fps
         edl.shots.append(
             EdlShot(
                 label=label,
                 src_in=round(src_in, 3),
-                src_out=round(src_in + duration, 3),
-                duration=round(duration, 3),
-                t_in=round(cursor, 3),
-                t_out=round(cursor + duration, 3),
+                src_out=round(src_in + quantised, 4),
+                duration=round(quantised, 4),
+                t_in=round(frame_in / fps, 4),
+                t_out=round((frame_in + frames) / fps, 4),
                 frames=frames,
                 cut_on=cut_on,
                 contrast=round(contrast, 3),
                 note=note,
             )
         )
-        cursor += duration
+        cursor = (frame_in + frames) / fps
 
-    edl.total = round(cursor, 3)
+    edl.total = round(edl.shots[-1].t_out, 4) if edl.shots else 0.0
     edl.frames = sum(s.frames for s in edl.shots)
     expected = int(round(edl.total * fps))
     if edl.frames != expected:
@@ -173,16 +172,51 @@ def build(
     return edl
 
 
+def filtergraph(edl: Edl, inputs: Dict[str, int]) -> str:
+    """One graph: every shot trims picture and sound from the same input, then a single
+    concat advances both streams. `inputs` maps a label to its ffmpeg input index."""
+    parts: List[str] = []
+    pairs: List[str] = []
+    for index, shot in enumerate(edl.shots):
+        src = inputs[shot.label]
+        parts.append(
+            f"[{src}:v]trim=start={shot.src_in:.3f}:end={shot.src_out:.3f},"
+            f"setpts=PTS-STARTPTS[v{index}]"
+        )
+        parts.append(
+            f"[{src}:a]atrim=start={shot.src_in:.3f}:end={shot.src_out:.3f},"
+            f"asetpts=PTS-STARTPTS[a{index}]"
+        )
+        pairs.append(f"[v{index}][a{index}]")
+    parts.append("".join(pairs) + f"concat=n={len(edl.shots)}:v=1:a=1[v][a]")
+    return ";".join(parts)
+
+
 def validate(edl: Edl, media: Dict[str, Any]) -> Dict[str, Any]:
-    """The EDL must survive Gate 1 before anything is rendered."""
+    """Gate 1 on the geometry, Gate 2 on the graph the EDL will produce."""
     plan = contract.EditPlan(
         cuts=[{"in": s.src_in, "out": s.src_out} for s in edl.shots]
     )
+    inputs = {
+        label: index
+        for index, label in enumerate(dict.fromkeys(s.label for s in edl.shots))
+    }
+    graph = filtergraph(edl, inputs)
     try:
-        result = gates.pre_render(plan, media)
-        return {"ok": True, "gate": result.to_dict()}
+        first = gates.pre_render(plan, media)
+        second = gates.graph(graph)
+        declared = round(sum(s.duration for s in edl.shots), 3)
+        arithmetic = abs(declared - round(edl.total, 3)) <= 0.001
+        return {
+            "ok": first.ok and second.ok and arithmetic,
+            "gate1": first.to_dict(),
+            "gate2": second.to_dict(),
+            "graph": graph,
+            "declared_total": declared,
+            "arithmetic_match": arithmetic,
+        }
     except contract.QCFailure as exc:
-        return {"ok": False, "gate": exc.result}
+        return {"ok": False, "failed": exc.result, "graph": graph}
 
 
 def _selftest() -> int:
