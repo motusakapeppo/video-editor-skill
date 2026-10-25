@@ -381,3 +381,59 @@ def estimate_best(
             "rhythmic cuts must be blocked on this clip"
         )
     return winner
+
+
+def estimate_stable(
+    path: str,
+    *,
+    canonical_seconds: float = 90.0,
+    full_seconds: float = 900.0,
+    bpm_min: float = 60.0,
+    bpm_max: float = 200.0,
+) -> Estimate:
+    """Two windows, take the lower contrast: in doubt, do not act.
+
+    The same clip scored 1.53 on 120 s and 1.31 on 90 s, so a confidence that moves with
+    the length of the sample is not a measurement of the track but of the reading window.
+    The clip is usable only if BOTH windows clear the floor; the one that fails is named
+    so the log says which reading triggered the block.
+    """
+    full = estimate_best(path, bpm_min=bpm_min, bpm_max=bpm_max, seconds=full_seconds)
+    canonical = estimate_best(
+        path, bpm_min=bpm_min, bpm_max=bpm_max, seconds=canonical_seconds
+    )
+    floor = 1.35
+    worst = min(full.contrast, canonical.contrast)
+    triggered = "full" if full.contrast <= canonical.contrast else "canonical"
+    winner = full if full.contrast <= canonical.contrast else canonical
+    winner = Estimate(
+        bpm=winner.bpm,
+        phase=winner.phase,
+        score=winner.score,
+        baseline=winner.baseline,
+        contrast=round(worst, 3),
+        candidates=winner.candidates,
+        method=winner.method,
+        reason=(
+            "rhythmically opaque: contrast "
+            f"{worst:.2f} in the {triggered} window "
+            f"(full {full.contrast:.2f} / canonical {canonical.contrast:.2f})"
+            if worst < floor
+            else ""
+        ),
+    )
+    setattr(
+        winner,
+        "windows",
+        {
+            "full_seconds": full_seconds,
+            "canonical_seconds": canonical_seconds,
+            "contrast_full": round(full.contrast, 3),
+            "contrast_canonical": round(canonical.contrast, 3),
+            "min": round(worst, 3),
+            "triggered_by": triggered,
+            "bpm_full": full.bpm,
+            "bpm_canonical": canonical.bpm,
+        },
+    )
+    return winner

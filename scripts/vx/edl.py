@@ -93,6 +93,7 @@ def build(
     min_len: float = 2.6,
     max_len: float = 4.4,
     beats_per_bar: int = 4,
+    veto_fn: Optional[Any] = None,
 ) -> Edl:
     """Turn shot intents into a frame-exact EDL, honouring per-clip confidence."""
     edl = Edl(fps=fps)
@@ -123,8 +124,13 @@ def build(
             pool = _accents(grids.get(label), beats_per_bar)
             window = [(kind, a) for kind, a in pool if min_len <= a - src_in <= max_len]
             chosen: Optional[tuple[str, float]] = None
+            rejected: List[float] = []
             for kind in ("bar", "beat", "onset"):
                 typed = [a for k, a in window if k == kind]
+                if veto_fn is not None:
+                    allowed = [a for a in typed if not veto_fn(label, a)]
+                    rejected += [a for a in typed if a not in allowed]
+                    typed = allowed
                 if typed:
                     chosen = (kind, min(typed, key=lambda a: abs(a - ideal)))
                     break
@@ -134,11 +140,21 @@ def build(
                 note = "nessun accento nella finestra: durata richiesta"
             else:
                 cut_on, boundary = chosen
-                note = (
-                    f"costo {abs(boundary - ideal):.3f}s rispetto all'ideale"
-                    if cut_on != "bar"
-                    else ""
-                )
+                displaced = [
+                    a for a in rejected if abs(a - ideal) < abs(boundary - ideal)
+                ]
+                if displaced:
+                    cut_on = "visual_veto"
+                    note = (
+                        f"accento a {min(displaced, key=lambda a: abs(a - ideal)):.3f} scartato "
+                        f"(movimento); costo {abs(boundary - ideal) * 1000:.0f} ms"
+                    )
+                else:
+                    note = (
+                        f"costo {abs(boundary - ideal):.3f}s rispetto all'ideale"
+                        if cut_on != "bar"
+                        else ""
+                    )
             duration = boundary - src_in
             edl.rhythmic_shots += 1
 
