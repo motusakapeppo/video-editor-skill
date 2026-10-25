@@ -49,11 +49,30 @@ __all__ = [
     "verify_fonts",
     "burn_filter",
     "transcript_stats",
+    "measure_bbox",
+    "wrap_text",
     "main",
 ]
 
 DEFAULT_MODEL = "small"
 DEFAULT_FONT = "Arial Black"
+
+# Tipografia broadcast (specifica utente). Outline pieno sottile + ombra
+# staccata: il testo resta leggibile su maglietta bianca e riflessi sul muro
+# senza diventare un blocco. `ScaledBorderAndShadow: yes` fa scalare i valori con
+# la PlayRes, quindi 2 significa 2 pixel reali sulla delivery 1080x1440.
+OUTLINE_VERTICAL = 2
+SHADOW_VERTICAL = 1
+OUTLINE_HORIZONTAL = 4
+SHADOW_HORIZONTAL = 2
+
+# Budget di caratteri per riga: con 2 righe e 960 px utili, 30 caratteri
+# permettono un corpo ~64 px invece dei 40 px necessari a stare su una riga sola.
+# Misurato: la cue piu' lunga e' 44 caratteri e senza a capo sborda il canvas di
+# 152 px (era il difetto a 0:00).
+WRAP_CHARS_VERTICAL = 30
+MAX_LINES_VERTICAL = 2
+
 
 GAP_BREAK = 0.45  # seconds of silence that closes a cue
 MIN_CUE = 0.4  # never emit a shorter cue; extend the end instead
@@ -442,6 +461,49 @@ def _clean_body(cue: Cue) -> str:
     return _ass_escape(cue.text)
 
 
+def wrap_text(
+    text: str, width: int, *, max_lines: int = MAX_LINES_VERTICAL
+) -> List[str]:
+    """Greedy word wrap, then rebalanced so a two-line cue has no orphan word.
+
+    `width` is characters, not pixels: the caller has already chosen the font so
+    that `width` characters fit the safe box. Greedy alone produced
+    "Lo racchiudo per intero con il / palmo"; the rebalance turns that into
+    "Lo racchiudo per intero / con il palmo", which is what a caption looks like.
+    """
+    words = str(text).split()
+    if not words:
+        return []
+    width = max(1, int(width))
+    lines: List[str] = []
+    cur = ""
+    for word in words:
+        if not cur:
+            cur = word
+        elif len(cur) + 1 + len(word) <= width or len(lines) >= max_lines - 1:
+            cur = f"{cur} {word}"
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+
+    if len(lines) == 2 and len(words) > 2:
+        best: Optional[List[str]] = None
+        best_cost: Optional[tuple[int, int]] = None
+        for k in range(1, len(words)):
+            first = " ".join(words[:k])
+            second = " ".join(words[k:])
+            if len(first) > width or len(second) > width:
+                continue
+            cost = (max(len(first), len(second)), abs(len(first) - len(second)))
+            if best_cost is None or cost < best_cost:
+                best_cost, best = cost, [first, second]
+        if best is not None:
+            return best
+    return lines
+
+
 def write_ass(
     cues: List[Cue],
     dst,
@@ -452,15 +514,27 @@ def write_ass(
     font: str = DEFAULT_FONT,
     out_w: int = 1080,
     out_h: int = 1920,
+    bottom_limit_px: Optional[int] = None,
+    wrap_chars: Optional[int] = None,
+    outline: Optional[int] = None,
+    shadow: Optional[int] = None,
+    margin_lr: Optional[int] = None,
 ) -> str:
-    """Write an ASS file and return its absolute path (plain UTF-8, no BOM)."""
+    """Write an ASS file and return its absolute path (plain UTF-8, no BOM).
+
+    `bottom_limit_px` is the highest Y (exclusive) the text block may reach. It is
+    what `vx.layout` computes from the graphic overlays, and it overrides the
+    platform-inset heuristic entirely: a measured limit beats a generic one.
+    """
     target = Path(dst)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     vertical = aspect not in ("16:9", "4:3")
     if vertical:
         base = int(round(0.062 * out_h))
-        outline, shadow = 7, 4
+        outline = OUTLINE_VERTICAL if outline is None else int(outline)
+        shadow = SHADOW_VERTICAL if shadow is None else int(shadow)
+        chars = WRAP_CHARS_VERTICAL if wrap_chars is None else int(wrap_chars)
         insets = PLATFORM_INSETS.get(platform, (0, 0, 0, 0))
         scale = out_h / 1920.0
         margin_v = int(
@@ -473,19 +547,26 @@ def write_ass(
         )
     else:
         base = int(round(0.045 * out_h))
-        outline, shadow = 4, 2
+        outline = OUTLINE_HORIZONTAL if outline is None else int(outline)
+        shadow = SHADOW_HORIZONTAL if shadow is None else int(shadow)
+        chars = 42 if wrap_chars is None else int(wrap_chars)
         margin_v = 40
 
     if style == "clean":
-        outline = max(2, outline - 3)
-        shadow = max(1, shadow - 2)
+        outline = max(2, outline - 1)
+        shadow = max(1, shadow - 1)
 
-    # keep the longest cue inside the frame even if the caller raised max_chars
-    longest = max((len(c.text) for c in cues), default=1) or 1
-    avail = max(64, out_w - 80)
-    size = max(24, min(base, int(avail / (longest * _CHAR_EM))))
+    if bottom_limit_px is not None:
+        margin_v = max(0, int(out_h) - int(bottom_limit_px))
 
-    margin_lr = 60
+    margin_lr = 60 if margin_lr is None else int(margin_lr)
+    wrapped: List[List[str]] = [wrap_text(c.text, chars) for c in cues]
+    longest = max(
+        (max((len(x) for x in lines), default=1) for lines in wrapped), default=1
+    )
+    avail = max(64, out_w - 2 * margin_lr)
+    size = max(24, min(base, int(avail / (max(1, longest) * _CHAR_EM))))
+
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -512,11 +593,13 @@ def write_ass(
         "{\\fscx100\\fscy100\\t(0,80,\\fscx108\\fscy108)\\t(80,160,\\fscx100\\fscy100)}"
     )
     lines: List[str] = []
-    for cue in cues:
+    for cue, chunks in zip(cues, wrapped):
         if cue.end <= cue.start:
             continue
         if style == "karaoke":
             body = pop + _karaoke_body(cue)
+        elif len(chunks) > 1:
+            body = "\\N".join(_ass_escape(chunk) for chunk in chunks)
         else:
             body = _clean_body(cue)
         lines.append(
@@ -589,14 +672,14 @@ def verify_fonts(ass_path, *, log_path=None) -> Dict[str, Any]:
     start = _first_dialogue_start(ass_text)
 
     args = [
-        "-ss",
-        f"{start + 0.05:.3f}",
         "-f",
         "lavfi",
         "-i",
-        f"color=c=black:s={w}x{h}:d=1",
+        f"color=c=black:s={w}x{h}:r=25:d={start + 1.5:.2f}",
         "-vf",
         burn_filter(src),
+        "-ss",
+        f"{start + 0.05:.3f}",
         "-frames:v",
         "1",
         "-f",
@@ -630,8 +713,122 @@ def verify_fonts(ass_path, *, log_path=None) -> Dict[str, Any]:
     result["fonts_used"] = sorted(set(chosen))
     result["requested"] = sorted(set(requested))
     result["rc"] = proc.rc
-    result["ok"] = bool(proc.rc == 0 and fallback == 0 and not hard_error)
+    result["ok"] = bool(
+        proc.rc == 0 and fallback == 0 and not hard_error and len(chosen) > 0
+    )
+    if not chosen:
+        result["error"] = (
+            "no fontselect line in the log: the frame carried no text, so the "
+            "font was never exercised"
+        )
     return result
+
+
+# --------------------------------------------------------------------------- #
+# 5b. measured ink box — the only proof that the typography fits
+# --------------------------------------------------------------------------- #
+
+_INK = re.compile(
+    r"^Dialogue:\s*\d+,(\d+):(\d\d):(\d\d)\.(\d\d),(\d+):(\d\d):(\d\d)\.(\d\d),"
+)
+
+
+def measure_bbox(
+    ass_path,
+    *,
+    workdir=None,
+    threshold: int = 24,
+    outline_px: int = OUTLINE_VERTICAL,
+) -> Dict[str, Any]:
+    """Render every cue on black and measure the real ink box of the text.
+
+    This is the ground truth the layout gate wants: the declared box in
+    `vx.layout` is arithmetic, this is the pixels libass actually produced. A
+    missing font, a wrong PlayRes or an unsupported tag all show up here.
+    """
+    src = Path(ass_path)
+    out: Dict[str, Any] = {"ok": False, "cues": [], "bbox": None, "max_bottom": 0}
+    if not src.exists():
+        out["error"] = f"missing ass: {src}"
+        return out
+    try:
+        import cv2  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = f"opencv/numpy unavailable: {exc}"
+        return out
+
+    text = src.read_text(encoding="utf-8", errors="replace")
+    w, h = _playres(text)
+    work = Path(workdir) if workdir else src.parent / "_bbox"
+    work.mkdir(parents=True, exist_ok=True)
+
+    spans: List[tuple[float, float]] = []
+    for line in text.splitlines():
+        m = _INK.match(line.strip())
+        if not m:
+            continue
+        g = [int(x) for x in m.groups()]
+        start = g[0] * 3600 + g[1] * 60 + g[2] + g[3] / 100.0
+        end = g[4] * 3600 + g[5] * 60 + g[6] + g[7] / 100.0
+        if end > start:
+            spans.append((start, end))
+    if not spans:
+        out["error"] = "no Dialogue lines"
+        return out
+
+    x1 = y1 = 10**9
+    x2 = y2 = -1
+    for i, (start, end) in enumerate(spans):
+        at = start + 0.4 * (end - start)
+        png = work / f"cue_{i:02d}.png"
+        proc = ff.run_ff(
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c=black:s={w}x{h}:r=25:d={at + 1.5:.2f}",
+                "-vf",
+                burn_filter(src),
+                "-ss",
+                f"{at:.3f}",
+                "-frames:v",
+                "1",
+                "-y",
+                str(png),
+            ],
+            loglevel="error",
+        )
+        if not proc.ok or not png.exists():
+            out["cues"].append(
+                {"index": i, "start": round(start, 3), "error": proc.tail(3)}
+            )
+            continue
+        img = cv2.imread(str(png))
+        if img is None:
+            continue
+        gray = img.max(axis=2)
+        ys, xs = np.where(gray > int(threshold))
+        if not len(xs):
+            out["cues"].append({"index": i, "start": round(start, 3), "empty": True})
+            continue
+        box = {
+            "x": int(xs.min()) - int(outline_px),
+            "y": int(ys.min()) - int(outline_px),
+            "w": int(xs.max() - xs.min() + 1) + 2 * int(outline_px),
+            "h": int(ys.max() - ys.min() + 1) + 2 * int(outline_px),
+        }
+        out["cues"].append({"index": i, "start": round(start, 3), "bbox": box})
+        x1, y1 = min(x1, box["x"]), min(y1, box["y"])
+        x2, y2 = max(x2, box["x"] + box["w"]), max(y2, box["y"] + box["h"])
+
+    if x2 > 0:
+        out["bbox"] = {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}
+        out["max_bottom"] = int(y2)
+        out["max_right"] = int(x2)
+        out["min_left"] = int(x1)
+        out["ok"] = True
+    return out
 
 
 # --------------------------------------------------------------------------- #

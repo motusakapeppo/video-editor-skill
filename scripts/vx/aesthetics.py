@@ -22,7 +22,12 @@ from typing import Any, Dict, Optional
 
 OUT_W = 1080
 OUT_H = 1440
-EYE_LINE = 0.42
+
+# Gli occhi cadono al 25% dell'altezza del crop: la testa sta nel terzo superiore
+# e la finestra scende di ~490 px rispetto al vecchio 0.42, recuperando busto e
+# braccia. Misurato: con 0.42 quattro spezzoni su sette erano bloccati a y=0
+# (nessuna liberta' verticale); con 0.25 si sbloccano.
+EYE_LINE = 0.25
 MODEL = (
     Path(__file__).resolve().parents[2]
     / "assets"
@@ -30,13 +35,27 @@ MODEL = (
     / "face_detection_yunet_2023mar.onnx"
 )
 
+# Duotono non distruttivo, verificato àncora per àncora su rampa sintetica:
+#
+#     L_in  RGB_out              L_out   dL      sat
+#     0.25  0.380 0.161 0.145    0.225   -0.025  0.619
+#     0.50  0.745 0.392 0.290    0.486   -0.014  0.611
+#     0.75  0.890 0.741 0.675    0.778   +0.028  0.242
+#     1.00  1.000 0.988 0.957    0.988   -0.012  0.043
+#
+# Sui frame reali: neri assoluti 5.6% (era 15.7%), saturazione mezzitoni 0.512,
+# saturazione alte luci 0.186 (la bandiera resta bianca), p99 0.850.
+# `curves=m` protegge i punti 0/1 prima del viraggio; il viraggio vero e' nelle
+# tre curve per canale, i cui àncore sono scelti per conservare la luma BT.601.
+# `colorbalance` e' stato misurato e scartato: a L_in 0.50 restituisce
+# 0.502/0.502/0.502, cioe' non vira i mezzitoni.
 DUOTONE = (
-    "curves=all='0/0 0.35/0.20 0.72/0.88 1/1',"
-    "hue=s=0,eq=contrast=1.08,"
-    "curves=r='0/0.031 0.502/0.588 1/0.922':"
-    "g='0/0.024 0.502/0.094 1/0.871':"
-    "b='0/0.024 0.502/0.078 1/0.804',"
-    "noise=alls=9:allf=t,vignette=PI/5"
+    "curves=m='0/0 0.06/0.05 0.5/0.53 0.94/0.97 1/1',"
+    "hue=s=0,"
+    "curves=r='0/0 0.25/0.40 0.5/0.72 0.75/0.86 1/1.0':"
+    "g='0/0 0.25/0.17 0.5/0.36 0.75/0.66 1/0.99':"
+    "b='0/0 0.25/0.15 0.5/0.26 0.75/0.58 1/0.96',"
+    "noise=alls=4:allf=t,vignette=PI/9"
 )
 
 
@@ -136,6 +155,111 @@ def chain(placement: Placement, *, out_w: int = OUT_W, out_h: int = OUT_H) -> st
         f"scale={out_w}:{out_h}:flags=lanczos,"
         f"{DUOTONE},format=yuv420p,setsar=1"
     )
+
+
+@dataclass
+class MotionFit:
+    """Quanto movimento contiene lo spezzone, e quanto ne puo' seguire il crop."""
+
+    crop_w: int
+    crop_h: int
+    room_x: int
+    room_y: int
+    spread_x: float
+    spread_y: float
+    samples: int
+    decision: str
+    note: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "crop_w": self.crop_w,
+            "crop_h": self.crop_h,
+            "room_x": self.room_x,
+            "room_y": self.room_y,
+            "spread_x": round(self.spread_x, 1),
+            "spread_y": round(self.spread_y, 1),
+            "samples": self.samples,
+            "decision": self.decision,
+            "note": self.note,
+        }
+
+
+def motion_fit(
+    path: str | Path,
+    t_in: float,
+    t_out: float,
+    *,
+    src_w: int,
+    src_h: int,
+    samples: int = 5,
+) -> MotionFit:
+    """Misura l'escursione del soggetto e decide se il crop puo' seguirlo.
+
+    Il crop ha liberta' solo se e' piu' piccolo della sorgente: `room_x` e
+    `room_y` sono i pixel di pan disponibili. Se lo spostamento del soggetto
+    eccede la stanza il pan non puo' compensare, e la decisione lo dichiara
+    invece di fingere una correzione che non esiste.
+    """
+    crop_w, crop_h = window(src_w, src_h)
+    room_x = max(0, int(src_w) - crop_w)
+    room_y = max(0, int(src_h) - crop_h)
+    span = max(1e-6, float(t_out) - float(t_in))
+    stamps = [float(t_in) + span * i / max(1, samples - 1) for i in range(samples)]
+
+    fit = MotionFit(crop_w, crop_h, room_x, room_y, 0.0, 0.0, 0, "static")
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        fit.note = "opencv unavailable: moto non misurato"
+        return fit
+
+    capture = cv2.VideoCapture(str(path))
+    detector = None
+    xs: list[float] = []
+    ys: list[float] = []
+    for at in stamps:
+        capture.set(cv2.CAP_PROP_POS_MSEC, at * 1000.0)
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            continue
+        height, width = frame.shape[:2]
+        if detector is None:
+            detector = cv2.FaceDetectorYN.create(
+                str(MODEL), "", (width, height), 0.6, 0.3, 5000
+            )
+        _, faces = detector.detect(frame)
+        if faces is None or len(faces) == 0:
+            continue
+        row = sorted(faces, key=lambda r: r[2] * r[3], reverse=True)[0]
+        xs.append(float(row[0]) + float(row[2]) / 2.0)
+        ys.append(float(row[5]))
+    capture.release()
+
+    fit.samples = len(xs)
+    if len(xs) < 2:
+        fit.note = "meno di 2 volti rilevati: moto non stimabile"
+        return fit
+
+    fit.spread_x = max(xs) - min(xs)
+    fit.spread_y = max(ys) - min(ys)
+
+    if room_x <= 0 and room_y <= 0:
+        fit.decision = "static"
+        fit.note = (
+            "crop = intera sorgente: nessun pixel di pan disponibile. "
+            "L'inquadratura e' quella della camera, non dell'edit"
+        )
+    elif fit.spread_x <= room_x and fit.spread_y <= room_y:
+        fit.decision = "pan"
+        fit.note = "il soggetto resta dentro la stanza di pan"
+    else:
+        fit.decision = "static"
+        fit.note = (
+            f"escursione {fit.spread_x:.0f}x{fit.spread_y:.0f} px supera la stanza "
+            f"{room_x}x{room_y} px: il pan non puo' compensare, si tiene il centro"
+        )
+    return fit
 
 
 def shot_graph(

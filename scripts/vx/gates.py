@@ -394,6 +394,79 @@ def post_render(
 
 
 # --------------------------------------------------------------------------- #
+# Gate 4 — layout: testo contro grafica, prima di ffmpeg
+# --------------------------------------------------------------------------- #
+
+
+def layout(lay, text_box, *, crop_box=None) -> GateResult:
+    """Static gate: the declared text box must not touch the declared graphic box.
+
+    Runs before the filtergraph reaches ffmpeg, on *declarations* only, so a
+    collision costs a millisecond instead of a full render. A failure means the
+    process refuses to render (exit 6, `contract.EXIT_RENDER_FAIL`): the same
+    exit the pipeline uses for "render refused", because that is what it is.
+
+    `crop_box` is optional and only reported: at 3:4 on a 9:16 source the crop
+    already spans the full source width, so it cannot be widened and the check
+    documents the available pan room instead of pretending to fix it.
+    """
+    result = GateResult("layout")
+    canvas = lay.canvas
+
+    graphic = getattr(lay, "graphic", None)
+    overlap = graphic.intersection(text_box) if graphic is not None else None
+    result.checks.append(
+        Check(
+            "text_vs_graphic",
+            "fail" if overlap else "pass",
+            overlap.to_dict() if overlap else 0,
+            0,
+            f"testo e grafica si sovrappongono per {overlap.area} px"
+            if overlap
+            else "nessuna sovrapposizione",
+        )
+    )
+
+    gap = int(lay.text_limit_y) - int(text_box.bottom)
+    result.checks.append(
+        Check(
+            "text_clearance_px",
+            "pass" if gap >= 0 else "fail",
+            gap,
+            ">= 0",
+            f"limite {lay.text_limit_y}, fondo testo {text_box.bottom}",
+        )
+    )
+
+    inside = canvas.contains(text_box)
+    result.checks.append(
+        Check(
+            "text_inside_canvas",
+            "pass" if inside else "fail",
+            text_box.to_dict(),
+            canvas.to_dict(),
+            "" if inside else "il testo dichiarato esce dal canvas",
+        )
+    )
+
+    if crop_box is not None:
+        room = max(0, int(getattr(lay, "canvas", canvas).w) - int(crop_box.w))
+        result.checks.append(
+            Check(
+                "crop_pan_room_px",
+                "skipped",
+                room,
+                "n/a",
+                "spazio di pan orizzontale disponibile nel crop dichiarato",
+            )
+        )
+
+    if not result.ok:
+        raise contract.QCFailure(result.to_dict())
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # self-test
 # --------------------------------------------------------------------------- #
 
