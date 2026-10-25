@@ -588,9 +588,9 @@ def write_ass(
         chars = 42 if wrap_chars is None else int(wrap_chars)
         margin_v = 40
 
-    if style == "clean" and border_style == 1:
-        outline = max(2, outline - 1)
-        shadow = max(1, shadow - 1)
+    if style == "clean" and border_style == 1 and int(outline) > 0:
+        outline = max(0, int(outline) - 1)
+        shadow = max(0, int(shadow) - 1)
 
     if bottom_limit_px is not None:
         # Con la placca (BorderStyle 3) MarginV àncora il glifo, ma lo sfondo
