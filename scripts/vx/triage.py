@@ -25,7 +25,7 @@ from .contract import (
 
 __all__ = ["build_briefing", "to_markdown", "main"]
 
-PYTHON = r"D:\video_env\Scripts\python.exe"
+PYTHON = sys.executable
 SCRIPTS = Path(__file__).resolve().parent.parent
 
 _SEVERITY_RANK = {"critical": 0, "warn": 1, "info": 2}
