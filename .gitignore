@@ -27,3 +27,6 @@ work/
 examples/answers.json
 examples/brief.json
 examples/plan.json
+
+# documento locale, non versionato
+DOCUMENTAZIONE-COMPLETA.md

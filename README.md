@@ -111,11 +111,6 @@ Stabilità (optical flow), esposizione (istogrammi luma, clipping), dominante co
 dead air, LUFS e true peak, clipping, music ratio, volti/track/speaker (YuNet + IoU +
 mouth-aspect-ratio), WPM. Le soglie vivono in un solo posto: `scripts/vx/contract.py`.
 
-## Documentazione
-
-Un unico file con tutto: fasi, architettura, spiegazione modulo per modulo, storia
-della costruzione e contenuto integrale di ogni file — DOCUMENTAZIONE-COMPLETA.md.
-
 ## Struttura
 
 ```
