@@ -144,5 +144,5 @@ trattamenti creativi.
 
 ## Licenza
 
-MIT — vedi `LICENSE`, che riporta anche la provenienza del modello YuNet
-(opencv_zoo) e i progetti da cui sono adattate le euristiche di framing e cutting.
+MIT — vedi `LICENSE`. Provenienza del modello YuNet (opencv_zoo) e dei progetti
+da cui sono adattate le euristiche di framing e cutting: `NOTICE.md`.

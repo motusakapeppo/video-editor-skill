@@ -127,6 +127,8 @@ sheet. Usa `crf 28`, `veryfast`, `rc-lookahead=0:bframes=0`, scala bicubica, aud
 AAC 96k, e confronta il fingerprint prima e dopo: `source_unchanged` è misurato.
 
 ```powershell
+$PY = "<VENV_DIR>\Scripts\python.exe"
+$env:PYTHONPATH = "<SKILL_DIR>\scripts"
 & $PY -m vx.proxy make --input "%USERPROFILE%\clip.mp4" --json
 & $PY -m vx.proxy thumbs --input "%USERPROFILE%\clip.mp4" --out-dir "<WORK_DIR>\clip-a1b2c3d4\out"
 ```

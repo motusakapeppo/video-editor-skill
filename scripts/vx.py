@@ -1,6 +1,6 @@
 """Launcher for the video-editor toolkit.
 
-    D:\\video_env\\Scripts\\python.exe scripts\\vx.py <command> [options]
+    python scripts/vx.py <command> [options]
 
 Kept deliberately thin: all logic lives in the `vx` package next to it.
 """
