@@ -506,6 +506,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     """Fase 7 end-to-end: ingest -> plan -> subs -> proxy -> full -> qc -> deliverables."""
     from . import autoframe, render, subs
+    from . import gates
     from . import plan as plan_mod
     from . import qc, triage
     from .contract import FaceTracks
@@ -608,6 +609,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     report_io.write(built.to_dict(), work / "plan.json")
 
     # ---- preview on the proxy, then full-res delivery
+    gates.pre_render(built, media)
     winpath.heartbeat(work, "render_preview")
     _log("[run] render anteprima (proxy)")
     preview = render.render(
@@ -642,6 +644,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         source_fp=state["fingerprint"],
     )
     report_io.write(result.to_dict(), work / "qc.json")
+    planned_total = sum(float(c["out"]) - float(c["in"]) for c in (final_plan.cuts or [])) or None
+    gates.post_render(final_plan, media, final["path"], workdir=work, planned_total=planned_total)
 
     rep["plan"] = final_plan.to_dict()
     rep["qc"] = result.to_dict()
