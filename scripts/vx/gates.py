@@ -587,3 +587,94 @@ if __name__ == "__main__":
     import sys
 
     raise SystemExit(_selftest() if "--selftest" in sys.argv else 0)
+
+
+# --------------------------------------------------------------------------- #
+# Gate 5 — color audit: il grade del nuovo motore non tradisce quello certificato
+# --------------------------------------------------------------------------- #
+
+COLOR_SAMPLES = 12
+# Tolleranze sul confronto a parita' di sorgente. Sono strette di proposito: il
+# grade lo fa lo stesso codice, quindi una differenza misurabile e' un errore, non
+# una sfumatura. Misurato: 0.000 fra un file e se stesso.
+COLOR_TOLERANCE = {"luma_p01": 0.010, "luma_p50": 0.020, "luma_p99": 0.030,
+                   "mid_sat": 0.050, "hi_sat": 0.050}
+
+
+def _frame_stats(video: str | Path, at: float, region: tuple[float, float]) -> dict:
+    import cv2  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        raise contract.QCFailure({"gate": "color", "failures": [f"non apribile: {video}"]})
+    cap.set(cv2.CAP_PROP_POS_MSEC, at * 1000.0)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise contract.QCFailure({"gate": "color", "failures": [f"frame non leggibile a {at}"]})
+    h = frame.shape[0]
+    y0, y1 = int(h * region[0]), int(h * region[1])
+    rgb = cv2.cvtColor(frame[y0:y1], cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    hi = rgb.max(axis=2)
+    lo = rgb.min(axis=2)
+    sat = np.where(hi > 1e-6, (hi - lo) / np.maximum(hi, 1e-6), 0.0)
+    mid = (luma > 0.35) & (luma < 0.65)
+    bright = luma > 0.72
+    return {
+        "luma_p01": float(np.percentile(luma, 1)),
+        "luma_p50": float(np.percentile(luma, 50)),
+        "luma_p99": float(np.percentile(luma, 99)),
+        "mid_sat": float(sat[mid].mean()) if mid.any() else 0.0,
+        "hi_sat": float(sat[bright].mean()) if bright.any() else 0.0,
+    }
+
+
+def color(
+    candidate: str | Path,
+    reference: str | Path,
+    *,
+    samples: int = COLOR_SAMPLES,
+    region: tuple[float, float] = (0.0, 0.62),
+    tolerance: dict | None = None,
+) -> GateResult:
+    """Gate 5: il grade del file nuovo deve combaciare con quello certificato.
+
+    Non confronta i pixel (la grafica puo' differire), confronta la DISTRIBUZIONE
+    di luma e saturazione nella zona di puro grade — sopra il blocco testo. E' il
+    cancello che rende sicuro spostare il duotone dentro il motore di compositing:
+    senza, un errore di colore passerebbe silenzioso.
+    """
+    tol = dict(COLOR_TOLERANCE)
+    if tolerance:
+        tol.update({k: float(v) for k, v in tolerance.items()})
+    result = GateResult("color")
+    from . import motion as motion_mod  # noqa: PLC0415
+
+    frames, dur, _fps = motion_mod.expected_frames(reference)
+    if dur <= 0:
+        raise contract.QCFailure({"gate": "color", "failures": ["durata non leggibile"]})
+    times = [dur * i / max(1, samples - 1) * 0.999 for i in range(samples)]
+
+    worst = {k: 0.0 for k in tol}
+    for at in times:
+        ref = _frame_stats(reference, at, region)
+        cand = _frame_stats(candidate, at, region)
+        for key in tol:
+            worst[key] = max(worst[key], abs(cand[key] - ref[key]))
+
+    for key, limit in tol.items():
+        delta = worst[key]
+        result.checks.append(
+            Check(
+                key,
+                "pass" if delta <= limit else "fail",
+                round(delta, 4),
+                f"<= {limit}",
+                f"scarto massimo su {samples} campioni nella fascia {region}",
+            )
+        )
+    if not result.ok:
+        raise contract.QCFailure(result.to_dict())
+    return result
