@@ -243,6 +243,7 @@ def post_render(
     *,
     workdir: str | Path,
     planned_total: Optional[float] = None,
+    expected_size: Optional[tuple[int, int]] = None,
 ) -> GateResult:
     """Validate the delivered file; quarantine it and raise if it is not usable."""
     result = GateResult("post_render")
@@ -277,6 +278,20 @@ def post_render(
         )
     else:
         result.checks.append(Check("video_stream", "pass", True, True, ""))
+        if expected_size is not None:
+            got = (int(video.get("width") or 0), int(video.get("height") or 0))
+            wanted = (int(expected_size[0]), int(expected_size[1]))
+            result.checks.append(
+                Check(
+                    "output_size",
+                    "pass" if got == wanted else "fail",
+                    f"{got[0]}x{got[1]}",
+                    f"{wanted[0]}x{wanted[1]}",
+                    ""
+                    if got == wanted
+                    else "geometry differs from the declared target",
+                )
+            )
 
     v_dur = float(
         (video or {}).get("duration") or data.get("format", {}).get("duration") or 0.0

@@ -189,7 +189,11 @@ def build(
 
 
 def filtergraph(
-    edl: Edl, inputs: Dict[str, int], *, fps: Optional[float] = None
+    edl: Edl,
+    inputs: Dict[str, int],
+    *,
+    fps: Optional[float] = None,
+    video_extra: Optional[Any] = None,
 ) -> str:
     """One graph: rate-match first, then cut on frame indices, then one concat.
 
@@ -208,7 +212,9 @@ def filtergraph(
         last = first + int(shot.frames)
         parts.append(
             f"[{src}:v]fps={int(round(rate))},"
-            f"trim=start_frame={first}:end_frame={last},setpts=PTS-STARTPTS[v{index}]"
+            f"trim=start_frame={first}:end_frame={last},setpts=PTS-STARTPTS"
+            + (f",{video_extra(shot).lstrip(',')}" if video_extra is not None else "")
+            + f"[v{index}]"
         )
         parts.append(
             f"[{src}:a]aresample=48000,"
