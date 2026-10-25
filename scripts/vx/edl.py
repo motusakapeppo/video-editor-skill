@@ -172,19 +172,31 @@ def build(
     return edl
 
 
-def filtergraph(edl: Edl, inputs: Dict[str, int]) -> str:
-    """One graph: every shot trims picture and sound from the same input, then a single
-    concat advances both streams. `inputs` maps a label to its ffmpeg input index."""
+def filtergraph(
+    edl: Edl, inputs: Dict[str, int], *, fps: Optional[float] = None
+) -> str:
+    """One graph: rate-match first, then cut on frame indices, then one concat.
+
+    Trimming by seconds after an fps conversion does not guarantee a frame count: the
+    timeline is quantised but the cut is not, so a segment can gain or lose a frame.
+    Normalising the rate upstream and cutting with start_frame/end_frame makes each
+    segment's frame count exact by construction, and the audio window is derived from
+    the same frame indices so picture and sound cannot drift apart.
+    """
+    rate = float(fps or edl.fps)
     parts: List[str] = []
     pairs: List[str] = []
     for index, shot in enumerate(edl.shots):
         src = inputs[shot.label]
+        first = int(round(shot.src_in * rate))
+        last = first + int(shot.frames)
         parts.append(
-            f"[{src}:v]trim=start={shot.src_in:.3f}:end={shot.src_out:.3f},"
-            f"setpts=PTS-STARTPTS[v{index}]"
+            f"[{src}:v]fps={int(round(rate))},"
+            f"trim=start_frame={first}:end_frame={last},setpts=PTS-STARTPTS[v{index}]"
         )
         parts.append(
-            f"[{src}:a]atrim=start={shot.src_in:.3f}:end={shot.src_out:.3f},"
+            f"[{src}:a]aresample=48000,"
+            f"atrim=start={first / rate:.6f}:end={last / rate:.6f},"
             f"asetpts=PTS-STARTPTS[a{index}]"
         )
         pairs.append(f"[v{index}][a{index}]")
