@@ -138,6 +138,23 @@ Exit code: `0` ok · `2` uso errato · `3` serve l'utente · `4` dipendenza manc
 | `deliverables` | matrice di consegna |
 | `vx-mcp` | server MCP su stdio: quattro tool, JSON-RPC 2.0 per riga |
 
+## Job asincroni
+
+Un render lungo non deve vivere dentro il timeout di un tool MCP. Il motore
+asincrono separa la richiesta dall'esecuzione:
+
+- `vx_job_submit` (`prompt`, `assets`, `out` obbligatori; `workdir`, `fps`,
+  `manifest`, `autonomous`, `crf`, `preset` opzionali) scrive un record `queued`
+  e torna subito con l'id del job.
+- `vx_job_status` (`job_id`, 32 esadecimali minuscoli) restituisce il record:
+  stato, percentuale, stage, risultato o errore.
+
+Lo stato vive su disco in `<work_root>/jobs/<job_id>/job.json`, scritto in modo
+atomico. Il worker è staccato e sopravvive all'uscita del server MCP, quindi una
+sessione nuova può leggere un job che non ha creato. Non c'è cancellazione: un
+job avviato arriva a `completed` o `failed`. `vx_auto` resta per i job brevi.
+Dettagli e limiti in `references/25-job-engine.md`.
+
 ## Cosa misura
 
 Stabilità (optical flow), esposizione (istogrammi luma, clipping), dominante colore
@@ -149,9 +166,10 @@ mouth-aspect-ratio), WPM. Le soglie vivono in un solo posto: `scripts/vx/contrac
 
 ```
 SKILL.md                  ruolo, protocollo, trigger di auto-invocazione
-references/01..24.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
+references/01..25.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
                           accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna, EDL,
-                          render multi-sorgente, regia semantica, grammatica e mixer audio, triage e auto, API e MCP
+                          render multi-sorgente, regia semantica, grammatica e mixer audio, triage e auto, API e MCP,
+                          motore di job asincrono
 scripts/vx.py             launcher
 scripts/vx/
   contract.py             interfaccia congelata: schemi, soglie, validatori
