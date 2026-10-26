@@ -406,7 +406,32 @@ def render_layer(
     if active is None:
         return layer
 
+    style = payload.style or {}
     rows = _layout(payload, active, font)
+    # animazione dichiarata per questa cue (slide_up/left/right, typeon, pop, none)
+    try:
+        cue_idx = payload.cues.index(active)
+    except ValueError:
+        cue_idx = 0
+    spec_list = (style.get("animation", {}) or {}).get("per_cue", []) or []
+    spec = next((s for s in spec_list if int(s.get("cue", -1)) == cue_idx), {})
+    effect = str(spec.get("in", "none"))
+    anim_ms = max(1.0, float(spec.get("ms", 0))) / 1000.0
+    age = max(0.0, t - active.start)
+    prog = min(1.0, age / anim_ms) if anim_ms > 0 else 1.0
+    ease = 1.0 - (1.0 - prog) ** 3
+    if effect == "slide_up":
+        dy, dx = (1.0 - ease) * 70.0, 0.0
+    elif effect == "slide_left":
+        dy, dx = 0.0, (1.0 - ease) * 90.0
+    elif effect == "slide_right":
+        dy, dx = 0.0, -(1.0 - ease) * 90.0
+    else:
+        dy = dx = 0.0
+    if effect == "typeon":
+        visible_chars = int(round(ease * 10 ** 6))
+    else:
+        visible_chars = 10 ** 6
     if not rows:
         return layer
     ys = [y for _, _, y, _ in rows]
@@ -432,7 +457,6 @@ def render_layer(
             > ADAPT_THRESHOLD
         )
 
-    style = payload.style or {}
     if style.get("ink"):
         c = style["ink"]
         ink = (int(c[0]), int(c[1]), int(c[2]), 255) if isinstance(c, (list, tuple)) else ink
@@ -467,7 +491,11 @@ def render_layer(
         f = font
         if abs(scale - 1.0) > 1e-3:
             f = font.font_variant(size=max(8, int(round(payload.font_px * scale))))
-        d.text((cx, y), word_text, font=f, fill=(*colour[:3], alpha), anchor="ma")
+        if len(word_text) > visible_chars:
+            word_text = word_text[:visible_chars]
+        if not word_text:
+            continue
+        d.text((cx + dx, y + dy), word_text, font=f, fill=(*colour[:3], alpha), anchor="ma")
 
     mask = text.split()[3].filter(ImageFilter.GaussianBlur(SHADOW_BLUR))
     shadow = Image.new("RGBA", (payload.width, payload.height), (0, 0, 0, 0))
