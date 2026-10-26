@@ -72,15 +72,14 @@ class Proposal:
     values: Dict[str, Any]
     cited: str = ""
     rationale: str = ""
+    # Un agente che ha un dubbio NON indovina: restituisce la domanda. Il brief non
+    # si chiude e la domanda arriva all'utente tramite la chat principale.
+    questions: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "role": self.role,
-            "values": self.values,
-            "cited": self.cited,
-            "rationale": self.rationale,
-        }
-
+        return {"role": self.role, "values": self.values,
+                "cited": self.cited, "rationale": self.rationale,
+                "questions": self.questions}
 
 @dataclass
 class Verdict:
@@ -135,6 +134,23 @@ def convene(proposals: Sequence[Proposal], material: Dict[str, Any]) -> Verdict:
     accepted: Dict[str, Dict[str, Any]] = {}
     owners: Dict[str, str] = {}
 
+    # un agente che chiede non e' un agente che ha deciso: il brief resta aperto
+    _pending: List[Dict[str, Any]] = []
+    for _p in proposals:
+        for _q in getattr(_p, "questions", []) or []:
+            _pending.append({"role": _p.role, **_q})
+    if _pending:
+        verdict.ok = False
+        verdict.notes.append(f"{len(_pending)} domande aperte: il brief non si chiude")
+    pending: List[Dict[str, Any]] = []
+    for p in proposals:
+        for q in p.questions:
+            pending.append({"role": p.role, **q})
+    if pending:
+        verdict.ok = False
+        verdict.notes.append(f"{len(pending)} domande aperte: il brief non si chiude")
+        verdict.brief["_questions"] = pending
+
     for p in proposals:
         good, why = validate(p, material)
         if not good:
@@ -172,6 +188,8 @@ def convene(proposals: Sequence[Proposal], material: Dict[str, Any]) -> Verdict:
         verdict.notes.append(f"domini scoperti: {missing}")
 
     verdict.brief = accepted
+    if _pending:
+        verdict.brief["_questions"] = _pending
     verdict.brief["_owners"] = owners
     verdict.brief["_signed"] = bool(director)
     return verdict
@@ -432,3 +450,55 @@ def verify_animation(animation: Dict[str, Any], cues: Sequence[Dict[str, float]]
     if len(treatments) > 2:
         errs.append(f"anti-arlecchino: {len(treatments)} trattamenti distinti (max 2)")
     return errs
+
+
+# --------------------------------------------------------------------------- #
+# prefight: cosa chiedere all'utente prima di convocare gli agenti
+# --------------------------------------------------------------------------- #
+
+# Si chiede solo cio' che CAMBIA l'output e non e' deducibile ne' misurabile.
+PREFLIGHT_RULES: List[Dict[str, Any]] = [
+    {"code": "tone", "triggers": ("caotic", "festos", "elegant", "minimal", "vintage",
+                                  "cinematograf", "epic", "modern"),
+     "question": "Il tono e' un aggettivo: quale intensita' vuoi, in concreto?",
+     "options": ["contenuta (1 trattamento, palette 2 colori)",
+                 "media (2 trattamenti, palette 3 colori)",
+                 "massima (4 trattamenti, palette 4 colori, jitter di rotazione)"]},
+    {"code": "copy", "triggers": ("spot", "promo", "pubblicit"),
+     "question": "Chi parla e cosa deve restare impresso? Serve il nome e la data/CTA.",
+     "options": ["te li fornisco io", "inventali tu dal materiale"]},
+    {"code": "palette", "triggers": ("colorat", "festos"),
+     "question": "Il colore deve venire dal materiale o essere imposto?",
+     "options": ["deriva dal materiale (complementare della tinta dominante)",
+                 "palette fissa che ti do io"]},
+]
+
+
+def prefight(request: str, material: Dict[str, Any], *, has_text: bool = True,
+             assets: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """Domande da porre all'utente PRIMA di convocare la giuria.
+
+    Non chiede cio' che si misura (luma, contrasto, durate) ne' cio' che la
+    piattaforma decide (formato). Chiede solo le scelte che cambiano l'output e che
+    nessun dato puo' risolvere: tono, contenuto, palette imposta.
+    """
+    text = (request or "").lower()
+    questions: List[Dict[str, Any]] = []
+    import re as _re
+    has_quoted = bool(_re.search(r"[\"«'][^\"»']{6,}[\"»']", request or ""))
+    has_date = bool(_re.search(r"\b\d{1,2}\s*(novembre|dicembre|gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre)\b", text))
+    for rule in PREFLIGHT_RULES:
+        if rule["code"] == "copy" and (has_quoted or has_date):
+            continue
+        if any(trig in text for trig in rule["triggers"]):
+            questions.append({"code": rule["code"], "question": rule["question"],
+                              "options": list(rule["options"])})
+    if not has_text:
+        questions.append({"code": "text_missing",
+                          "question": "Non c'e' testo: chi lo scrive?",
+                          "options": ["lo scrivo io", "lo inventa lo scrittore"]})
+    if assets is not None and not assets:
+        questions.append({"code": "no_assets",
+                          "question": "Nessun font/logo nel registro: procedo col sistema?",
+                          "options": ["usa i font di sistema", "ti fornisco gli asset"]})
+    return {"ok": not questions, "questions": questions}
