@@ -344,3 +344,16 @@ if __name__ == "__main__":
         print('       (or set VX_DEMO_SOURCES=\'{"9928": "<video>", ...}\')')
         raise SystemExit(2)
     raise SystemExit(_selftest(srcs))
+
+# Public alias: the v2 multi-source model lives in its own module so the
+# single-source Edl above stays byte-identical; importing it here keeps
+# ``vx.edl.EDLPlan`` valid. Placed after the __main__ block so direct
+# execution (which raises SystemExit above) never evaluates this import.
+from .edl_plan import (  # noqa: E402,F401
+    ClipSegment,
+    EDLPlan,
+    EDLValidationError,
+    SourceRef,
+    Track,
+    Transition,
+)
