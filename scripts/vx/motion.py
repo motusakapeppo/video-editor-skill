@@ -137,6 +137,7 @@ class MotionPayload:
     safe_areas: List[Dict[str, Any]] = field(default_factory=list)
     elements: List[Element] = field(default_factory=list)
     beats: List[float] = field(default_factory=list)
+    style: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -190,6 +191,7 @@ def build_payload(
     bottom_limit: int,
     beats: Optional[Sequence[float]] = None,
     wrap_chars: int = 30,
+    style: Optional[Dict[str, Any]] = None,
 ) -> MotionPayload:
     """Costruisce il contratto. I tempi delle parole sono distribuiti sulla cue.
 
@@ -237,13 +239,21 @@ def build_payload(
             break
         size -= 2
 
-    return MotionPayload(
+    st = dict(style or {})
+    if st.get("font_path"):
+        font_path = st["font_path"]
+    if st.get("font_px"):
+        size = int(st["font_px"])
+    if st.get("bottom_limit"):
+        bottom_limit = int(st["bottom_limit"])
+    payload = MotionPayload(
         width=int(width), height=int(height), fps=float(fps), aspect=str(aspect),
         font_path=str(font_path), font_px=size, margin_lr=int(margin_lr),
         # L'ombra sfocata dipinge oltre il glifo: il limite del testo la riserva
         # dentro di se', altrimenti il box massimo sfonda la fascia grafica.
-        bottom_limit=int(bottom_limit) - pad, cues=built,
+        bottom_limit=int(bottom_limit) - pad, cues=built, style=st,
     )
+    return payload
 
 
 def expected_frames(video: str | Path) -> Tuple[int, float, float]:
@@ -340,9 +350,9 @@ def _ease_out_back(x: float) -> float:
     return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2
 
 
-def _word_scale(word: Word, t: float) -> float:
+def _word_scale(word: Word, t: float, pop_ms: float = POP_MS) -> float:
     """Pop che atterra a 1.0 e non lo supera mai."""
-    span = POP_MS / 1000.0
+    span = max(1.0, float(pop_ms)) / 1000.0
     age = t - word.t_start
     if age < 0 or age >= span:
         return 1.0
@@ -422,8 +432,15 @@ def render_layer(
             > ADAPT_THRESHOLD
         )
 
-    ink = (16, 16, 16, 255) if light_bg else (255, 255, 255, 255)
-    shadow_rgb = (255, 255, 255) if light_bg else (0, 0, 0)
+    style = payload.style or {}
+    if style.get("ink"):
+        c = style["ink"]
+        ink = (int(c[0]), int(c[1]), int(c[2]), 255) if isinstance(c, (list, tuple)) else ink
+    else:
+        ink = (16, 16, 16, 255) if light_bg else (255, 255, 255, 255)
+    if not isinstance(ink, tuple) or len(ink) != 4:
+        ink = (16, 16, 16, 255) if light_bg else (255, 255, 255, 255)
+    shadow_rgb = (255, 255, 255) if sum(ink[:3]) < 200 else (0, 0, 0)
 
     text = Image.new("RGBA", (payload.width, payload.height), (0, 0, 0, 0))
     d = ImageDraw.Draw(text)
@@ -440,13 +457,17 @@ def render_layer(
         else:
             alpha = 232
             colour = ink
-        scale = _word_scale(word, t)
+        scale = _word_scale(word, t, float(style.get("pop_ms", POP_MS)))
+        if str(style.get("case", "")).lower() == "upper":
+            word_text = word.text.upper()
+        else:
+            word_text = word.text
         if word.beat and 0.0 <= (t - word.t_start) < BEAT_FLASH_MS / 1000.0:
             colour = (255, 60, 60) if not light_bg else (170, 0, 0)
         f = font
         if abs(scale - 1.0) > 1e-3:
             f = font.font_variant(size=max(8, int(round(payload.font_px * scale))))
-        d.text((cx, y), word.text, font=f, fill=(*colour[:3], alpha), anchor="ma")
+        d.text((cx, y), word_text, font=f, fill=(*colour[:3], alpha), anchor="ma")
 
     mask = text.split()[3].filter(ImageFilter.GaussianBlur(SHADOW_BLUR))
     shadow = Image.new("RGBA", (payload.width, payload.height), (0, 0, 0, 0))
