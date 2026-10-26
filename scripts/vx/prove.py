@@ -402,8 +402,8 @@ def distinct_surface(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     Families:
       colour     palette family differs OR grade node type differs OR hue L1 >= 0.15
       rhythm     |cut target delta| >= 0.4 OR animation name/count differs
-      geometry   both offsets measured AND both compositions applied AND
-                 |dx| >= 0.05 or |dy| >= 0.05
+      geometry   both composition values measured AND both compositions applied
+                 AND |dx| >= 0.05 or |dy| >= 0.05
       typography font differs OR size delta >= 8 px
 
     When geometry is available the gate needs geometry AND two of the other
@@ -433,18 +433,20 @@ def distinct_surface(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
         or anim_a.get("count") != anim_b.get("count")
     )
 
-    off_a = _measure(a, "subject_offset")
-    off_b = _measure(b, "subject_offset")
-    geometry_available = off_a is not None and off_b is not None
-    geometry_applied = (
-        _choice(a, "composition").get("applied") is True
-        and _choice(b, "composition").get("applied") is True
-    )
+    comp_a = _choice(a, "composition")
+    comp_b = _choice(b, "composition")
+    value_a = comp_a.get("value")
+    value_b = comp_b.get("value")
+    geometry_available = isinstance(value_a, dict) and isinstance(value_b, dict)
     geometry = False
     if geometry_available:
-        dx = abs(float(off_a.get("x") or 0.0) - float(off_b.get("x") or 0.0))
-        dy = abs(float(off_a.get("y") or 0.0) - float(off_b.get("y") or 0.0))
-        geometry = geometry_applied and (dx >= GEOMETRY_OFFSET or dy >= GEOMETRY_OFFSET)
+        dx = abs(float(value_a.get("x") or 0.0) - float(value_b.get("x") or 0.0))
+        dy = abs(float(value_a.get("y") or 0.0) - float(value_b.get("y") or 0.0))
+        geometry = (
+            comp_a.get("applied") is True
+            and comp_b.get("applied") is True
+            and (dx >= GEOMETRY_OFFSET or dy >= GEOMETRY_OFFSET)
+        )
 
     typo_a, typo_b = _choice(a, "typography"), _choice(b, "typography")
     typography = (

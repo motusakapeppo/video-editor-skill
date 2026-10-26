@@ -60,7 +60,7 @@ def _brief(**overrides) -> dict:
         value=2.0, applied=True, inaction=False, confidence=0.9
     )
     b["choices"]["composition"].update(
-        value="offset", applied=True, inaction=False, confidence=0.9
+        value={"x": 0.10, "y": 0.0}, applied=True, inaction=False, confidence=0.9
     )
     b["choices"]["typography"].update(
         value=0, applied=False, inaction=True, confidence=0.5
@@ -141,9 +141,9 @@ def main() -> int:
             "palette.inaction": True,
             "palette.confidence": 0.5,
             "cut_density.value": 3.0,
+            "composition.value": {"x": 0.0, "y": 0.0},
         }
     )
-    other["measurements"]["subject_offset"] = {"x": 0.0, "y": 0.0}
     result = prove.distinct_surface(same, other)
     check(
         "coppia con geometria disponibile: geometry True",
@@ -161,10 +161,9 @@ def main() -> int:
             "composition.applied": False,
             "composition.inaction": True,
             "composition.confidence": 0.5,
-            "composition.value": "centre",
+            "composition.value": {"x": 0.0, "y": 0.0},
         }
     )
-    not_applied["measurements"]["subject_offset"] = {"x": 0.0, "y": 0.0}
     result = prove.distinct_surface(same, not_applied)
     check(
         "offset diversi ma composizione non applicata: geometry False",
@@ -172,8 +171,16 @@ def main() -> int:
         str(result["families"]),
     )
 
-    no_offset = _brief(**{"typography.value": 8})
-    no_offset["measurements"]["subject_offset"] = None
+    close = _brief(**{"composition.value": {"x": -0.0774, "y": 0.0}})
+    far = _brief(**{"composition.value": {"x": -0.1537, "y": 0.0}})
+    result = prove.distinct_surface(far, close)
+    check(
+        "entrambe applicate con diff 0.0763: geometry True",
+        result["geometry_available"] and result["families"]["geometry"] is True,
+        str(result["families"]),
+    )
+
+    no_offset = _brief(**{"typography.value": 8, "composition.value": None})
     result = prove.distinct_surface(same, no_offset)
     check(
         "la tipografia non sostituisce la geometria",

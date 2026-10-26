@@ -10,7 +10,7 @@
     "families": {
       "colour": true,
       "rhythm": true,
-      "geometry": false,
+      "geometry": true,
       "typography": false
     },
     "hook_types": {
@@ -519,7 +519,7 @@
       "families": {
         "colour": true,
         "rhythm": true,
-        "geometry": false,
+        "geometry": true,
         "typography": false
       },
       "geometry_available": true,
@@ -528,9 +528,9 @@
         "a": "visual",
         "b": "title"
       },
-      "distinct_ok": false,
+      "distinct_ok": true,
       "hook_distinct": true,
-      "passes_both": false
+      "passes_both": true
     },
     {
       "a": "real_interview_169",
@@ -706,8 +706,8 @@
   ],
   "summary": {
     "total": 36,
-    "distinct_ok": 1,
+    "distinct_ok": 2,
     "hook_distinct": 18,
-    "passes_both": 1
+    "passes_both": 2
   }
 }

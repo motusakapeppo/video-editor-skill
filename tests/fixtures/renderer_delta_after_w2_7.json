@@ -1,0 +1,7 @@
+{
+  "after_w2_7": 0.0,
+  "baseline": 0.038337,
+  "ratio": 0.0,
+  "applicable": true,
+  "note": "max |ffmpeg-pillow| su p01/p50/p99, 12 campioni su MOTUS_vox_FINALE_delivery.mp4; nodo scelto da gradeplan.decide sulle misure del delivery (luma_p50 0.4044, cast_rg 0.2193, cast_by -0.1448, cast normalizzato da unita' pixel per P3): curve con canali ['b', 'r'], master no. W2.7 non tocca il percorso del grade: il delta deve restare quello di W2.6."
+}

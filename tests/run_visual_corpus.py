@@ -69,6 +69,8 @@ def _profile(clip: Dict[str, Any]) -> Dict[str, Any]:
     Stesse chiamate di ``build_visual_brief`` meno ``screen.plan`` (che serve
     alla sola scelta di inquadratura del brief): la matrice legge l'offset
     misurato dal corpus, che e' lo stesso campo che il gate legge dal brief.
+    La matrice e' a livello di superficie (misura del corpus); la coppia
+    designata e' a livello di render (crop applicato).
     Le scelte senza filtro eseguibile sono gia' degradate a inazione, come fa
     il brief, cosi' la matrice e il ledger parlano la stessa lingua.
     """
@@ -96,15 +98,15 @@ def _profile(clip: Dict[str, Any]) -> Dict[str, Any]:
         anim_name, anim_count = "none", 0
     typo_value = 0 if typo["applied"] else typo["value"]
     offset = m.get("subject_offset")
-    if offset is None:
-        comp_applied, comp_value = False, "centre"
-    else:
-        magnitude = max(
+    comp_applied = bool(
+        offset is not None
+        and max(
             abs(float(offset.get("x") or 0.0)),
             abs(float(offset.get("y") or 0.0)),
         )
-        comp_applied = magnitude >= screen_mod.OFFSET_THRESHOLD
-        comp_value = "offset" if comp_applied else "centre"
+        >= screen_mod.OFFSET_THRESHOLD
+    )
+    comp_value = offset if offset is not None else None
     return {
         "choices": {
             "palette": {"value": pal_value},
@@ -340,9 +342,7 @@ def main() -> int:
     briefs: Dict[str, Dict[str, Any]] = {}
     for name in designated:
         clip = clips[name]
-        briefs[name] = build_visual_brief(
-            CORPUS / clip["path"], clip, project=name, window=WINDOWS[name]
-        )
+        briefs[name] = build_visual_brief(CORPUS / clip["path"], clip, project=name)
         prof, got = profiles[name], briefs[name]
         consistent = (
             all(

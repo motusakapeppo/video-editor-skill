@@ -234,46 +234,50 @@ def _median(values: List[float]) -> Optional[float]:
 
 
 def _aggregate_composition(plans: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """One composition decision from the per-timestamp ``screen.plan`` results.
+    """One composition decision from the whole-clip ``screen.plan`` samples.
 
-    The decision is taken once, on the median offset and the majority
-    ``face_found``; the crop box is the placement at the timestamp closest to
-    the window start (the first plan). The threshold and the uncertainty band
-    are the ones ``screen`` declares: this function aggregates, it does not
-    invent a second rule.
+    Framing is a project-level decision: the offset is the median of the
+    sampled offsets that actually found a face, and the crop box is the
+    placement whose offset is closest to that median. At least two of the five
+    samples must carry a face; otherwise the clip is centred. The threshold and
+    the uncertainty band are the ones ``screen`` declares: this function
+    aggregates, it does not invent a second rule.
     """
     from . import screen as screen_mod
 
-    faces = [bool(plan.get("face_found")) for plan in plans]
-    face_found = bool(faces) and sum(faces) * 2 > len(faces)
     offsets = [
         plan["composition"]["value"]
         for plan in plans
-        if isinstance(plan.get("composition"), dict)
+        if plan.get("face_found")
+        and isinstance(plan.get("composition"), dict)
         and plan["composition"].get("value") is not None
     ]
-    first_crop: Dict[str, Any] = {}
-    if plans:
-        first_crop = dict((plans[0].get("composition") or {}).get("crop") or {})
+    samples = {
+        "n": len(plans),
+        "with_face": sum(1 for plan in plans if plan.get("face_found")),
+        "median": None,
+        "rule": "declared:at_least_2_of_5",
+    }
 
-    if not face_found or not offsets:
+    if len(offsets) < 2:
         return {
             "name": "centre",
-            "crop": first_crop,
+            "crop": {},
             "driver": screen_mod.DRIVER,
             "value": None,
             "provenance": screen_mod.PROVENANCE,
             "inaction": True,
             "inaction_reason": (
-                "nessun volto nella finestra di render: inquadratura al centro, "
-                "nessuna scelta."
+                "meno di due volti nella clip: inquadratura al centro, nessuna scelta."
             ),
             "confidence": screen_mod.NO_FACE_CONFIDENCE,
             "applied": False,
+            "samples": samples,
         }
 
     median_x = _median([float(item["x"]) for item in offsets])
     median_y = _median([float(item["y"]) for item in offsets])
+    samples["median"] = {"x": round(median_x, 4), "y": round(median_y, 4)}
     magnitude = max(abs(median_x), abs(median_y))
     confidence = min(1.0, max(0.0, magnitude / screen_mod.OFFSET_THRESHOLD))
     if screen_mod.UNCERTAIN_LOW <= confidence <= screen_mod.UNCERTAIN_HIGH:
@@ -294,9 +298,24 @@ def _aggregate_composition(plans: List[Dict[str, Any]]) -> Dict[str, Any]:
             f"offset mediano {magnitude:.4f} sotto la soglia "
             f"{screen_mod.OFFSET_THRESHOLD}: il soggetto e' al centro."
         )
+
+    closest = min(
+        (
+            plan
+            for plan in plans
+            if plan.get("face_found")
+            and isinstance(plan.get("composition"), dict)
+            and plan["composition"].get("value") is not None
+        ),
+        key=lambda plan: (
+            abs(float(plan["composition"]["value"]["x"]) - median_x)
+            + abs(float(plan["composition"]["value"]["y"]) - median_y)
+        ),
+    )
+    crop = dict((closest.get("composition") or {}).get("crop") or {})
     return {
         "name": name,
-        "crop": first_crop,
+        "crop": crop,
         "driver": screen_mod.DRIVER,
         "value": {"x": round(median_x, 4), "y": round(median_y, 4)},
         "provenance": screen_mod.PROVENANCE,
@@ -304,6 +323,7 @@ def _aggregate_composition(plans: List[Dict[str, Any]]) -> Dict[str, Any]:
         "inaction_reason": reason,
         "confidence": round(float(confidence), 4),
         "applied": applied,
+        "samples": samples,
     }
 
 
@@ -333,12 +353,11 @@ def build_visual_brief(
     *,
     delivery: str | Path | None = None,
     project: str | None = None,
-    window: tuple[float, float] | None = None,
 ) -> Dict[str, Any]:
     """Build a ``vx.visual/1.0`` brief from the measured clip.
 
     The six choices come from the decision modules (``palette``, ``gradeplan``,
-    ``animplan``, ``screen`` over five timestamps in ``window``) plus the
+    ``animplan``, ``screen`` over five whole-clip timestamps) plus the
     cut-density and typography rules. Two normalisations happen here, by
     contract:
 
@@ -399,11 +418,7 @@ def build_visual_brief(
     anim = animplan.decide(
         None if ratio is None else float(ratio), m.get("onsets_per_s")
     )
-    if window is not None:
-        start, end = float(window[0]), float(window[1])
-    else:
-        start, end = 0.0, float(duration)
-    stamps = [start + (end - start) * (index + 0.5) / 5.0 for index in range(5)]
+    stamps = [float(duration) * (index + 0.5) / 5.0 for index in range(5)]
     comp = _aggregate_composition(
         screen_mod.plan(str(src), stamps, int(width), int(height))
     )
