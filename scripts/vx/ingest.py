@@ -10,7 +10,7 @@ from __future__ import annotations
 import statistics
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from . import ffmpeg as ff
 from . import probe as probe_mod
@@ -33,6 +33,11 @@ MIN_DELIVERY_H = 1920
 
 class IngestError(RuntimeError):
     """Staging failed; the source is untouched."""
+
+
+def _safe_label(label: Optional[str], fallback: str) -> str:
+    raw = f"{label}_{fallback}" if label else fallback
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in raw)
 
 
 @dataclass(frozen=True)
@@ -311,6 +316,8 @@ def normalize_source(
     source_path: str | Path,
     probe_info: Dict[str, Any],
     stage_dir: str | Path,
+    *,
+    label: Optional[str] = None,
 ) -> IngestResult:
     src = Path(source_path)
     if not src.exists():
@@ -351,7 +358,8 @@ def normalize_source(
 
     out_dir = Path(stage_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    staged = out_dir / f"stage_00_ingest_{src.stem}.mp4"
+    stem = _safe_label(label, src.stem)
+    staged = out_dir / f"stage_00_ingest_{stem}.mp4"
     graph, applied = build_ingest_filtergraph(
         was_vfr=was_vfr,
         was_hdr=was_hdr,
@@ -359,7 +367,7 @@ def normalize_source(
         target_fps=target_fps,
         downscale=downscale,
     )
-    script = out_dir / f"stage_00_ingest_{src.stem}.txt"
+    script = out_dir / f"stage_00_ingest_{stem}.txt"
     script.write_text(graph, encoding="utf-8")
     proc = ff.run_ff(
         [
@@ -419,3 +427,31 @@ def normalize_source(
         was_downscaled=was_downscaled,
         downscale=downscale_info,
     )
+
+
+def ingest_sources(
+    sources_map: Mapping[str, str | Path],
+    stage_dir: str | Path,
+    *,
+    progress=None,
+) -> Dict[str, IngestResult]:
+    """Stage every declared source through stage 00, keyed by ``source_id``.
+
+    Each source is probed and normalized independently (VFR, HDR, SAR,
+    rotation, 4K guard), so a multi-source plan gets one consistent timeline
+    per source. The staged filename carries the ``source_id``: two different
+    files with the same stem must not overwrite each other.
+    """
+    if not sources_map:
+        raise IngestError("sources_map is empty")
+    results: Dict[str, IngestResult] = {}
+    for source_id, path in sources_map.items():
+        if not isinstance(source_id, str) or not source_id:
+            raise IngestError(f"source_id non valido: {source_id!r}")
+        info = probe_mod.probe(str(path)).to_dict()
+        if progress is not None:
+            progress(source_id, str(path))
+        results[source_id] = normalize_source(
+            str(path), info, stage_dir, label=source_id
+        )
+    return results
