@@ -1858,6 +1858,34 @@ def cmd_edl(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_auto(args: argparse.Namespace) -> int:
+    """Prompt + folder -> triage -> EDL -> render -> QC -> deliverables -> report."""
+    from . import auto
+    from .grammar import GrammarError
+
+    try:
+        report = auto.run(args)
+    except GrammarError as exc:
+        _out(
+            {
+                "ok": False,
+                "errors": [item.details for item in exc.violations],
+                "grammar": [item.to_dict() for item in exc.violations],
+                "camera_exemptions": getattr(exc, "camera_exemptions", []),
+            }
+        )
+        return EXIT_USAGE
+
+    if getattr(args, "json", False):
+        _out(report)
+    else:
+        _log(
+            f"[auto] ok: {report['master']} "
+            f"({report['timeline_sec']:.3f}s, {report['assets']['selected']} selezionati)"
+        )
+    return EXIT_OK
+
+
 def _apply_settings(args: argparse.Namespace) -> None:
     """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
     from . import settings
@@ -2092,6 +2120,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None, help="percorso del brief JSON")
     p.add_argument("--project", default=None, help="project_id del brief")
     p.set_defaults(func=cmd_visual)
+
+    p = add(
+        "auto",
+        "pipeline completa da prompt+cartella: triage->EDL->render->QC->consegna",
+    )
+    p.add_argument("--prompt", required=True, help="richiesta in linguaggio naturale")
+    p.add_argument(
+        "--assets", required=True, help="cartella degli asset (sola lettura)"
+    )
+    p.add_argument("--out", required=True, help="percorso del master")
+    p.add_argument(
+        "--workdir",
+        default=None,
+        help="default: <out parent>/<out stem>-auto",
+    )
+    p.add_argument(
+        "--fps",
+        type=float,
+        default=None,
+        help="frame rate della timeline; default: dedotto dal primo video selezionato",
+    )
+    p.add_argument("--manifest", default=None, help="manifest JSON con ruoli e ancore")
+    p.add_argument(
+        "--autonomous",
+        action="store_true",
+        help="forza la modalita autonoma: nessuna domanda, i default sono registrati",
+    )
+    p.add_argument("--crf", type=int, default=None)
+    p.add_argument("--preset", default=None)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_auto)
 
     p = add("edl", "EDL v2.0 multi-sorgente: validate o render")
     edl_sub = p.add_subparsers(dest="edl_cmd", required=True)
