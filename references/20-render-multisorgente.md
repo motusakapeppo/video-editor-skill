@@ -33,9 +33,8 @@ su disco, esegue ffmpeg e verifica che l'output esista e non sia vuoto.
 - ogni clip A-Roll: `[idx:v]trim=start=src_in:end=src_out,setpts=PTS-STARTPTS,
   scale=W:H:force_original_aspect_ratio=decrease,pad=W:H:(ow-iw)/2:(oh-ih)/2,
   setsar=1,format=yuv420p`;
-- l'audio che rispecchia l'A-Roll entra nello stesso
-  `concat=n=N:v=1:a=1`: il suono resta agganciato al quadro, e Gate 2 trova il
-  concat che si aspetta;
+- il video usa `concat=n=N:v=1:a=0`; l'audio è indipendente: ogni clip fa
+  `atrim`, `asetpts`, `adelay=dst_in*1000`, poi `amix` con `normalize=0`;
 - ogni B-roll: stesso trim e normalizzazione, fade in/out dalle transizioni,
   `setpts=PTS-STARTPTS+dst_in/TB`, poi
   `overlay=enable='between(t,dst_in,dst_out)':eof_action=pass`;
@@ -75,9 +74,10 @@ vx edl render --plan edl.json --source src_A=A.mp4 --source src_B=B.mp4 \
 
 ## Limiti dichiarati
 
-- Il `concat v=1:a=1` unico richiede che i clip audio rispecchino l'A-Roll per
-  numero e tempi. Un J/L cut più profondo richiede un concat audio separato:
-  non è ancora implementato.
+- `amix` somma senza un inviluppo di crossfade: due dialoghi sovrapposti possono
+  alzare il livello. La dissolvenza audio non è ancora nel contratto.
+- La camera è per sorgente, non per clip; le regole 30°/180° sono in
+  `references/22-grammatica-e-mixer-audio.md`.
 - Il B-roll è a pieno frame, scalato e paddato alla risoluzione della timeline;
   non c'è ancora una geometria di crop per sorgente.
 - Il percorso legacy `cli -> render.render` resta mono-sorgente. Il percorso
@@ -91,12 +91,16 @@ vx edl render --plan edl.json --source src_A=A.mp4 --source src_B=B.mp4 \
 `tests/test_ingest_multisource.py` (14): clean/VFR/HDR, mappa per `source_id`,
 stage con nome legato all'id, collisione di stem, input invalido.
 
-`tests/test_render_multisource.py` (21): `[0:v]` per A, `[1:v]` per B, `[0:a]` e
-`[1:a]`, concat A/V, overlay a `dst_in`, due `-i`, e un render reale di 2 s con
-B-roll.
+`tests/test_render_multisource.py` (24): `[0:v]` per A, `[1:v]` per B, `[0:a]` e
+`[1:a]`, concat solo video, `adelay`, `amix`, overlay a `dst_in`, due `-i`, e un
+render reale di 2 s con B-roll.
 
 `tests/test_gate1_multisource.py` (11): mappa valida, sforamento su B, durata
 piatta, sorgente mancante, clip audio.
 
-`tests/test_edl_cli.py` (10): validate, render reale, sorgente mancante (exit 2),
-sforamento (exit 5) con `source_id` nel payload.
+`tests/test_edl_cli.py` (12): validate, render reale, sorgente mancante (exit 2),
+sforamento (exit 5) con `source_id` nel payload, violazione grammaticale (exit 2).
+
+`tests/test_dialogue_shift.py` (20) e `tests/test_grammar_cinematic.py` (16):
+J/L e regole 30°/180°, descritti in
+`references/22-grammatica-e-mixer-audio.md`.

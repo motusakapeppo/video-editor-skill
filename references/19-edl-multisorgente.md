@@ -1,17 +1,18 @@
-# 19 — EDL multi-sorgente v2.0
+# 19 — EDL multi-sorgente v2.1
 
 Il motore mono-sorgente (`Edl`, un clip → una timeline) non basta più quando il
 montaggio accosta A-Roll e B-Roll da file diversi. Questo modulo aggiunge il
-contratto **EDL v2.0** senza toccare `Edl`: il modello vive in
-`scripts/vx/edl_plan.py`, `edl.py` lo ri-esporta in fondo al file.
+contratto **EDL v2.1.0** (v2.0 + metadati camera) senza toccare `Edl`: il modello
+vive in `scripts/vx/edl_plan.py`, `edl.py` lo ri-esporta in fondo al file.
 
 ## Forma JSON
 
 ```json
 {
-  "contract_version": "2.0.0",
+  "contract_version": "2.1.0",
   "timeline": {"fps": 25.0, "duration_sec": 45.0, "aspect_ratio": "9:16", "resolution": [1080, 1920]},
-  "sources": {"src_01": {"path": "stage/main.mp4", "sha256": "<64 hex>", "duration": 45.0}},
+  "sources": {"src_01": {"path": "stage/main.mp4", "sha256": "<64 hex>", "duration": 45.0,
+                          "camera": {"angle_deg": 0.0, "focal_length_mm": 35.0}}},
   "tracks": {
     "video": [
       {"track_id": 0, "role": "main", "clips": [
@@ -52,8 +53,10 @@ Regole di serializzazione:
 `EDLValidationError`. Chiavi sconosciute a ogni livello sono rifiutate con il
 percorso esatto.
 
-- `contract_version` esattamente `2.0.0`; `fps > 0`; `duration_sec > 0`.
+- `contract_version` esattamente `2.1.0`; `fps > 0`; `duration_sec > 0`.
 - `sources` non vuota; chiavi `[A-Za-z0-9_.-]+`; path non vuoto; sha a 64 hex.
+- ogni `camera`, se presente, ha `angle_deg` finito e `focal_length_mm > 0`;
+  il default è `0°/35mm`.
 - almeno una traccia video, ogni traccia con almeno un clip; `clip_id` unico
   globalmente; `track_id` unico dentro video e dentro audio (video e audio
   possono riusare lo stesso id).
@@ -98,12 +101,13 @@ lasciare un testimone senza fonte.
 
 ## Costruzione A-Roll + B-Roll
 
-`cutplan.build_edl_plan(edl, *, source_id, sources, broll=(), fps=None,
-duration=None, aspect_ratio="9:16", resolution=None) -> BuiltEdl`
+`cutplan.build_edl_plan(edl, *, source_id, sources, broll=(), dialogue_shifts=(),
+fps=None, duration=None, aspect_ratio="9:16", resolution=None) -> BuiltEdl`
 
 - ogni `EdlShot` diventa un clip di layer 0 con `role="main_talking_head"`;
-- la traccia audio `dialogue` rispecchia gli stessi clip (stessi tempi, stessa
-  sorgente): lo sfasamento A/V è zero per costruzione;
+- la traccia audio `dialogue` parte come specchio degli stessi clip; un
+  `DialogueShift` (v2.1) sposta un confine di al massimo 1,5 s e mette quel clip
+  su una traccia propria, così l'overlap è legale e il mixer lo somma;
 - ogni `BrollCandidate` diventa un clip di **una traccia video separata**
   (`track_id=1`, `layer=1`), con fade in/out. Metterlo nella traccia A-Roll
   violerebbe l'invariante di non sovrapposizione;
@@ -125,14 +129,16 @@ duration=None, aspect_ratio="9:16", resolution=None) -> BuiltEdl`
 - Il percorso legacy (`cli -> render.render`) resta mono-sorgente; il percorso
   EDL usa `render.render_edl`, descritto in
   `references/20-render-multisorgente.md`.
-- Il `concat v=1:a=1` unico richiede che l'audio rispecchi i clip A-Roll; J/L cut
-  più profondi richiedono un concat audio separato.
+- `amix` somma le tracce senza un inviluppo di crossfade: l'overlap J/L può
+  alzare il livello. La dissolvenza audio non è ancora nel contratto.
+- La camera è per sorgente, non per clip: la stessa sorgente usata con
+  inquadrature diverse non è distinguibile.
 - `notes` non è serializzato: il formato del contratto non lo prevede.
 
 ## Test
 
-`tests/test_edl_plan.py`: 101 assert. Modello (forma JSON, chiavi sconosciute,
-sorgenti, id, aritmetica dei tempi, layer, transizioni, copertura, J/L,
+`tests/test_edl_plan.py`: 108 assert. Modello (forma JSON, chiavi sconosciute,
+sorgenti, camera, id, aritmetica dei tempi, layer, transizioni, copertura, J/L,
 shorthand audio, immutabilità, round-trip su disco) e builder (due tracce,
 mappatura dell'orologio, witness, cinque rifiuti, round-trip su due clip reali
 generate con ffmpeg).
