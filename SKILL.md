@@ -199,6 +199,7 @@ due sessioni sulla stessa workdir.
 - `references/07-render.md` ordine degli stadi, tagli, loudnorm
 - `references/08-qc-e-consegna.md` codici QC, deliverable, checklist
 - `references/13-lezioni-impresse.md` le 15 regole del progetto e il codice che le impone
+- `references/14-direzione-visiva-adattiva.md` i sei assi, i quattro cancelli, le fragilità dichiarate
 
 
 ---
@@ -236,6 +237,20 @@ bit-exact contro `vf_curves.c`) · `creative` (analisi materiale -> parametri) �
 `board` (giuria, domini, verifica) · `pipeline` (catena che si compone) ·
 `decide` (autonomia vs domande)
 
+La tornata visiva (W0–W2.5) aggiunge un secondo strato, con un solo vocabolario:
+
+| Modulo | Cosa possiede | Proprietà |
+|---|---|---|
+| `registry` | `ANIMATIONS`, `THRESHOLDS`, `AXES`, `SCHEMA`, `APPROVED_DELIVERY_SHA256` | l'unico posto dove vivono nomi, motori e soglie; tutto il resto deriva |
+| `brief` | `new_brief`, `add_reason`, `add_executed`, `validate`, `to_json` | costruisce e valida il documento `vx.visual/1.0`; non decide |
+| `prove` | `check_ledger`, `distinct_surface`, `hook_distinct`, `coverage_gate`, `docs_match`, `reproduce_sha256`, `renderer_delta` | il verificatore indipendente: può dire no, e non importa logica di decisione |
+| `palette` | `decide(measurements)` | famiglia e quattro colori dalla massa hue misurata, contrasto WCAG calcolato |
+| `gradeplan` | `decide(measurements, palette)`, `chain_for_shot(node)` | nodo cromatico dalla luma e dal cast; frammento ffmpeg o stringa vuota |
+| `animplan` | `transient(path, words)`, `decide(ratio)`, `chain_for_shot(choice, shot)` | transient ratio e i tre effetti single-stream, massimo 2 |
+| `cutplan` | `snap(edl, vad_gaps, onsets)` | sposta i confini su un onset dentro un silenzio VAD, frame esatti |
+| `screen` | `decide(path, at, src_w, src_h)` | inquadratura dall'offset del soggetto, chiamando `aesthetics.place` una volta |
+| `docs` | `render(brief)`, `match(brief, text)`, `hash_ledger(brief)` | rende il brief in Markdown e delega il cancello a `prove.docs_match` |
+
 ### Debiti aperti, con il fix esatto
 
 1. **luma per frame e peggior patch locale** — `creative.analyse` misura il
@@ -250,16 +265,29 @@ bit-exact contro `vf_curves.c`) · `creative` (analisi materiale -> parametri) �
    la copertura d'inchiostro su una stringa** (Showcard Gothic 0.681, Impact 0.655,
    Gill Sans Ultra Bold 0.654): va calcolata dentro `_measure_font`, non dedotta dal
    nome ne' dal glifo "I".
-3. **effetti solo-Chromium** — `blur_in`, `glitch`, `mask_wipe`,
-   `blend_difference`, `elastic_3d` sono dichiarati ma non eseguiti: serve lo
-   strato CSS. `board.required_engine()` li instrada gia' al motore giusto.
+3. **effetti solo-Chromium — chiuso il 26/10/2026.** I cinque effetti fantasma
+   sono stati rimossi dal vocabolario: `registry.ANIMATIONS` contiene solo
+   `none`, `fade`, `wipe`, `punch`, tutti ffmpeg single-stream. `motion_browser.py`
+   resta in quarantena: conservato, non importato. Non c'è più un effetto
+   dichiarato e non eseguito.
 
 ### Test che esistono
 
 - `tests/run_corpus.py` — 9 clip reali e sintetiche, 53 assert (formati, colore, geometria)
-- `tests/run_color.py` — calibrazione del nodo cromatico sul corpus
+- `tests/run_color.py` — calibrazione del nodo cromatico sul corpus, 36 assert
 - `tests/test_decisions.py` — 15 assert sul perimetro decisionale
+- `tests/test_gradeplan.py` — 35 assert sul nodo cromatico e la sua catena
+- `tests/test_cutplan.py` — 15 assert sullo snap dentro il silenzio VAD
+- `tests/test_animplan.py` — 49 assert su transient ratio, tre effetti, frame e geometria
+- `tests/test_palette.py` — 32 assert su famiglia, colori e contrasto WCAG
+- `tests/test_screen.py` — 23 assert su offset, centro e inazione
+- `tests/test_ledger.py` — 8 assert sul ledger (`applied:true` => filtro eseguito)
+- `tests/test_distinct.py` — 13 assert su `distinct_surface`, `hook_distinct`, `coverage_gate`
+- `tests/test_docs.py` — 5 assert su `docs_match`
+- `tests/run_visual_corpus.py` — 16 assert: due progetti, due render, tutti i cancelli
 - `tests/stock_corpus/real/LICENSES.md` — provenienza del materiale reale
+
+Totale: 104 assert di base + 196 nuovi = 300.
 
 ### Regola che vale sopra le altre
 
@@ -296,3 +324,60 @@ Regole:
 - la risposta dell'utente entra nel contesto degli agenti come punto di partenza.
 
 Una domanda posta come prosa e' una domanda che l'utente salta.
+
+---
+
+## Direzione visiva adattiva (26/10/2026)
+
+La direzione visiva non è un preset: ogni asse ha un driver misurato e una
+provenienza. Se la confidenza cade fra 0.2 e 0.8, la scelta è inazione. Il
+dettaglio completo, con le fragilità dichiarate, sta in
+`references/14-direzione-visiva-adattiva.md`.
+
+### I sei assi
+
+| Asse | Driver | Soglie | n | Provenienza |
+|---|---|---|---|---|
+| palette | `hue_mass_top3[0].mass` | p33 0.1817 / p67 0.5012 | 9 | corpus |
+| grade | `luma_p50` + cast | p33 0.2914 / p67 0.5028; cast 0.08 | 9 | corpus + `declared:p95_cast` |
+| animation | `transient_ratio` | p33 3.4758 / p67 4.9944 | 3 di 9 | corpus, direzione asserita |
+| cut_density | `onsets_per_s` | p33 2.9887 / p67 4.9227 | 9 | corpus |
+| composition | `subject_offset` | 0.05 = 1/20 larghezza | 5 per clip | `declared:1/20_width` |
+| typography | `ink_coverage_pct` | 0.45 / 0.94 | delivery | `measured:delivery` |
+
+### Comandi
+
+```powershell
+& $PY $VX visual --source <clip> --measurements <json> --out <brief.json>
+& $PY $VX render --plan <plan.json> --visual-brief <brief.json>
+```
+
+`vx visual` costruisce il brief `vx.visual/1.0`; `vx render --visual-brief` lo
+esegue, inserendo le catene di grade e animazione nel grafo.
+
+### I quattro cancelli
+
+| Cancello | Cosa prova | Cosa NON prova |
+|---|---|---|
+| `distinct_surface` | che due brief divergono su almeno tre famiglie di superficie (colore, ritmo, geometria, tipografia) | la differenza di montaggio (rinviata) e la distinzione su materiale arbitrario futuro |
+| `hook_distinct` | che i primi 3 secondi hanno tipo di hook e animazione diversi | che l'hook trattenga |
+| `coverage_gate` | che l'inchiostro stia fra 0.30% e 2.00% su 12 frame | che il testo sia leggibile o corretto; `overlay == ink` perché le decorazioni sono fuori scope |
+| `docs_match` | che il testo contenga l'hash del ledger, l'hash del documento, gli effetti eseguiti e le tre frasi | che la prosa sia completa o utile |
+
+Il ledger è il presupposto: `check_ledger` rifiuta un brief in cui `applied:true`
+non punti a un filtro reale (`executed.name != "none"`, filtro non vuoto, `rc 0`,
+`frames > 0`). **Regola: `applied:true` => filtro eseguito.** Nessun effetto
+dichiarato e non eseguito.
+
+### Le tre frasi che devono restare
+
+1. La direzione ratio↑→animazione più dura è asserita, non misurata; solo i punti di taglio sono empirici.
+2. Il gate `distinct_surface` certifica solo la divergenza di superficie fra due brief; non certifica la differenza di montaggio e non pretende di certificare la distinzione su materiale arbitrario futuro.
+3. Riduzione di scope rispetto all'ODG: le decorazioni sono fuori da questa tornata per motivo di budget, non per motivo di gate; il gate non le richiede e la loro assenza non è un fallimento.
+
+### Riduzione di scope
+
+Le decorazioni sono fuori da questa tornata per motivo di **budget**, non per
+motivo di gate: il gate non le richiede e la loro assenza non è un fallimento.
+La priorità della prossima tornata è la **scelta e l'ordine degli spezzoni**, non
+un'altra decorazione: `skeleton:"deferred"` lo dichiara nel brief.

@@ -194,3 +194,29 @@ Verifica: ogni giunzione etichettata `LINK` o `COLLIDE`; il rapporto deve essere
 | "L'ultimo frame è il più importante" | principio ragionevole, nessuna prova diretta |
 
 Le fonti e i numeri delle affermazioni di piattaforma stanno nel file 11.
+
+---
+
+## 9. Snap dei tagli: la regola eseguita
+
+`cutplan.snap(edl, silences, onsets, fps=...)` è una **funzione pura**: copia
+l'EDL, non muta l'input, e restituisce un nuovo `Edl`. Gira **dopo**
+`plan.build`: prima il piano esiste, poi lo snap sposta i confini.
+
+Un confine (lo `src_out` dello spezzone uscente) può muoversi **solo** su un
+onset che:
+
+1. stia entro `grammar.frame_tolerance(fps)` dal confine;
+2. cada **strettamente dentro** una finestra di silenzio misurata dal VAD
+   (`start < t < end`), sia per l'onset grezzo sia per il valore quantizzato al
+   frame.
+
+Il nuovo confine è quantizzato alla griglia dei frame (`round(t*fps)/fps`); i due
+spezzoni adiacenti vengono ricalcolati perché `frames = round(duration*fps)`
+resti esatto e il totale sia la somma dei frame, non un arrotondamento
+indipendente. Se non esiste un onset qualificato, il confine resta dov'era.
+
+La **scelta e l'ordine degli spezzoni** restano rinviati: il brief dichiara
+`skeleton:"deferred"`. Per questo `distinct_surface` non certifica la differenza
+di montaggio: confronta solo la superficie (colore, ritmo, geometria,
+tipografia).

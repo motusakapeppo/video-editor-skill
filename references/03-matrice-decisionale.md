@@ -107,3 +107,31 @@ Due trattamenti, uno creativo e uno tecnico. Ogni trattamento cita un finding.
 
 Su queste cose il toolkit tace. Se l'utente le chiede, si esegue il brief, non
 si inventa un finding per giustificare il lavoro.
+
+## Matrice visiva (`vx.visual/1.0`)
+
+La matrice visiva è separata da quella dei finding: ogni riga ha un driver
+misurato, una soglia con provenienza, un trattamento e un veto. Se la confidenza
+cade fra 0.2 e 0.8, la scelta è inazione (`applied:false`, `executed.name:"none"`).
+
+| Asse | Driver | Soglia (provenienza) | Trattamento | Veto |
+|---|---|---|---|---|
+| palette | `hue_mass_top3[0].mass` | p33 0.1817 / p67 0.5012 (`corpus_hash:704caf9f…`) | famiglia `mono`/`dual`/`neutral` e quattro colori; nessun filtro in questa ondata | confidenza 0.2–0.8; nessun filtro eseguibile |
+| grade | `luma_p50` + cast | p33 0.2914 / p67 0.5028; cast 0.08 (`declared:p95_cast`) | nodo `curve`: alza ombre, abbassa alte luci, neutralizza il cast | confidenza 0.2–0.8; `chain_for_shot` vuota |
+| animation | `transient_ratio` | p33 3.4758 / p67 4.9944, n=3 (`corpus_hash:704caf9f…`) | `fade` / `wipe` / `punch`, massimo 2 | confidenza 0.2–0.8; nessun filtro eseguibile |
+| cut_density | `onsets_per_s` | p33 2.9887 / p67 4.9227 (`corpus_hash:704caf9f…`) | durata 3.0 / 2.0 / 1.2 s, poi `cutplan.snap` su onset dentro silenzio VAD | confidenza 0.2–0.8; nessun onset qualificato: confine invariato |
+| composition | `subject_offset` | 0.05 = 1/20 larghezza (`declared:1/20_width`) | crop `offset` o `centre` | confidenza 0.2–0.8; crop uguale al centro |
+| typography | `ink_coverage_pct` | 0.45 / 0.94 (`measured:delivery`) | corpo +8 / −8 / invariato | confidenza 0.2–0.8; nessun burn in questa ondata |
+
+**Regola:** `applied:true` richiede un filtro eseguito. `check_ledger` rifiuta un
+brief in cui una scelta applicata non punta a `executed.name != "none"`, filtro
+non vuoto, `rc 0`, `frames > 0`. Nessun effetto dichiarato e non eseguito.
+
+### I quattro cancelli visivi
+
+| Cancello | Cosa prova | Cosa NON prova |
+|---|---|---|
+| `distinct_surface` | divergenza di superficie su almeno tre famiglie | la differenza di montaggio (rinviata) e la distinzione su materiale arbitrario futuro |
+| `hook_distinct` | tipo di hook e animazione diversi nei primi 3 s | che l'hook trattenga |
+| `coverage_gate` | inchiostro fra 0.30% e 2.00% su 12 frame | leggibilità o correttezza del testo; `overlay == ink` |
+| `docs_match` | hash del ledger, hash del documento, effetti eseguiti, tre frasi | completezza o utilità della prosa |

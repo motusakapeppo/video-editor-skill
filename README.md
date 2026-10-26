@@ -29,6 +29,15 @@ Se il brief non dichiara formato, hook e sottotitoli, il comando `ingest` **esce
 codice 3** e stampa un briefing con i numeri reali del tuo materiale e tre domande.
 Non indovina il formato.
 
+## Direzione visiva
+
+La direzione visiva è decisa dalla misura, non dal gusto: palette, grade,
+animazione, densità dei tagli, inquadratura e tipografia hanno un driver misurato
+e una provenienza, e una confidenza fra 0.2 e 0.8 produce inazione. Il brief è
+`vx.visual/1.0`; due progetti si confrontano con `distinct_surface` e
+`hook_distinct`, che certificano solo la divergenza di superficie e dell'hook,
+non la differenza di montaggio.
+
 ## Requisiti
 
 | Componente | Versione | Note |
