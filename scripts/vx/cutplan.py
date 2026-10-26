@@ -160,6 +160,26 @@ class BrollCandidate:
 
 
 @dataclass(frozen=True)
+class DialogueShift:
+    """A cut boundary moved by at most 1.5 s; positive leads (J), negative trails (L)."""
+
+    at: float
+    lead_sec: float
+    finding_id: str
+    finding_source_id: str
+    t0: float
+    t1: float
+
+    def witness(self) -> Dict[str, object]:
+        return {
+            "finding_id": self.finding_id,
+            "t0": float(self.t0),
+            "t1": float(self.t1),
+            "source_id": self.finding_source_id,
+        }
+
+
+@dataclass(frozen=True)
 class BrollRule:
     """Keyword -> footage: one semantic rule, not a montage decision."""
 
@@ -270,17 +290,19 @@ def build_edl_plan(
     source_id: str,
     sources: Mapping[str, SourceRef],
     broll: Sequence[BrollCandidate] = (),
+    dialogue_shifts: Sequence[DialogueShift] = (),
     fps: Optional[float] = None,
     duration: Optional[float] = None,
     aspect_ratio: str = "9:16",
     resolution: Optional[Tuple[int, int]] = None,
 ) -> BuiltEdl:
-    """Build the multi-track EDL v2.0: A-Roll, mirrored dialogue, anchored B-roll.
+    """Build the multi-track EDL: A-Roll, dialogue, anchored B-roll, J/L shifts.
 
-    The A-Roll keeps the Edl's cut timing. The dialogue track mirrors those
-    same clips, so the audio/video offset is zero and the J/L law is satisfied
-    by construction. B-roll lives in its own video track (layer 1): putting it
-    in the A-Roll track would violate the no-overlap invariant.
+    The A-Roll keeps the Edl's cut timing. Dialogue starts as a mirror of those
+    clips; a ``DialogueShift`` extends one side of a cut and moves that clip to
+    its own track, so the overlap is mixed by ``amix`` instead of concatenated.
+    B-roll lives in its own video track (layer 1): putting it in the A-Roll
+    track would violate the no-overlap invariant.
     """
     if not isinstance(edl, Edl) or not edl.shots:
         raise EDLValidationError(["edl: at least one shot is required"])
@@ -311,22 +333,115 @@ def build_edl_plan(
         )
         for index, shot in enumerate(edl.shots, 1)
     ]
-    audio_clips = [
-        ClipSegment(
+    witnesses: Dict[str, Dict[str, object]] = {}
+    audio_specs = [
+        {
+            "clip": clip,
+            "src_in": float(clip.src_in),
+            "src_out": float(clip.src_out),
+            "dst_in": float(clip.dst_in),
+            "dst_out": float(clip.dst_out),
+            "track_id": 0,
+        }
+        for clip in main_clips
+    ]
+    next_track = 1
+    shifted_specs: set = set()
+    for shift in dialogue_shifts:
+        lead = float(shift.lead_sec)
+        if not (0.0 < abs(lead) <= 1.5 + 1e-9):
+            raise EDLValidationError(
+                [f"dialogue shift at {shift.at}: |lead_sec| must be in (0, 1.5]"]
+            )
+        if shift.finding_source_id != source_id:
+            raise EDLValidationError(
+                [
+                    f"dialogue shift at {shift.at}: finding source "
+                    f"{shift.finding_source_id} is not {source_id}"
+                ]
+            )
+        if not (float(shift.t0) <= float(shift.at) <= float(shift.t1)):
+            raise EDLValidationError(
+                [f"dialogue shift at {shift.at}: at is outside the finding span"]
+            )
+        expected = "audio.dialogue_lead" if lead > 0 else "audio.dialogue_trail"
+        if shift.finding_id != expected:
+            raise EDLValidationError(
+                [
+                    f"dialogue shift at {shift.at}: finding {shift.finding_id!r} "
+                    f"does not authorize a {expected!r} shift"
+                ]
+            )
+        cut_index = None
+        for index in range(len(main_clips) - 1):
+            boundary = (
+                float(main_clips[index + 1].src_in)
+                if lead > 0
+                else float(main_clips[index].src_out)
+            )
+            if abs(boundary - float(shift.at)) <= 1.0 / frame_rate + 1e-6:
+                cut_index = index
+                break
+        if cut_index is None:
+            raise EDLValidationError(
+                [f"dialogue shift at {shift.at}: no cut at that source time"]
+            )
+        spec = audio_specs[cut_index + 1] if lead > 0 else audio_specs[cut_index]
+        if id(spec) in shifted_specs:
+            raise EDLValidationError(
+                [
+                    f"dialogue shift at {shift.at}: two shifts on the same "
+                    "clip are not supported"
+                ]
+            )
+        shifted_specs.add(id(spec))
+        if lead > 0:
+            spec["src_in"] = float(spec["src_in"]) - lead
+            spec["dst_in"] = float(spec["dst_in"]) - lead
+        else:
+            spec["src_out"] = float(spec["src_out"]) + abs(lead)
+            spec["dst_out"] = float(spec["dst_out"]) + abs(lead)
+        if float(spec["src_in"]) < -1e-9:
+            raise EDLValidationError(
+                [f"dialogue shift at {shift.at}: src_in would become negative"]
+            )
+        declared = sources[main_clips[cut_index].source_id].duration
+        if declared is not None and float(spec["src_out"]) > float(declared) + 1e-6:
+            raise EDLValidationError(
+                [
+                    f"dialogue shift at {shift.at}: src_out "
+                    f"{float(spec['src_out']):.3f} exceeds source duration "
+                    f"{float(declared):.3f}"
+                ]
+            )
+        spec["track_id"] = next_track
+        audio_id = f"a{cut_index + (2 if lead > 0 else 1)}"
+        witnesses[audio_id] = shift.witness()
+        next_track += 1
+
+    audio_by_track: Dict[int, List[ClipSegment]] = {}
+    for index, spec in enumerate(audio_specs, 1):
+        clip = ClipSegment(
             clip_id=f"a{index}",
-            source_id=clip.source_id,
-            src_in=clip.src_in,
-            src_out=clip.src_out,
-            dst_in=clip.dst_in,
-            dst_out=clip.dst_out,
+            source_id=spec["clip"].source_id,
+            src_in=float(spec["src_in"]),
+            src_out=float(spec["src_out"]),
+            dst_in=float(spec["dst_in"]),
+            dst_out=float(spec["dst_out"]),
             layer=0,
             role="dialogue",
         )
-        for index, clip in enumerate(main_clips, 1)
-    ]
+        audio_by_track.setdefault(int(spec["track_id"]), []).append(clip)
+    audio_tracks = tuple(
+        Track(
+            track_id=track_id,
+            clips=tuple(sorted(clips, key=lambda clip: clip.dst_in)),
+            role="dialogue",
+        )
+        for track_id, clips in sorted(audio_by_track.items())
+    )
 
     broll_clips: List[ClipSegment] = []
-    witnesses: Dict[str, Dict[str, object]] = {}
     for index, candidate in enumerate(broll, 1):
         if candidate.finding_source_id != source_id:
             raise EDLValidationError(
@@ -409,11 +524,6 @@ def build_edl_plan(
     video_tracks = [Track(track_id=0, clips=tuple(main_clips), role="main")]
     if broll_clips:
         video_tracks.append(Track(track_id=1, clips=tuple(broll_clips), role="broll"))
-    audio_tracks = (
-        (Track(track_id=0, clips=tuple(audio_clips), role="dialogue"),)
-        if audio_clips
-        else ()
-    )
 
     plan = EDLPlan(
         fps=frame_rate,
