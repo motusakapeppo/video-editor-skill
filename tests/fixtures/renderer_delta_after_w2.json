@@ -1,0 +1,6 @@
+{
+  "after_w2": 0.0,
+  "baseline": 0.038337,
+  "ratio": 0.0,
+  "note": "max |ffmpeg-pillow| su p01/p50/p99, 12 campioni su MOTUS_vox_FINALE_delivery.mp4; nodo scelto da gradeplan.decide sulle misure del delivery (luma_p50 0.4044, cast_rg 0.2181, cast_by -0.1423): curve con canali ['b', 'r'], master no. W2 non tocca il renderer: il delta deve restare quello di W1a."
+}
