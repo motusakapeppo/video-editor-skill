@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 from types import MappingProxyType
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 SCHEMA = "vx.report/1.0"
 TRIAGE_SCHEMA = "vx.triage/1.0"
@@ -773,3 +773,284 @@ def payload_to_edit_plan(
     from . import decide
 
     return decide.payload_to_edit_plan(payload, media_info)
+
+
+def payload_to_edl_plan(
+    payload: Mapping[str, Any],
+    sources: Mapping[str, Any],
+    media_info_map: Mapping[str, Any],
+    *,
+    fps: float,
+    anchors: Sequence[Tuple[str, float]] = (),
+    aspect_ratio: Optional[str] = None,
+    resolution: Optional[Tuple[int, int]] = None,
+) -> Any:  # edl_plan.EDLPlan
+    """Project a scene payload v1.5.0 (with ``asset_triage``) into an EDLPlan.
+
+    The bridge consumes the triage verdict instead of guessing: only
+    ``selected_assets`` reach the timeline, every rejected asset is counted in
+    the notes and never routed. A-roll lands on video layer 0, b-roll on layer
+    1, the dialogue bus mirrors A-roll, and at most one music bed is placed with
+    its declared gain. ``sources`` carries only the refs actually referenced.
+    """
+    # Local import: contract.py is the frozen leaf and imports nothing local at
+    # module level. edl_plan is pure data, so this mirrors the local import of
+    # asset_triage in decide.py without creating a cycle.
+    from . import edl_plan
+
+    block = payload.get("asset_triage")
+    if not isinstance(block, Mapping) or not block:
+        raise VxError(
+            "payload.asset_triage missing: the EDL bridge needs the triage block"
+        )
+
+    selected = block.get("selected_assets")
+    if not isinstance(selected, list):
+        raise VxError("payload.asset_triage.selected_assets must be a list")
+    rejected = block.get("rejected_assets") or []
+    if not isinstance(rejected, list):
+        raise VxError("payload.asset_triage.rejected_assets must be a list")
+    rejected_count = len(rejected)
+
+    if not (
+        isinstance(fps, (int, float))
+        and not isinstance(fps, bool)
+        and math.isfinite(float(fps))
+        and float(fps) > 0
+    ):
+        raise VxError("fps must be a positive number")
+
+    scene = payload.get("scene") or {}
+    if not isinstance(scene, Mapping):
+        scene = {}
+    aspect = aspect_ratio if aspect_ratio is not None else scene.get("aspect_ratio")
+    if not isinstance(aspect, str) or not aspect:
+        raise VxError("scene.aspect_ratio missing: pass aspect_ratio explicitly")
+    raw_resolution = resolution if resolution is not None else scene.get("resolution")
+    if raw_resolution is None:
+        raise VxError("scene.resolution missing: pass resolution explicitly")
+    try:
+        res = (int(raw_resolution[0]), int(raw_resolution[1]))
+    except (TypeError, ValueError, IndexError) as exc:
+        raise VxError(f"resolution must be two integers: {raw_resolution!r}") from exc
+
+    def _media_duration(asset_id: str) -> float:
+        info = media_info_map.get(asset_id)
+        if info is None:
+            raise VxError(f"asset {asset_id!r} has no media_info entry")
+        value = getattr(info, "duration", None)
+        if value is None and isinstance(info, Mapping):
+            value = info.get("duration")
+        try:
+            duration = float(value)
+        except (TypeError, ValueError) as exc:
+            raise VxError(f"asset {asset_id!r} has no usable duration") from exc
+        if not math.isfinite(duration) or duration <= 0:
+            raise VxError(f"asset {asset_id!r} has no usable duration")
+        return duration
+
+    def _source_ref(asset_id: str) -> Any:
+        ref = sources.get(asset_id)
+        if ref is None:
+            raise VxError(f"asset {asset_id!r} has no SourceRef")
+        return ref
+
+    def _target(entry: Mapping[str, Any], asset_id: str) -> float:
+        try:
+            target = float(entry.get("target_duration_sec"))
+        except (TypeError, ValueError) as exc:
+            raise VxError(
+                f"asset {asset_id!r} has no usable target_duration_sec"
+            ) from exc
+        if not math.isfinite(target) or target <= 0:
+            raise VxError(f"asset {asset_id!r} has no usable target_duration_sec")
+        return target
+
+    for index, entry in enumerate(selected):
+        if not isinstance(entry, Mapping):
+            raise VxError(f"selected_assets[{index}] is not an object")
+
+    a_entries = [entry for entry in selected if entry.get("role") == "a_roll"]
+    b_entries = [entry for entry in selected if entry.get("role") == "b_roll"]
+    music_entries = [entry for entry in selected if entry.get("role") == "music"]
+
+    if not a_entries:
+        raise VxError("payload.asset_triage has no a_roll: cannot build a timeline")
+
+    referenced: Dict[str, Any] = {}
+    a_clips: List[Any] = []
+    dialogue_clips: List[Any] = []
+    cursor = 0.0
+    for index, entry in enumerate(a_entries):
+        asset_id = entry.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id:
+            raise VxError(f"selected a_roll[{index}] has no asset_id")
+        ref = _source_ref(asset_id)
+        media_duration = _media_duration(asset_id)
+        length = min(_target(entry, asset_id), media_duration)
+        if length <= 0:
+            raise VxError(f"asset {asset_id!r} has no usable duration")
+        referenced[asset_id] = ref
+        a_clips.append(
+            edl_plan.ClipSegment(
+                clip_id=f"v0_{index}",
+                source_id=asset_id,
+                src_in=0.0,
+                src_out=length,
+                dst_in=cursor,
+                dst_out=cursor + length,
+                layer=0,
+                role="main_talking_head",
+            )
+        )
+        dialogue_clips.append(
+            edl_plan.ClipSegment(
+                clip_id=f"a0_{index}",
+                source_id=asset_id,
+                src_in=0.0,
+                src_out=length,
+                dst_in=cursor,
+                dst_out=cursor + length,
+                layer=0,
+                role="dialogue",
+                gain_db=0.0,
+            )
+        )
+        cursor += length
+    duration = cursor
+    if duration <= 0:
+        raise VxError("a_roll total duration is zero")
+
+    anchor_map: Dict[str, float] = {}
+    for pair in anchors:
+        try:
+            anchor_id, anchor_at = pair
+            anchor_map[str(anchor_id)] = float(anchor_at)
+        except (TypeError, ValueError) as exc:
+            raise VxError(f"invalid anchor pair: {pair!r}") from exc
+
+    b_clips: List[Any] = []
+    any_anchor = False
+    n_broll = len(b_entries)
+    for index, entry in enumerate(b_entries):
+        asset_id = entry.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id:
+            raise VxError(f"selected b_roll[{index}] has no asset_id")
+        ref = _source_ref(asset_id)
+        media_duration = _media_duration(asset_id)
+        length = min(_target(entry, asset_id), media_duration, duration)
+        if length <= 0:
+            raise VxError(f"asset {asset_id!r} has no usable duration")
+        if asset_id in anchor_map:
+            at = anchor_map[asset_id]
+            any_anchor = True
+        elif entry.get("at_sec") is not None:
+            try:
+                at = float(entry["at_sec"])
+            except (TypeError, ValueError) as exc:
+                raise VxError(f"asset {asset_id!r} has a non-numeric at_sec") from exc
+            any_anchor = True
+        else:
+            at = duration * (index + 1) / (n_broll + 1)
+        max_start = max(0.0, duration - length)
+        dst_in = clamp(at, 0.0, max_start)
+        fade = float(THRESHOLDS["broll_fade_sec"])
+        if fade > length:
+            fade = length
+        referenced[asset_id] = ref
+        b_clips.append(
+            edl_plan.ClipSegment(
+                clip_id=f"v1_{index}",
+                source_id=asset_id,
+                src_in=0.0,
+                src_out=length,
+                dst_in=dst_in,
+                dst_out=dst_in + length,
+                layer=1,
+                role="b_roll",
+                transition_in=edl_plan.Transition("fade", fade),
+            )
+        )
+
+    # Layer 1 cannot hold two overlapping clips. Refuse rather than emit a plan
+    # that validate() would reject when the timeline is too short for the pool.
+    ordered_b = sorted(b_clips, key=lambda clip: clip.dst_in)
+    for previous, current in zip(ordered_b, ordered_b[1:]):
+        if current.dst_in < previous.dst_out - 1e-6:
+            raise VxError(
+                "selected b_roll clips overlap on layer 1: "
+                f"{previous.source_id!r} and {current.source_id!r}"
+            )
+
+    if len(music_entries) > 1:
+        raise VxError("payload.asset_triage selected more than one music asset")
+    music_clip = None
+    if music_entries:
+        entry = music_entries[0]
+        asset_id = entry.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id:
+            raise VxError("selected music has no asset_id")
+        ref = _source_ref(asset_id)
+        media_duration = _media_duration(asset_id)
+        music_length = min(media_duration, duration)
+        try:
+            gain = float(entry.get("ducking_db", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise VxError(f"asset {asset_id!r} has a non-numeric ducking_db") from exc
+        referenced[asset_id] = ref
+        music_clip = edl_plan.ClipSegment(
+            clip_id="a1_0",
+            source_id=asset_id,
+            src_in=0.0,
+            src_out=music_length,
+            dst_in=0.0,
+            dst_out=music_length,
+            layer=0,
+            role="music",
+            gain_db=gain,
+        )
+
+    video_tracks = [edl_plan.Track(track_id=0, clips=tuple(a_clips), role="a_roll")]
+    if b_clips:
+        video_tracks.append(
+            edl_plan.Track(track_id=1, clips=tuple(b_clips), role="b_roll")
+        )
+    audio_tracks = [
+        edl_plan.Track(track_id=0, clips=tuple(dialogue_clips), role="dialogue")
+    ]
+    if music_clip is not None:
+        audio_tracks.append(
+            edl_plan.Track(track_id=1, clips=(music_clip,), role="music")
+        )
+
+    notes: List[str] = []
+    payload_version = payload.get("contract_version") or "?"
+    notes.append(f"payload v{payload_version} -> EDL v{edl_plan.EDL_CONTRACT_VERSION}")
+    if b_clips and not any_anchor:
+        notes.append("b-roll distribuiti uniformemente: nessun ancoraggio dichiarato")
+    if music_clip is None:
+        notes.append("nessuna traccia musicale")
+    elif music_length < duration - 1e-9:
+        notes.append(
+            f"musica più corta della timeline: {music_length:.3f}s su {duration:.3f}s"
+        )
+    if not dialogue_clips:
+        notes.append("nessun bus dialogo: ducking non dichiarato")
+    notes.append(f"asset scartati ignorati: {rejected_count}")
+
+    ducking = (
+        edl_plan.DuckingSpec() if music_clip is not None and dialogue_clips else None
+    )
+
+    return edl_plan.EDLPlan(
+        contract_version=edl_plan.EDL_CONTRACT_VERSION,
+        fps=float(fps),
+        duration_sec=duration,
+        aspect_ratio=aspect,
+        resolution=res,
+        sources=referenced,
+        video_tracks=tuple(video_tracks),
+        audio_tracks=tuple(audio_tracks),
+        ducking=ducking,
+        notes=tuple(notes),
+    )
