@@ -21,6 +21,7 @@ import json
 import math
 import re
 import sys
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -776,3 +777,528 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+# --------------------------------------------------------------------------- #
+# Phase 2.2 — chunked, resumable analysis
+# --------------------------------------------------------------------------- #
+
+ANALYSIS_CHUNK_SEC = 300.0
+ANALYSIS_CHUNK_OVERLAP_SEC = 1.0
+
+
+@dataclass(frozen=True)
+class Chunk:
+    """One analysis window.
+
+    ``own_start``/``own_end`` partition the timeline; ``decode_start``/
+    ``decode_end`` add a small overlap so a word that straddles a seam is
+    decoded by both neighbours and then owned by exactly one of them.
+    """
+
+    index: int
+    own_start: float
+    own_end: float
+    decode_start: float
+    decode_end: float
+
+
+def plan_chunks(
+    duration: float,
+    *,
+    chunk_sec: float = ANALYSIS_CHUNK_SEC,
+    overlap: float = ANALYSIS_CHUNK_OVERLAP_SEC,
+) -> List[Chunk]:
+    """Partition ``[0, duration]`` into fixed windows with a decode overlap."""
+    duration = float(duration)
+    chunk_sec = float(chunk_sec)
+    overlap = max(0.0, float(overlap))
+    if duration <= 0.0:
+        return []
+    if chunk_sec <= 0.0:
+        raise ValueError("chunk_sec must be positive")
+    count = max(1, int(math.ceil(duration / chunk_sec - 1e-9)))
+    chunks: List[Chunk] = []
+    for index in range(count):
+        own_start = index * chunk_sec
+        own_end = min((index + 1) * chunk_sec, duration)
+        if own_end <= own_start:
+            continue
+        chunks.append(
+            Chunk(
+                index=index,
+                own_start=own_start,
+                own_end=own_end,
+                decode_start=max(0.0, own_start - overlap),
+                decode_end=min(duration, own_end + overlap),
+            )
+        )
+    return chunks
+
+
+def should_chunk(
+    duration: float,
+    has_audio: bool,
+    *,
+    chunk_sec: float = ANALYSIS_CHUNK_SEC,
+) -> bool:
+    """Chunk only when there is audio and the clip is longer than one window."""
+    return bool(has_audio) and float(duration) > float(chunk_sec)
+
+
+def _chunk_attr(chunk: Any, name: str, default: float = 0.0) -> float:
+    if isinstance(chunk, dict):
+        return float(chunk.get(name, default))
+    return float(getattr(chunk, name, default))
+
+
+def _as_transcript(value: Any) -> Optional[Transcript]:
+    from .contract import Transcript
+
+    if value is None:
+        return None
+    if isinstance(value, Transcript):
+        return value
+    if isinstance(value, dict):
+        names = {field.name for field in fields(Transcript)}
+        return Transcript(**{k: v for k, v in value.items() if k in names})
+    return None
+
+
+def _as_vad(value: Any) -> Optional[Any]:
+    from .vad import VadResult
+
+    if value is None:
+        return None
+    if isinstance(value, VadResult):
+        return value
+    if isinstance(value, dict):
+        names = {field.name for field in fields(VadResult)}
+        return VadResult(**{k: v for k, v in value.items() if k in names})
+    return None
+
+
+def _jsonable(value: Any) -> Any:
+    """Turn dataclasses with ``to_dict`` into plain JSON-safe structures."""
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return _jsonable(to_dict())
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    return value
+
+
+def _owns(chunk: Any, midpoint: float, duration: float) -> bool:
+    own_start = _chunk_attr(chunk, "own_start")
+    own_end = _chunk_attr(chunk, "own_end")
+    if own_start <= midpoint < own_end:
+        return True
+    # The final chunk owns the closing boundary itself.
+    return abs(own_end - duration) < 1e-9 and abs(midpoint - own_end) < 1e-9
+
+
+def merge_transcripts(
+    chunks: Sequence[Dict[str, Any]],
+    *,
+    duration: float,
+    model: str = "",
+    device: str = "cpu",
+) -> Transcript:
+    """Merge chunk-local transcripts into one global transcript.
+
+    Words and segments are offset by ``decode_start``, clamped to the global
+    timeline, and kept only by the chunk whose *own* interval contains their
+    midpoint.  That is what makes the 1 s decode overlap lossless and
+    duplicate-free.
+    """
+    from .contract import Transcript
+
+    duration = max(0.0, float(duration))
+    words: List[Dict[str, Any]] = []
+    segments: List[Dict[str, Any]] = []
+    languages: Dict[str, int] = {}
+    failures: List[str] = []
+
+    for item in chunks:
+        chunk = item.get("chunk")
+        index = int(_chunk_attr(chunk, "index", -1))
+        transcript = _as_transcript(item.get("transcript"))
+        error = str(item.get("error") or "")
+        if transcript is None:
+            failures.append(f"chunk {index}: {error or 'no transcript'}")
+            continue
+        if error:
+            failures.append(f"chunk {index}: {error}")
+        if transcript.language:
+            languages[transcript.language] = languages.get(transcript.language, 0) + 1
+        if not transcript.words and transcript.skipped_reason:
+            failures.append(f"chunk {index}: {transcript.skipped_reason}")
+
+        offset = _chunk_attr(chunk, "decode_start")
+        for word in transcript.words or []:
+            start = float(word.get("start", 0.0)) + offset
+            end = float(word.get("end", start)) + offset
+            start = min(max(start, 0.0), duration)
+            end = min(max(end, 0.0), duration)
+            if start >= end:
+                continue
+            if not _owns(chunk, (start + end) / 2.0, duration):
+                continue
+            kept = dict(word)
+            kept["start"] = round(start, 3)
+            kept["end"] = round(end, 3)
+            words.append(kept)
+
+        for segment in transcript.segments or []:
+            start = float(segment.get("start", 0.0)) + offset
+            end = float(segment.get("end", start)) + offset
+            start = min(max(start, 0.0), duration)
+            end = min(max(end, 0.0), duration)
+            if start >= end:
+                continue
+            if not _owns(chunk, (start + end) / 2.0, duration):
+                continue
+            kept = dict(segment)
+            kept["start"] = round(start, 3)
+            kept["end"] = round(end, 3)
+            segments.append(kept)
+
+    words.sort(key=lambda word: (word["start"], word["end"]))
+    segments.sort(key=lambda segment: (segment["start"], segment["end"]))
+
+    text = " ".join(
+        str(segment.get("text", "")).strip()
+        for segment in segments
+        if str(segment.get("text", "")).strip()
+    )
+    if not text:
+        text = " ".join(
+            str(word.get("word", "")) for word in words if str(word.get("word", ""))
+        )
+
+    language = ""
+    if languages:
+        language = max(languages.items(), key=lambda pair: pair[1])[0]
+
+    wpm = round(len(words) / (duration / 60.0), 1) if duration > 0.0 else 0.0
+    skipped_reason = ""
+    if not words:
+        skipped_reason = "; ".join(failures) if failures else "no speech detected"
+
+    return Transcript(
+        language=language,
+        words=words,
+        segments=segments,
+        text=text,
+        duration=round(duration, 3),
+        wpm=wpm,
+        model=model,
+        device=device,
+        skipped_reason=skipped_reason,
+    )
+
+
+def merge_vad(
+    results: Sequence[Dict[str, Any]],
+    *,
+    duration: float,
+    threshold: float = 0.5,
+) -> VadResult:
+    """Merge chunk-local VAD regions and energy-weight the dBFS levels."""
+    from .vad import VadResult
+
+    duration = max(0.0, float(duration))
+    regions: List[Dict[str, float]] = []
+    reasons: List[str] = []
+    all_available = True
+    windows = 0
+    speech_energy = 0.0
+    speech_weight = 0.0
+    noise_energy = 0.0
+    noise_weight = 0.0
+
+    for item in results:
+        chunk = item.get("chunk")
+        index = int(_chunk_attr(chunk, "index", -1))
+        vad = _as_vad(item.get("vad"))
+        error = str(item.get("error") or "")
+        if vad is None:
+            all_available = False
+            reasons.append(f"chunk {index}: {error or 'no vad'}")
+            continue
+        if error:
+            all_available = False
+            reasons.append(f"chunk {index}: {error}")
+        if not vad.available:
+            all_available = False
+            reasons.append(f"chunk {index}: {vad.reason or 'vad unavailable'}")
+        else:
+            windows += int(vad.windows or 0)
+            weight = max(
+                0.0,
+                _chunk_attr(chunk, "own_end") - _chunk_attr(chunk, "own_start"),
+            )
+            if weight > 0.0:
+                speech_energy += (10.0 ** (float(vad.speech_dbfs) / 10.0)) * weight
+                speech_weight += weight
+                noise_energy += (10.0 ** (float(vad.noise_dbfs) / 10.0)) * weight
+                noise_weight += weight
+
+        offset = _chunk_attr(chunk, "decode_start")
+        for region in vad.regions or []:
+            start = float(region.get("start", 0.0)) + offset
+            end = float(region.get("end", start)) + offset
+            start = min(max(start, 0.0), duration)
+            end = min(max(end, 0.0), duration)
+            if end > start:
+                regions.append({"start": start, "end": end})
+
+    regions.sort(key=lambda region: (region["start"], region["end"]))
+    merged: List[Dict[str, float]] = []
+    for region in regions:
+        if merged and region["start"] - merged[-1]["end"] < 0.35:
+            merged[-1]["end"] = max(merged[-1]["end"], region["end"])
+        else:
+            merged.append(dict(region))
+    merged = [
+        {"start": round(region["start"], 3), "end": round(region["end"], 3)}
+        for region in merged
+        if region["end"] > region["start"]
+    ]
+
+    speech_seconds = sum(region["end"] - region["start"] for region in merged)
+    speech_ratio = round(speech_seconds / duration, 4) if duration > 0.0 else 0.0
+    speech_dbfs = (
+        round(10.0 * math.log10(speech_energy / speech_weight), 2)
+        if speech_weight > 0.0 and speech_energy > 0.0
+        else -90.0
+    )
+    noise_dbfs = (
+        round(10.0 * math.log10(noise_energy / noise_weight), 2)
+        if noise_weight > 0.0 and noise_energy > 0.0
+        else -90.0
+    )
+    available = bool(results) and all_available
+    reason = "" if available else ("; ".join(reasons) or "vad unavailable")
+
+    return VadResult(
+        engine="silero-v5" if available else "none",
+        available=available,
+        reason=reason,
+        regions=merged,
+        speech_ratio=speech_ratio,
+        speech_dbfs=speech_dbfs,
+        noise_dbfs=noise_dbfs,
+        snr_db=round(speech_dbfs - noise_dbfs, 2),
+        windows=windows,
+        threshold=float(threshold),
+        duration=round(duration, 3),
+    )
+
+
+def run_chunk_analysis(
+    duration: float,
+    *,
+    store: Any,
+    loader: Any,
+    chunk_sec: float = ANALYSIS_CHUNK_SEC,
+    overlap: float = ANALYSIS_CHUNK_OVERLAP_SEC,
+    engine_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run (or resume) every chunk and merge the results.
+
+    ``loader`` is the seam: it receives a :class:`Chunk` and returns a payload
+    dict.  A loader exception is recorded as a chunk failure and is *not*
+    written, so the next run retries exactly that chunk.
+    """
+    from . import checkpoint
+
+    if engine_version is None:
+        engine_version = checkpoint.ENGINE_VERSION
+
+    chunks = plan_chunks(duration, chunk_sec=chunk_sec, overlap=overlap)
+    manifest = store.load_manifest()
+    manifest_rebuilds = 0
+    if manifest is None:
+        store.write_manifest(len(chunks), chunk_sec)
+        manifest_rebuilds += 1
+    else:
+        total = manifest.get("total_chunks")
+        try:
+            stored_sec = float(manifest.get("chunk_sec", 0.0))
+        except (TypeError, ValueError):
+            stored_sec = 0.0
+        if total != len(chunks) or abs(stored_sec - float(chunk_sec)) > 1e-9:
+            store.write_manifest(len(chunks), chunk_sec)
+            manifest_rebuilds += 1
+
+    stale_source = bool(store.find_previous())
+    computed = 0
+    cached = 0
+    failures = 0
+    transcript_items: List[Dict[str, Any]] = []
+    vad_items: List[Dict[str, Any]] = []
+
+    for chunk in chunks:
+        payload = store.load_chunk(chunk.index)
+        if payload is not None and "error" not in payload:
+            cached += 1
+        else:
+            try:
+                raw = loader(chunk)
+                if not isinstance(raw, dict):
+                    raise TypeError("loader must return a dict")
+                if "error" in raw:
+                    raise RuntimeError(str(raw.get("error")))
+                payload = _jsonable(raw)
+                store.write_chunk(chunk.index, payload)
+                if store.load_chunk(chunk.index) is None:
+                    raise IOError("chunk payload not readable after write")
+                store.write_manifest(len(chunks), chunk_sec)
+                computed += 1
+            except Exception as exc:  # noqa: BLE001 - one bad chunk must not stop the run
+                failures += 1
+                payload = {"error": f"{type(exc).__name__}: {exc}"}
+
+        transcript_items.append(
+            {
+                "chunk": chunk,
+                "transcript": payload.get("transcript"),
+                "error": payload.get("error", ""),
+            }
+        )
+        vad_items.append(
+            {
+                "chunk": chunk,
+                "vad": payload.get("vad"),
+                "error": payload.get("error", ""),
+            }
+        )
+
+    ident = store.ident
+    transcript = merge_transcripts(
+        transcript_items,
+        duration=duration,
+        model=str(ident.get("model", "")),
+        device="cpu",
+    )
+    vad_config = ident.get("vad_config") or {}
+    try:
+        threshold = float(vad_config.get("threshold", 0.5))
+    except (TypeError, ValueError):
+        threshold = 0.5
+    vad = merge_vad(vad_items, duration=duration, threshold=threshold)
+
+    stats = {
+        "chunks_total": len(chunks),
+        "chunks_computed": computed,
+        "chunks_cached": cached,
+        "chunk_failures": failures,
+        "manifest_rebuilds": manifest_rebuilds,
+        "stale_source": stale_source,
+        "checkpoint_dir": str(store.path),
+    }
+    return {"transcript": transcript, "vad": vad, "stats": stats}
+
+
+def analyze_chunked(
+    path: str | Path,
+    *,
+    workdir: str | Path,
+    source_sha256: str,
+    analysis_sha256: str,
+    chunk_sec: float = ANALYSIS_CHUNK_SEC,
+    model: str = "small",
+    language: Optional[str] = None,
+    vad_config: Optional[Dict[str, Any]] = None,
+    transcribe: bool = True,
+    transcribe_fn: Any = None,
+    vad_fn: Any = None,
+) -> Dict[str, Any]:
+    """Chunked analysis bound to the real ffmpeg / Whisper / Silero stack.
+
+    The default loader extracts each chunk to a temporary 16 kHz mono WAV and
+    calls :func:`vx.subs.transcribe` and :func:`vx.vad.detect` on it.  Both
+    modules are imported lazily so this module stays importable without
+    faster-whisper or onnxruntime.
+    """
+    from . import checkpoint
+
+    vad_config = dict(vad_config or {})
+    ident = checkpoint.identity(
+        source_sha256,
+        analysis_sha256,
+        chunk_sec=chunk_sec,
+        model=model,
+        language=language or "",
+        transcribe=transcribe,
+        vad_config=vad_config,
+    )
+    store = checkpoint.Store(Path(workdir) / "stage" / "checkpoints", ident)
+    duration = _duration(path)
+
+    if transcribe and transcribe_fn is None:
+        from . import subs
+
+        transcribe_fn = subs.transcribe
+    if vad_fn is None:
+        from . import vad
+
+        vad_fn = vad.detect
+
+    def loader(chunk: Chunk) -> Dict[str, Any]:
+        import os
+        import tempfile
+
+        fd, wav = tempfile.mkstemp(prefix="vxchunk-", suffix=".wav")
+        os.close(fd)
+        try:
+            span = max(0.0, float(chunk.decode_end) - float(chunk.decode_start))
+            proc = ff.run_ff(
+                [
+                    "-ss",
+                    f"{float(chunk.decode_start):.3f}",
+                    "-i",
+                    str(path),
+                    "-t",
+                    f"{span:.3f}",
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    "-y",
+                    wav,
+                ],
+                loglevel="error",
+            )
+            if not proc.ok:
+                raise RuntimeError(proc.tail(3) or "audio extraction failed")
+            payload: Dict[str, Any] = {}
+            if transcribe:
+                payload["transcript"] = transcribe_fn(
+                    wav, model=model, language=language
+                )
+            payload["vad"] = vad_fn(wav, **vad_config)
+            payload["chunk"] = {
+                "index": chunk.index,
+                "own_start": chunk.own_start,
+                "own_end": chunk.own_end,
+                "decode_start": chunk.decode_start,
+                "decode_end": chunk.decode_end,
+            }
+            return payload
+        finally:
+            try:
+                os.unlink(wav)
+            except OSError:
+                pass
+
+    return run_chunk_analysis(
+        duration,
+        store=store,
+        loader=loader,
+        chunk_sec=chunk_sec,
+        overlap=ANALYSIS_CHUNK_OVERLAP_SEC,
+    )
