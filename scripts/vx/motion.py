@@ -537,6 +537,7 @@ def composite(
     preset: str = "medium",
     on_frame=None,
     grade_node=None,
+    lossless: bool = False,
 ) -> Dict[str, Any]:
     """Un passaggio: decode -> layer -> encode, audio copiato dal master.
 
@@ -700,6 +701,7 @@ def render_video(
     crf: int = 20,
     preset: str = "medium",
     grade: Optional[Dict[str, Any]] = None,
+    lossless: bool = False,
 ) -> Dict[str, Any]:
     """Unico ingresso: sceglie il motore, i Gate restano identici.
 
@@ -712,7 +714,7 @@ def render_video(
         node = grade_mod.parse(grade) if grade else None
         if getattr(renderer, "name", "") == "pillow":
             info = composite(master, payload, out, crf=crf, preset=preset,
-                             grade_node=node)
+                             grade_node=node, lossless=lossless)
         else:
             from .motion_browser import composite_browser  # noqa: PLC0415
 
