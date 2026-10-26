@@ -684,7 +684,8 @@ def validate_plan(
         errors.append("output.aspect missing")
     if report is not None:
         findings = report.get("findings") or []
-        duration = (report.get("source") or {}).get("duration")
+        source = report.get("source") or {}
+        duration = source.get("analysis_duration") or source.get("duration")
         errors.extend(validate_evidence(plan, findings, duration))
     return errors
 

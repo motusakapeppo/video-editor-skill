@@ -878,7 +878,7 @@ def check_render(
 
     # -- source integrity --------------------------------------------------- #
     if source_fp:
-        source_path = media.get("path") or source_fp.get("path")
+        source_path = source_fp.get("path") or media.get("path")
         unchanged = bool(source_path) and check_source_unchanged(source_fp, source_path)
         checks.append(
             _check(

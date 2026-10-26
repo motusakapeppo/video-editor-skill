@@ -129,3 +129,29 @@ def probe(path: str | Path, *, count_frames: bool = False) -> ProbeResult:
         size=int(stat.st_size),
         mtime=round(stat.st_mtime, 3),
     )
+
+
+def raw_video_stream(path: str | Path) -> dict:
+    """The first video stream exactly as ffprobe reports it (rates, SAR, side data)."""
+    p = Path(path)
+    if not p.exists():
+        raise MissingDependency(f"input not found: {p}")
+    proc = ff.run_fp(
+        [
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_streams",
+            "-of",
+            "json",
+            str(p),
+        ]
+    )
+    if not proc.ok:
+        raise MissingDependency(f"ffprobe failed on {p.name}: {proc.tail(5)}")
+    data = json.loads(proc.stdout or "{}")
+    streams = data.get("streams") or []
+    if not streams:
+        raise MissingDependency(f"no video stream in {p.name}")
+    return streams[0]

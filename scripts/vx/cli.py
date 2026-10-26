@@ -1115,6 +1115,7 @@ def _ingest(
 ) -> Dict[str, Any]:
     """Fase 1 + Fase 4: proxy, pre-analysis, findings. Never mutates the source."""
     from . import analyze, audio, faces
+    from . import ingest as ingest_mod
     from . import plan as plan_mod
     from . import probe as probe_mod
     from . import proxy as proxy_mod
@@ -1135,24 +1136,35 @@ def _ingest(
         winpath.clear_lock(stale)
         work = winpath.make_workdir(str(src))
 
+    raw_stream = probe_mod.raw_video_stream(str(src))
+    normalization = ingest_mod.normalize_source(str(src), raw_stream, work / "stage_00")
+    analysis_src = Path(normalization.staged_path)
+    analysis_probe = (
+        probe_mod.probe(str(analysis_src)).to_dict()
+        if normalization.is_staged
+        else probe_data
+    )
+    if normalization.is_staged:
+        _log(f"[0/6] ingest: {', '.join(normalization.filters_applied)}")
+
     _log("[1/6] proxy a bassa risoluzione")
     proxy_info = proxy_mod.make_proxy(
-        str(src), work / "proxy" / "proxy.mp4", width=args.width
+        str(analysis_src), work / "proxy" / "proxy.mp4", width=args.width
     )
     proxy_path = proxy_info["path"]
 
     _log("[2/6] pre-analisi video (proxy)")
     video = analyze.analyze_video(
-        str(src), sample_fps=args.sample_fps, proxy_path=proxy_path
+        str(analysis_src), sample_fps=args.sample_fps, proxy_path=proxy_path
     )
     _log("[3/6] pre-analisi audio")
-    aud = audio.analyze_audio(str(src))
+    aud = audio.analyze_audio(str(analysis_src))
     _log("[4/7] volti e speaker")
     fac = faces.detect_faces_tracked(proxy_path, sample_fps=SAMPLE_FPS_FACE)
     _log("[5/7] parlato")
     speech, transcript = ({"skipped_reason": "disabled"}, None)
-    if not getattr(args, "no_speech", False) and probe_data.get("has_audio"):
-        speech, transcript = _transcribe(str(src), args.model, args.lang)
+    if not getattr(args, "no_speech", False) and analysis_probe.get("has_audio"):
+        speech, transcript = _transcribe(str(analysis_src), args.model, args.lang)
     _log("[6/7] anteprime")
     thumbs = proxy_mod.thumbs(str(src), work / "analysis", count=args.thumbs)
     sheet = proxy_mod.contact_sheet(thumbs, work / "analysis" / "contact.jpg")
@@ -1160,6 +1172,11 @@ def _ingest(
     rep = report_io.new_report(probe_data, tool=_tool_block())
     report_path = work / "report.json"
     rep["source"]["sha256"] = fingerprint["sha256"]
+    rep["source"]["analysis_duration"] = analysis_probe.get("duration")
+    rep["source"]["staged"] = (
+        normalization.staged_path if normalization.is_staged else None
+    )
+    rep["source"]["normalized"] = normalization.to_dict()
     rep["workdir"] = str(work)
     rep["settings"] = settings.describe()
     rep["_path"] = str(report_path)
@@ -1210,7 +1227,9 @@ def _ingest(
         "proxy": proxy_info,
         "triage": request,
         "fingerprint": fingerprint,
-        "probe": probe_data,
+        "probe": analysis_probe,
+        "analysis_source": str(analysis_src),
+        "normalization": normalization.to_dict(),
         "thumbs": thumbs,
         "contact_sheet": sheet,
         "transcript": transcript,
@@ -1326,7 +1345,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         and state.get("transcript") is None
     ):
         _log("[run] trascrizione (serve al piano e ai sottotitoli)")
-        speech, transcript = _transcribe(str(src), args.model, args.lang)
+        speech, transcript = _transcribe(
+            state.get("analysis_source", str(src)), args.model, args.lang
+        )
         report_io.merge(rep, "analysis", {"speech": speech})
         state["transcript"] = transcript
 
