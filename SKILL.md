@@ -198,3 +198,66 @@ due sessioni sulla stessa workdir.
 - `references/06-sottotitoli-ass.md` whisper, cue, ASS karaoke, escaping
 - `references/07-render.md` ordine degli stadi, tagli, loudnorm
 - `references/08-qc-e-consegna.md` codici QC, deliverable, checklist
+- `references/13-lezioni-impresse.md` le 15 regole del progetto e il codice che le impone
+
+
+---
+
+## Stato dell'architettura (26/10/2026)
+
+### Il flusso obbligatorio
+
+```
+1. prefight        board.prefight(richiesta, materiale) -> domande all'utente
+                   si chiede SOLO cio' che cambia l'output e non si misura
+2. giuria          tipografo | colorista | animatore | direttore
+                   domini esclusivi, proposta con misura citata, direttore firma
+3. brief firmato   board.merge(verdict)  -> rifiuta un brief senza firma
+4. pipeline        pipeline.run(..., verdict=...)  -> RIFIUTA senza brief firmato
+5. cancelli        Gate 1 aritmetica, 2 grafo, 3 file, 4 layout, 5 colore
+```
+
+Un agente che ha un dubbio **non indovina**: restituisce `questions` nella proposta.
+`convene()` le raccoglie, il brief resta aperto, il render non parte.
+
+### Chi fa cosa
+
+| Motore | Cosa possiede | Perche' |
+|---|---|---|
+| FFmpeg | tagli, transizioni, **colore** | esatto in YUV intero; il grade e' certificato li' |
+| Compositor (Pillow) | testo, grafica, animazione | spazio e tempo; 42 ms/frame |
+| Chromium | solo effetti che Pillow non sa fare | 2,7x piu' lento, si accende da solo via `board.required_engine()` |
+
+### Moduli nati in questa fase
+
+`layout` (safe area misurate) · `gates` (1-5) · `motion` (compositing) ·
+`motion_browser` (engine alternativo) · `grade` (nodo cromatico parametrico, LUT
+bit-exact contro `vf_curves.c`) · `creative` (analisi materiale -> parametri) ·
+`board` (giuria, domini, verifica) · `pipeline` (catena che si compone) ·
+`decide` (autonomia vs domande)
+
+### Debiti aperti, con il fix esatto
+
+1. **luma per frame e peggior patch locale** — `creative.analyse` misura il
+   fotogramma intero e ne fa la media; la fascia del testo e' eterogenea (misurato:
+   media 0.245, p05 0.161, p95 0.447). Il colore dell'inchiostro va scelto sulla
+   patch peggiore sotto i glifi, per ogni cue. **Questo errore ha gia' prodotto
+   cinque decisioni sbagliate.**
+2. **peso del font** — `creative._measure_font` usa la larghezza della "I", che
+   premia i corsivi (ha scelto Kunstler Script). Va usata la copertura d'inchiostro
+   su una stringa (misurata: Showcard Gothic 0.681, Impact 0.655).
+3. **effetti solo-Chromium** — `blur_in`, `glitch`, `mask_wipe`,
+   `blend_difference`, `elastic_3d` sono dichiarati ma non eseguiti: serve lo
+   strato CSS. `board.required_engine()` li instrada gia' al motore giusto.
+
+### Test che esistono
+
+- `tests/run_corpus.py` — 9 clip reali e sintetiche, 53 assert (formati, colore, geometria)
+- `tests/run_color.py` — calibrazione del nodo cromatico sul corpus
+- `tests/test_decisions.py` — 15 assert sul perimetro decisionale
+- `tests/stock_corpus/real/LICENSES.md` — provenienza del materiale reale
+
+### Regola che vale sopra le altre
+
+Quando un agente sbaglia, si guarda **prima il contesto che ha ricevuto, poi il suo
+giudizio**. Se l'errore si ripete, il contesto si corregge nel codice, non nella chat.
