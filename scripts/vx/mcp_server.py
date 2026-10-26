@@ -125,8 +125,9 @@ TOOLS: List[Dict[str, Any]] = [
         "description": (
             "Run the whole pipeline synchronously from a prompt and an asset "
             "folder. This call can run for minutes: the client owns the "
-            "timeout. It writes plan.json, auto_report.json and <workdir>/out. "
-            "For interactive clients the CLI is preferable."
+            "timeout. It writes plan.json and auto_report.json under "
+            "<workdir>, the master to <out>, and the deliverables to "
+            "<workdir>/out. For interactive clients the CLI is preferable."
         ),
         "inputSchema": AUTO_SCHEMA,
         "handler": _tool_auto,
