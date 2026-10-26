@@ -63,6 +63,20 @@ python -m venv <venv>
   librosa soundfile scipy pydub faster-whisper pyyaml imageio-ffmpeg
 ```
 
+## Installazione
+
+L'unico modo supportato è l'install editable dalla radice del repo:
+
+```powershell
+<venv>\Scripts\python.exe -m pip install -e .
+vx --version
+vx doctor
+```
+
+`vx --version` stampa `vx 1.5.0`; `vx doctor` deve dire `ready`. L'install crea
+anche `vx-mcp`, il server MCP su stdio. Un'install non editable non è
+supportata: `SKILL_ROOT` e `assets/fonts/` devono restare nel repo.
+
 ## Setup
 
 1. Copia `vx.config.example.json` in `vx.config.json` (è in `.gitignore`, resta tuo) e
@@ -122,6 +136,7 @@ Exit code: `0` ok · `2` uso errato · `3` serve l'utente · `4` dipendenza manc
 | `run` | pipeline end-to-end |
 | `auto` | prompt + cartella asset → triage, piano, render, QC; scrive `plan.json`, `auto_report.json` e `out/`; exit 0/2/5/6 |
 | `deliverables` | matrice di consegna |
+| `vx-mcp` | server MCP su stdio: quattro tool, JSON-RPC 2.0 per riga |
 
 ## Cosa misura
 
@@ -134,9 +149,9 @@ mouth-aspect-ratio), WPM. Le soglie vivono in un solo posto: `scripts/vx/contrac
 
 ```
 SKILL.md                  ruolo, protocollo, trigger di auto-invocazione
-references/01..23.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
+references/01..24.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
                           accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna, EDL,
-                          render multi-sorgente, regia semantica, grammatica e mixer audio, triage e auto
+                          render multi-sorgente, regia semantica, grammatica e mixer audio, triage e auto, API e MCP
 scripts/vx.py             launcher
 scripts/vx/
   contract.py             interfaccia congelata: schemi, soglie, validatori
@@ -146,6 +161,7 @@ scripts/vx/
   analyze.py audio.py faces.py autoframe.py subs.py
   plan.py triage.py       decisione e pausa interattiva
   render.py qc.py report.py cli.py
+  api.py mcp_server.py    superficie stabile e server MCP su stdio
 examples/                 brief/answers di esempio + test end-to-end
 assets/models/            modello YuNet
 ```
