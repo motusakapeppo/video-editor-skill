@@ -26,7 +26,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 __all__ = ["ROLES", "Proposal", "Verdict", "convene", "validate", "merge",
-           "open_domains", "CLOSED_BY_PRINCIPLE", "OPEN_BY_TASTE"]
+           "open_domains", "CLOSED_BY_PRINCIPLE", "OPEN_BY_TASTE",
+           "context_for", "verify_numbers", "METHODS"]
 
 ROLES: Dict[str, Dict[str, Any]] = {
     "tipografo": {
@@ -244,3 +245,88 @@ def _contrast_ink(background_luma: float) -> Tuple[Tuple[int, int, int], str]:
     if white >= black:
         return (250, 250, 248), f"bianco, contrasto {white:.1f}:1"
     return (18, 18, 20), f"quasi nero, contrasto {black:.1f}:1"
+
+
+# --------------------------------------------------------------------------- #
+# il contesto porta il metodo; l'agente ragiona e mostra i passaggi
+# --------------------------------------------------------------------------- #
+
+METHODS: Dict[str, str] = {
+    "colorista": (
+        "METODO DEL CONTRASTO (WCAG), da applicare alla lettera:\n"
+        "1. La luma misurata del materiale e' in spazio sRGB, non lineare.\n"
+        "2. Linearizza:  L = c/12.92  se c <= 0.03928,  altrimenti ((c+0.055)/1.055)^2.4\n"
+        "3. Rapporto col bianco: (1.0+0.05)/(L+0.05). Col nero: (L+0.05)/0.05\n"
+        "4. Si sceglie il colore col rapporto MAGGIORE, non per soglia.\n"
+        "Esempio: c=0.4845 -> L=0.200 -> bianco 4.2:1, nero 5.0:1 -> vince il nero.\n"
+        "5. Riporta nel reasoning i due rapporti calcolati, con i numeri."
+    ),
+    "tipografo": (
+        "METODO DEL CORPO:\n"
+        "1. px = (larghezza_canvas * frazione_occupata) / (advance * n_caratteri)\n"
+        "2. frazione_occupata va dichiarata e giustificata con l'energia del materiale\n"
+        "   (piu' onsets/s -> testo piu' grande e piu' pesante, meno tempo per leggerlo).\n"
+        "3. Verifica che l'altezza del blocco (righe * px * 1.45) stia sopra il limite.\n"
+        "4. Riporta il calcolo nel reasoning."
+    ),
+    "montatore": (
+        "METODO DEI TEMPI:\n"
+        "1. intervallo_onset = 1 / onsets_per_second (secondi).\n"
+        "2. fade_ms + pop_ms deve stare sotto intervallo_onset*1000, se le animazioni\n"
+        "   sono sequenziali sulla stessa parola; altrimenti sotto la cue media.\n"
+        "3. bottom_limit: altezza - margine_piattaforma - altezza_blocco.\n"
+        "4. Riporta i millisecondi calcolati nel reasoning."
+    ),
+}
+
+
+def context_for(role: str, material: Dict[str, Any], *, extra: str = "") -> str:
+    """Il contesto che si passa all'agente: dati, metodo, vincoli, e cosa deve mostrare.
+
+    Il campo `reasoning` non e' decorativo: e' la parte che il verificatore rilegge.
+    """
+    method = METHODS.get(role, "")
+    return (
+        f"RUOLO: {role}\n"
+        f"MATERIALE (misurato, non stimato): {material}\n"
+        f"VINCOLI: il risultato deve stare nel canvas e nei tempi della cue.\n"
+        f"{method}\n"
+        f"OUTPUT: JSON con `values`, `cited`, e `reasoning` dove mostri i passaggi "
+        f"numerici (non un'aggettivazione).\n"
+        f"{extra}"
+    )
+
+
+def verify_numbers(proposal: "Proposal", material: Dict[str, Any]) -> List[str]:
+    """Ricalcola cio' che l'agente dichiara. Non sostituisce il ragionamento: lo controlla.
+
+    Se un numero non torna, l'errore viene rimandato all'agente per la correzione.
+    """
+    errs: List[str] = []
+    v = proposal.values
+    if "ink" in v and "luma_p50" in material:
+        c = float(material["luma_p50"])
+        lin = c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+        white = (1.05) / (lin + 0.05)
+        black = (lin + 0.05) / 0.05
+        try:
+            h = str(v["ink"]).lstrip("#")
+            r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+            l_ink = 0.2126 * (r / 12.92 if r <= 0.03928 else ((r + 0.055) / 1.055) ** 2.4) \
+                + 0.7152 * (g / 12.92 if g <= 0.03928 else ((g + 0.055) / 1.055) ** 2.4) \
+                + 0.0722 * (b / 12.92 if b <= 0.03928 else ((b + 0.055) / 1.055) ** 2.4)
+            ratio = (max(lin, l_ink) + 0.05) / (min(lin, l_ink) + 0.05)
+        except Exception:  # noqa: BLE001
+            errs.append(f"ink non interpretabile: {v['ink']}")
+            return errs
+        best = max(white, black)
+        if ratio < best - 0.15:
+            errs.append(
+                f"ink {v['ink']} da {ratio:.2f}:1 ma il colore migliore da {best:.2f}:1 "
+                f"(bianco {white:.2f}, nero {black:.2f}) — ricalcola con la linearizzazione"
+            )
+    if "font_px" in v and "font" in v:
+        px = int(v["font_px"])
+        if px < 12:
+            errs.append(f"corpo {px}px illeggibile")
+    return errs
