@@ -61,9 +61,9 @@ def main() -> int:
     # -- reference index ------------------------------------------------- #
     listed = re.findall(r"references/(\d{2})-[A-Za-z0-9\-]+\.md", skill)
     numbers = sorted(set(listed))
-    expected = [f"{n:02d}" for n in range(1, 21)]
-    check("indice elenca 01..20", numbers == expected, ",".join(numbers))
-    missing = [f"{n:02d}" for n in range(1, 21) if not list(REFS.glob(f"{n:02d}-*.md"))]
+    expected = [f"{n:02d}" for n in range(1, 22)]
+    check("indice elenca 01..21", numbers == expected, ",".join(numbers))
+    missing = [f"{n:02d}" for n in range(1, 22) if not list(REFS.glob(f"{n:02d}-*.md"))]
     check("ogni reference elencato esiste", not missing, ",".join(missing))
     check("README non dice '01..08'", "01..08" not in readme)
 

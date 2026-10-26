@@ -13,9 +13,10 @@ un arrotondamento indipendente che puo' divergere.
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import contract, grammar, vad
 from .edl import Edl, EdlShot, filtergraph
@@ -156,6 +157,97 @@ class BrollCandidate:
             "t1": float(self.t1),
             "source_id": self.finding_source_id,
         }
+
+
+@dataclass(frozen=True)
+class BrollRule:
+    """Keyword -> footage: one semantic rule, not a montage decision."""
+
+    keyword: str
+    broll_source_id: str
+    src_in: float
+    src_out: float
+    max_uses: int = 1
+    min_gap_sec: float = 2.0
+    role: str = "broll_overlay"
+    transition_sec: float = 0.3
+
+
+def _norm_token(text: Any) -> str:
+    if not isinstance(text, str):
+        return ""
+    decomposed = unicodedata.normalize("NFKD", text.casefold())
+    without_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return "".join(ch for ch in without_marks if ch.isalnum())
+
+
+def select_broll(
+    words: Sequence[Mapping[str, Any]],
+    rules: Sequence[BrollRule],
+    *,
+    source_id: str,
+    finding_id: str = "transcript.keyword_match",
+) -> List[BrollCandidate]:
+    """Turn keyword matches into anchored B-roll candidates, in transcript order.
+
+    Tokens are compared case- and accent-insensitively, punctuation stripped.
+    The candidate's ``at`` is the matched word's midpoint on the A-Roll source;
+    the builder maps it to the timeline. ``min_gap_sec`` is measured from the
+    last accepted insert across all rules, so two keywords cannot stack the
+    same visual moment. The first matching rule in ``rules`` wins.
+    """
+    if not isinstance(source_id, str) or not source_id:
+        raise ValueError("source_id must be a non-empty string")
+    prepared: List[Tuple[BrollRule, str]] = []
+    for rule in rules:
+        if not isinstance(rule, BrollRule):
+            raise ValueError("rules must contain BrollRule objects")
+        token = _norm_token(rule.keyword)
+        if not token:
+            raise ValueError("BrollRule.keyword must contain at least one alphanumeric")
+        if float(rule.src_out) <= float(rule.src_in):
+            raise ValueError(f"BrollRule {rule.keyword!r}: src_out must be > src_in")
+        if int(rule.max_uses) < 1:
+            raise ValueError(f"BrollRule {rule.keyword!r}: max_uses must be >= 1")
+        if float(rule.min_gap_sec) < 0:
+            raise ValueError(f"BrollRule {rule.keyword!r}: min_gap_sec must be >= 0")
+        prepared.append((rule, token))
+
+    uses = [0] * len(prepared)
+    last_at: Optional[float] = None
+    selected: List[BrollCandidate] = []
+    for word in sorted(words, key=lambda item: float(item.get("start") or 0.0)):
+        start = word.get("start")
+        end = word.get("end")
+        if start is None or end is None or float(end) <= float(start):
+            continue
+        token = _norm_token(word.get("word") or word.get("text") or "")
+        if not token:
+            continue
+        for index, (rule, key) in enumerate(prepared):
+            if token != key or uses[index] >= int(rule.max_uses):
+                continue
+            at = (float(start) + float(end)) / 2.0
+            if last_at is not None and abs(at - last_at) < float(rule.min_gap_sec):
+                continue
+            selected.append(
+                BrollCandidate(
+                    broll_source_id=rule.broll_source_id,
+                    src_in=float(rule.src_in),
+                    src_out=float(rule.src_out),
+                    at=at,
+                    finding_id=finding_id,
+                    finding_source_id=source_id,
+                    t0=float(start),
+                    t1=float(end),
+                    role=rule.role,
+                    transition_sec=float(rule.transition_sec),
+                )
+            )
+            uses[index] += 1
+            last_at = at
+            break
+    return selected
 
 
 @dataclass(frozen=True)

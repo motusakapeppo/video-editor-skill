@@ -133,9 +133,9 @@ mouth-aspect-ratio), WPM. Le soglie vivono in un solo posto: `scripts/vx/contrac
 
 ```
 SKILL.md                  ruolo, protocollo, trigger di auto-invocazione
-references/01..20.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
+references/01..21.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
                           accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna, EDL,
-                          render multi-sorgente
+                          render multi-sorgente, regia semantica
 scripts/vx.py             launcher
 scripts/vx/
   contract.py             interfaccia congelata: schemi, soglie, validatori
