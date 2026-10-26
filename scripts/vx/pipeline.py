@@ -311,11 +311,13 @@ def run(
         k: info[k] for k in ("frames_written", "frames_declared", "frames_match")
     }
 
+    _frames, _dur, _fps = motion.expected_frames(graded)
     res = gates.post_render(
         contract.EditPlan(),
         {"fps": 25.0, "duration": 200.0},
         Path(out),
         workdir=work,
+        planned_total=_dur,
         expected_size=(p.canvas["width"], p.canvas["height"]),
     )
     report["steps"].append("gate3")
