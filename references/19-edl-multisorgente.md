@@ -122,10 +122,11 @@ duration=None, aspect_ratio="9:16", resolution=None) -> BuiltEdl`
 
 ## Cosa non è ancora
 
-- Nessun cablaggio CLI multi-sorgente: `_ingest` resta mono-sorgente. Ingest di
-  N file e render multi-input sono la Fase 3.2.
-- `render.py` continua a usare un solo `-i` e `[0:v]`/`[0:a]`; l'EDL v2 non è
-  ancora il suo input di produzione.
+- Il percorso legacy (`cli -> render.render`) resta mono-sorgente; il percorso
+  EDL usa `render.render_edl`, descritto in
+  `references/20-render-multisorgente.md`.
+- Il `concat v=1:a=1` unico richiede che l'audio rispecchi i clip A-Roll; J/L cut
+  più profondi richiedono un concat audio separato.
 - `notes` non è serializzato: il formato del contratto non lo prevede.
 
 ## Test
