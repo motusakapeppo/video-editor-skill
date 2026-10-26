@@ -65,6 +65,9 @@ RANGES: Dict[str, tuple[float, float]] = {
 
 DEFAULTS: Dict[str, Any] = {
     "thresholds": {},
+    "analysis": {
+        "chunk_sec": 300.0,
+    },
     "audio": {
         "vad": "silero",
         "vad_threshold": 0.5,

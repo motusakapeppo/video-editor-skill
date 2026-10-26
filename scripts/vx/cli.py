@@ -771,7 +771,17 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     _log("[2/3] audio: noise floor, dead air, loudness, clipping")
     aud = audio.analyze_audio(str(src))
     _log("[3/3] volti e speaker")
-    fac = faces.detect_faces_tracked(args.proxy or str(src), sample_fps=SAMPLE_FPS_FACE)
+    face_src = args.proxy or str(src)
+    fac = faces.detect_faces_tracked(face_src, sample_fps=SAMPLE_FPS_FACE)
+    if args.proxy:
+        proxy_probe = probe_mod.probe(face_src).to_dict()
+        fac = faces.rescale_tracks(
+            fac,
+            int(proxy_probe.get("width") or 0),
+            int(proxy_probe.get("height") or 0),
+            int(probe_data.get("width") or 0),
+            int(probe_data.get("height") or 0),
+        )
 
     payload = {
         "video": video.to_dict(),
@@ -790,6 +800,118 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _speech_block(transcript, model: str = "") -> Dict[str, Any]:
+    """Report-safe speech stats: counts and reasons, never the word list."""
+    from . import subs
+
+    if transcript is None:
+        return {"skipped_reason": "no transcript"}
+    stats = subs.transcript_stats(transcript)
+    return {
+        "language": transcript.language or "",
+        "word_count": int(stats.get("word_count") or 0),
+        "wpm": float(stats.get("wpm") or 0.0),
+        "fillers": int(stats.get("fillers") or 0),
+        "model": transcript.model or model,
+        "skipped_reason": transcript.skipped_reason or "",
+    }
+
+
+def _vad_config() -> Dict[str, Any]:
+    from . import settings
+
+    cfg = settings.current().get("audio") or {}
+    return {
+        "threshold": float(cfg.get("vad_threshold", 0.5)),
+        "min_speech": float(cfg.get("vad_min_speech", 0.25)),
+        "min_silence": float(cfg.get("vad_min_silence", 0.35)),
+    }
+
+
+def _analysis_chunk_sec(args=None) -> float:
+    value = getattr(args, "chunk_sec", None) if args is not None else None
+    if value is not None:
+        try:
+            return max(1.0, float(value))
+        except (TypeError, ValueError):
+            pass
+    from . import settings
+
+    try:
+        return float(settings.get("analysis.chunk_sec", 300.0))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _chunked_report(state: Dict[str, Any]) -> Dict[str, Any]:
+    stats = dict(state.get("stats") or {})
+    vad = state.get("vad")
+    regions = len(getattr(vad, "regions", []) or [])
+    return {
+        "stats": stats,
+        "vad": {
+            "engine": str(getattr(vad, "engine", "none") or "none"),
+            "available": bool(getattr(vad, "available", False)),
+            "speech_ratio": float(getattr(vad, "speech_ratio", 0.0) or 0.0),
+            "snr_db": (float(getattr(vad, "snr_db", 0.0) or 0.0) if regions else None),
+            "regions": regions,
+            "reason": str(getattr(vad, "reason", "") or ""),
+        },
+    }
+
+
+def _analyze_speech(
+    src: str,
+    *,
+    workdir: Path,
+    source_sha256: str,
+    analysis_sha256: str,
+    media: Dict[str, Any],
+    model: str,
+    language: Optional[str],
+    transcribe: bool,
+    chunk_sec: Optional[float] = None,
+) -> tuple[Dict[str, Any], Any, Optional[Dict[str, Any]]]:
+    """Speech stats, transcript and chunked state; short clips keep the old path."""
+    from . import analyze
+
+    if not media.get("has_audio"):
+        return {"skipped_reason": "no audio"}, None, None
+    duration = float(media.get("duration") or 0.0)
+    window = float(chunk_sec) if chunk_sec is not None else _analysis_chunk_sec()
+    if not analyze.should_chunk(duration, True, chunk_sec=window):
+        if not transcribe:
+            return {"skipped_reason": "disabled"}, None, None
+        block, transcript = _transcribe(src, model, language)
+        return block, transcript, None
+
+    state = analyze.analyze_chunked(
+        src,
+        workdir=workdir,
+        source_sha256=source_sha256,
+        analysis_sha256=analysis_sha256,
+        chunk_sec=window,
+        model=model,
+        language=language,
+        vad_config=_vad_config(),
+        transcribe=transcribe,
+    )
+    stats = state.get("stats") or {}
+    _log(
+        "[chunk] {total} blocchi: {cached} da cache, {computed} calcolati, "
+        "{failed} falliti".format(
+            total=stats.get("chunks_total", 0),
+            cached=stats.get("chunks_cached", 0),
+            computed=stats.get("chunks_computed", 0),
+            failed=stats.get("chunk_failures", 0),
+        )
+    )
+    if not transcribe:
+        return {"skipped_reason": "disabled"}, None, state
+    transcript = state.get("transcript")
+    return _speech_block(transcript, model), transcript, state
+
+
 def _transcribe(
     src: str, model: str = "tiny", lang: Optional[str] = None
 ) -> tuple[Dict[str, Any], Any]:
@@ -801,16 +923,7 @@ def _transcribe(
         from . import subs
 
         tr = subs.transcribe(src, model=model, language=lang)
-        stats = subs.transcript_stats(tr)
-        block = {
-            "language": tr.language or "",
-            "word_count": int(stats.get("word_count") or 0),
-            "wpm": float(stats.get("wpm") or 0.0),
-            "fillers": int(stats.get("fillers") or 0),
-            "model": tr.model or model,
-            "skipped_reason": tr.skipped_reason or "",
-        }
-        return block, tr
+        return _speech_block(tr, model), tr
     except Exception as exc:  # noqa: BLE001 - a missing model must not kill the run
         _log(f"[warn] trascrizione non disponibile: {exc}")
         return {"skipped_reason": str(exc)}, None
@@ -1153,18 +1266,40 @@ def _ingest(
     )
     proxy_path = proxy_info["path"]
 
-    _log("[2/6] pre-analisi video (proxy)")
+    _log("[2/7] pre-analisi video (proxy)")
     video = analyze.analyze_video(
         str(analysis_src), sample_fps=args.sample_fps, proxy_path=proxy_path
     )
-    _log("[3/6] pre-analisi audio")
-    aud = audio.analyze_audio(str(analysis_src))
-    _log("[4/7] volti e speaker")
+    analysis_sha = (
+        winpath.source_fingerprint(str(analysis_src))["sha256"]
+        if normalization.is_staged
+        else fingerprint["sha256"]
+    )
+    _log("[3/7] parlato")
+    speech, transcript, chunked = _analyze_speech(
+        str(analysis_src),
+        workdir=work,
+        source_sha256=fingerprint["sha256"],
+        analysis_sha256=analysis_sha,
+        media=analysis_probe,
+        model=args.model,
+        language=args.lang,
+        transcribe=not getattr(args, "no_speech", False),
+        chunk_sec=_analysis_chunk_sec(args),
+    )
+    _log("[4/7] pre-analisi audio")
+    aud = audio.analyze_audio(str(analysis_src), vad_result=(chunked or {}).get("vad"))
+    _log("[5/7] volti e speaker")
     fac = faces.detect_faces_tracked(proxy_path, sample_fps=SAMPLE_FPS_FACE)
-    _log("[5/7] parlato")
-    speech, transcript = ({"skipped_reason": "disabled"}, None)
-    if not getattr(args, "no_speech", False) and analysis_probe.get("has_audio"):
-        speech, transcript = _transcribe(str(analysis_src), args.model, args.lang)
+    # Detection ran on the proxy; every consumer below reads `analysis_probe`
+    # dimensions (crop, report, plan). Convert once, here.
+    fac = faces.rescale_tracks(
+        fac,
+        int(proxy_info.get("width") or 0),
+        int(proxy_info.get("height") or 0),
+        int(analysis_probe.get("width") or 0),
+        int(analysis_probe.get("height") or 0),
+    )
     _log("[6/7] anteprime")
     thumbs = proxy_mod.thumbs(str(src), work / "analysis", count=args.thumbs)
     sheet = proxy_mod.contact_sheet(thumbs, work / "analysis" / "contact.jpg")
@@ -1190,16 +1325,15 @@ def _ingest(
         "report": str(report_path),
         "qc": None,
     }
-    report_io.merge(
-        rep,
-        "analysis",
-        {
-            "video": video.to_dict(),
-            "audio": aud.to_dict(),
-            "faces": fac.to_dict(),
-            "speech": speech,
-        },
-    )
+    analysis_block = {
+        "video": video.to_dict(),
+        "audio": aud.to_dict(),
+        "faces": fac.to_dict(),
+        "speech": speech,
+    }
+    if chunked is not None:
+        analysis_block["chunked"] = _chunked_report(chunked)
+    report_io.merge(rep, "analysis", analysis_block)
     report_io.merge(rep, "findings", plan_mod.detect_findings(rep))
 
     brief = brief_override if brief_override is not None else _load_brief(args.brief)
@@ -1229,10 +1363,12 @@ def _ingest(
         "fingerprint": fingerprint,
         "probe": analysis_probe,
         "analysis_source": str(analysis_src),
+        "analysis_sha256": analysis_sha,
         "normalization": normalization.to_dict(),
         "thumbs": thumbs,
         "contact_sheet": sheet,
         "transcript": transcript,
+        "chunked": chunked,
     }
 
 
@@ -1345,10 +1481,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         and state.get("transcript") is None
     ):
         _log("[run] trascrizione (serve al piano e ai sottotitoli)")
-        speech, transcript = _transcribe(
-            state.get("analysis_source", str(src)), args.model, args.lang
+        speech, transcript, chunked = _analyze_speech(
+            state.get("analysis_source", str(src)),
+            workdir=work,
+            source_sha256=state["fingerprint"]["sha256"],
+            analysis_sha256=state.get("analysis_sha256")
+            or state["fingerprint"]["sha256"],
+            media=state["probe"],
+            model=args.model,
+            language=args.lang,
+            transcribe=True,
+            chunk_sec=_analysis_chunk_sec(args),
         )
         report_io.merge(rep, "analysis", {"speech": speech})
+        if chunked is not None:
+            report_io.merge(rep, "analysis", {"chunked": _chunked_report(chunked)})
         state["transcript"] = transcript
 
     _log("[run] piano")
@@ -1753,6 +1900,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thumbs", type=int, default=8)
     p.add_argument("--sample-fps", type=float, default=SAMPLE_FPS_VIDEO)
     p.add_argument(
+        "--chunk-sec",
+        type=float,
+        default=None,
+        help="finestra di analisi a chunk in secondi (default: settings)",
+    )
+    p.add_argument(
         "--autonomous",
         action="store_true",
         help="non chiede mai: registra i default nel report e prosegue",
@@ -1782,6 +1935,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--thumbs", type=int, default=8)
     p.add_argument("--sample-fps", type=float, default=SAMPLE_FPS_VIDEO)
+    p.add_argument(
+        "--chunk-sec",
+        type=float,
+        default=None,
+        help="finestra di analisi a chunk in secondi (default: settings)",
+    )
     p.add_argument(
         "--autonomous",
         action="store_true",

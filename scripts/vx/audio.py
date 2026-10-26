@@ -744,8 +744,12 @@ def _music_confidence(ratio: float) -> float:
     return round(min(1.0, abs(ratio - 0.5) * 2.0), 3)
 
 
-def analyze_audio(path: str | Path) -> AudioAnalysis:
-    """Full audio forensics pass. Never raises on a video without audio."""
+def analyze_audio(path: str | Path, *, vad_result=None) -> AudioAnalysis:
+    """Full audio forensics pass. Never raises on a video without audio.
+
+    ``vad_result`` lets a caller that already ran the (chunked) VAD hand its
+    regions and levels over, so the same audio is not measured twice.
+    """
     info = _audio_info(path)
     if not info["has_audio"]:
         return AudioAnalysis(
@@ -762,8 +766,23 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
             verdict="silent",
         )
 
-    noise = noise_floor_and_speech(path)
-    spans = dead_air(path, noise_floor_dbfs=noise["noise_floor_dbfs"])
+    duration = float(info.get("duration") or 0.0)
+    silence_min = float(THRESHOLDS["silence_min"])
+    supplied = vad_result
+    if supplied is not None and supplied.available and supplied.regions:
+        noise = {
+            "noise_floor_dbfs": supplied.noise_dbfs,
+            "speech_level_dbfs": supplied.speech_dbfs,
+            "snr_db": supplied.snr_db,
+        }
+        spans = [
+            gap
+            for gap in _vad_gaps(supplied, duration)
+            if gap["duration"] >= silence_min
+        ]
+    else:
+        noise = noise_floor_and_speech(path)
+        spans = dead_air(path, noise_floor_dbfs=noise["noise_floor_dbfs"])
     loud = loudness(path)
     peak, events = _peak_scan(path)
     music = music_detect(path)
@@ -771,7 +790,7 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
     speech_regions: List[Dict[str, float]] = []
     vad_engine = "none"
     snr_method = "p10-p90"
-    vad = _vad_pass(path, float(info.get("duration") or 0.0))
+    vad = supplied if supplied is not None else _vad_pass(path, duration)
     if vad is not None and vad.available and vad.regions:
         speech_regions = list(vad.regions)
         vad_engine = vad.engine
@@ -781,7 +800,9 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
             "speech_level_dbfs": vad.speech_dbfs,
             "snr_db": vad.snr_db,
         }
-        spans = [gap for gap in _vad_gaps(vad, float(info.get("duration") or 0.0)) if gap["duration"] >= float(THRESHOLDS["silence_min"])]
+        spans = [
+            gap for gap in _vad_gaps(vad, duration) if gap["duration"] >= silence_min
+        ]
 
     return AudioAnalysis(
         noise_floor_dbfs=float(noise["noise_floor_dbfs"]),

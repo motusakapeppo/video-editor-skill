@@ -347,6 +347,74 @@ def _span_stats(tracks: List[Dict[str, Any]], src_w: int) -> Tuple[float, int]:
     return clamp(ratio, 0.0, 1.0), max_concurrent
 
 
+def rescale_tracks(
+    tracks: FaceTracks,
+    from_w: int,
+    from_h: int,
+    to_w: int,
+    to_h: int,
+) -> FaceTracks:
+    """Move face boxes from the decoded file's pixels to another frame size.
+
+    ``detect_faces_tracked`` reports boxes in the pixels of the file it opened.
+    Downstream ``autoframe.build_crop_plan`` reads ``media["width"]/["height"]``,
+    i.e. the analysis source. When detection ran on a 640 px proxy those are two
+    different systems and the crop follows boxes that are several times too
+    small. This is the single conversion point; ratios and counts are invariant.
+    """
+    if from_w <= 0 or from_h <= 0 or to_w <= 0 or to_h <= 0:
+        return tracks
+    if (from_w, from_h) == (to_w, to_h):
+        return tracks
+    sx = float(to_w) / float(from_w)
+    sy = float(to_h) / float(from_h)
+
+    def _one(sample: Dict[str, Any]) -> Dict[str, Any]:
+        item = dict(sample)
+        width = clamp(abs(float(item.get("w") or 0.0)) * sx, 2.0, float(to_w))
+        height = clamp(abs(float(item.get("h") or 0.0)) * sy, 2.0, float(to_h))
+        item["w"] = round(width, 4)
+        item["h"] = round(height, 4)
+        item["x"] = round(
+            clamp(float(item.get("x") or 0.0) * sx, 0.0, max(0.0, to_w - width)), 4
+        )
+        item["y"] = round(
+            clamp(float(item.get("y") or 0.0) * sy, 0.0, max(0.0, to_h - height)), 4
+        )
+        if "eye_y" in item:
+            item["eye_y"] = round(
+                clamp(float(item.get("eye_y") or 0.0) * sy, 0.0, float(to_h)), 4
+            )
+        return item
+
+    rescaled: List[Dict[str, Any]] = []
+    for track in tracks.tracks:
+        item = dict(track)
+        samples = [_one(sample) for sample in (track.get("samples") or [])]
+        item["samples"] = samples
+        if samples:
+            mean_area = sum(
+                float(sample["w"]) * float(sample["h"]) for sample in samples
+            ) / len(samples)
+            centrality = float(track.get("centrality") or 0.0)
+            persistence = float(track.get("persistence") or 0.0)
+            item["mean_area"] = round(mean_area, 3)
+            item["score"] = round(
+                (mean_area**0.5) * (0.5 + 0.5 * centrality) * (0.4 + 0.6 * persistence),
+                4,
+            )
+        rescaled.append(item)
+
+    return FaceTracks(
+        detected_ratio=tracks.detected_ratio,
+        tracks=rescaled,
+        max_concurrent=tracks.max_concurrent,
+        framing=tracks.framing,
+        detector=tracks.detector,
+        span_x_ratio=tracks.span_x_ratio,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # public API
 # --------------------------------------------------------------------------- #
