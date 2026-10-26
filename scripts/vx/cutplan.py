@@ -13,10 +13,20 @@ un arrotondamento indipendente che puo' divergere.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import grammar, vad
+from . import contract, grammar, vad
 from .edl import Edl, EdlShot, filtergraph
+from .edl_plan import (
+    ClipSegment,
+    EDLPlan,
+    EDLValidationError,
+    SourceRef,
+    Track,
+    Transition,
+)
 
 
 def _inside(t: float, silences: List[Dict[str, float]]) -> bool:
@@ -116,6 +126,216 @@ def silence_windows(path: str) -> List[Dict[str, float]]:
     except Exception:  # noqa: BLE001 - stessa regola: degrada, non esplode
         return []
     return [{"start": float(gap["start"]), "end": float(gap["end"])} for gap in gaps]
+
+
+@dataclass(frozen=True)
+class BrollCandidate:
+    """A B-roll insert anchored to a semantic finding on the main dialogue.
+
+    ``at`` is a SOURCE timestamp on the A-Roll source, not a timeline second:
+    the builder maps it through the shot that contains it. ``finding_source_id``
+    is the source the finding's ``t0``/``t1`` refer to, and it is the one written
+    into the witness: the B-roll source is the footage, not the evidence.
+    """
+
+    broll_source_id: str
+    src_in: float
+    src_out: float
+    at: float
+    finding_id: str
+    finding_source_id: str
+    t0: float
+    t1: float
+    role: str = "broll_overlay"
+    transition_sec: float = 0.3
+
+    def witness(self) -> Dict[str, object]:
+        return {
+            "finding_id": self.finding_id,
+            "t0": float(self.t0),
+            "t1": float(self.t1),
+            "source_id": self.finding_source_id,
+        }
+
+
+@dataclass(frozen=True)
+class BuiltEdl:
+    """The EDL plus the witness that justifies every B-roll clip."""
+
+    plan: EDLPlan
+    witnesses: Mapping[str, Dict[str, object]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "witnesses", MappingProxyType(dict(self.witnesses)))
+
+    def witness(self, clip_id: str) -> Dict[str, object]:
+        return self.witnesses[clip_id]
+
+
+def build_edl_plan(
+    edl: Edl,
+    *,
+    source_id: str,
+    sources: Mapping[str, SourceRef],
+    broll: Sequence[BrollCandidate] = (),
+    fps: Optional[float] = None,
+    duration: Optional[float] = None,
+    aspect_ratio: str = "9:16",
+    resolution: Optional[Tuple[int, int]] = None,
+) -> BuiltEdl:
+    """Build the multi-track EDL v2.0: A-Roll, mirrored dialogue, anchored B-roll.
+
+    The A-Roll keeps the Edl's cut timing. The dialogue track mirrors those
+    same clips, so the audio/video offset is zero and the J/L law is satisfied
+    by construction. B-roll lives in its own video track (layer 1): putting it
+    in the A-Roll track would violate the no-overlap invariant.
+    """
+    if not isinstance(edl, Edl) or not edl.shots:
+        raise EDLValidationError(["edl: at least one shot is required"])
+    if source_id not in sources:
+        raise EDLValidationError([f"sources: {source_id} is not declared"])
+    frame_rate = float(fps if fps is not None else edl.fps)
+    total = float(duration if duration is not None else edl.total)
+    if frame_rate <= 0:
+        raise EDLValidationError(["timeline.fps must be > 0"])
+    if total <= 0:
+        raise EDLValidationError(["timeline.duration_sec must be > 0"])
+    if aspect_ratio not in contract.ASPECTS:
+        raise EDLValidationError(
+            [f"timeline.aspect_ratio {aspect_ratio!r} is not a known aspect"]
+        )
+    width, height = resolution or contract.output_size(aspect_ratio)
+
+    main_clips = [
+        ClipSegment(
+            clip_id=f"c{index}",
+            source_id=source_id,
+            src_in=float(shot.src_in),
+            src_out=float(shot.src_out),
+            dst_in=float(shot.t_in),
+            dst_out=float(shot.t_out),
+            layer=0,
+            role="main_talking_head",
+        )
+        for index, shot in enumerate(edl.shots, 1)
+    ]
+    audio_clips = [
+        ClipSegment(
+            clip_id=f"a{index}",
+            source_id=clip.source_id,
+            src_in=clip.src_in,
+            src_out=clip.src_out,
+            dst_in=clip.dst_in,
+            dst_out=clip.dst_out,
+            layer=0,
+            role="dialogue",
+        )
+        for index, clip in enumerate(main_clips, 1)
+    ]
+
+    broll_clips: List[ClipSegment] = []
+    witnesses: Dict[str, Dict[str, object]] = {}
+    for index, candidate in enumerate(broll, 1):
+        if candidate.finding_source_id != source_id:
+            raise EDLValidationError(
+                [
+                    f"broll[{index}]: finding source {candidate.finding_source_id} "
+                    f"is not the main dialogue source {source_id}"
+                ]
+            )
+        if candidate.broll_source_id not in sources:
+            raise EDLValidationError(
+                [f"broll[{index}]: source {candidate.broll_source_id} is not declared"]
+            )
+        if not (float(candidate.src_out) > float(candidate.src_in)):
+            raise EDLValidationError([f"broll[{index}]: src_out must be > src_in"])
+        if not (float(candidate.t0) <= float(candidate.at) <= float(candidate.t1)):
+            raise EDLValidationError(
+                [
+                    f"broll[{index}]: at {candidate.at} is outside the finding "
+                    f"span [{candidate.t0}, {candidate.t1}]"
+                ]
+            )
+        host = next(
+            (
+                clip
+                for clip in main_clips
+                if clip.src_in - 1e-6 <= float(candidate.at) <= clip.src_out + 1e-6
+            ),
+            None,
+        )
+        if host is None:
+            raise EDLValidationError(
+                [f"broll[{index}]: at {candidate.at} is outside every A-Roll shot"]
+            )
+        if (
+            float(candidate.t0) < host.src_in - 1e-6
+            or float(candidate.t1) > host.src_out + 1e-6
+        ):
+            raise EDLValidationError(
+                [
+                    f"broll[{index}]: finding span [{candidate.t0}, "
+                    f"{candidate.t1}] crosses the host shot "
+                    f"[{host.src_in}, {host.src_out}]"
+                ]
+            )
+        declared = sources[candidate.broll_source_id].duration
+        if declared is not None and float(candidate.src_out) > float(declared) + 1e-6:
+            raise EDLValidationError(
+                [
+                    f"broll[{index}]: src_out {candidate.src_out} exceeds "
+                    f"{candidate.broll_source_id} duration {declared}"
+                ]
+            )
+        clip_duration = float(candidate.src_out) - float(candidate.src_in)
+        timeline_in = host.dst_in + (float(candidate.at) - host.src_in)
+        timeline_out = timeline_in + clip_duration
+        if timeline_out > total + 1e-6:
+            raise EDLValidationError(
+                [
+                    f"broll[{index}]: ends at {timeline_out:.3f}, past the "
+                    f"timeline {total:.3f}"
+                ]
+            )
+        clip_id = f"b{index}"
+        broll_clips.append(
+            ClipSegment(
+                clip_id=clip_id,
+                source_id=candidate.broll_source_id,
+                src_in=float(candidate.src_in),
+                src_out=float(candidate.src_out),
+                dst_in=timeline_in,
+                dst_out=timeline_out,
+                layer=1,
+                role=candidate.role,
+                transition_in=Transition("fade", float(candidate.transition_sec)),
+                transition_out=Transition("fade", float(candidate.transition_sec)),
+            )
+        )
+        witnesses[clip_id] = candidate.witness()
+
+    video_tracks = [Track(track_id=0, clips=tuple(main_clips), role="main")]
+    if broll_clips:
+        video_tracks.append(Track(track_id=1, clips=tuple(broll_clips), role="broll"))
+    audio_tracks = (
+        (Track(track_id=0, clips=tuple(audio_clips), role="dialogue"),)
+        if audio_clips
+        else ()
+    )
+
+    plan = EDLPlan(
+        fps=frame_rate,
+        duration_sec=total,
+        aspect_ratio=aspect_ratio,
+        resolution=(int(width), int(height)),
+        sources=sources,
+        video_tracks=tuple(video_tracks),
+        audio_tracks=audio_tracks,
+    )
+    errors = plan.validate()
+    if errors:
+        raise EDLValidationError(errors)
+    return BuiltEdl(plan=plan, witnesses=witnesses)
 
 
 def _selftest() -> int:
