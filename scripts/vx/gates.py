@@ -602,7 +602,8 @@ COLOR_TOLERANCE = {"luma_p01": 0.010, "luma_p50": 0.020, "luma_p99": 0.030,
                    "mid_sat": 0.050, "hi_sat": 0.050}
 
 
-def _frame_stats(video: str | Path, at: float, region: tuple[float, float]) -> dict:
+def _frame_stats(video: str | Path, at: float, region: tuple[float, float],
+                 inset: float = 0.0) -> dict:
     import cv2  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
 
@@ -614,9 +615,10 @@ def _frame_stats(video: str | Path, at: float, region: tuple[float, float]) -> d
     cap.release()
     if not ok or frame is None:
         raise contract.QCFailure({"gate": "color", "failures": [f"frame non leggibile a {at}"]})
-    h = frame.shape[0]
+    h, w = frame.shape[0], frame.shape[1]
     y0, y1 = int(h * region[0]), int(h * region[1])
-    rgb = cv2.cvtColor(frame[y0:y1], cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    x0, x1 = int(w * inset), int(w * (1.0 - inset))
+    rgb = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
     hi = rgb.max(axis=2)
     lo = rgb.min(axis=2)
@@ -638,6 +640,7 @@ def color(
     *,
     samples: int = COLOR_SAMPLES,
     region: tuple[float, float] = (0.0, 0.62),
+    inset: float = 0.0,
     tolerance: dict | None = None,
 ) -> GateResult:
     """Gate 5: il grade del file nuovo deve combaciare con quello certificato.
@@ -664,8 +667,8 @@ def color(
         # Un campione oltre l'ultimo frame decodificabile non e' un errore di
         # colore: si salta. Se ne restano troppo pochi, il gate rifiuta comunque.
         try:
-            ref = _frame_stats(reference, at, region)
-            cand = _frame_stats(candidate, at, region)
+            ref = _frame_stats(reference, at, region, inset)
+            cand = _frame_stats(candidate, at, region, inset)
         except contract.QCFailure:
             continue
         used += 1
@@ -685,7 +688,7 @@ def color(
                 "pass" if delta <= limit else "fail",
                 round(delta, 4),
                 f"<= {limit}",
-                f"scarto massimo su {used} campioni validi nella fascia {region}",
+                f"scarto massimo su {used} campioni validi nella fascia {region} inset {inset}",
             )
         )
     if not result.ok:

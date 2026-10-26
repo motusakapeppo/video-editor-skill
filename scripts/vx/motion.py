@@ -536,6 +536,7 @@ def composite(
     crf: int = 20,
     preset: str = "medium",
     on_frame=None,
+    grade_node=None,
 ) -> Dict[str, Any]:
     """Un passaggio: decode -> layer -> encode, audio copiato dal master.
 
@@ -621,6 +622,10 @@ def composite(
             if len(buf) < frame_bytes:
                 break
             base = Image.frombytes("RGB", (w, h), buf)
+            if grade_node is not None:
+                from . import grade as grade_mod  # noqa: PLC0415
+
+                base = grade_mod.apply_pillow(base, grade_node)
             t = n / fps
             layer = render_layer(payload, base, t, font=font)
             merged = base.convert("RGBA")
@@ -694,6 +699,7 @@ def render_video(
     engine: str = "pillow",
     crf: int = 20,
     preset: str = "medium",
+    grade: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Unico ingresso: sceglie il motore, i Gate restano identici.
 
@@ -702,8 +708,11 @@ def render_video(
     """
     renderer = renderer_for(payload, engine)
     try:
+        from . import grade as grade_mod  # noqa: PLC0415
+        node = grade_mod.parse(grade) if grade else None
         if getattr(renderer, "name", "") == "pillow":
-            info = composite(master, payload, out, crf=crf, preset=preset)
+            info = composite(master, payload, out, crf=crf, preset=preset,
+                             grade_node=node)
         else:
             from .motion_browser import composite_browser  # noqa: PLC0415
 

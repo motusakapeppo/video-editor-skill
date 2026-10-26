@@ -167,6 +167,8 @@ def apply_pillow(img: Image.Image, node: GradeNode) -> Image.Image:
             # curves=m agisce su OGNI canale, non sulla luma: f(R), f(G), f(B).
             rgb = np.stack([f(rgb[:, :, i]) for i in range(3)], axis=2)
         if node.desaturate:
+            # Misurato: il round-trip YUV intero peggiora p01 (0.0176 contro 0.0137)
+            # perche' quantizza Y a 8 bit. La replicazione in float e' piu' fedele.
             y = LUMA[0] * rgb[:, :, 0] + LUMA[1] * rgb[:, :, 1] + LUMA[2] * rgb[:, :, 2]
             rgb = np.stack([y, y, y], axis=2)
         for i, key in enumerate("rgb"):
