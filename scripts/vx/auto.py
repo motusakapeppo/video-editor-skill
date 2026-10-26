@@ -372,6 +372,7 @@ def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
             for entry in rejected
         ],
         "not_evaluated": list(block.get("not_evaluated") or []),
+        "plan_notes": list(getattr(plan, "notes", ()) or ()),
         "camera_exemptions": exemptions,
         "gate1": gate1.to_dict(),
         "qc": qc_result,

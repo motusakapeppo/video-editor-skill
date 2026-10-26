@@ -73,6 +73,8 @@ def _cli(args: list) -> subprocess.CompletedProcess:
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -134,7 +136,7 @@ def _build_pool(pool: Path) -> bool:
     )
     ok_music = _make(
         pool / "music.m4a",
-        ["-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:a", "aac"],
+        ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac"],
     )
     if not (ok_clip and ok_still and ok_music):
         return False
@@ -367,6 +369,18 @@ def main() -> int:
             "camera_exemptions e' una lista",
             isinstance(report.get("camera_exemptions"), list),
             report.get("camera_exemptions"),
+        )
+
+        notes = report.get("plan_notes") or []
+        check(
+            "note del piano persistite nel referto",
+            isinstance(notes, list) and any("payload v1.5.0" in n for n in notes),
+            notes,
+        )
+        check(
+            "musica corta dichiarata nel referto",
+            any("più corta della timeline" in n for n in notes),
+            notes,
         )
 
         after = {p.name: _sha256(p) for p in pool.iterdir() if p.is_file()}
