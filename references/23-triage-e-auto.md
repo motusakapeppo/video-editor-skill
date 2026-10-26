@@ -99,7 +99,10 @@ Una metrica non misurata non diventa zero: il suo nome finisce in
 `not_evaluated`. I nomi sono `video_sharpness`, `video_exposure`,
 `audio_noise`, `music_incoherent` e `semantic_anchor`. Una misura fallita è
 assenza, non un valore: la metrica non viene usata per rifiutare e il suo nome
-finisce in `not_evaluated`.
+finisce in `not_evaluated`. Il percorso automatico misura nitidezza ed
+esposizione, ma non calcola `snr_db` né `music_ratio`: senza una misura
+iniettata, `audio_noise` e `music_incoherent` restano in `not_evaluated` e
+nessun asset viene scartato per rumore o per incoerenza musicale.
 
 ## Duplicati
 

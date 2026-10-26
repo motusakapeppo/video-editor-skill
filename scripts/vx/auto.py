@@ -24,7 +24,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, List, Mapping, Sequence
 
 from . import (
     asset_triage,
@@ -131,6 +131,7 @@ def _fps(
 def _timeline_est(
     selected: List[Mapping[str, Any]],
     assets_by_id: Mapping[str, asset_triage.AssetInfo],
+    rejected: Sequence[Mapping[str, Any]] = (),
 ) -> float:
     total = 0.0
     for entry in selected:
@@ -148,8 +149,13 @@ def _timeline_est(
             ) from exc
         total += min(target, float(asset.duration_sec))
     if total <= 0:
+        discarded = ", ".join(
+            f"{entry.get('asset_id')}={entry.get('rejection_reason')}"
+            for entry in rejected
+        )
+        detail = f"; scarti: {discarded}" if discarded else ""
         raise contract.VxError(
-            "timeline stimata non positiva: nessun a_roll utilizzabile"
+            "timeline stimata non positiva: nessun a_roll utilizzabile" + detail
         )
     return total
 
@@ -282,7 +288,7 @@ def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
     rejected = list(block.get("rejected_assets") or [])
 
     fps = _fps(args, selected, assets_by_id)
-    timeline_est = _timeline_est(selected, assets_by_id)
+    timeline_est = _timeline_est(selected, assets_by_id, rejected)
 
     sources_map: Dict[str, str] = {}
     for entry in selected:

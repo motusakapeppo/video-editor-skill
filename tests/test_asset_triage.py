@@ -390,6 +390,52 @@ def main() -> int:
         contract.THRESHOLDS["triage_max_upscale"],
     )
 
+    # -- a failed measurement is absence, not a zero ----------------------- #
+    from vx import analyze, visual
+
+    original_sharpness = visual.measure_sharpness
+    original_exposure = analyze.measure_exposure
+    visual.measure_sharpness = lambda path, **kw: {
+        "sharpness": 0.0,
+        "samples": 0,
+        "method": "unavailable: no cv2",
+    }
+    analyze.measure_exposure = lambda path, **kw: {
+        "mean_luma": 0.0,
+        "clip_high_pct": 0.0,
+        "clip_low_pct": 0.0,
+        "verdict": "unknown",
+        "note": "no cv2",
+    }
+    try:
+        measured = at.measure_asset(_asset("v.mp4"))
+        check(
+            "misura fallita: nessuna nitidezza inventata",
+            "sharpness" not in measured and "measure_error" in measured,
+            measured,
+        )
+        check(
+            "misura fallita: nessuna luma inventata",
+            "mean_luma" not in measured,
+            measured,
+        )
+        unavailable = at.triage_assets(
+            [_asset("v.mp4")], (1080, 1920), measure=at.measure_asset
+        )
+    finally:
+        visual.measure_sharpness = original_sharpness
+        analyze.measure_exposure = original_exposure
+    check(
+        "misura fallita: l'asset resta selezionato",
+        not unavailable.rejected,
+        [item.rejection_reason for item in unavailable.rejected],
+    )
+    check(
+        "misura fallita: dichiarata in not_evaluated",
+        {"video_sharpness", "video_exposure"} <= set(unavailable.not_evaluated),
+        unavailable.not_evaluated,
+    )
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 

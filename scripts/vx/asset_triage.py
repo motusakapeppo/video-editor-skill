@@ -438,20 +438,30 @@ def measure_asset(asset: AssetInfo) -> Dict[str, Any]:
         try:
             from . import visual
 
-            metrics["sharpness"] = float(
-                visual.measure_sharpness(asset.path).get("sharpness", 0.0)
-            )
-        except Exception:  # noqa: BLE001 - absent metric is declared downstream
-            pass
+            sharpness = visual.measure_sharpness(asset.path)
+            method = str(sharpness.get("method") or "")
+            if int(sharpness.get("samples") or 0) > 0 and not method.startswith(
+                "unavailable"
+            ):
+                metrics["sharpness"] = float(sharpness["sharpness"])
+            else:
+                metrics["measure_error"] = method or "sharpness unavailable"
+        except Exception as exc:  # noqa: BLE001 - absent metric is declared downstream
+            metrics["measure_error"] = f"{type(exc).__name__}: {exc}"
     if asset.kind == "video":
         try:
             from . import analyze
 
             exposure = analyze.measure_exposure(asset.path, max_seconds=2.0)
-            metrics["mean_luma"] = float(exposure.get("mean_luma", 0.0))
-            metrics["luma_verdict"] = exposure.get("verdict", "")
-        except Exception:  # noqa: BLE001
-            pass
+            if str(exposure.get("verdict") or "") != "unknown":
+                metrics["mean_luma"] = float(exposure["mean_luma"])
+                metrics["luma_verdict"] = str(exposure.get("verdict") or "")
+            else:
+                metrics["measure_error"] = str(
+                    exposure.get("note") or "exposure unavailable"
+                )
+        except Exception as exc:  # noqa: BLE001
+            metrics["measure_error"] = f"{type(exc).__name__}: {exc}"
     if asset.kind == "audio":
         metrics["duration_sec"] = float(asset.duration_sec)
         metrics["has_audio"] = bool(asset.has_audio)
