@@ -659,11 +659,23 @@ def color(
     times = [dur * i / max(1, samples - 1) * 0.999 for i in range(samples)]
 
     worst = {k: 0.0 for k in tol}
+    used = 0
     for at in times:
-        ref = _frame_stats(reference, at, region)
-        cand = _frame_stats(candidate, at, region)
+        # Un campione oltre l'ultimo frame decodificabile non e' un errore di
+        # colore: si salta. Se ne restano troppo pochi, il gate rifiuta comunque.
+        try:
+            ref = _frame_stats(reference, at, region)
+            cand = _frame_stats(candidate, at, region)
+        except contract.QCFailure:
+            continue
+        used += 1
         for key in tol:
             worst[key] = max(worst[key], abs(cand[key] - ref[key]))
+    if used < max(2, samples // 2):
+        raise contract.QCFailure({
+            "gate": "color",
+            "failures": [f"solo {used} campioni validi su {samples}: misura non affidabile"],
+        })
 
     for key, limit in tol.items():
         delta = worst[key]
@@ -673,7 +685,7 @@ def color(
                 "pass" if delta <= limit else "fail",
                 round(delta, 4),
                 f"<= {limit}",
-                f"scarto massimo su {samples} campioni nella fascia {region}",
+                f"scarto massimo su {used} campioni validi nella fascia {region}",
             )
         )
     if not result.ok:

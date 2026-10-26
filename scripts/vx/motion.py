@@ -247,25 +247,49 @@ def build_payload(
 
 
 def expected_frames(video: str | Path) -> Tuple[int, float, float]:
-    """Frame e durata DICHIARATI dal file. E' il metro, non i sottotitoli."""
+    """Frame e durata dichiarati dal file, con i fallback che il mondo reale impone.
+
+    WebM/Matroska non espone `duration` ne' `nb_frames` a livello di stream: stanno
+    nel container, e `nb_frames` spesso non c'e' affatto. Senza questi fallback la
+    sonda legge 0.00s e il render muore su ogni .webm (trovato dal corpus reale).
+    """
     proc = ff.run_fp([
         "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=nb_frames,r_frame_rate,duration",
+        "-show_entries", "stream=nb_frames,r_frame_rate,duration:format=duration",
         "-of", "json", str(video),
     ])
     fps, dur, frames = 25.0, 0.0, 0
     try:
-        stream = json.loads(proc.stdout)["streams"][0]
+        payload = json.loads(proc.stdout)
+        stream = payload["streams"][0]
         num, den = (stream.get("r_frame_rate") or "25/1").split("/")
         fps = float(num) / float(den or 1)
         dur = float(stream.get("duration") or 0.0)
         frames = int(stream.get("nb_frames") or 0)
+        if dur <= 0:
+            dur = float((payload.get("format") or {}).get("duration") or 0.0)
     except Exception:  # noqa: BLE001
         pass
-    # La durata e' affidabile, `nb_frames` no: un file stream-copied dichiara 62 e
-    # ne decodifica 65. Il metro e' round(durata x fps), che sul master da 538.
-    calc = int(round(dur * fps)) if dur > 0 else frames
-    return (calc if calc > 0 else frames), dur, fps
+    if frames <= 0 and dur > 0:
+        frames = int(round(dur * fps))
+    if dur <= 0 or frames <= 0:
+        counted = ff.run_fp(["-v", "error", "-select_streams", "v:0", "-count_frames",
+                             "-show_entries", "stream=nb_read_frames,duration:format=duration",
+                             "-of", "json", str(video)])
+        try:
+            payload = json.loads(counted.stdout)
+            stream = payload["streams"][0]
+            read = int(stream.get("nb_read_frames") or 0)
+            if read > 0:
+                frames = read
+            if dur <= 0:
+                dur = float(stream.get("duration")
+                            or (payload.get("format") or {}).get("duration") or 0.0)
+            if dur <= 0 and frames > 0:
+                dur = frames / fps
+        except Exception:  # noqa: BLE001
+            pass
+    return frames, dur, fps
 
 
 def audit_font(
