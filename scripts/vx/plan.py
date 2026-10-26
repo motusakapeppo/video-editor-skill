@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -418,7 +419,22 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
     input_i = _num(loudness.get("input_i"))
     target_name = _loudness_target_name(brief)
     target_i = float(LOUDNESS_TARGETS[target_name][0])
-    if input_i is not None and abs(input_i - target_i) >= 1.0:
+    silent_audio = input_i is not None and (
+        not math.isfinite(input_i) or input_i <= THRESHOLDS["silence_dbfs"]
+    )
+    if silent_audio:
+        out.append(
+            _finding(
+                "audio.silent",
+                "warn",
+                "audio.loudness.input_i",
+                round(input_i, 2) if math.isfinite(input_i) else "-inf",
+                THRESHOLDS["silence_dbfs"],
+                "Traccia audio muta o non misurabile: nessuna normalizzazione",
+                "audio_restore",
+            )
+        )
+    elif input_i is not None and abs(input_i - target_i) >= 1.0:
         out.append(
             _finding(
                 "audio.loudness.off",

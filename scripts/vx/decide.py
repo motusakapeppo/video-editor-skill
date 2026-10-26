@@ -31,8 +31,10 @@ __all__ = [
     "PLATFORMS",
     "VAGUE",
     "calculate_specificity_score",
+    "duotone_filter",
     "interpret",
     "parse_and_decide",
+    "payload_to_edit_plan",
     "select_mode",
     "validate_scene_payload",
 ]
@@ -447,6 +449,121 @@ def parse_and_decide(
             "engine": engine,
         },
     }
+
+
+def _hex_rgb(value: object) -> tuple[float, float, float]:
+    text = str(value or "").strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(char * 2 for char in text)
+    if len(text) != 6:
+        return (0.0, 0.0, 0.0)
+    try:
+        return tuple(int(text[index : index + 2], 16) / 255.0 for index in (0, 2, 4))
+    except ValueError:
+        return (0.0, 0.0, 0.0)
+
+
+def duotone_filter(shadows: object, highlights: object) -> str:
+    sr, sg, sb = _hex_rgb(shadows)
+    hr, hg, hb = _hex_rgb(highlights)
+    return (
+        "hue=s=0,"
+        f"curves=r='0/{sr:.3f} 1/{hr:.3f}':"
+        f"g='0/{sg:.3f} 1/{hg:.3f}':"
+        f"b='0/{sb:.3f} 1/{hb:.3f}'"
+    )
+
+
+def payload_to_edit_plan(
+    payload: Dict[str, Any], media_info: Dict[str, Any]
+) -> contract.EditPlan:
+    errors = validate_scene_payload(payload)
+    if errors:
+        raise contract.VxError("invalid scene payload: " + "; ".join(errors))
+    try:
+        duration = float(media_info.get("duration") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if duration <= 0:
+        raise contract.VxError("media_info.duration is required")
+
+    scene = payload["scene"]
+    rationale = payload["execution_context"]["creative_rationale"]
+    aspect = str(scene["aspect_ratio"])
+    width, height = (int(value) for value in scene["resolution"])
+    finding = {
+        "id": "brief.autonomous",
+        "severity": "info",
+        "metric": "brief.mode",
+        "value": "autonomous",
+        "threshold": "n/a",
+        "evidence": rationale.get("genre_detected") or "creative_rationale",
+        "suggested_treatment": None,
+        "span": [0.0, duration],
+        "declared": True,
+    }
+
+    treatments: List[Dict[str, Any]] = []
+    executed = ["output", "cut"]
+    color = rationale.get("color_palette") or {}
+    if color.get("type") == "duotone":
+        filter_text = duotone_filter(color.get("shadows"), color.get("highlights"))
+        treatments.append(
+            {
+                "name": "color_fix",
+                "kind": "technical",
+                "enabled": True,
+                "params": {"filter": filter_text},
+                "reason": {
+                    "finding_id": "brief.autonomous",
+                    "explain": str(color.get("rationale") or "duotone autonomo"),
+                },
+                "evidence": [
+                    {"finding_id": "brief.autonomous", "t0": 0.0, "t1": duration}
+                ],
+            }
+        )
+        executed.append("color_fix")
+
+    pacing = rationale.get("pacing") or {}
+    typography = rationale.get("typography") or {}
+    engine = str(scene.get("engine") or "pillow")
+    unsupported: List[Dict[str, str]] = []
+    if pacing.get("bpm_target") is not None:
+        unsupported.append(
+            {
+                "field": "pacing.bpm_target",
+                "reason": "il pianificatore non taglia su BPM: il valore resta nel brief",
+            }
+        )
+    if engine != "pillow":
+        unsupported.append(
+            {
+                "field": "scene.engine",
+                "reason": "vx run usa ffmpeg; il compositor non è cablato",
+            }
+        )
+    if typography.get("font_family"):
+        unsupported.append(
+            {
+                "field": "typography.font_family",
+                "reason": "nota di stile: il bridge non crea sottotitoli",
+            }
+        )
+
+    return contract.EditPlan(
+        output={"aspect": aspect, "width": width, "height": height},
+        treatments=treatments,
+        cuts=[{"in": 0.0, "out": duration}],
+        render={"precision": "full", "engine": engine},
+        brief={
+            "creative_rationale": rationale,
+            "font": typography.get("font_family"),
+            "bpm": pacing.get("bpm_target"),
+            "autonomous_findings": [finding],
+            "bridge": {"executed": executed, "unsupported": unsupported},
+        },
+    )
 
 
 def validate_scene_payload(payload: Dict[str, Any]) -> List[str]:

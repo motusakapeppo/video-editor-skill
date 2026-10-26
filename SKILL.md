@@ -136,7 +136,8 @@ ferma sul non quantificato. Il Python segnala `rd_search_required`, mai
 Jitter (optical flow DIS), esposizione (istogrammi luma, clipping), cast colore
 (gray-world), freeze, scene cut, noise floor e SNR (p10/p90 del RMS), dead air,
 LUFS e true peak, clipping, music ratio, volti/track/speaker (YuNet + IoU + MAR),
-WPM. Le soglie vivono in `scripts/vx/contract.py`.
+WPM. Le soglie vivono in `scripts/vx/contract.py`; la tabella è read-only e
+`settings` è l'unico scrittore.
 
 ## Trattamenti: cosa fa il codice
 

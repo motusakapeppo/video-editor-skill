@@ -1035,6 +1035,13 @@ def cmd_render(args: argparse.Namespace) -> int:
     else:
         _verify_source_identity(report, media)
 
+    if report is not None:
+        declared = (built.brief or {}).get("autonomous_findings") or []
+        if declared:
+            report.setdefault("findings", [])
+            seen = {f.get("id") for f in report["findings"] if isinstance(f, dict)}
+            report["findings"].extend(f for f in declared if f.get("id") not in seen)
+
     visual = (
         _visual_from_brief(_load_json(args.visual_brief))
         if getattr(args, "visual_brief", None)
@@ -1284,6 +1291,11 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     _log("[run] piano")
     built = plan_mod.build_plan(rep, brief, answers or {})
+    declared = (built.brief or {}).get("autonomous_findings") or []
+    if declared:
+        rep.setdefault("findings", [])
+        seen = {f.get("id") for f in rep["findings"] if isinstance(f, dict)}
+        rep["findings"].extend(f for f in declared if f.get("id") not in seen)
     errors = plan_mod.validate(built, rep)
     if errors:
         for err in errors:

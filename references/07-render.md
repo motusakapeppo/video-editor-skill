@@ -92,6 +92,10 @@ invece di comprimere, e il risultato resta prevedibile. Se la misura è
 inutilizzabile (`nan`, stringa vuota, `None`), il codice ricade sulla modalità
 dinamica: è la rete di sicurezza, non la scelta preferita.
 
+Una traccia muta (`input_i` non finito o <= -70 dBFS) non arriva al secondo
+passaggio: il piano emette `audio.silent` e lo stadio 04 fa `04_remux`; la guardia
+`_silent_loudness` impedisce comunque di passare `measured_I=-inf` a ffmpeg.
+
 Atteso: il secondo passaggio porta l'integrato a **-14.0 LUFS**. Il finding che
 accende il loudnorm scatta a **1.0 LU** di scarto (`plan.py`); il gate QC che lo
 verifica pretende **0.3 LU** (`qc.py`). Sono due soglie diverse e non in

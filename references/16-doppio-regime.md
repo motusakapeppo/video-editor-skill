@@ -72,6 +72,15 @@ quando il solo flag Python veniva letto come "ricerca fatta".
 
 Exit 0 con payload valido, 3 se STRICT è ambiguo, 2 se il payload non valida.
 
+## Bridge verso EditPlan
+
+`contract.payload_to_edit_plan(payload, media_info)` proietta il payload in un
+`EditPlan` eseguibile: output, taglio unico 0..durata, e duotone → `color_fix`
+con `hue=s=0,curves=...`, che `_eq_chain` compone davvero. Il duotone cita
+`brief.autonomous`, un finding `declared:true` con span [0,durata]; senza
+`declared` il validatore rifiuta. BPM, font e engine Chromium non sono eseguiti
+da `vx run`: finiscono in `brief.bridge.unsupported` con il motivo.
+
 ## Cosa non cambia
 
 La legge dell'evidenza e i gate 1-5. L'autonomia non è un permesso per saltare una

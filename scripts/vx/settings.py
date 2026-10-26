@@ -44,6 +44,7 @@ RANGES: Dict[str, tuple[float, float]] = {
     "dead_air_max_cut": (0.0, 1.0),
     "silence_pad": (0.0, 5.0),
     "silence_min": (0.01, 600.0),
+    "silence_dbfs": (-120.0, 0.0),
     "clip_pct": (0.0, 100.0),
     "lra_wide": (0.0, 60.0),
     "speech_wpm_fast": (10.0, 600.0),
@@ -233,21 +234,28 @@ def fingerprint(settings: Dict[str, Any]) -> str:
 
 
 def apply(settings: Dict[str, Any]) -> Dict[str, Any]:
-    """Install the effective values: mutate contract.THRESHOLDS in place and refresh
-    the few modules that derive constants at import time."""
+    """Install the effective values as a new live snapshot; the public table is read-only."""
     problems = _validate_ranges(settings)
     if problems:
         raise contract.VxError("invalid settings: " + "; ".join(problems))
 
-    thresholds = settings.get("thresholds") or {}
-    for key, value in thresholds.items():
-        contract.THRESHOLDS[key] = value
+    merged = dict(contract.DEFAULT_THRESHOLDS)
+    merged.update(settings.get("thresholds") or {})
+    contract._set_thresholds(merged)
 
     _APPLIED.clear()
     _APPLIED.update(settings)
     _APPLIED["_fingerprint"] = fingerprint(settings)
     for refresher in _REFRESHERS:
         refresher(settings)
+    _refresh_modules()
+    return _APPLIED
+
+
+def reset() -> Dict[str, Any]:
+    """Restore the frozen default snapshot."""
+    contract._set_thresholds(dict(contract.DEFAULT_THRESHOLDS))
+    _APPLIED.clear()
     _refresh_modules()
     return _APPLIED
 

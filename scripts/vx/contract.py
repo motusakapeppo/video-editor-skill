@@ -57,7 +57,7 @@ LOUDNESS_TARGETS = {
     "broadcast": (-23.0, -2.0),
 }
 
-THRESHOLDS = {
+_THRESHOLDS_DATA: Dict[str, Any] = {
     # video stability / image
     "jitter_shaky": 0.35,
     "jitter_bands": (0.35, 0.60, 1.00),
@@ -75,6 +75,7 @@ THRESHOLDS = {
     "dead_air_max_cut": 0.35,
     "silence_pad": 0.12,
     "silence_min": 0.35,
+    "silence_dbfs": -70.0,
     "clip_pct": 0.01,
     "lra_wide": 12.0,
     # speech / subtitles
@@ -92,9 +93,18 @@ THRESHOLDS = {
     "cut_fade_ms": 12,
 }
 
-# Floor of the settings cascade: `settings.apply()` mutates THRESHOLDS in place, so
-# this snapshot has to exist before anything can change it.
-DEFAULT_THRESHOLDS = dict(THRESHOLDS)
+THRESHOLDS = MappingProxyType(_THRESHOLDS_DATA)
+
+# The default snapshot is separate and never changes. `settings` owns the only
+# write path to the live table through `_set_thresholds`; everything else reads a
+# read-only mapping and cannot mutate it in place.
+DEFAULT_THRESHOLDS = MappingProxyType(dict(_THRESHOLDS_DATA))
+
+
+def _set_thresholds(values: Dict[str, Any]) -> None:
+    _THRESHOLDS_DATA.clear()
+    _THRESHOLDS_DATA.update(values)
+
 
 CREATIVE_TREATMENTS = ("autoframe", "zoom", "hook_overlay", "fit")
 TECHNICAL_TREATMENTS = (
@@ -119,7 +129,7 @@ ALLOWED_EVIDENCE_MAP = MappingProxyType(
         "audio_restore": frozenset({"audio.silent"}),
         "stabilize": frozenset({"video.jitter.shaky"}),
         "exposure_fix": frozenset({"video.exposure.under", "video.exposure.high_clip"}),
-        "color_fix": frozenset({"video.color.cast"}),
+        "color_fix": frozenset({"video.color.cast", "brief.autonomous"}),
         "pacing_fix": frozenset({"video.pacing.drag"}),
         "autoframe": frozenset(
             {
@@ -590,6 +600,11 @@ def validate_evidence(
             if finding.get("stale"):
                 errors.append(f"treatment {name} cites stale finding {finding_id}")
                 continue
+            if finding_id == "brief.autonomous" and not finding.get("declared"):
+                errors.append(
+                    f"treatment {name} cites brief.autonomous without declared:true"
+                )
+                continue
             span = _finding_span(finding)
             if span is None:
                 errors.append(
@@ -694,3 +709,12 @@ def validate_qc(qc: Dict[str, Any]) -> List[str]:
     if not isinstance(qc.get("checks"), list):
         errors.append("qc checks must be a list")
     return errors
+
+
+def payload_to_edit_plan(
+    payload: Dict[str, Any], media_info: Dict[str, Any]
+) -> "EditPlan":
+    """Project an autonomous scene payload into the executable plan."""
+    from . import decide
+
+    return decide.payload_to_edit_plan(payload, media_info)

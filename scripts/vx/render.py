@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import sys
 from contextlib import contextmanager
@@ -35,6 +36,7 @@ from . import ffmpeg as ff
 from . import fonts as fonts_mod
 from .contract import (
     LOUDNESS_TARGETS,
+    THRESHOLDS,
     CropPlan,
     EditPlan,
     RenderFailure,
@@ -301,10 +303,14 @@ def _eq_chain(plan: EditPlan) -> Optional[str]:
         "gamma_g",
         "gamma_b",
     )
-    parts = [f"{k}={_num(params[k]):.4f}" for k in keys if k in params]
-    if not parts:
-        return None
-    return "eq=" + ":".join(parts)
+    eq_parts = [f"{k}={_num(params[k]):.4f}" for k in keys if k in params]
+    chain: List[str] = []
+    if eq_parts:
+        chain.append("eq=" + ":".join(eq_parts))
+    raw = str(params.get("filter") or "").strip()
+    if raw:
+        chain.append(raw)
+    return ",".join(chain) if chain else None
 
 
 def _db_to_linear(db: float) -> float:
@@ -626,6 +632,18 @@ def write_script(graph: str, dst) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _silent_loudness(stats: dict) -> bool:
+    if not stats:
+        return False
+    try:
+        number = float(stats.get("input_i"))
+    except (TypeError, ValueError):
+        return True
+    if not math.isfinite(number):
+        return True
+    return number <= THRESHOLDS["silence_dbfs"]
+
+
 def loudnorm_two_pass(
     stats: dict,
     *,
@@ -645,17 +663,23 @@ def loudnorm_two_pass(
         "measured_thresh": stats.get("input_thresh"),
         "offset": stats.get("target_offset", 0.0),
     }
-    usable = all(
-        measured[key] not in (None, "", "nan")
-        for key in ("measured_I", "measured_TP", "measured_LRA", "measured_thresh")
+    numbers: Dict[str, Optional[float]] = {}
+    for key in ("measured_I", "measured_TP", "measured_LRA", "measured_thresh"):
+        try:
+            number = float(measured[key])
+        except (TypeError, ValueError):
+            number = None
+        numbers[key] = number if number is not None and math.isfinite(number) else None
+    usable = all(value is not None for value in numbers.values()) and (
+        numbers["measured_I"] > THRESHOLDS["silence_dbfs"]
     )
     base = f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
     if usable:
         base += (
-            f":measured_I={measured['measured_I']}"
-            f":measured_TP={measured['measured_TP']}"
-            f":measured_LRA={measured['measured_LRA']}"
-            f":measured_thresh={measured['measured_thresh']}"
+            f":measured_I={numbers['measured_I']:.2f}"
+            f":measured_TP={numbers['measured_TP']:.2f}"
+            f":measured_LRA={numbers['measured_LRA']:.2f}"
+            f":measured_thresh={numbers['measured_thresh']:.2f}"
             f":offset={measured['offset']}"
             ":linear=true"
         )
@@ -1003,11 +1027,14 @@ def render(
     final = work / f"final_{precision}.mp4"
     target_i, target_tp, target_lra = loudness_target(plan)
     stats: Dict[str, float] = {}
-    if has_audio and _enabled(plan, "loudnorm"):
+    run_loudnorm = has_audio and _enabled(plan, "loudnorm")
+    if run_loudnorm:
+        stats = _measure_loudness(stage03)
+        run_loudnorm = not _silent_loudness(stats)
+    if run_loudnorm:
         # Two passes: measure stage 03, then apply the measured values. The
         # filter graph goes to a script file (the project's hard rule: never
         # -af), so the executed declaration is the one on disk.
-        stats = _measure_loudness(stage03)
         af_args = loudnorm_two_pass(
             stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
         )
