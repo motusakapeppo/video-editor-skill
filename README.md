@@ -1,6 +1,6 @@
 # video-editor-skill
 
-> Versione: **1.3.0** — protocollo CLI unico, quattro deliverable, nessun export multi-aspect.
+> Versione: **1.4.0** — protocollo CLI unico, quattro deliverable, nessun export multi-aspect.
 
 > **English TL;DR** — An adaptive video-editing skill for the opencode agent runtime.
 > It measures a video before touching it (jitter, exposure, colour cast, noise floor,
@@ -133,8 +133,8 @@ mouth-aspect-ratio), WPM. Le soglie vivono in un solo posto: `scripts/vx/contrac
 
 ```
 SKILL.md                  ruolo, protocollo, trigger di auto-invocazione
-references/01..18.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
-                          accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna
+references/01..19.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
+                          accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna, EDL
 scripts/vx.py             launcher
 scripts/vx/
   contract.py             interfaccia congelata: schemi, soglie, validatori

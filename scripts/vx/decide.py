@@ -508,6 +508,10 @@ def payload_to_edit_plan(
     color = rationale.get("color_palette") or {}
     if color.get("type") == "duotone":
         filter_text = duotone_filter(color.get("shadows"), color.get("highlights"))
+        witness = {"finding_id": "brief.autonomous", "t0": 0.0, "t1": duration}
+        source_id = media_info.get("source_id")
+        if isinstance(source_id, str) and source_id:
+            witness["source_id"] = source_id
         treatments.append(
             {
                 "name": "color_fix",
@@ -518,9 +522,7 @@ def payload_to_edit_plan(
                     "finding_id": "brief.autonomous",
                     "explain": str(color.get("rationale") or "duotone autonomo"),
                 },
-                "evidence": [
-                    {"finding_id": "brief.autonomous", "t0": 0.0, "t1": duration}
-                ],
+                "evidence": [witness],
             }
         )
         executed.append("color_fix")

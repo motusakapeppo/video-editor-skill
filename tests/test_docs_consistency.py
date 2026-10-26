@@ -38,9 +38,9 @@ def main() -> int:
     contract = read(CONTRACT)
 
     # -- version --------------------------------------------------------- #
-    check("SKILL.md dichiara 1.3.0", 'version: "1.3.0"' in skill)
-    check("README.md dichiara 1.3.0", "1.3.0" in readme)
-    check("contract.VERSION e' 1.3.0", 'VERSION = "1.3.0"' in contract)
+    check("SKILL.md dichiara 1.4.0", 'version: "1.4.0"' in skill)
+    check("README.md dichiara 1.4.0", "1.4.0" in readme)
+    check("contract.VERSION e' 1.4.0", 'VERSION = "1.4.0"' in contract)
 
     # -- witness law ----------------------------------------------------- #
     for name, text in (("SKILL.md", skill), ("README.md", readme)):
@@ -61,9 +61,9 @@ def main() -> int:
     # -- reference index ------------------------------------------------- #
     listed = re.findall(r"references/(\d{2})-[A-Za-z0-9\-]+\.md", skill)
     numbers = sorted(set(listed))
-    expected = [f"{n:02d}" for n in range(1, 19)]
-    check("indice elenca 01..18", numbers == expected, ",".join(numbers))
-    missing = [f"{n:02d}" for n in range(1, 19) if not list(REFS.glob(f"{n:02d}-*.md"))]
+    expected = [f"{n:02d}" for n in range(1, 20)]
+    check("indice elenca 01..19", numbers == expected, ",".join(numbers))
+    missing = [f"{n:02d}" for n in range(1, 20) if not list(REFS.glob(f"{n:02d}-*.md"))]
     check("ogni reference elencato esiste", not missing, ",".join(missing))
     check("README non dice '01..08'", "01..08" not in readme)
 

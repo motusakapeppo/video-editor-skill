@@ -105,6 +105,17 @@ tagliato, e il crop virtuale ha bisogno delle coordinate del sorgente.
 Due trattamenti, uno creativo e uno tecnico. Ogni trattamento cita un finding e ne
 copia lo span in `evidence`. `output.aspect` è dichiarato. Il piano passa.
 
+Nei piani che dichiarano una mappa `sources` (EDL multi-sorgente, contratto v1.4.0),
+ogni testimone aggiunge `source_id`, la chiave della sorgente su cui `t0`/`t1` sono
+stati misurati:
+
+```json
+"evidence": [{ "finding_id": "F-faces-01", "t0": 0.0, "t1": 12.4, "source_id": "src_01" }]
+```
+
+Se `sources` non è dichiarata (piano single-source v1) il campo resta implicito e
+può essere omesso: è la modalità di compatibilità che tiene validi i report v1.3.0.
+
 `cut_silence` è l'unica eccezione: può citare più finding, e ogni intervallo
 rimosso dai `cuts` deve cadere dentro l'unione dei loro span. Un taglio che tocca
 un silenzio non testimoniato invalida il piano.

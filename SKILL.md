@@ -16,7 +16,7 @@ description: |-
 license: MIT
 compatibility: opencode
 metadata:
-  version: "1.3.0"
+  version: "1.4.0"
   engine: vx (python 3.10 + ffmpeg 8.1 + opencv + faster-whisper)
   venv: "<VENV_DIR>"
   ffmpeg: "8.1"
@@ -197,4 +197,4 @@ Si caricano su richiesta, non si incollano qui.
 - `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi
 - `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap
 - `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo
-- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume
+- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.0, A/B-Roll, source_id

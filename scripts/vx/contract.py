@@ -1,4 +1,4 @@
-"""vx.contract — FROZEN interface v1.3.0 for the video-editor skill.
+"""vx.contract — FROZEN interface v1.4.0 for the video-editor skill.
 
 stdlib only. Every other module may import this; this module imports nothing local.
 Changing anything here is a version bump (see SKILL.md "contratto").
@@ -15,7 +15,7 @@ SCHEMA = "vx.report/1.0"
 TRIAGE_SCHEMA = "vx.triage/1.0"
 PLAN_SCHEMA = "vx.plan/1.1"
 QC_SCHEMA = "vx.qc/1.0"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 PROXY_WIDTH = 640
 SAMPLE_FPS_VIDEO = 10.0
@@ -533,6 +533,12 @@ def validate_evidence_shape(plan: Dict[str, Any]) -> List[str]:
             finding_id = witness.get("finding_id")
             if not isinstance(finding_id, str) or not finding_id:
                 errors.append(f"treatment {name} evidence[{index}] has no finding_id")
+            if "source_id" in witness:
+                source_id = witness.get("source_id")
+                if not isinstance(source_id, str) or not source_id:
+                    errors.append(
+                        f"treatment {name} evidence[{index}] has an invalid source_id"
+                    )
             t0 = witness.get("t0")
             t1 = witness.get("t1")
             if not (_is_number(t0) and _is_number(t1)):
@@ -548,6 +554,8 @@ def validate_evidence(
     plan: Dict[str, Any],
     findings: List[Dict[str, Any]],
     duration: Optional[float] = None,
+    *,
+    sources: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Full evidence law: witnesses must be fresh, spanned and exact.
 
@@ -556,12 +564,20 @@ def validate_evidence(
     source interval must lie inside the union of its witnesses (1e-3). Every
     other treatment carries exactly one witness and needs exact span equality
     (1e-6).
+
+    ``sources`` is the multi-source map (source_id -> source info). When it is
+    ``None`` the v1 law applies: a witness may omit ``source_id``. When it is
+    provided, every witness of an enabled treatment must cite a non-empty
+    ``source_id`` that is a key in the map, and must match the finding's own
+    ``source_id`` when the finding declares one.
     """
     errors: List[str] = list(validate_evidence_shape(plan))
     by_id: Dict[str, Dict[str, Any]] = {}
     for finding in findings or []:
         if isinstance(finding, dict) and finding.get("id"):
             by_id[finding["id"]] = finding
+
+    strict_sources = sources is not None
 
     for treatment in plan.get("treatments") or []:
         if not isinstance(treatment, dict) or not treatment.get("enabled"):
@@ -582,6 +598,25 @@ def validate_evidence(
             if not isinstance(witness, dict):
                 continue
             finding_id = witness.get("finding_id")
+            if strict_sources:
+                source_id = witness.get("source_id")
+                if not isinstance(source_id, str) or not source_id:
+                    errors.append(
+                        f"treatment {name} evidence[{index}] has no source_id"
+                    )
+                else:
+                    declared = (by_id.get(finding_id) or {}).get("source_id")
+                    if declared and source_id != declared:
+                        errors.append(
+                            f"treatment {name} evidence[{index}] source_id "
+                            f"{source_id} does not match finding source_id "
+                            f"{declared}"
+                        )
+                    elif source_id not in sources:
+                        errors.append(
+                            f"treatment {name} evidence[{index}] cites unknown "
+                            f"source_id {source_id}"
+                        )
             t0 = witness.get("t0")
             t1 = witness.get("t1")
             if not (_is_number(t0) and _is_number(t1)):
@@ -686,7 +721,8 @@ def validate_plan(
         findings = report.get("findings") or []
         source = report.get("source") or {}
         duration = source.get("analysis_duration") or source.get("duration")
-        errors.extend(validate_evidence(plan, findings, duration))
+        sources = plan.get("sources") or (report or {}).get("sources")
+        errors.extend(validate_evidence(plan, findings, duration, sources=sources))
     return errors
 
 

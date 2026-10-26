@@ -1419,6 +1419,16 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 witnesses=cut_witnesses,
             )
 
+    # -- multi-source evidence --------------------------------------------- #
+    # Only when the report declares a source_id: the v1 witness shape stays
+    # byte-identical otherwise.
+    source_id = source.get("source_id")
+    if isinstance(source_id, str) and source_id:
+        for treatment in treatments:
+            for witness in treatment.get("evidence") or []:
+                if isinstance(witness, dict):
+                    witness["source_id"] = source_id
+
     # -- output ------------------------------------------------------------ #
     out_w, out_h = output_size(aspect)
     output = {
