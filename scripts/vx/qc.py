@@ -16,6 +16,10 @@ faststart, aspect_mismatch.
 ``aspect_mismatch`` is an extension of the frozen code list: a render at the
 wrong aspect is otherwise invisible to the gates, and the acceptance test
 requires it to be observable.
+
+``audit_master`` is the final gate for the multitrack EDL path, which has no
+loudness check of its own: master_exists, master_audio, master_duration,
+master_lufs, master_true_peak.
 """
 
 from __future__ import annotations
@@ -33,7 +37,9 @@ from . import fonts as fonts_mod
 from .contract import (
     LOUDNESS_TARGETS,
     QCResult,
+    QCFailure,
     THRESHOLDS,
+    VxError,
     EditPlan,
     expected_frames,
     output_size,
@@ -41,12 +47,19 @@ from .contract import (
 from .probe import probe
 from .winpath import ass_filter_path, same_fingerprint, source_fingerprint
 
-__all__ = ["check_render", "frame_count", "check_source_unchanged", "lufs_of"]
+__all__ = [
+    "audit_master",
+    "check_render",
+    "frame_count",
+    "check_source_unchanged",
+    "lufs_of",
+]
 
 QC_DEFAULTS = {
     "duration_drift_ms": 40.0,
     "frame_count_delta": 1,
     "lufs_delta": 0.3,
+    "master_lufs_delta": 1.5,
     "true_peak_margin": 0.1,
     "av_start_ms": 20.0,
     "black_frames_edges": 2,
@@ -162,6 +175,32 @@ def _streams(path: Path) -> List[Dict[str, Any]]:
         return json.loads(proc.stdout or "{}").get("streams", [])
     except json.JSONDecodeError:
         return []
+
+
+def _container_duration(path: Path) -> float:
+    """Container duration in seconds from ffprobe's format block (0.0 if absent)."""
+    proc = ff.run_fp(
+        [
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+        ]
+    )
+    if not proc.ok:
+        return 0.0
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line or line.upper() == "N/A":
+            continue
+        try:
+            return float(line)
+        except ValueError:
+            continue
+    return 0.0
 
 
 def _loudness_target(plan: EditPlan) -> tuple[float, float]:
@@ -496,6 +535,129 @@ def lufs_of(path) -> dict:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def audit_master(
+    path,
+    *,
+    target_lufs: float,
+    target_tp: float,
+    tolerance_lu: float = 1.5,
+) -> Dict[str, Any]:
+    """Final master gate: measure the delivered file, never trust the caller.
+
+    ``target_lufs``/``target_tp`` are the delivery spec the renderer was asked
+    to hit; the measurement comes from ``lufs_of`` on the file itself, so a
+    declared target cannot stand in for a measurement. The tolerance is capped
+    at 3.0 LUFS: above that a "master" is not a delivery spec, it is a wish,
+    and a caller must not be able to widen the gate until it always passes.
+
+    Returns the result dict when every check passes; raises
+    ``contract.QCFailure(result)`` otherwise, which the CLI maps to exit 5.
+    """
+    tolerance = float(tolerance_lu)
+    if tolerance <= 0:
+        raise VxError(f"tolerance_lu must be > 0, got {tolerance_lu}")
+    if tolerance > 3.0:
+        raise VxError(
+            f"tolerance_lu {tolerance_lu} exceeds the 3.0 LUFS delivery ceiling"
+        )
+
+    want_i = float(target_lufs)
+    want_tp = float(target_tp)
+    margin = float(QC_DEFAULTS["true_peak_margin"])
+    target = Path(path)
+
+    checks: List[Dict[str, Any]] = []
+
+    def add(code: str, status: str, detail: str) -> None:
+        checks.append({"code": code, "status": status, "detail": detail})
+
+    exists = False
+    size = 0
+    try:
+        exists = target.is_file()
+        if exists:
+            size = target.stat().st_size
+    except OSError as exc:
+        add("master_exists", "fail", f"unreadable: {exc}")
+    else:
+        if exists and size > 0:
+            add("master_exists", "pass", f"{target} ({size} bytes)")
+        else:
+            add("master_exists", "fail", f"missing or empty: {target}")
+
+    if not (exists and size > 0):
+        for code in (
+            "master_audio",
+            "master_duration",
+            "master_lufs",
+            "master_true_peak",
+        ):
+            add(code, "skipped", "no master file to inspect")
+        result = {
+            "ok": False,
+            "measured": {"i": 0.0, "tp": 0.0},
+            "target": {"i": want_i, "tp": want_tp},
+            "tolerance_lu": tolerance,
+            "checks": checks,
+            "failures": [c["code"] for c in checks if c["status"] == "fail"],
+        }
+        raise QCFailure(result)
+
+    streams = _streams(target)
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
+    if audio:
+        add("master_audio", "pass", f"{len(audio)} audio stream(s)")
+    else:
+        add("master_audio", "fail", "no audio stream in the master")
+
+    duration = _container_duration(target)
+    if duration > 0:
+        add("master_duration", "pass", f"duration={duration:.3f}s")
+    else:
+        add("master_duration", "fail", f"container duration={duration:.3f}s")
+
+    loud = lufs_of(target)
+    measured_i = _num(loud.get("input_i"), None)
+    measured_tp = _num(loud.get("input_tp"), None)
+
+    if measured_i is None:
+        add("master_lufs", "fail", "no loudnorm measurement (input_i missing)")
+    else:
+        delta = abs(measured_i - want_i)
+        add(
+            "master_lufs",
+            "pass" if delta <= tolerance else "fail",
+            f"measured={measured_i:.1f} target={want_i:.1f} "
+            f"delta={delta:.1f} LU (tolerance {tolerance:.1f})",
+        )
+
+    if measured_tp is None:
+        add("master_true_peak", "fail", "no loudnorm measurement (input_tp missing)")
+    else:
+        ceiling = want_tp + margin
+        add(
+            "master_true_peak",
+            "pass" if measured_tp <= ceiling else "fail",
+            f"measured={measured_tp:.1f} limit={ceiling:.1f} dBTP",
+        )
+
+    failures = [c["code"] for c in checks if c["status"] == "fail"]
+    result = {
+        "ok": not failures,
+        "measured": {
+            "i": float(measured_i) if measured_i is not None else 0.0,
+            "tp": float(measured_tp) if measured_tp is not None else 0.0,
+        },
+        "target": {"i": want_i, "tp": want_tp},
+        "tolerance_lu": tolerance,
+        "checks": checks,
+        "failures": failures,
+    }
+    if failures:
+        raise QCFailure(result)
+    return result
 
 
 def check_render(
