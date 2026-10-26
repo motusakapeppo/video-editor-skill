@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from . import ffmpeg as ff
 from . import probe as probe_mod
+from .contract import even
 
 
 HDR_TRANSFER = {"smpte2084", "arib-std-b67"}
@@ -21,6 +22,13 @@ HDR_SPACES = {"bt2020nc", "bt2020c", "bt2020"}
 DEFAULT_TARGET_FPS = 25.0
 VFR_DELTA_TOLERANCE = 0.02
 VFR_DELTA_FRACTION = 0.05
+
+# Stage 00 keeps the analysis/render source small enough to decode cheaply while
+# still feeding a 1080x1920 crop without upscaling. 1.5x the 1080p area is the
+# ceiling: above it the source is downscaled, below it the source is left alone.
+MAX_INGEST_PIXELS = 1920 * 1080 * 1.5
+MIN_DELIVERY_W = 1080
+MIN_DELIVERY_H = 1920
 
 
 class IngestError(RuntimeError):
@@ -39,6 +47,8 @@ class IngestResult:
     target_fps: float
     filters_applied: Tuple[str, ...]
     vfr_fraction: Optional[float] = None
+    was_downscaled: bool = False
+    downscale: Optional[Dict[str, int]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -184,21 +194,99 @@ def detect_rotation(video_stream: Dict[str, Any]) -> int:
         return 0
 
 
+def effective_dimensions(
+    width: int, height: int, *, sar: float = 1.0, rotation: int = 0
+) -> Tuple[int, int]:
+    """Display-oriented, even dimensions: de-squeeze, rotate, round to even."""
+    w = even(int(width) * float(sar))
+    h = even(int(height))
+    if abs(int(rotation)) % 180 == 90:
+        w, h = h, w
+    return w, h
+
+
+def plan_downscale(
+    width: int,
+    height: int,
+    *,
+    sar: float = 1.0,
+    rotation: int = 0,
+    min_w: int = MIN_DELIVERY_W,
+    min_h: int = MIN_DELIVERY_H,
+    area_guard: float = MAX_INGEST_PIXELS,
+) -> Optional[Tuple[int, int]]:
+    """Target size for stage 00, or None when the source already fits.
+
+    The target keeps the source aspect ratio and is the smallest scale that
+    still lets a 1080x1920 crop be taken without upscaling. A source whose
+    quality floor would require an upscale is left alone.
+    """
+    dw, dh = effective_dimensions(width, height, sar=sar, rotation=rotation)
+    if dw <= 0 or dh <= 0:
+        return None
+    if dw * dh <= area_guard:
+        return None
+    crop_w0 = min(dw, dh * 9.0 / 16.0)
+    crop_h0 = min(dh, dw * 16.0 / 9.0)
+    if crop_w0 <= 0 or crop_h0 <= 0:
+        return None
+    s = max(min_w / crop_w0, min_h / crop_h0)
+    if s >= 1.0:
+        return None
+    return (even(dw * s), even(dh * s))
+
+
+def detect_downscale(video_stream: Dict[str, Any]) -> Tuple[bool, int, int]:
+    """(needs_downscale, display_w, display_h) for a raw ffprobe video stream."""
+    width = int(video_stream.get("width") or 0)
+    height = int(video_stream.get("height") or 0)
+    sar = _aspect(video_stream.get("sample_aspect_ratio"))
+    rotation = detect_rotation(video_stream)
+    dw, dh = effective_dimensions(width, height, sar=sar, rotation=rotation)
+    plan = plan_downscale(width, height, sar=sar, rotation=rotation)
+    return plan is not None, dw, dh
+
+
+def build_downscale_filter(width: int, height: int) -> Tuple[str, str]:
+    """(filter, label) for the stage-00 downscale, or ("", "") when not needed."""
+    plan = plan_downscale(width, height)
+    if plan is None:
+        return "", ""
+    w, h = plan
+    return (
+        f"scale={w}:{h}:flags=lanczos",
+        f"downscale_4k_to_1080p ({width}x{height} -> {w}x{h})",
+    )
+
+
 def build_ingest_filtergraph(
     *,
     was_vfr: bool,
     was_hdr: bool,
     was_sar: bool,
     target_fps: float,
+    downscale: Optional[Tuple[int, int]] = None,
 ) -> Tuple[str, Tuple[str, ...]]:
     parts = []
     applied = []
     if was_sar:
-        parts.extend(["scale=trunc(iw*sar/2)*2:ih", "setsar=1"])
+        if downscale is None:
+            parts.extend(["scale=trunc(iw*sar/2)*2:ih", "setsar=1"])
+        else:
+            # The explicit target already carries the de-squeezed width, so the
+            # intermediate SAR scale would apply the stretch twice.
+            parts.append("setsar=1")
         applied.append("scale_sar_to_square_pixels")
     else:
         parts.append("setsar=1")
         applied.append("setsar=1")
+    if downscale is not None:
+        w, h = downscale
+        parts.append(f"scale={w}:{h}:flags=lanczos")
+        # scale recomputes SAR to preserve DAR; force square pixels again so the
+        # staged timeline stays 1:1 like every other stage-00 output.
+        parts.append("setsar=1")
+        applied.append(f"downscale={w}x{h}")
     if was_hdr:
         ff.require("zscale")
         ff.require("tonemap")
@@ -239,7 +327,13 @@ def normalize_source(
     rotation = detect_rotation(stream)
     target_fps = round(target_fps, 3)
 
-    if not (was_vfr or was_hdr or was_sar or rotation % 360):
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    sar = _aspect(stream.get("sample_aspect_ratio"))
+    downscale = plan_downscale(width, height, sar=sar, rotation=rotation)
+    was_downscaled = downscale is not None
+
+    if not (was_vfr or was_hdr or was_sar or rotation % 360 or was_downscaled):
         return IngestResult(
             source_path=str(src.resolve()),
             staged_path=str(src.resolve()),
@@ -251,13 +345,19 @@ def normalize_source(
             target_fps=target_fps,
             filters_applied=(),
             vfr_fraction=fraction,
+            was_downscaled=False,
+            downscale=None,
         )
 
     out_dir = Path(stage_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     staged = out_dir / f"stage_00_ingest_{src.stem}.mp4"
     graph, applied = build_ingest_filtergraph(
-        was_vfr=was_vfr, was_hdr=was_hdr, was_sar=was_sar, target_fps=target_fps
+        was_vfr=was_vfr,
+        was_hdr=was_hdr,
+        was_sar=was_sar,
+        target_fps=target_fps,
+        downscale=downscale,
     )
     script = out_dir / f"stage_00_ingest_{src.stem}.txt"
     script.write_text(graph, encoding="utf-8")
@@ -294,6 +394,17 @@ def normalize_source(
     if not staged.is_file() or staged.stat().st_size == 0:
         raise IngestError("staging non ha prodotto un file")
     probe_mod.probe(str(staged))
+    downscale_info = None
+    if downscale is not None:
+        display_w, display_h = effective_dimensions(
+            width, height, sar=sar, rotation=rotation
+        )
+        downscale_info = {
+            "src_w": display_w,
+            "src_h": display_h,
+            "dst_w": downscale[0],
+            "dst_h": downscale[1],
+        }
     return IngestResult(
         source_path=str(src.resolve()),
         staged_path=str(staged.resolve()),
@@ -305,4 +416,6 @@ def normalize_source(
         target_fps=target_fps,
         filters_applied=applied,
         vfr_fraction=fraction,
+        was_downscaled=was_downscaled,
+        downscale=downscale_info,
     )
