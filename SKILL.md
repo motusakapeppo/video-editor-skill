@@ -123,6 +123,14 @@ deliverables in un colpo. Per una corsa manuale restano i comandi singoli:
 3. Il brief dell'utente vince sempre sulla rilevazione automatica. Se l'utente
    dice "lascia il rumore, è ambientale", il denoise non si applica.
 
+## Doppio regime
+
+`decide` sceglie l'iniziativa: 7 parametri espliciti, soglia 0.7. Sotto soglia è
+**autonomo** (deduce formato, palette, ritmo, tipografia e motiva in
+`creative_rationale`; i fallback sono dichiarati). Sopra è **strict**: esegue e si
+ferma sul non quantificato. Il Python segnala `rd_search_required`, mai
+`conducted`: quello lo mette l'agente dopo la ricerca, con le fonti. Ref 16.
+
 ## Cosa misura
 
 Jitter (optical flow DIS), esposizione (istogrammi luma, clipping), cast colore
@@ -187,3 +195,4 @@ Si caricano su richiesta, non si incollano qui.
 - `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
 - `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi
 - `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap
+- `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo

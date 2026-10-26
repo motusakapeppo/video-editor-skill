@@ -10,6 +10,9 @@ handle). Si chiede tutto cio' che e' un aggettivo: "vintage" non e' un parametro
 un menu.
 
 Un blocco non e' un errore: e' la skill che alza la mano prima di toccare i binari.
+In regime autonomo, invece, la skill sceglie e motiva: `parse_and_decide` compila
+il payload creativo e `creative_rationale` dice perche'. I gate fisici restano a
+valle e non vengono indeboliti.
 """
 
 from __future__ import annotations
@@ -18,7 +21,21 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
-__all__ = ["Blocker", "Decision", "interpret", "PLATFORMS", "VAGUE", "ENGINE_TRIGGERS"]
+from . import contract
+
+__all__ = [
+    "AmbiguousContractError",
+    "Blocker",
+    "Decision",
+    "ENGINE_TRIGGERS",
+    "PLATFORMS",
+    "VAGUE",
+    "calculate_specificity_score",
+    "interpret",
+    "parse_and_decide",
+    "select_mode",
+    "validate_scene_payload",
+]
 
 # Piattaforma -> (aspect, larghezza, altezza). Deduzione, non domanda.
 PLATFORMS: Dict[str, Dict[str, Any]] = {
@@ -242,3 +259,271 @@ def interpret(
     decision.contract["closed"] = not decision.blockers
     decision.ok = not decision.blockers
     return decision
+
+
+# --------------------------------------------------------------------------- #
+# dual regime: STRICT (execute) / AUTONOMOUS (choose and justify)
+# --------------------------------------------------------------------------- #
+
+SPECIFICITY_TOTAL = 7
+STRICT_THRESHOLD = 0.7
+
+GEOMETRY_RE = re.compile(
+    r"\b(9:16|16:9|1:1|4:5|1080x1920|1920x1080|1080x1080)\b", re.IGNORECASE
+)
+BPM_RE = re.compile(r"\b(\d+)\s*bpm\b", re.IGNORECASE)
+HEX_RE = re.compile(r"#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})\b")
+FONT_RE = re.compile(r"\bfont\s+([\w-]+)\b", re.IGNORECASE)
+CUT_RE = re.compile(
+    r"\b(un taglio per|taglio ogni|su ogni battuta|sugli onset)\b", re.IGNORECASE
+)
+DURATION_RE = re.compile(r"\b(\d+)\s*(s|sec|secondi)\b", re.IGNORECASE)
+ENGINE_RE = re.compile(r"\bengine\s*=\s*(pillow|chromium)\b", re.IGNORECASE)
+
+
+class AmbiguousContractError(ValueError):
+    """STRICT mode refused a vague adjective that has no executable value."""
+
+
+def calculate_specificity_score(prompt: str) -> tuple[float, dict]:
+    text = prompt or ""
+    matches: Dict[str, bool] = {}
+    if GEOMETRY_RE.search(text):
+        matches["geometry"] = True
+    if BPM_RE.search(text):
+        matches["bpm"] = True
+    if HEX_RE.search(text):
+        matches["color"] = True
+    if FONT_RE.search(text):
+        matches["typography"] = True
+    if CUT_RE.search(text):
+        matches["cut_policy"] = True
+    if DURATION_RE.search(text):
+        matches["duration"] = True
+    if ENGINE_RE.search(text):
+        matches["engine"] = True
+    return round(len(matches) / SPECIFICITY_TOTAL, 2), matches
+
+
+def select_mode(prompt: str) -> str:
+    score, _ = calculate_specificity_score(prompt)
+    return "strict" if score >= STRICT_THRESHOLD else "autonomous"
+
+
+def _font_choice(
+    text: str, assets: Optional[Sequence[str]]
+) -> tuple[str, Optional[str]]:
+    named = FONT_RE.findall(text)
+    font = named[0] if named else "Antonio"
+    if assets is None:
+        return font, None
+    known = {a.lower() for a in assets}
+    if font.lower() in known:
+        return font, None
+    return "Antonio", f"font {font} non disponibile: uso Antonio (tracciato)"
+
+
+def parse_and_decide(
+    prompt: str, assets: Optional[Sequence[str]] = None
+) -> Dict[str, Any]:
+    """Classify the request, then either execute (strict) or choose (autonomous)."""
+    text = prompt or ""
+    lower = text.lower()
+    score, matches = calculate_specificity_score(text)
+    mode = "strict" if score >= STRICT_THRESHOLD else "autonomous"
+    vintage = bool(re.search(r"\b(vintage|retr[oò])\b", lower))
+    dynamic = bool(re.search(r"\b(dinamic|incalzante)", lower))
+
+    if mode == "strict":
+        if vintage and "color" not in matches:
+            raise AmbiguousContractError(
+                "[vague_vintage] il look vintage non e' un parametro quantificato: "
+                "specifica una palette hex (es. #1A100C / #FFE8C8)."
+            )
+        if dynamic and "cut_policy" not in matches and "bpm" not in matches:
+            raise AmbiguousContractError(
+                "[vague_dynamic] il ritmo dinamico va misurato: specifica BPM o "
+                "una regola di taglio su battuta/onset."
+            )
+
+    platform_name = _platform(lower)
+    rd_search = mode == "autonomous" and platform_name is None
+    platform = platform_name or "tiktok"
+    spec = PLATFORMS[platform]
+
+    font, font_note = _font_choice(text, assets)
+    if mode == "strict" and font_note:
+        raise AmbiguousContractError(
+            f"[asset_missing] {font_note}. Fornisci il font o autorizza la "
+            "sostituzione in autonomia."
+        )
+
+    hexes = [f"#{value}" for value in HEX_RE.findall(text)]
+    bpm_match = BPM_RE.search(text)
+    bpm = int(bpm_match.group(1)) if bpm_match else None
+    engine_match = ENGINE_RE.search(text)
+    engine = engine_match.group(1).lower() if engine_match else _engine(lower, "pillow")
+
+    if mode == "strict":
+        color = (
+            {
+                "type": "custom",
+                "colors": hexes,
+                "rationale": "colori espliciti nel prompt",
+            }
+            if hexes
+            else {
+                "type": "none",
+                "rationale": "nessun colore nel prompt: resta neutro",
+            }
+        )
+        cut = (
+            "onset_synced"
+            if "onset" in lower
+            else ("beat_synced" if bpm or "battuta" in lower else "standard")
+        )
+        pacing = {
+            "bpm_target": bpm,
+            "cut_policy": cut,
+            "rationale": (
+                "ritmo dichiarato nel prompt"
+                if bpm or cut != "standard"
+                else "nessun ritmo nel prompt: taglio standard"
+            ),
+        }
+        typography = {
+            "font_family": font,
+            "size_px": 72,
+            "rationale": (
+                "font dichiarato nel prompt"
+                if FONT_RE.search(text)
+                else "font di default del repo"
+            ),
+        }
+    else:
+        color = {
+            "type": "duotone" if vintage else "none",
+            "shadows": "#1A100C" if vintage else "#000000",
+            "highlights": "#FFE8C8" if vintage else "#FFFFFF",
+            "rationale": (
+                "palette calda pellicola dedotta dal contesto"
+                if vintage
+                else "nessuna alterazione cromatica"
+            ),
+        }
+        pacing = {
+            "bpm_target": 120 if dynamic else 100,
+            "cut_policy": "beat_synced" if dynamic else "standard",
+            "rationale": (
+                "ritmo dinamico sincronizzato a 120 BPM"
+                if dynamic
+                else "ritmo narrativo standard"
+            ),
+        }
+        typography = {
+            "font_family": font,
+            "size_px": 72,
+            "rationale": font_note or "font certificato per la safe area",
+        }
+
+    return {
+        "contract_version": contract.VERSION,
+        "execution_context": {
+            "mode": mode,
+            "specificity_score": score,
+            "creative_rationale": {
+                "genre_detected": f"{platform}_promo",
+                "pacing": pacing,
+                "color_palette": color,
+                "typography": typography,
+                "rd_search_required": rd_search,
+                "rd_search_conducted": False,
+                "rd_search_sources": [],
+            },
+        },
+        "scene": {
+            "aspect_ratio": spec["aspect"],
+            "resolution": [spec["w"], spec["h"]],
+            "engine": engine,
+        },
+    }
+
+
+def validate_scene_payload(payload: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    if not isinstance(payload, dict):
+        return ["payload is not an object"]
+    if payload.get("contract_version") != contract.VERSION:
+        errors.append(
+            f"contract_version must be {contract.VERSION!r}, "
+            f"got {payload.get('contract_version')!r}"
+        )
+    context = payload.get("execution_context")
+    if not isinstance(context, dict):
+        errors.append("execution_context missing")
+        return errors
+    if context.get("mode") not in ("strict", "autonomous"):
+        errors.append(f"mode {context.get('mode')!r} not in strict/autonomous")
+    score = context.get("specificity_score")
+    if not isinstance(score, (int, float)) or not 0.0 <= float(score) <= 1.0:
+        errors.append(f"specificity_score {score!r} outside 0..1")
+    rationale = context.get("creative_rationale")
+    if not isinstance(rationale, dict):
+        errors.append("creative_rationale missing")
+        return errors
+    for key in ("pacing", "color_palette", "typography"):
+        block = rationale.get(key)
+        if not isinstance(block, dict) or not str(block.get("rationale") or "").strip():
+            errors.append(f"creative_rationale.{key} has no rationale")
+    for key in ("rd_search_required", "rd_search_conducted"):
+        if not isinstance(rationale.get(key), bool):
+            errors.append(f"creative_rationale.{key} must be boolean")
+    sources = rationale.get("rd_search_sources")
+    if not isinstance(sources, list):
+        errors.append("creative_rationale.rd_search_sources must be a list")
+    elif rationale.get("rd_search_conducted") and not sources:
+        errors.append("rd_search_conducted true but rd_search_sources is empty")
+    scene = payload.get("scene")
+    if not isinstance(scene, dict):
+        errors.append("scene missing")
+        return errors
+    if scene.get("aspect_ratio") not in ("9:16", "16:9", "1:1", "4:5"):
+        errors.append(f"scene.aspect_ratio {scene.get('aspect_ratio')!r} invalid")
+    resolution = scene.get("resolution")
+    if not (
+        isinstance(resolution, list)
+        and len(resolution) == 2
+        and all(isinstance(v, int) and v > 0 for v in resolution)
+    ):
+        errors.append(f"scene.resolution {resolution!r} invalid")
+    if scene.get("engine") not in ("pillow", "chromium"):
+        errors.append(f"scene.engine {scene.get('engine')!r} invalid")
+    return errors
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(prog="vx.decide")
+    parser.add_argument("--prompt", required=True)
+    parser.add_argument("--assets", default="")
+    args = parser.parse_args(argv)
+    assets = [item.strip() for item in args.assets.split(",") if item.strip()] or None
+    try:
+        payload = parse_and_decide(args.prompt, assets=assets)
+    except AmbiguousContractError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return contract.EXIT_NEEDS_INPUT
+    errors = validate_scene_payload(payload)
+    if errors:
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+        return contract.EXIT_USAGE
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return contract.EXIT_OK
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
