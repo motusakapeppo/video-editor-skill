@@ -55,6 +55,8 @@ RANGES: Dict[str, tuple[float, float]] = {
     "hook_window": (0.1, 120.0),
     "max_creative_treatments": (0.0, 20.0),
     "cut_fade_ms": (0.0, 500.0),
+    "dialogue_fade_ms": (0.0, 500.0),
+    "broll_fade_sec": (0.0, 10.0),
     "vad_threshold": (0.05, 0.95),
     "vad_min_speech": (0.05, 60.0),
     "vad_min_silence": (0.05, 60.0),

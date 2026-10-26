@@ -901,6 +901,81 @@ def _edl_audio_clips(plan: Any) -> List[Any]:
     return sorted(clips, key=lambda clip: float(clip.dst_in))
 
 
+def _edl_audio_buses(plan: Any) -> Tuple[List[Any], List[Any]]:
+    """Split audio clips by track role: ``music`` to the music bus, all else to dialogue."""
+    dialogue: List[Any] = []
+    music: List[Any] = []
+    for track in getattr(plan, "audio_tracks", ()):
+        role = str(getattr(track, "role", "") or "")
+        target = music if role == "music" else dialogue
+        target.extend(getattr(track, "clips", ()))
+    key = lambda clip: float(clip.dst_in)  # noqa: E731
+    return sorted(dialogue, key=key), sorted(music, key=key)
+
+
+def _edl_label(prefix: str, clip: Any, used: set) -> str:
+    raw = str(getattr(clip, "clip_id", "") or "")
+    safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in raw) or "clip"
+    label = f"{prefix}{safe}"
+    if label in used:
+        index = 2
+        while f"{label}_{index}" in used:
+            index += 1
+        label = f"{label}_{index}"
+    used.add(label)
+    return label
+
+
+def _edl_audio_clip_chain(
+    clip: Any,
+    audio_index: int,
+    label: str,
+    *,
+    fades: bool,
+) -> str:
+    src_in = float(clip.src_in)
+    src_out = float(clip.src_out)
+    duration = src_out - src_in
+    chain = (
+        f"[{audio_index}:a]atrim=start={src_in:.6f}:end={src_out:.6f},"
+        f"asetpts=PTS-STARTPTS"
+    )
+    gain = float(getattr(clip, "gain_db", 0.0) or 0.0)
+    if gain != 0.0:
+        chain += f",volume={gain:.3f}dB"
+    if fades and duration > 0:
+        fade = min(THRESHOLDS["dialogue_fade_ms"] / 1000.0, duration / 2.0)
+        chain += f",afade=t=in:st=0:d={fade:.6f}"
+        chain += f",afade=t=out:st={duration - fade:.6f}:d={fade:.6f}"
+    delay_ms = int(round(float(clip.dst_in) * 1000.0))
+    chain += f",adelay={delay_ms}|{delay_ms}[{label}]"
+    return chain
+
+
+def _edl_bus(
+    labels: List[str],
+    bus: str,
+    duration: float,
+) -> List[str]:
+    if not labels:
+        return []
+    if len(labels) == 1:
+        parts = [f"[{labels[0]}]anull[{bus}_bus]"]
+    else:
+        inputs = "".join(f"[{label}]" for label in labels)
+        parts = [
+            f"{inputs}amix=inputs={len(labels)}:"
+            f"dropout_transition=0:normalize=0[{bus}_bus]"
+        ]
+    parts.append(
+        f"[{bus}_bus]apad=whole_dur={duration:.6f},"
+        f"atrim=start=0:end={duration:.6f},"
+        f"aformat=sample_fmts=fltp:sample_rates=48000:"
+        f"channel_layouts=stereo[{bus}]"
+    )
+    return parts
+
+
 def _edl_normalise(clip: Any, index: int, width: int, height: int) -> str:
     return (
         f"[{index}:v]trim=start={float(clip.src_in):.6f}:"
@@ -916,12 +991,14 @@ def build_edl_filtergraph(
     *,
     has_audio: Optional[bool] = None,
 ) -> str:
-    """A-Roll is concatenated; dialogue is delayed and mixed; B-roll is overlaid at dst_in.
+    """A-Roll is concatenated; audio is split into dialogue and music buses; B-roll is overlaid.
 
     Pad indices come from ``source_to_index``, never from a hardcoded ``[0:v]``.
     The audio graph is independent of the video concat: each clip is trimmed,
-    shifted to its absolute ``dst_in`` with adelay, then summed with amix, so
-    overlap and J/L cuts are expressible without duplicating a stream.
+    shifted to its absolute ``dst_in`` with adelay, then summed per bus with
+    amix, so overlap and J/L cuts are expressible without duplicating a stream.
+    Every audio track whose role is not ``music`` feeds the dialogue bus, which
+    keeps older plans working unchanged.
     """
     width, height = (int(value) for value in plan.resolution)
     video_clips = _edl_clips(plan, layers={0})
@@ -944,22 +1021,61 @@ def build_edl_filtergraph(
         parts.append(_edl_normalise(clip, index_in, width, height) + f"[v{index}]")
 
     if audio:
-        for index, clip in enumerate(audio_clips):
-            audio_index = source_to_index[clip.source_id]
-            delay_ms = int(round(float(clip.dst_in) * 1000.0))
+        dialogue_clips, music_clips = _edl_audio_buses(plan)
+        used: set = set()
+        dialogue_labels: List[str] = []
+        music_labels: List[str] = []
+        for clip in dialogue_clips:
+            label = _edl_label("ad", clip, used)
+            dialogue_labels.append(label)
             parts.append(
-                f"[{audio_index}:a]atrim=start={float(clip.src_in):.6f}:"
-                f"end={float(clip.src_out):.6f},asetpts=PTS-STARTPTS,"
-                f"adelay={delay_ms}|{delay_ms}[a{index}]"
+                _edl_audio_clip_chain(
+                    clip,
+                    source_to_index[clip.source_id],
+                    label,
+                    fades=True,
+                )
             )
-        if len(audio_clips) == 1:
-            parts.append("[a0]anull[aout]")
+        for clip in music_clips:
+            label = _edl_label("mu", clip, used)
+            music_labels.append(label)
+            parts.append(
+                _edl_audio_clip_chain(
+                    clip,
+                    source_to_index[clip.source_id],
+                    label,
+                    fades=False,
+                )
+            )
+
+        duration = float(plan.duration_sec)
+        parts.extend(_edl_bus(dialogue_labels, "dialog", duration))
+        parts.extend(_edl_bus(music_labels, "music", duration))
+
+        ducking = getattr(plan, "ducking", None)
+        if ducking is not None and dialogue_labels and music_labels:
+            linear = max(1.0, 10.0 ** (float(ducking.makeup_db) / 20.0))
+            parts.append("[dialog]asplit=2[dialog_mix][dialog_sc]")
+            parts.append(
+                f"[music][dialog_sc]sidechaincompress="
+                f"threshold={float(ducking.threshold):.3f}:"
+                f"ratio={float(ducking.ratio):.3f}:"
+                f"attack={float(ducking.attack_ms):.3f}:"
+                f"release={float(ducking.release_ms):.3f}:"
+                f"makeup={linear:.3f}[music_duck]"
+            )
+            parts.append(
+                "[dialog_mix][music_duck]amix=inputs=2:"
+                "dropout_transition=0:normalize=0[aout]"
+            )
+        elif dialogue_labels and music_labels:
+            parts.append(
+                "[dialog][music]amix=inputs=2:dropout_transition=0:normalize=0[aout]"
+            )
+        elif dialogue_labels:
+            parts.append("[dialog]anull[aout]")
         else:
-            inputs = "".join(f"[a{i}]" for i in range(len(audio_clips)))
-            parts.append(
-                f"{inputs}amix=inputs={len(audio_clips)}:"
-                f"dropout_transition=0:normalize=0[aout]"
-            )
+            parts.append("[music]anull[aout]")
 
     if len(video_clips) == 1:
         base = "[v0]"
@@ -1040,16 +1156,44 @@ def render_edl(
     has_audio: Optional[bool] = None,
     crf: int = 17,
     preset: str = "fast",
+    loudness: Optional[Tuple[float, float]] = None,
 ) -> Path:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
+    audio = (
+        bool(getattr(plan, "audio_tracks", ()))
+        if has_audio is None
+        else bool(has_audio)
+    )
+    if loudness is not None and not audio:
+        raise RenderFailure("loudness requested but the EDL has no audio")
     mapping = edl_input_map(staged_sources)
     graph = build_edl_filtergraph(plan, mapping, has_audio=has_audio)
     script = write_script(graph, work / "edl_graph.txt")
+    out = Path(output_path)
+
+    if loudness is None:
+        args = build_edl_command(
+            plan,
+            staged_sources,
+            out,
+            graph_path=script,
+            has_audio=has_audio,
+            crf=crf,
+            preset=preset,
+        )
+        proc = ff.run_ff(args)
+        if not proc.ok:
+            raise RenderFailure(f"EDL render failed: {proc.tail(15)}")
+        if not out.is_file() or out.stat().st_size == 0:
+            raise RenderFailure("EDL render produced no file")
+        return out
+
+    pre = work / "final_pre_loudness.mp4"
     args = build_edl_command(
         plan,
         staged_sources,
-        output_path,
+        pre,
         graph_path=script,
         has_audio=has_audio,
         crf=crf,
@@ -1057,10 +1201,58 @@ def render_edl(
     )
     proc = ff.run_ff(args)
     if not proc.ok:
-        raise RenderFailure(f"EDL render failed: {proc.tail(15)}")
-    out = Path(output_path)
+        raise RenderFailure(f"EDL pre-loudness render failed: {proc.tail(15)}")
+    if not pre.is_file() or pre.stat().st_size == 0:
+        raise RenderFailure("EDL pre-loudness render produced no file")
+
+    target_i, target_tp = float(loudness[0]), float(loudness[1])
+    stats = _measure_loudness(pre)
+    af_args = loudnorm_two_pass(
+        stats, target_i=target_i, target_tp=target_tp, target_lra=11.0
+    )
+    graph04 = f"[0:a]{af_args[1]}[aout]"
+    script04 = write_script(graph04, work / "04_loudness.txt")
+    # Audio-only pass: the video stream is already final, so -c:v copy is legal
+    # here for the same reason as stage 04 of the EditPlan path: this pass does
+    # not cut.
+    args = [
+        "-i",
+        str(pre),
+        "-filter_complex_script",
+        script04,
+        "-map",
+        "0:v:0",
+        "-map",
+        "[aout]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-ar",
+        "48000",
+        "-movflags",
+        "+faststart",
+        str(out),
+    ]
+    proc = ff.run_ff(args, loglevel="error")
+    if not proc.ok:
+        raise RenderFailure(f"EDL loudness pass failed: {proc.tail(12)}")
     if not out.is_file() or out.stat().st_size == 0:
-        raise RenderFailure("EDL render produced no file")
+        raise RenderFailure("EDL loudness pass produced no file")
+
+    payload = {
+        "pre": str(pre),
+        "final": str(out),
+        "loudness": {
+            "target": {"i": target_i, "tp": target_tp},
+            "measured": stats,
+        },
+    }
+    (work / "edl_render.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return out
 
 

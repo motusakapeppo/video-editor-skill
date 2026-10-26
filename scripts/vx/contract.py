@@ -91,6 +91,9 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "hook_window": 4.0,
     "max_creative_treatments": 3,
     "cut_fade_ms": 12,
+    # multitrack EDL audio buses
+    "dialogue_fade_ms": 12,
+    "broll_fade_sec": 0.5,
     # asset triage (Fase 4)
     "triage_max_upscale": 1.5,
     "triage_max_broll": 3,
