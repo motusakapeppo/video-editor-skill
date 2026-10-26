@@ -500,10 +500,7 @@ def scenario_loudness(tmp: Path, profile: str, target: float) -> Tuple[str, Any,
 
 
 def scenario_hook(tmp: Path) -> Tuple[str, Any, str]:
-    name = "8 hook overlay with hook_text"
-    if not REAL.exists():
-        skip(name, f"real speech clip missing: {REAL}")
-        return "SKIP", "-", "missing real corpus"
+    name = "8 hook overlay on a clip without a natural hook"
     base = tmp / "s8"
     clip = base / "clip.mp4"
     base.mkdir(parents=True, exist_ok=True)
@@ -512,42 +509,13 @@ def scenario_hook(tmp: Path) -> Tuple[str, Any, str]:
             "-f",
             "lavfi",
             "-t",
-            "3.75",
+            "5",
             "-i",
-            "color=c=red:s=640x360:r=25",
-            "-f",
-            "lavfi",
-            "-t",
-            "3.75",
-            "-i",
-            "color=c=blue:s=640x360:r=25",
-            "-i",
-            str(REAL),
-            "-f",
-            "lavfi",
-            "-t",
-            "0.5",
-            "-i",
-            "anullsrc=r=48000:cl=mono",
-            "-filter_complex",
-            "[0:v][1:v]concat=n=2:v=1:a=0[v];"
-            "[3:a]asetpts=PTS-STARTPTS[sil];"
-            "[2:a]atrim=start=6.5:end=13.5,asetpts=PTS-STARTPTS,"
-            "aresample=48000,volume=2.0[a0];"
-            "[sil][a0]concat=n=2:v=0:a=1[a]",
-            "-map",
-            "[v]",
-            "-map",
-            "[a]",
+            "color=c=black:s=640x360:r=25",
             "-c:v",
             "libx264",
             "-pix_fmt",
             "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
             str(clip),
         ]
     )
@@ -557,7 +525,7 @@ def scenario_hook(tmp: Path) -> Tuple[str, Any, str]:
             "format": "16:9",
             "hook": "text",
             "hook_text": "Guarda questo",
-            "subtitles": "clean",
+            "subtitles": "none",
             "loudness": "social",
         },
         base / "work",
@@ -566,23 +534,17 @@ def scenario_hook(tmp: Path) -> Tuple[str, Any, str]:
     if res["rc"] != 0:
         return _fail(name, res)
     hook = treatment(res["plan"], "hook_overlay")
-    subs = treatment(res["plan"], "subtitles")
     if not hook or not hook.get("enabled"):
         reason = ((hook or {}).get("reason") or {}).get("explain", "treatment absent")
-        skip(name, f"hook_overlay not enabled: {reason}")
-        return "SKIP", res["rc"], reason
-    if not subs or not subs.get("enabled"):
-        reason = ((subs or {}).get("reason") or {}).get("explain", "treatment absent")
-        skip(name, f"subtitles not enabled: {reason}")
-        return "SKIP", res["rc"], reason
+        return "FAIL", res["rc"], f"hook_overlay not enabled: {reason}"
     check(f"{name}: exit 0", True)
     hook_files = list((res["workdir"] / "subs").glob("*.hook.ass"))
     check(f"{name}: hook.ass exists", len(hook_files) == 1, str(hook_files))
     script_path = res["workdir"] / "stage" / "stage" / "03_graph.txt"
     script = script_path.read_text(encoding="utf-8") if script_path.exists() else ""
     check(
-        f"{name}: stage-03 has two subtitles=",
-        script.count("subtitles=") == 2,
+        f"{name}: stage-03 has one subtitles=",
+        script.count("subtitles=") == 1,
         f"count={script.count('subtitles=')}",
     )
     check(f"{name}: hook_overlay enabled in plan", bool(hook.get("enabled")))

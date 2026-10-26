@@ -56,6 +56,9 @@ QC_DEFAULTS = {
 LIMITS = dict(QC_DEFAULTS)
 LIMITS["cue_cps_max"] = float(THRESHOLDS["sub_max_cps"])
 LIMITS["cue_lines_max"] = int(THRESHOLDS["sub_max_lines"])
+LIMITS["cue_dur_min"] = float(THRESHOLDS["cue_dur_min"])
+LIMITS["cue_dur_max"] = float(THRESHOLDS["cue_dur_max"])
+LIMITS["upscale_warn"] = float(THRESHOLDS["upscale_warn"])
 
 
 def refresh_from_settings(settings=None) -> None:
@@ -741,7 +744,7 @@ def check_render(
                 note,
             )
         )
-        cues = _ass_cues(subs)
+        cues = sorted(_ass_cues(subs), key=lambda c: (c["start"], c["end"]))
         worst_cps = max((c["cps"] for c in cues), default=0.0)
         worst_lines = max((c["lines"] for c in cues), default=0)
         checks.append(
@@ -762,11 +765,49 @@ def check_render(
                 f"{len(cues)} cue(s)",
             )
         )
+        durations = [c["end"] - c["start"] for c in cues]
+        shortest = min(durations, default=0.0)
+        longest = max(durations, default=0.0)
+        checks.append(
+            _check(
+                "cue_duration_min",
+                shortest >= LIMITS["cue_dur_min"],
+                round(shortest, 3),
+                LIMITS["cue_dur_min"],
+                f"{len(cues)} cue(s)",
+            )
+        )
+        checks.append(
+            _check(
+                "cue_duration_max",
+                longest <= LIMITS["cue_dur_max"],
+                round(longest, 3),
+                LIMITS["cue_dur_max"],
+                f"{len(cues)} cue(s)",
+            )
+        )
+        overlaps = sum(
+            1
+            for previous, current in zip(cues, cues[1:])
+            if current["start"] < previous["end"] - 1e-6
+        )
+        checks.append(
+            _check(
+                "cue_overlap",
+                overlaps == 0,
+                overlaps,
+                0,
+                f"{len(cues)} cue(s)",
+            )
+        )
     else:
         for code, limit in (
             ("font_fallback_count", LIMITS["font_fallback_count"]),
             ("cue_cps_max", LIMITS["cue_cps_max"]),
             ("cue_lines_max", LIMITS["cue_lines_max"]),
+            ("cue_duration_min", LIMITS["cue_dur_min"]),
+            ("cue_duration_max", LIMITS["cue_dur_max"]),
+            ("cue_overlap", 0),
         ):
             checks.append(_check(code, True, 0, limit, "no subtitles"))
 
@@ -800,6 +841,40 @@ def check_render(
         )
     else:
         checks.append(_check("crop_in_bounds", True, None, None, "no crop plan"))
+
+    # -- effective upscale -------------------------------------------------- #
+    out_w, out_h = output_size(aspect, precision)
+    crop_rect = _crop_rect(plan) or {}
+    eff_w = int(_num(crop_rect.get("w", crop_rect.get("crop_w")), 0)) or int(
+        _num(media.get("width"), 0)
+    )
+    eff_h = int(_num(crop_rect.get("h", crop_rect.get("crop_h")), 0)) or int(
+        _num(media.get("height"), 0)
+    )
+    if eff_w <= 0 or eff_h <= 0 or out_w <= 0 or out_h <= 0:
+        checks.append(
+            _check(
+                "upscale_ratio",
+                True,
+                None,
+                LIMITS["upscale_warn"],
+                "no geometry",
+                status="skipped",
+            )
+        )
+    else:
+        ratio = max(out_w / eff_w, out_h / eff_h)
+        checks.append(
+            _check(
+                "upscale_ratio",
+                True,
+                round(ratio, 3),
+                LIMITS["upscale_warn"],
+                f"crop {eff_w}x{eff_h} -> {out_w}x{out_h}: {ratio:.2f}x"
+                + (" upscale" if ratio > LIMITS["upscale_warn"] else " downscale"),
+                status="warn" if ratio > LIMITS["upscale_warn"] else "checked",
+            )
+        )
 
     # -- source integrity --------------------------------------------------- #
     if source_fp:

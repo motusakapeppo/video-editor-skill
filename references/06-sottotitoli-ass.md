@@ -34,12 +34,12 @@ pacchetto mancante o un decoder che fallisce tornano come `Transcript` con
 | `sub_max_chars_916` | 18 | caratteri massimi per cue verticale |
 | `sub_max_chars_169` | 42 | caratteri massimi per cue orizzontale |
 | `sub_max_lines` | 2 | righe massime |
-| `sub_max_cps` | 25 | caratteri al secondo massimi |
+| `sub_max_cps` | 20 | caratteri al secondo massimi |
 | `GAP_BREAK` | 0.45 s | una pausa più lunga chiude la cue |
 | `MIN_CUE` | 0.4 s | nessuna cue più corta, si allunga la fine |
 
 La cue si chiude quando scatta una delle quattro condizioni: gap oltre 0.45 s,
-testo oltre il budget di caratteri, righe oltre il limite, cps oltre 25. Il
+testo oltre il budget di caratteri, righe oltre il limite, cps oltre 20. Il
 controllo sui cps si applica solo da due parole in su: spezzare una parola sola
 non abbassa i suoi cps. Con 18 caratteri una cue verticale è sempre una riga
 sola; il limite di 2 righe resta come rete di sicurezza se qualcuno alza

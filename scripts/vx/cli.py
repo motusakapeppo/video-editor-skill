@@ -1355,8 +1355,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             rep["artifacts"]["fonts"] = fonts
 
     # ---- hook overlay
-    if _enabled(built, "hook_overlay"):
-        _log("[run] hook overlay")
+    hook_treatment = next(
+        (t for t in built.treatments or [] if t.get("name") == "hook_overlay"), None
+    )
+    if hook_treatment is not None:
         text = (brief.get("hook_text") or "").strip()
         if not text:
             words = getattr(state.get("transcript"), "words", []) or []
@@ -1366,12 +1368,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 if str(w.get("word") or "").strip()
             ).strip()
         if not text:
-            for t in built.treatments or []:
-                if t.get("name") == "hook_overlay":
-                    t["enabled"] = False
-                    t.setdefault("reason", {})["explain"] = (
-                        "nessun testo disponibile: overlay non inciso"
-                    )
+            hook_treatment["enabled"] = False
+            hook_treatment.setdefault("reason", {})["explain"] = (
+                "nessun testo disponibile: overlay non inciso"
+            )
             rep.setdefault("skipped", []).append(
                 {
                     "treatment": "hook_overlay",
@@ -1379,7 +1379,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 }
             )
             _log("[run] hook overlay non inciso: nessun testo disponibile")
-        else:
+        elif _enabled(built, "hook_overlay"):
+            _log("[run] hook overlay")
             params = _params(built, "hook_overlay")
             hook_path = str(
                 subs.write_hook_ass(

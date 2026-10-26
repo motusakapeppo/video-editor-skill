@@ -16,7 +16,7 @@ description: |-
 license: MIT
 compatibility: opencode
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   engine: vx (python 3.10 + ffmpeg 8.1 + opencv + faster-whisper)
   venv: "<VENV_DIR>"
   ffmpeg: "8.1"

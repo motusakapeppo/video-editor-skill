@@ -401,7 +401,7 @@ def _finalize(cues: List[Cue], max_chars: int, max_cps: float) -> List[Cue]:
                 cue.line_count = _wrap_count(cue.text, max_chars)
                 out.pop(i + 1)
                 continue  # re-evaluate the merged cue
-            cue.end = max(cue.start + 0.01, limit)
+            cue.end = limit
         else:
             cue.end = min(max(cue.end, target), limit)
         i += 1

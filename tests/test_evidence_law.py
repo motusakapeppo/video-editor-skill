@@ -78,7 +78,8 @@ def _plan(treatments: list, cuts: list | None = None) -> dict:
 def contract_matrix() -> None:
     a = _finding("a", [0.0, 10.0])
     b = _finding("b", [0.0, 10.0])
-    findings = [a, b]
+    real = _finding("audio.loudness.off", [0.0, 10.0])
+    findings = [a, b, real]
 
     p = _plan([_treatment("loudnorm", "a", None)])
     check(
@@ -241,7 +242,15 @@ def contract_matrix() -> None:
         bool(contract.validate_evidence(p, [_finding("a", [0.0, 12.0])], 10.0)),
     )
 
-    p = _plan([_treatment("loudnorm", "a", [_witness("a", 0.0, 10.0)])])
+    p = _plan(
+        [
+            _treatment(
+                "loudnorm",
+                "audio.loudness.off",
+                [_witness("audio.loudness.off", 0.0, 10.0)],
+            )
+        ]
+    )
     check(
         "valid evidence accepted",
         contract.validate_evidence(p, findings, 10.0) == [],
@@ -264,8 +273,16 @@ def contract_matrix() -> None:
         bool(contract.validate_plan(p, report)),
     )
 
-    report = {"source": {"duration": 10.0}, "findings": [a]}
-    p = _plan([_treatment("loudnorm", "a", [_witness("a", 0.0, 10.0)])])
+    report = {"source": {"duration": 10.0}, "findings": [real]}
+    p = _plan(
+        [
+            _treatment(
+                "loudnorm",
+                "audio.loudness.off",
+                [_witness("audio.loudness.off", 0.0, 10.0)],
+            )
+        ]
+    )
     check(
         "validate_plan accepts valid evidence",
         contract.validate_plan(p, report) == [],

@@ -79,6 +79,7 @@ Misura su 135 video, 2026-10-12 — **[MEAS, campione piccolo, non ufficiale]**:
 |---|---|---|---|---|
 | **BBC** (9:16) | **25** | max 3 | **160–180 wpm** | interlinea 3,9–4,5% dell'altezza → 75–86 px su 1920; area centrale 75% verticale / 90% orizzontale |
 | **Netflix** (inglese) | 42 | max 2 | **20 cps** | minimo 5/6 s, massimo 7 s per cue |
+| **Gate video-editor** | 18–42 | 2 | **20 cps** | cue 0,4–7 s, nessuna sovrapposizione; upscale oltre 1,25x = avviso misurato |
 | **Bruciati social** (prassi) | 18–25 | 2 | 15–20 cps | oltre, il testo si legge a scatti |
 
 **[OFF/MANUAL]** — BBC Subtitle Guidelines; Netflix Timed Text Style Guide.

@@ -18,8 +18,12 @@ vuota.
 | `av_start_ms` | 20.0 ms | skew fra `start_time` del video e dell'audio |
 | `black_frames_edges` | 2 | frame neri all'inizio o alla fine |
 | `font_fallback_count` | 0 | sostituzioni di font nei sottotitoli |
-| `cue_cps_max` | 25 | caratteri al secondo della cue più veloce |
+| `cue_cps_max` | 20 | caratteri al secondo della cue più veloce |
 | `cue_lines_max` | 2 | righe della cue più alta |
+| `cue_duration_min` | 0.4 s | cue più corta accettata |
+| `cue_duration_max` | 7.0 s | cue più lunga accettata |
+| `cue_overlap` | 0 | cue sovrapposte nel tempo |
+| `upscale_ratio` | 1.25x | oltre è un avviso `warn`, con il rapporto misurato |
 | `crop_in_bounds` | vero | il rettangolo di crop sta dentro il sorgente |
 | `source_sha_unchanged` | vero | lo sha256 del sorgente non è cambiato |
 | `no_nan_timestamps` | vero | nessun PTS o DTS `nan` nei pacchetti |
@@ -122,11 +126,12 @@ L'export multi-aspect non è implementato: non ci sono tagli per piattaforma.
 | 4 | True peak sotto target | `true_peak` a vero |
 | 5 | Nessun frame nero ai bordi | `black_frames_edges` <= 2 |
 | 6 | Nessun font sostituito | `font_fallback_count` a 0 |
-| 7 | Cue leggibili | `cue_cps_max` <= 25, `cue_lines_max` <= 2 |
+| 7 | Cue leggibili | `cue_cps_max` <= 20, `cue_lines_max` <= 2, durata 0,4-7 s, nessuna sovrapposizione |
 | 8 | Crop dentro il sorgente | `crop_in_bounds` a vero |
 | 9 | Faststart presente | `faststart` a vero |
 | 10 | Formato corretto | `aspect_mismatch` a vero |
 | 11 | SRT presente | `out/subtitles.srt` quando c'è parlato |
+| 12 | Upscale misurato | `upscale_ratio` riporta il rapporto; oltre 1,25x è warn |
 | 12 | Manifest presente | `out/deliverables.json` con i quattro sha256 |
 
 Se uno dei primi dieci fallisce, non si consegna. Non esiste "quasi verde".

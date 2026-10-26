@@ -65,6 +65,7 @@ FINDING_IDS: tuple[str, ...] = (
     "speech.filler",
     "format.unknown",
     "hook.missing",
+    "video.hook.weak",
     "subs.unknown",
 )
 
@@ -629,6 +630,23 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
                     span=[0.0, min(duration, THRESHOLDS["hook_window"])],
                 )
             )
+        risks = retention.get("risk_drop") or []
+        if any(
+            isinstance(item, dict) and item.get("reason") == "weak_hook_low_motion"
+            for item in risks
+        ):
+            out.append(
+                _finding(
+                    "video.hook.weak",
+                    "warn",
+                    "retention.weak_hook",
+                    1,
+                    1,
+                    f"Apertura statica nei primi {THRESHOLDS['hook_window']:.0f}s",
+                    "hook_overlay",
+                    span=[0.0, min(duration, THRESHOLDS["hook_window"])],
+                )
+            )
 
     # Every finding carries a source-time span. Findings without a natural
     # interval fall back to the whole source, clamped to its duration.
@@ -1164,7 +1182,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
         add("autoframe", "creative", enabled, params, face_id, explain)
 
     hook_value = brief.get("hook")
-    if hook_value not in (None, "", "none") and "video.scene.cuts" in known:
+    if hook_value not in (None, "", "none"):
         at = 0.0
         candidates = (video.get("retention") or {}).get("hook_candidates") or []
         if candidates and isinstance(candidates[0], dict):
@@ -1176,8 +1194,17 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 "creative",
                 False,
                 hook_params,
-                "video.scene.cuts",
+                "video.hook.weak",
                 "tone clean: niente overlay",
+            )
+        elif "video.hook.weak" not in fresh:
+            add(
+                "hook_overlay",
+                "creative",
+                False,
+                hook_params,
+                "video.hook.weak",
+                "apertura già dinamica: niente overlay",
             )
         else:
             add(
@@ -1185,17 +1212,13 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 "creative",
                 True,
                 hook_params,
-                "video.scene.cuts",
-                f"aggancio testuale a {at:.1f}s per 3s",
+                "video.hook.weak",
+                f"apertura statica: testo a {at:.1f}s per 3s",
             )
 
-    if brief.get("zoom") and (
-        "video.scene.cuts" in known or "video.pacing.drag" in known
-    ):
-        cite = (
-            "video.scene.cuts" if "video.scene.cuts" in known else "video.pacing.drag"
-        )
+    if brief.get("zoom"):
         zoom_params = {"amount": 0.06}
+        cite = "video.pacing.drag"
         if tone == "clean":
             add(
                 "zoom",
@@ -1204,6 +1227,15 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 zoom_params,
                 cite,
                 "tone clean: niente zoom",
+            )
+        elif "video.pacing.drag" not in fresh:
+            add(
+                "zoom",
+                "creative",
+                False,
+                zoom_params,
+                cite,
+                "nessun ristagno misurato: niente zoom",
             )
         else:
             add(
@@ -1216,13 +1248,16 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
             )
 
     if brief.get("fit") and face_id:
+        fit_enabled = face_id in ("faces.multi_span", "faces.multi_concurrent")
         add(
             "fit",
             "creative",
-            True,
+            fit_enabled,
             {"gblur_sigma": 20},
             face_id,
-            "riempio il formato con sfondo sfocato",
+            "riempio il formato con sfondo sfocato"
+            if fit_enabled
+            else "fit non giustificato da volti multipli: niente sfondo sfocato",
         )
 
     # -- subtitles --------------------------------------------------------- #

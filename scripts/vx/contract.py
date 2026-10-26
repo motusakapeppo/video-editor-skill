@@ -1,4 +1,4 @@
-"""vx.contract — FROZEN interface v1.2.0 for the video-editor skill.
+"""vx.contract — FROZEN interface v1.3.0 for the video-editor skill.
 
 stdlib only. Every other module may import this; this module imports nothing local.
 Changing anything here is a version bump (see SKILL.md "contratto").
@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
+from types import MappingProxyType
 from typing import Any, Dict, List, Optional
 
 SCHEMA = "vx.report/1.0"
 TRIAGE_SCHEMA = "vx.triage/1.0"
 PLAN_SCHEMA = "vx.plan/1.1"
 QC_SCHEMA = "vx.qc/1.0"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 PROXY_WIDTH = 640
 SAMPLE_FPS_VIDEO = 10.0
@@ -81,7 +82,10 @@ THRESHOLDS = {
     "sub_max_chars_916": 18,
     "sub_max_chars_169": 42,
     "sub_max_lines": 2,
-    "sub_max_cps": 25,
+    "sub_max_cps": 20,
+    "cue_dur_min": 0.4,
+    "cue_dur_max": 7.0,
+    "upscale_warn": 1.25,
     # editing policy
     "hook_window": 4.0,
     "max_creative_treatments": 3,
@@ -101,6 +105,38 @@ TECHNICAL_TREATMENTS = (
     "color_fix",
     "exposure_fix",
     "compress",
+)
+
+# The semantic half of the evidence law: a witness must be the measurement that
+# justifies the treatment, not merely a finding that exists. The map is frozen;
+# a treatment absent from it is rejected rather than granted a silent default.
+ALLOWED_EVIDENCE_MAP = MappingProxyType(
+    {
+        "clipping_fix": frozenset({"audio.clipping"}),
+        "denoise": frozenset({"audio.noise.high"}),
+        "loudnorm": frozenset({"audio.loudness.off"}),
+        "compress": frozenset({"audio.lra.wide"}),
+        "audio_restore": frozenset({"audio.silent"}),
+        "stabilize": frozenset({"video.jitter.shaky"}),
+        "exposure_fix": frozenset({"video.exposure.under", "video.exposure.high_clip"}),
+        "color_fix": frozenset({"video.color.cast"}),
+        "pacing_fix": frozenset({"video.pacing.drag"}),
+        "autoframe": frozenset(
+            {
+                "faces.none",
+                "faces.single",
+                "faces.multi_span",
+                "faces.multi_concurrent",
+                "faces.track_broken",
+            }
+        ),
+        "hook_overlay": frozenset({"video.hook.weak"}),
+        "zoom": frozenset({"video.pacing.drag"}),
+        "fit": frozenset({"faces.multi_span", "faces.multi_concurrent"}),
+        "subtitles": frozenset({"speech.present"}),
+        "filler_cut": frozenset({"speech.filler"}),
+        "cut_silence": frozenset({"audio.dead_air.excess", "video.freeze.static"}),
+    }
 )
 
 
@@ -564,6 +600,19 @@ def validate_evidence(
                 errors.append(
                     f"treatment {name} witness {finding_id} does not copy the "
                     "finding span"
+                )
+                continue
+            allowed = ALLOWED_EVIDENCE_MAP.get(str(name))
+            if allowed is None:
+                errors.append(
+                    f"INVALID_EVIDENCE_SEMANTICS: treatment {name} has no "
+                    "evidence policy"
+                )
+                continue
+            if finding_id not in allowed:
+                errors.append(
+                    f"INVALID_EVIDENCE_SEMANTICS: treatment {name} cannot cite "
+                    f"finding {finding_id}"
                 )
                 continue
             if duration is not None and (t0 < -1e-6 or t1 > float(duration) + 1e-6):
