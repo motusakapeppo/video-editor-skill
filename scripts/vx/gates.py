@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from . import layout as layout_mod  # noqa: PLC0415
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -677,4 +678,53 @@ def color(
         )
     if not result.ok:
         raise contract.QCFailure(result.to_dict())
+    return result
+
+
+def layout_elements(lay, boxes, *, text_box=None) -> GateResult:
+    """Gate 4 universale: nessun elemento grafico invade un altro.
+
+    `boxes` e' un dict nome -> (x, y, w, h) dei box MASSIMI sull'animazione. I
+    contenitori (cornice) non entrano: il loro bbox e' il canvas, quindi
+    colliderebbero con tutto. Si controllano i badge fra loro e contro il testo.
+    """
+    result = GateResult("layout_elements")
+    items = {k: (v if isinstance(v, layout_mod.Rect) else layout_mod.Rect(*v))
+             for k, v in (boxes or {}).items()}
+    if text_box is not None and not isinstance(text_box, layout_mod.Rect):
+        text_box = layout_mod.Rect(*text_box)
+    if text_box is not None:
+        items["__text__"] = text_box
+
+    names = sorted(items)
+    collisions = []
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            inter = items[a].intersection(items[b])
+            if inter is not None:
+                collisions.append({"a": a, "b": b, "area": inter.area})
+
+    result.checks.append(
+        Check(
+            "element_collisions",
+            "fail" if collisions else "pass",
+            len(collisions),
+            0,
+            "; ".join(f"{c['a']}x{c['b']} {c['area']}px" for c in collisions[:4])
+            or "nessuna sovrapposizione fra elementi",
+        )
+    )
+    outside = [k for k, r in items.items()
+               if not lay.canvas.contains(r)]
+    result.checks.append(
+        Check(
+            "elements_in_canvas",
+            "fail" if outside else "pass",
+            outside or 0,
+            0,
+            "elementi fuori dal canvas" if outside else "tutti dentro il canvas",
+        )
+    )
+    if not result.ok:
+        raise LayoutFailure(result.to_dict())
     return result

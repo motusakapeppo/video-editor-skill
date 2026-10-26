@@ -84,6 +84,31 @@ class Word:
 
 
 @dataclass
+class Element:
+    """Grafica del frame. `kind=frame` e' un contenitore: non collide, contiene."""
+
+    name: str
+    path: str
+    box: Tuple[int, int, int, int]
+    kind: str = "badge"
+    z: int = 0
+    pulse: float = 0.0
+
+    def max_box(self) -> Tuple[int, int, int, int]:
+        """Box massimo sull'animazione: la pulsazione cresce, quindi va inclusa."""
+        x, y, w, h = self.box
+        grow = 1.0 + max(0.0, self.pulse)
+        cx, cy = x + w / 2.0, y + h / 2.0
+        nw, nh = w * grow, h * grow
+        return (int(cx - nw / 2), int(cy - nh / 2), int(nw), int(nh))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"name": self.name, "path": self.path, "box": list(self.box),
+                "kind": self.kind, "z": self.z, "pulse": self.pulse,
+                "max_box": list(self.max_box())}
+
+
+@dataclass
 class MotionCue:
     start: float
     end: float
@@ -110,6 +135,8 @@ class MotionPayload:
     bottom_limit: int
     cues: List[MotionCue]
     safe_areas: List[Dict[str, Any]] = field(default_factory=list)
+    elements: List[Element] = field(default_factory=list)
+    beats: List[float] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -122,6 +149,7 @@ class MotionPayload:
             "font": {"path": self.font_path, "px": self.font_px},
             "layout": {"margin_lr": self.margin_lr, "bottom_limit": self.bottom_limit},
             "safe_areas": self.safe_areas,
+            "elements": [e.to_dict() for e in self.elements],
             "cues": [c.to_dict() for c in self.cues],
         }
 
@@ -336,6 +364,9 @@ def render_layer(
     """
     font = font or ImageFont.truetype(payload.font_path, payload.font_px)
     layer = Image.new("RGBA", (payload.width, payload.height), (0, 0, 0, 0))
+    # Gli elementi si disegnano SEMPRE, anche fra una cue e l'altra: la cornice non
+    # puo' sparire nei vuoti solo perche' non c'e' testo.
+    layer = _draw_elements(payload, layer, t)
 
     active = next((c for c in payload.cues if c.start <= t <= c.end), None)
     if active is None:
@@ -398,7 +429,53 @@ def render_layer(
     shadow.paste(
         (*shadow_rgb, 255), (0, 0), mask.point(lambda a: int(a * SHADOW_ALPHA))
     )
-    return Image.alpha_composite(shadow, text)
+    # Gli elementi vivono in `layer`: ricomporre solo shadow+text li cancellava,
+    # e la cornice spariva esattamente quando compariva un sottotitolo.
+    return Image.alpha_composite(layer, Image.alpha_composite(shadow, text))
+
+
+_ELEMENT_CACHE: Dict[str, Image.Image] = {}
+
+
+def _element_image(path: str) -> Optional[Image.Image]:
+    if path not in _ELEMENT_CACHE:
+        p = Path(path)
+        if not p.is_file():
+            return None
+        _ELEMENT_CACHE[path] = Image.open(p).convert("RGBA")
+    return _ELEMENT_CACHE[path]
+
+
+def _pulse_at(element: Element, payload: MotionPayload, t: float) -> float:
+    """Pulsazione ancorata ai beat misurati, con attacco di 90 ms e rientro morbido."""
+    if element.pulse <= 0 or not payload.beats:
+        return 1.0
+    near = min((abs(t - b) for b in payload.beats), default=9.9)
+    if near > 0.09:
+        return 1.0
+    return 1.0 + element.pulse * (1.0 - near / 0.09)
+
+
+def _draw_elements(payload: MotionPayload, layer: Image.Image, t: float) -> Image.Image:
+    for element in sorted(payload.elements, key=lambda e: e.z):
+        img = _element_image(element.path)
+        if img is None:
+            continue
+        scale = _pulse_at(element, payload, t)
+        if abs(scale - 1.0) > 1e-4:
+            x, y, w, h = element.box
+            nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+            scaled = img.resize((nw, nh), Image.LANCZOS)
+            at = (int(x + w / 2 - nw / 2), int(y + h / 2 - nh / 2))
+            layer.alpha_composite(scaled, dest=(max(0, at[0]), max(0, at[1])))
+        else:
+            layer.alpha_composite(img, dest=(element.box[0], element.box[1]))
+    return layer
+
+
+def element_boxes(payload: MotionPayload) -> Dict[str, Tuple[int, int, int, int]]:
+    """Box MASSIMI dei soli badge: i contenitori non collidono con se stessi."""
+    return {e.name: e.max_box() for e in payload.elements if e.kind != "frame"}
 
 
 def animation_box(payload: MotionPayload) -> Dict[str, int]:
