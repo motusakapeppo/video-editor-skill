@@ -100,6 +100,7 @@ class _Progress:
         self._stop = threading.Event()
         self._tail_lock = threading.Lock()
         self._tail: Optional[threading.Thread] = None
+        self._closed = False
 
     # -- observer ------------------------------------------------------- #
 
@@ -117,6 +118,8 @@ class _Progress:
             return
         value = contract.clamp(value, 0.0, 100.0)
         with self._lock:
+            if self._closed:
+                return
             if value < self._last:
                 return
             self._last = value
@@ -147,6 +150,8 @@ class _Progress:
 
     def stop(self) -> None:
         """Signal the tail and join it; safe to call more than once."""
+        with self._lock:
+            self._closed = True
         self._stop.set()
         with self._tail_lock:
             thread = self._tail
@@ -206,6 +211,8 @@ def spawn(job_id: str, root: Optional[Union[str, Path]] = None) -> int:
     Windows, ``start_new_session`` elsewhere. Never ``shell``, never
     ``preexec_fn``. A ``Popen`` failure propagates to the caller.
     """
+    if not jobs.JOB_ID_RE.fullmatch(job_id):
+        raise contract.VxError(f"invalid job id: {job_id!r}")
     base = jobs.jobs_root(root)
     workdir = base / job_id
     workdir.mkdir(parents=True, exist_ok=True)

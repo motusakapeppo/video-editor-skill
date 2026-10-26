@@ -7,10 +7,13 @@ python tests/test_jobs.py
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -259,6 +262,71 @@ def main() -> int:
             "started_at >= created_at",
             after["started_at"] >= after["created_at"],
         )
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        root = tmp / "jobs"
+        rec = jobs.create_job(_params(tmp), root=root)
+        jid = rec["job_id"]
+        handle = (root / jid / "job.json").open("r", encoding="utf-8")
+
+        def _close_later() -> None:
+            time.sleep(0.3)
+            handle.close()
+
+        closer = threading.Thread(target=_close_later)
+        closer.start()
+        try:
+            jobs.update_job(jid, {"status": "running"}, root=root)
+            survived = True
+            detail: object = ""
+        except Exception as exc:  # noqa: BLE001 - the test records the failure
+            survived = False
+            detail = f"{type(exc).__name__}: {exc}"
+        finally:
+            closer.join()
+            if not handle.closed:
+                handle.close()
+        check("scrittura robusta a un lettore aperto", survived, detail)
+        check(
+            "stato corretto dopo il retry",
+            jobs.read_job(jid, root=root)["status"] == "running",
+        )
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        root = tmp / "jobs"
+        rec = jobs.create_job(_params(tmp), root=root)
+        jid = rec["job_id"]
+        check("claim preso per il job stantio", jobs.claim_job(jid, root=root) is True)
+        path = root / jid / "job.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["updated_at"] = time.time() - (jobs.QUEUED_STALE_SEC + 1)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        stale = jobs.read_job(jid, root=root)
+        check(
+            "queued stantio con claim -> failed",
+            stale["status"] == "failed" and stale["error"] == "worker never started",
+            (stale.get("status"), stale.get("error")),
+        )
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        root = tmp / "jobs"
+        for label, key, value in (
+            ("fps stringa", "fps", "25"),
+            ("crf stringa", "crf", "17"),
+            ("autonomous non booleano", "autonomous", "yes"),
+        ):
+            params = _params(tmp)
+            params[key] = value
+            try:
+                jobs.create_job(params, root=root)
+            except contract.VxError:
+                rejected = True
+            else:
+                rejected = False
+            check(f"parametro tipizzato: {label}", rejected, value)
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

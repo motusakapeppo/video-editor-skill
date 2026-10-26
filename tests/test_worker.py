@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from vx import jobs  # noqa: E402
+from vx import contract, jobs, worker  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -228,6 +228,32 @@ def main() -> int:
             "error_detail presente",
             bool(bad.get("error_detail")),
             str(bad.get("error_detail"))[-120:],
+        )
+
+    try:
+        worker.spawn("../evil", root=tmp / "jobs")
+    except contract.VxError:
+        traversal = True
+    else:
+        traversal = False
+    check("spawn rifiuta un id non valido", traversal, "../evil")
+
+    with tempfile.TemporaryDirectory() as raw:
+        isolated = Path(raw)
+        root = isolated / "jobs"
+        rec = jobs.create_job(
+            {"prompt": "p", "assets": str(isolated), "out": str(isolated / "o.mp4")},
+            root=root,
+        )
+        progress = worker._Progress(rec["job_id"], root, isolated)
+        progress.write(10.0, "render")
+        progress.stop()
+        progress.write(50.0, "render")
+        frozen = jobs.read_job(rec["job_id"], root=root)
+        check(
+            "dopo stop il progresso non scrive piu'",
+            frozen["progress_percent"] == 10.0,
+            frozen["progress_percent"],
         )
 
     elapsed = time.time() - started

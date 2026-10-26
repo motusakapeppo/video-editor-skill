@@ -23,10 +23,11 @@ Un job è una directory: `<work_root>/jobs/<job_id>/job.json`. L'id è
 può uscire dalla radice dei job.
 
 Ogni scrittura passa da un file temporaneo nella stessa directory, `flush` più
-`os.fsync`, poi `os.replace`. Da qui le due invarianti:
+`os.fsync`, poi `os.replace`, che ritenta per circa due secondi se un lettore
+Windows tiene il file aperto. Da qui le due invarianti:
 
-- **un solo scrittore per job**: solo il worker che possiede il job lo muta, non
-  c'è read-modify-write fra scrittori;
+- **un solo scrittore di stato**: il worker che possiede il job è l'unico a
+  mutarne lo stato; un lettore riscrive solo per il reaping di un orfano;
 - **lettori senza lock**: chi legge vede il file precedente completo o quello
   nuovo completo, mai un file a metà, perché `os.replace` è atomico su POSIX e
   su Windows.
@@ -55,6 +56,14 @@ Un job `running` porta il `pid` del worker. Quando lo si legge, se il pid non è
 più vivo il record viene marcato atomicamente `failed` con
 `error="worker died"` prima di essere restituito. La lettura con `reap=False`
 salta questo passaggio.
+
+Un job `queued` che ha già il claim ma non è mai partito viene marcato `failed`
+con `error="worker never started"` quando il record ha più di quindici minuti
+(`QUEUED_STALE_SEC`): copre il crash fra il claim e la marcatura `running`.
+
+Il reap è best-effort. Un pid riusato da un altro processo può ritardarlo; su
+Linux uno stato `Z` in `/proc/<pid>/stat` viene trattato come morto anche se
+`os.kill(pid, 0)` riesce, perché uno zombie non può più avanzare.
 
 La liveness la chiede al sistema operativo, mai all'orologio. Su Windows il
 controllo usa `OpenProcess` con `PROCESS_QUERY_LIMITED_INFORMATION` e
@@ -106,7 +115,7 @@ render lungo la coppia submit/status è la strada.
 
 - Nessuna cancellazione: un job avviato non si ferma.
 - Un kill duro del worker lascia il record `running` finché una lettura
-  successiva non lo reap; non c'è un demone che ripulisce da solo.
+  successiva non lo reap; il reap è best-effort e un pid riusato può ritardarlo.
 - Lo store è una directory su filesystem locale, non una coda con retry: un job
   fallito non viene ritentato.
 - Nessuna coordinazione multi-host: due macchine che montano la stessa directory

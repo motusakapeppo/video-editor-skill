@@ -53,6 +53,13 @@ _WINDOWS = os.name == "nt"
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _STILL_ACTIVE = 259
 
+# A Windows reader holds job.json open without delete sharing for a fraction of
+# a millisecond; os.replace then raises PermissionError. Retrying for ~2 s turns
+# a lost terminal write into a bounded wait.
+_REPLACE_ATTEMPTS = 40
+_REPLACE_DELAY_SEC = 0.05
+QUEUED_STALE_SEC = 900.0
+
 
 # --------------------------------------------------------------------------- #
 # paths and ids
@@ -100,13 +107,31 @@ def _write_job(base: Path, job_id: str, record: Dict[str, Any]) -> None:
             json.dump(record, handle, ensure_ascii=False, sort_keys=True)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, target)
+        _replace_with_retry(tmp, target)
     except Exception:
         try:
             tmp.unlink()
         except OSError:
             pass
         raise
+
+
+def _replace_with_retry(tmp: Path, target: Path) -> None:
+    """Replace ``target`` with ``tmp``, waiting out a Windows reader.
+
+    ``os.replace`` is atomic, but on Windows it fails with ``PermissionError``
+    while another process has the target open without delete sharing. A status
+    poll does exactly that for a fraction of a millisecond, so a terminal write
+    would otherwise be lost and a finished job reaped as ``failed``.
+    """
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_DELAY_SEC)
 
 
 def _read_record(base: Path, job_id: str) -> Optional[Dict[str, Any]]:
@@ -153,6 +178,17 @@ def is_alive(pid: Optional[int]) -> bool:
             return code.value == _STILL_ACTIVE
         finally:
             kernel32.CloseHandle(handle)
+
+    proc_stat = Path(f"/proc/{pid}/stat")
+    try:
+        fields = proc_stat.read_text(encoding="utf-8", errors="replace").rsplit(")", 1)
+    except OSError:
+        fields = []
+    if len(fields) == 2:
+        state = fields[1].strip().split(" ", 1)[0]
+        if state in ("Z", "X", "x"):
+            # A zombie still answers os.kill(pid, 0) but cannot make progress.
+            return False
 
     try:
         os.kill(pid, 0)
@@ -243,8 +279,24 @@ def create_job(
         raise contract.VxError(f"assets directory not found: {validated['assets']}")
 
     for key in _OPTIONAL_PARAMS:
-        if key in params:
-            validated[key] = params[key]
+        if key not in params:
+            continue
+        value = params[key]
+        if key in ("workdir", "manifest", "preset"):
+            if not isinstance(value, str) or not value.strip():
+                raise contract.VxError(f"job param {key!r} must be a non-empty string")
+        elif key == "fps":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise contract.VxError("job param 'fps' must be a number")
+            if value <= 0:
+                raise contract.VxError("job param 'fps' must be positive")
+        elif key == "crf":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise contract.VxError("job param 'crf' must be an integer")
+        elif key == "autonomous":
+            if not isinstance(value, bool):
+                raise contract.VxError("job param 'autonomous' must be a boolean")
+        validated[key] = value
 
     base = jobs_root(root)
     job_id = uuid.uuid4().hex
@@ -288,6 +340,16 @@ def read_job(
         if pid is not None and not is_alive(pid):
             record = _apply_update(
                 base, job_id, record, {"status": "failed", "error": "worker died"}
+            )
+    if reap and record.get("status") == "queued":
+        claim = base / f"{job_id}{CLAIM_SUFFIX}"
+        updated = float(record.get("updated_at") or 0.0)
+        if claim.exists() and (time.time() - updated) > QUEUED_STALE_SEC:
+            record = _apply_update(
+                base,
+                job_id,
+                record,
+                {"status": "failed", "error": "worker never started"},
             )
     return record
 
