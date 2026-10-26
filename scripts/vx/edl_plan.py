@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
-EDL_SCHEMA = "vx.edl/2.0"
-EDL_CONTRACT_VERSION = "2.0.0"
+EDL_SCHEMA = "vx.edl/2.1"
+EDL_CONTRACT_VERSION = "2.1.0"
 
 _SOURCE_KEY = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -27,7 +27,8 @@ _ASPECT = re.compile(r"^(\d+):(\d+)$")
 
 _TOP_KEYS = {"contract_version", "timeline", "sources", "tracks"}
 _TIMELINE_KEYS = {"fps", "duration_sec", "aspect_ratio", "resolution"}
-_SOURCE_KEYS = {"path", "sha256", "duration"}
+_SOURCE_KEYS = {"path", "sha256", "duration", "camera"}
+_CAMERA_KEYS = {"angle_deg", "focal_length_mm"}
 _TRACK_KEYS = {"track_id", "role", "clips"}
 _AUDIO_KEYS = _TRACK_KEYS | {"source_id", "src_in", "src_out", "dst_in", "dst_out"}
 _CLIP_KEYS = {
@@ -110,10 +111,34 @@ class _FrozenMap(Mapping):
 
 
 @dataclass(frozen=True)
+class CameraSpec:
+    angle_deg: float = 0.0
+    focal_length_mm: float = 35.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "angle_deg": self.angle_deg,
+            "focal_length_mm": self.focal_length_mm,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "CameraSpec":
+        if data is None:
+            return cls()
+        if not isinstance(data, dict):
+            raise ValueError("camera must be an object")
+        return cls(
+            angle_deg=float(data.get("angle_deg", 0.0)),
+            focal_length_mm=float(data.get("focal_length_mm", 35.0)),
+        )
+
+
+@dataclass(frozen=True)
 class SourceRef:
     path: str
     sha256: str
     duration: Optional[float] = None
+    camera: CameraSpec = field(default_factory=CameraSpec)
 
 
 @dataclass(frozen=True)
@@ -226,6 +251,16 @@ class EDLPlan:
                 not _is_num(ref.duration) or float(ref.duration) <= 0
             ):
                 errors.append(f"sources.{key}.duration must be > 0")
+            if not isinstance(ref.camera, CameraSpec):
+                errors.append(f"sources.{key}.camera must be a CameraSpec")
+            else:
+                if not _is_num(ref.camera.angle_deg):
+                    errors.append(f"sources.{key}.camera.angle_deg must be finite")
+                if (
+                    not _is_num(ref.camera.focal_length_mm)
+                    or float(ref.camera.focal_length_mm) <= 0
+                ):
+                    errors.append(f"sources.{key}.camera.focal_length_mm must be > 0")
 
         if not self.video_tracks:
             errors.append("tracks.video must not be empty")
@@ -502,10 +537,19 @@ class EDLPlan:
                 errors.append(f"{path}: must be an object")
                 continue
             _reject_unknown(raw, _SOURCE_KEYS, path, errors)
+            camera_raw = raw.get("camera")
+            if isinstance(camera_raw, dict):
+                _reject_unknown(camera_raw, _CAMERA_KEYS, f"{path}.camera", errors)
+            try:
+                camera = CameraSpec.from_dict(camera_raw)
+            except (TypeError, ValueError) as exc:
+                errors.append(f"{path}.camera: {exc}")
+                camera = CameraSpec()
             sources[str(key)] = SourceRef(
                 path=raw.get("path", ""),
                 sha256=raw.get("sha256", ""),
                 duration=raw.get("duration"),
+                camera=camera,
             )
 
         raw_tracks = data.get("tracks")
@@ -538,7 +582,11 @@ class EDLPlan:
 
 
 def _source_to_dict(ref: SourceRef) -> Dict[str, Any]:
-    data: Dict[str, Any] = {"path": ref.path, "sha256": ref.sha256}
+    data: Dict[str, Any] = {
+        "path": ref.path,
+        "sha256": ref.sha256,
+        "camera": ref.camera.to_dict(),
+    }
     if ref.duration is not None:
         data["duration"] = ref.duration
     return data

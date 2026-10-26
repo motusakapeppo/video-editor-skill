@@ -91,7 +91,7 @@ def _t(tid, clips, role="main"):
 
 
 def _p(**kw):
-    base = dict(contract_version="2.0.0", fps=25.0, duration_sec=20.0, aspect_ratio="9:16", resolution=(1080, 1920),
+    base = dict(contract_version="2.1.0", fps=25.0, duration_sec=20.0, aspect_ratio="9:16", resolution=(1080, 1920),
                 sources={"src_01": _src(), "src_02": _src("b.mp4", "b" * 64)},
                 video_tracks=(_t(0, [_c("c1"), _c("c2", 10, 20, 10, 20)]),),
                 audio_tracks=(_t(0, [_c("a1", 0, 20, 0, 20, role="dialogue")], "dialogue"),), notes=())
@@ -139,8 +139,8 @@ def _set(d, path, value=1):
 def case_m1() -> None:
     if not _ready("M1 import / re-export identity"): return
     from vx import edl as edl_mod
-    check("M1 schema", model.EDL_SCHEMA == "vx.edl/2.0", model.EDL_SCHEMA)
-    check("M1 version", model.EDL_CONTRACT_VERSION == "2.0.0")
+    check("M1 schema", model.EDL_SCHEMA == "vx.edl/2.1", model.EDL_SCHEMA)
+    check("M1 version", model.EDL_CONTRACT_VERSION == "2.1.0")
     check("M1 re-export", getattr(edl_mod, "EDLPlan", None) is model.EDLPlan)
     err = model.EDLValidationError(["boom"])
     check("M1 errors", err.errors == ["boom"], err.errors)
@@ -340,6 +340,86 @@ def case_m19() -> None:
         check("M19 idempotent", back.to_dict() == d)
 
 
+def case_m24() -> None:
+    if not _ready("M24 camera metadata"): return
+    default = _src()
+    check(
+        "M24 camera default",
+        (default.camera.angle_deg, default.camera.focal_length_mm) == (0.0, 35.0),
+        default.camera,
+    )
+    plan = _p(
+        sources={
+            "src_01": _src(),
+            "src_02": model.SourceRef(
+                "b.mp4", "b" * 64, 20.0, model.CameraSpec(45.0, 50.0)
+            ),
+        }
+    )
+    data = plan.to_dict()
+    check(
+        "M24 camera serializzata",
+        data["sources"]["src_02"]["camera"]
+        == {"angle_deg": 45.0, "focal_length_mm": 50.0},
+        data["sources"]["src_02"],
+    )
+    back = model.EDLPlan.from_dict(data)
+    check(
+        "M24 camera round-trip",
+        back == plan and back.sources["src_02"].camera.focal_length_mm == 50.0,
+        back.sources["src_02"].camera,
+    )
+    bad_focal = _p(
+        sources={
+            "src_01": model.SourceRef(
+                "a.mp4", "a" * 64, 20.0, model.CameraSpec(0.0, 0.0)
+            ),
+            "src_02": _src("b.mp4", "b" * 64),
+        }
+    )
+    _r("M24 focale 0", bad_focal)
+    _r(
+        "M24 angolo non finito",
+        _p(
+            sources={
+                "src_01": model.SourceRef(
+                    "a.mp4", "a" * 64, 20.0, model.CameraSpec(float("nan"), 35.0)
+                ),
+                "src_02": _src("b.mp4", "b" * 64),
+            }
+        ),
+    )
+    broken = plan.to_dict()
+    broken["sources"]["src_01"]["camera"]["bad"] = 1
+    try:
+        model.EDLPlan.from_dict(broken)
+    except model.EDLValidationError as exc:
+        check(
+            "M24 chiave camera sconosciuta",
+            "sources.src_01.camera.bad" in " | ".join(exc.errors),
+            exc.errors,
+        )
+    except Exception as exc:  # noqa: BLE001
+        check("M24 chiave camera sconosciuta", False, f"{type(exc).__name__}: {exc}")
+    else:
+        check("M24 chiave camera sconosciuta", False, "accettata")
+
+    not_object = plan.to_dict()
+    not_object["sources"]["src_01"]["camera"] = "wide"
+    try:
+        model.EDLPlan.from_dict(not_object)
+    except model.EDLValidationError as exc:
+        check(
+            "M24 camera non oggetto",
+            "sources.src_01.camera" in " | ".join(exc.errors),
+            exc.errors,
+        )
+    except Exception as exc:  # noqa: BLE001
+        check("M24 camera non oggetto", False, f"{type(exc).__name__}: {exc}")
+    else:
+        check("M24 camera non oggetto", False, "accettata")
+
+
 # --------------------------------------------------------------------------- #
 # builder cases
 # --------------------------------------------------------------------------- #
@@ -507,7 +587,7 @@ def main() -> int:
              ("M15 coverage", case_m15), ("M16 J/L cuts", case_m16), ("M17 audio shorthand", case_m17),
              ("M18 immutability", case_m18), ("M19 JSON on disk", case_m19), ("M20 builder happy path", case_m20),
              ("M21 builder clock mapping", case_m21), ("M22 builder rejects", case_m22),
-             ("M23 real clip round-trip", case_m23)]
+             ("M23 real clip round-trip", case_m23), ("M24 camera metadata", case_m24)]
     for label, fn in cases:
         print(f"\n{label}")
         run_case(label, fn)

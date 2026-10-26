@@ -350,6 +350,7 @@ if __name__ == "__main__":
 # ``vx.edl.EDLPlan`` valid. Placed after the __main__ block so direct
 # execution (which raises SystemExit above) never evaluates this import.
 from .edl_plan import (  # noqa: E402,F401
+    CameraSpec,
     ClipSegment,
     EDLPlan,
     EDLValidationError,
