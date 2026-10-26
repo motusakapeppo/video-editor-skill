@@ -1,0 +1,7 @@
+{
+  "after_w1b": 0.038337,
+  "baseline": 0.038337,
+  "ratio": 1.0,
+  "applicable": false,
+  "note": "animations are text-independent single-stream filters; delta unchanged — W1b applies no grade node, so prove.renderer_delta measures the same approved V2 node on the approved delivery and returns the baseline 0.038337 (sha256 verified)"
+}
