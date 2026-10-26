@@ -26,10 +26,32 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 def main() -> int:
     valid = brief_mod._valid_brief()
+    for item in valid["executed"]:
+        if item.get("name") != "none":
+            item["filter"] = "curves=m='0/0 1/1'"
     check(
         "brief valido -> []",
         prove.check_ledger(valid) == [],
         str(prove.check_ledger(valid)[:2]),
+    )
+
+    phantom = copy.deepcopy(valid)
+    phantom["executed"][0]["name"] = "none"
+    phantom["executed"][0]["filter"] = "null"
+    errors = prove.check_ledger(phantom)
+    check(
+        "applied true con executed.name 'none' rifiutato",
+        any("applied true ma nessun filtro eseguito" in e for e in errors),
+        str(errors[:1]),
+    )
+
+    null_filter = copy.deepcopy(valid)
+    null_filter["executed"][1]["filter"] = "null"
+    errors = prove.check_ledger(null_filter)
+    check(
+        "applied true con filtro 'null' rifiutato",
+        any("applied true ma nessun filtro eseguito" in e for e in errors),
+        str(errors[:1]),
     )
 
     missing = copy.deepcopy(valid)

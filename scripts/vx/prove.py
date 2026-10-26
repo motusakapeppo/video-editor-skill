@@ -136,6 +136,17 @@ def check_ledger(brief: Dict[str, Any]) -> List[str]:
             errors.append(f"{axis}: executed.filter vuoto")
         if applied is False and item.get("name") != "none":
             errors.append(f"{axis}: applied false ma executed.name != 'none'")
+        if applied is True:
+            # Applied means executed: a decision that claims to be applied must
+            # point at a filter that actually ran. ``none``/``null`` is the
+            # ledger's way of saying "nothing executed", so it cannot back an
+            # applied choice.
+            if (
+                item.get("name") == "none"
+                or not isinstance(filter_text, str)
+                or filter_text.strip() in ("", "null")
+            ):
+                errors.append(f"{axis}: applied true ma nessun filtro eseguito")
 
     if brief.get("skeleton") != "deferred":
         errors.append("skeleton deve essere 'deferred'")
@@ -391,7 +402,8 @@ def distinct_surface(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     Families:
       colour     palette family differs OR grade node type differs OR hue L1 >= 0.15
       rhythm     |cut target delta| >= 0.4 OR animation name/count differs
-      geometry   both offsets measured AND |dx| >= 0.05 or |dy| >= 0.05
+      geometry   both offsets measured AND both compositions applied AND
+                 |dx| >= 0.05 or |dy| >= 0.05
       typography font differs OR size delta >= 8 px
 
     When geometry is available the gate needs geometry AND two of the other
@@ -424,11 +436,15 @@ def distinct_surface(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     off_a = _measure(a, "subject_offset")
     off_b = _measure(b, "subject_offset")
     geometry_available = off_a is not None and off_b is not None
+    geometry_applied = (
+        _choice(a, "composition").get("applied") is True
+        and _choice(b, "composition").get("applied") is True
+    )
     geometry = False
     if geometry_available:
         dx = abs(float(off_a.get("x") or 0.0) - float(off_b.get("x") or 0.0))
         dy = abs(float(off_a.get("y") or 0.0) - float(off_b.get("y") or 0.0))
-        geometry = dx >= GEOMETRY_OFFSET or dy >= GEOMETRY_OFFSET
+        geometry = geometry_applied and (dx >= GEOMETRY_OFFSET or dy >= GEOMETRY_OFFSET)
 
     typo_a, typo_b = _choice(a, "typography"), _choice(b, "typography")
     typography = (
@@ -609,6 +625,9 @@ def _selftest() -> int:
         print(f"  [{'PASS' if ok else 'FAIL'}] {label:44} {detail}")
 
     valid = brief_mod._valid_brief()
+    for item in valid["executed"]:
+        if item.get("name") != "none":
+            item["filter"] = "curves=m='0/0 1/1'"
     errors = check_ledger(valid)
     check("brief con tutti gli assi applicati passa", errors == [], str(errors))
 

@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from vx import brief as brief_mod, docs, gates, prove  # noqa: E402
 from vx import animplan, gradeplan, palette as palette_mod  # noqa: E402
+from vx import screen as screen_mod  # noqa: E402
 from vx import contract, probe as probe_mod, render, subs  # noqa: E402
 from vx.cli import _cut_density_choice, _typography_choice  # noqa: E402
 from vx.cli import build_visual_brief, _visual_from_brief  # noqa: E402
@@ -65,9 +66,11 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 def _profile(clip: Dict[str, Any]) -> Dict[str, Any]:
     """Le decisioni di superficie per un clip, senza toccare la sorgente.
 
-    Stesse chiamate di ``build_visual_brief`` meno ``screen.decide`` (che serve
+    Stesse chiamate di ``build_visual_brief`` meno ``screen.plan`` (che serve
     alla sola scelta di inquadratura del brief): la matrice legge l'offset
     misurato dal corpus, che e' lo stesso campo che il gate legge dal brief.
+    Le scelte senza filtro eseguibile sono gia' degradate a inazione, come fa
+    il brief, cosi' la matrice e il ledger parlano la stessa lingua.
     """
     m = dict(clip)
     pal = palette_mod.decide(m)
@@ -78,13 +81,38 @@ def _profile(clip: Dict[str, Any]) -> Dict[str, Any]:
     )
     cut = _cut_density_choice(m)
     typo = _typography_choice(m)
+    shot = {
+        "duration": float(m.get("duration_s") or 0.25),
+        "width": int(m.get("width") or 0),
+        "height": int(m.get("height") or 0),
+        "fps": float(m.get("fps") or 25.0),
+    }
+    pal_value = "neutral" if pal["applied"] else pal["family"]
+    grade_value = grade["node"]["type"]
+    if grade["applied"] and not gradeplan.chain_for_shot(grade["node"]):
+        grade_value = "none"
+    anim_name, anim_count = anim["name"], anim["count"]
+    if anim["applied"] and not animplan.chain_for_shot(anim, shot):
+        anim_name, anim_count = "none", 0
+    typo_value = 0 if typo["applied"] else typo["value"]
+    offset = m.get("subject_offset")
+    if offset is None:
+        comp_applied, comp_value = False, "centre"
+    else:
+        magnitude = max(
+            abs(float(offset.get("x") or 0.0)),
+            abs(float(offset.get("y") or 0.0)),
+        )
+        comp_applied = magnitude >= screen_mod.OFFSET_THRESHOLD
+        comp_value = "offset" if comp_applied else "centre"
     return {
         "choices": {
-            "palette": {"value": pal["family"]},
-            "grade": {"value": grade["node"]["type"]},
-            "animation": {"name": anim["name"], "count": anim["count"]},
+            "palette": {"value": pal_value},
+            "grade": {"value": grade_value},
+            "animation": {"name": anim_name, "count": anim_count},
             "cut_density": {"value": cut["value"]},
-            "typography": {"value": typo["value"]},
+            "composition": {"value": comp_value, "applied": comp_applied},
+            "typography": {"value": typo_value},
         },
         "measurements": {
             "hue_mass_top3": m.get("hue_mass_top3") or [],
@@ -154,12 +182,11 @@ def _concat_fragment(graph: str) -> str:
     return match.group(0) if match else "null"
 
 
-def _crop_fragment(graph: str) -> str:
-    match = re.search(r"crop=[^,;\[\]]+", graph)
-    return match.group(0) if match else "null"
-
-
-def _fill_executed(b: Dict[str, Any], result: Dict[str, Any]) -> None:
+def _fill_executed(
+    b: Dict[str, Any],
+    result: Dict[str, Any],
+    crop_plan: Optional[Dict[str, Any]] = None,
+) -> None:
     """Sei voci del ledger dai risultati ffmpeg veri.
 
     ``grade`` e ``animation`` registrano il frammento realmente injectato nel
@@ -167,7 +194,7 @@ def _fill_executed(b: Dict[str, Any], result: Dict[str, Any]) -> None:
     ``tipografia`` non dichiarano filtri in ``vx.visual/1.0`` (le decorazioni
     sono fuori scope, la tipografia non ha burn proprio) e registrano ``none``;
     ``cut_density`` registra il concat realmente eseguito; ``composition``
-    registra il crop solo quando la scelta e' applicata.
+    registra il crop solo quando il ``crop_plan`` e' stato passato al render.
     """
     graph = result["graph"]
     frames = int(result["frames"])
@@ -175,18 +202,22 @@ def _fill_executed(b: Dict[str, Any], result: Dict[str, Any]) -> None:
     anim = b["_visual"]["animation"]
     grade_fragment = gradeplan.chain_for_shot(grade_node)
     anim_fragment = _segment_fragment(graph, 0)
-    comp_applied = bool(b["choices"]["composition"]["applied"])
+    if crop_plan:
+        crop_w = int(crop_plan["crop_w"])
+        crop_h = int(crop_plan["crop_h"])
+        box = crop_plan["boxes"][0]
+        comp_name = "crop"
+        comp_filter = f"crop={crop_w}:{crop_h}:{int(box['x'])}:{int(box['y'])}"
+    else:
+        comp_name = "none"
+        comp_filter = "null"
 
     entries = [
         ("palette", "none", "null"),
         ("grade", str(grade_node.get("type") or "none"), grade_fragment or "null"),
         ("animation", str(anim.get("name") or "none"), anim_fragment or "null"),
         ("cut_density", "snap", _concat_fragment(graph)),
-        (
-            "composition",
-            "crop" if comp_applied else "none",
-            _crop_fragment(graph) if comp_applied else "null",
-        ),
+        ("composition", comp_name, comp_filter),
         ("typography", "none", "null"),
     ]
     for axis, name, filter_text in entries:
@@ -224,12 +255,15 @@ def _render_clip(
     name: str,
     clip: Dict[str, Any],
     b: Dict[str, Any],
-) -> Tuple[Dict[str, Any], Optional[str]]:
+) -> Tuple[Dict[str, Any], Optional[str], Optional[Dict[str, Any]]]:
     """Renderizza il clip con il piano reale e il visual del brief.
 
     Il piano ha due tagli contigui che coprono la finestra: il grafo porta il
     concat v1a1 che il Gate 2 pretende, e la timeline dei sottotitoli resta
     continua (il taglio e' nello stesso punto, quindi lo shift unico basta).
+    Quando la composizione e' ``offset`` e applicata, il crop del brief diventa
+    il ``crop_plan`` del render: la differenza che il gate dichiara e' quella
+    che il file contiene.
     """
     src = CORPUS / clip["path"]
     t0, t1 = WINDOWS[name]
@@ -249,6 +283,16 @@ def _render_clip(
         cuts=[{"in": t0, "out": mid}, {"in": mid, "out": t1}],
         render={"precision": "proxy"},
     )
+    comp = b["_visual"]["composition"]
+    crop_plan: Optional[Dict[str, Any]] = None
+    if comp.get("applied") and comp.get("name") == "offset":
+        crop = comp.get("crop") or {}
+        crop_plan = {
+            "crop_w": int(crop.get("crop_w") or 0),
+            "crop_h": int(crop.get("crop_h") or 0),
+            "mode": "lock",
+            "boxes": [{"x": int(crop.get("x") or 0), "y": int(crop.get("y") or 0)}],
+        }
     media = probe_mod.probe(str(src)).to_dict()
     result = render.render(
         plan,
@@ -256,9 +300,10 @@ def _render_clip(
         precision="proxy",
         workdir=WORK / name / "render",
         subs_path=subs_path,
+        crop_plan=crop_plan,
         visual=_visual_for(b, 2),
     )
-    return result, subs_path
+    return result, subs_path, crop_plan
 
 
 def main() -> int:
@@ -295,7 +340,9 @@ def main() -> int:
     briefs: Dict[str, Dict[str, Any]] = {}
     for name in designated:
         clip = clips[name]
-        briefs[name] = build_visual_brief(CORPUS / clip["path"], clip, project=name)
+        briefs[name] = build_visual_brief(
+            CORPUS / clip["path"], clip, project=name, window=WINDOWS[name]
+        )
         prof, got = profiles[name], briefs[name]
         consistent = (
             all(
@@ -308,14 +355,17 @@ def main() -> int:
         check(f"{name}: profilo matrice == brief", consistent, "")
 
     results: Dict[str, Dict[str, Any]] = {}
+    crop_plans: Dict[str, Optional[Dict[str, Any]]] = {}
     for name in designated:
         print(f"  render {name}...")
-        result, subs_path = _render_clip(name, clips[name], briefs[name])
+        result, subs_path, crop_plan = _render_clip(name, clips[name], briefs[name])
         results[name] = result
-        _fill_executed(briefs[name], result)
+        crop_plans[name] = crop_plan
+        _fill_executed(briefs[name], result, crop_plan)
         print(
             f"    {result['path']} frames={result['frames']} "
-            f"subs={'si' if subs_path else 'no'}"
+            f"subs={'si' if subs_path else 'no'} "
+            f"crop={'si' if crop_plan else 'no'}"
         )
 
     surface = prove.distinct_surface(briefs[name_a], briefs[name_b])
@@ -328,6 +378,14 @@ def main() -> int:
             "families": [k for k, v in surface["families"].items() if v],
             "geometry_available": surface["geometry_available"],
         }
+    pair_row["families"] = surface["families"]
+    pair_row["geometry_available"] = surface["geometry_available"]
+    pair_row["hue_l1"] = surface["hue_l1"]
+    pair_row["hook_types"] = surface["hook_types"]
+    pair_row["distinct_ok"] = surface["ok"]
+    pair_row["hook_distinct"] = hook
+    pair_row["passes_both"] = bool(surface["ok"] and hook)
+    passing = [row for row in matrix if row["passes_both"]]
 
     print("\ncancelli:")
     for name in designated:
@@ -451,6 +509,7 @@ def main() -> int:
                         "path": results[name]["path"],
                         "frames": results[name]["frames"],
                         "expected_frames": results[name]["expected_frames"],
+                        "crop_plan": crop_plans[name],
                         "graph_sha256": hashlib.sha256(
                             results[name]["graph"].encode("utf-8")
                         ).hexdigest(),

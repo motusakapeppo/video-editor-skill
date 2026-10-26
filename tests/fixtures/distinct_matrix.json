@@ -10,7 +10,7 @@
     "families": {
       "colour": true,
       "rhythm": true,
-      "geometry": true,
+      "geometry": false,
       "typography": false
     },
     "hook_types": {
@@ -460,7 +460,7 @@
       "a": "real_anthem_169",
       "b": "real_vertical_916",
       "families": {
-        "colour": true,
+        "colour": false,
         "rhythm": true,
         "geometry": false,
         "typography": false
@@ -519,7 +519,7 @@
       "families": {
         "colour": true,
         "rhythm": true,
-        "geometry": true,
+        "geometry": false,
         "typography": false
       },
       "geometry_available": true,
@@ -528,9 +528,9 @@
         "a": "visual",
         "b": "title"
       },
-      "distinct_ok": true,
+      "distinct_ok": false,
       "hook_distinct": true,
-      "passes_both": true
+      "passes_both": false
     },
     {
       "a": "real_interview_169",
@@ -612,7 +612,7 @@
       "a": "real_street_169",
       "b": "square_11",
       "families": {
-        "colour": true,
+        "colour": false,
         "rhythm": false,
         "geometry": false,
         "typography": false
@@ -706,8 +706,8 @@
   ],
   "summary": {
     "total": 36,
-    "distinct_ok": 2,
+    "distinct_ok": 1,
     "hook_distinct": 18,
-    "passes_both": 2
+    "passes_both": 1
   }
 }

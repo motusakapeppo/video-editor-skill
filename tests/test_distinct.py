@@ -60,7 +60,7 @@ def _brief(**overrides) -> dict:
         value=2.0, applied=True, inaction=False, confidence=0.9
     )
     b["choices"]["composition"].update(
-        value="centre", applied=False, inaction=True, confidence=0.5
+        value="offset", applied=True, inaction=False, confidence=0.9
     )
     b["choices"]["typography"].update(
         value=0, applied=False, inaction=True, confidence=0.5
@@ -154,6 +154,22 @@ def main() -> int:
         "coppia con geometria: ok True",
         result["ok"] is True,
         f"colour={result['families']['colour']} rhythm={result['families']['rhythm']}",
+    )
+
+    not_applied = _brief(
+        **{
+            "composition.applied": False,
+            "composition.inaction": True,
+            "composition.confidence": 0.5,
+            "composition.value": "centre",
+        }
+    )
+    not_applied["measurements"]["subject_offset"] = {"x": 0.0, "y": 0.0}
+    result = prove.distinct_surface(same, not_applied)
+    check(
+        "offset diversi ma composizione non applicata: geometry False",
+        result["geometry_available"] and result["families"]["geometry"] is False,
+        str(result["families"]),
     )
 
     no_offset = _brief(**{"typography.value": 8})

@@ -60,7 +60,7 @@
           "inaction": true,
           "confidence": 0.5,
           "applied": false,
-          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+          "inaction_reason": "decisione presa ma nessun filtro eseguibile in questa ondata: inazione registrata, inquadratura al centro"
         },
         "typography": {
           "driver": "ink_coverage_pct",
@@ -151,10 +151,10 @@
         {
           "axis": "composition",
           "driver": "subject_offset",
-          "value": null,
+          "value": "centre",
           "threshold": 0.05,
           "provenance": "declared:1/20_width",
-          "decision": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+          "decision": "decisione presa ma nessun filtro eseguibile in questa ondata: inazione registrata, inquadratura al centro"
         },
         {
           "axis": "typography",
@@ -226,18 +226,17 @@
       ],
       "skeleton": "deferred",
       "distinct_surface": {
-        "ok": true,
+        "ok": false,
         "scope": "surface_only",
         "families": [
           "colour",
-          "rhythm",
-          "geometry"
+          "rhythm"
         ],
         "geometry_available": true
       },
       "docs_match": {
         "ok": false,
-        "doc_sha256": "7f6bec987c906bff486bafc178b58376e21282a4adc915ad366428dcf4c98253",
+        "doc_sha256": "f2df8a8e7ca4871ee635d767cd5fc35751e0ab04b75b7190cdc015ac322f1c6c",
         "ledger_sha256": "2c9043d602191af8382c60d6053604bf88fc6a7c76736d68dd070c6a7f793a4e"
       },
       "cast_normalised": false,
@@ -290,17 +289,18 @@
           "crop": {
             "crop_w": 810,
             "crop_h": 1080,
-            "x": 554,
+            "x": 242,
             "y": 0,
-            "face_found": false
+            "face_found": true
           },
           "driver": "subject_offset",
-          "value": null,
+          "value": "centre",
           "provenance": "declared:1/20_width",
           "inaction": true,
-          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta.",
+          "inaction_reason": "decisione presa ma nessun filtro eseguibile in questa ondata: inazione registrata, inquadratura al centro",
           "confidence": 0.5,
-          "applied": false
+          "applied": false,
+          "note": "inquadratura originale centre"
         }
       }
     },
@@ -312,12 +312,12 @@
       "choices": {
         "palette": {
           "driver": "hue_mass_top3",
-          "value": "dual",
+          "value": "neutral",
           "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
-          "inaction": false,
-          "confidence": 0.0692,
-          "applied": true,
-          "inaction_reason": "massa dominante 0.1900 -> famiglia dual."
+          "inaction": true,
+          "confidence": 0.5,
+          "applied": false,
+          "inaction_reason": "decisione presa ma nessun filtro eseguibile in questa ondata: inazione registrata, famiglia neutra"
         },
         "grade": {
           "driver": "luma_p50",
@@ -356,7 +356,7 @@
           "inaction": true,
           "confidence": 0.5,
           "applied": false,
-          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+          "inaction_reason": "nessun volto nella finestra di render: inquadratura al centro, nessuna scelta."
         },
         "typography": {
           "driver": "ink_coverage_pct",
@@ -402,13 +402,13 @@
         {
           "axis": "palette",
           "driver": "hue_mass_top3",
-          "value": 0.19,
+          "value": "neutral",
           "threshold": {
             "p33": 0.1817,
             "p67": 0.5012
           },
           "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
-          "decision": "massa dominante 0.1900 -> famiglia dual."
+          "decision": "decisione presa ma nessun filtro eseguibile in questa ondata: inazione registrata, famiglia neutra"
         },
         {
           "axis": "grade",
@@ -450,7 +450,7 @@
           "value": null,
           "threshold": 0.05,
           "provenance": "declared:1/20_width",
-          "decision": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+          "decision": "nessun volto nella finestra di render: inquadratura al centro, nessuna scelta."
         },
         {
           "axis": "typography",
@@ -522,18 +522,17 @@
       ],
       "skeleton": "deferred",
       "distinct_surface": {
-        "ok": true,
+        "ok": false,
         "scope": "surface_only",
         "families": [
           "colour",
-          "rhythm",
-          "geometry"
+          "rhythm"
         ],
         "geometry_available": true
       },
       "docs_match": {
         "ok": false,
-        "doc_sha256": "1ea89aafe3645b3ef3adb56ccbaa2e309e6e188fd0d696dbe79baaf157c5a97d",
+        "doc_sha256": "8b2dd64748c6c0333e74ac0eca9832501c0d86dda41cbb14940ebfe9cadc37e1",
         "ledger_sha256": "c09856048b2efd67daf40022ba4e2a32265a10b9c9588ed038474645bde4ea04"
       },
       "cast_normalised": false,
@@ -554,7 +553,7 @@
           "note": "transient_ratio p33/p67 misurate su n=3 di 9 clip (solo clip con parole): campione piccolo, direzione asserita."
         },
         "palette": {
-          "family": "dual",
+          "family": "neutral",
           "colors": {
             "bg": "#1e222e",
             "accent": "#2454f2",
@@ -573,13 +572,13 @@
             "deco_correction": "passed"
           },
           "driver": "hue_mass_top3",
-          "value": 0.19,
+          "value": "neutral",
           "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
-          "inaction": false,
-          "inaction_reason": "massa dominante 0.1900 -> famiglia dual.",
-          "confidence": 0.0692,
-          "applied": true,
-          "note": "masses 0.1900/0.1011/0.1350"
+          "inaction": true,
+          "inaction_reason": "decisione presa ma nessun filtro eseguibile in questa ondata: inazione registrata, famiglia neutra",
+          "confidence": 0.5,
+          "applied": false,
+          "note": "masses 0.1900/0.1011/0.1350; famiglia originale dual"
         },
         "composition": {
           "name": "centre",
@@ -594,7 +593,7 @@
           "value": null,
           "provenance": "declared:1/20_width",
           "inaction": true,
-          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta.",
+          "inaction_reason": "nessun volto nella finestra di render: inquadratura al centro, nessuna scelta.",
           "confidence": 0.5,
           "applied": false
         }
@@ -603,12 +602,12 @@
   },
   "gate_results": {
     "distinct_surface": {
-      "ok": true,
+      "ok": false,
       "scope": "surface_only",
       "families": {
         "colour": true,
         "rhythm": true,
-        "geometry": true,
+        "geometry": false,
         "typography": false
       },
       "geometry_available": true,
@@ -639,12 +638,14 @@
       "path": "C:\\Users\\motus\\.config\\opencode\\skill\\video-editor\\tests\\_out\\visual_corpus\\real_interview_169\\render\\final_proxy.mp4",
       "frames": 150,
       "expected_frames": 150,
+      "crop_plan": null,
       "graph_sha256": "27261f0291f8d05f2b1d5466b33cb87d092d75a866a8e04c8bf189a89ab3739b"
     },
     "real_street_169": {
       "path": "C:\\Users\\motus\\.config\\opencode\\skill\\video-editor\\tests\\_out\\visual_corpus\\real_street_169\\render\\final_proxy.mp4",
       "frames": 149,
       "expected_frames": 150,
+      "crop_plan": null,
       "graph_sha256": "17c379f873299c1aaff1a182bcd2a67a363fff4f15b32c585b4c99916389233c"
     }
   }
