@@ -53,7 +53,19 @@ def _out(obj: Any) -> None:
 
 
 def _load_json(path: str | Path) -> Dict[str, Any]:
-    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    try:
+        raw = Path(path).read_bytes()
+        text = (
+            raw.decode("utf-16")
+            if raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+            else raw.decode("utf-8-sig")
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise VxError(f"{path}: unreadable JSON ({exc})") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise VxError(f"{path}: invalid JSON ({exc})") from exc
     if not isinstance(data, dict):
         raise VxError(f"{path}: expected a JSON object")
     return data
@@ -1096,7 +1108,11 @@ def cmd_qc(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _ingest(src: Path, args: argparse.Namespace) -> Dict[str, Any]:
+def _ingest(
+    src: Path,
+    args: argparse.Namespace,
+    brief_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Fase 1 + Fase 4: proxy, pre-analysis, findings. Never mutates the source."""
     from . import analyze, audio, faces
     from . import plan as plan_mod
@@ -1169,7 +1185,7 @@ def _ingest(src: Path, args: argparse.Namespace) -> Dict[str, Any]:
     )
     report_io.merge(rep, "findings", plan_mod.detect_findings(rep))
 
-    brief = _load_brief(args.brief)
+    brief = brief_override if brief_override is not None else _load_brief(args.brief)
     autonomous = bool(getattr(args, "autonomous", False))
     _log("[7/7] triage")
     request = plan_mod.needs_triage(brief, rep, autonomous=autonomous)
@@ -1251,12 +1267,37 @@ def cmd_run(args: argparse.Namespace) -> int:
     src = Path(args.input)
     answers = _load_json(args.answers) if args.answers else None
 
-    state = _ingest(src, args)
+    payload = None
+    brief_override: Optional[Dict[str, Any]] = None
+    if getattr(args, "payload", None):
+        payload = _load_json(args.payload)
+    elif getattr(args, "prompt", None):
+        from . import decide as decide_mod
+
+        try:
+            payload = decide_mod.parse_and_decide(args.prompt)
+        except decide_mod.AmbiguousContractError as exc:
+            _log(f"[run] prompt ambiguo in STRICT: {exc}")
+            return EXIT_NEEDS_INPUT
+    if payload is not None:
+        if not isinstance(payload, dict) or "scene" not in payload:
+            _log("[run] payload non valido: manca scene")
+            return EXIT_USAGE
+        brief_override = {
+            "format": payload["scene"]["aspect_ratio"],
+            "hook": "none",
+            "subtitles": "none",
+            "source": str(src),
+        }
+        args.no_speech = True
+        answers = {}
+
+    state = _ingest(src, args, brief_override=brief_override)
 
     rep = state["report"]
     work: Path = state["workdir"]
     media = state["probe"]
-    brief = _load_brief(args.brief)
+    brief = brief_override if brief_override is not None else _load_brief(args.brief)
     if answers is None and getattr(args, "autonomous", False):
         answers = {}
     if answers is None:
@@ -1290,7 +1331,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         state["transcript"] = transcript
 
     _log("[run] piano")
-    built = plan_mod.build_plan(rep, brief, answers or {})
+    if payload is not None:
+        from . import contract as contract_mod
+
+        built = contract_mod.payload_to_edit_plan(payload, state["probe"])
+        bridge = (built.brief or {}).get("bridge") or {}
+        _log(f"[bridge] eseguiti: {bridge.get('executed')}")
+        if bridge.get("unsupported"):
+            _log(f"[bridge] non eseguiti: {bridge.get('unsupported')}")
+    else:
+        built = plan_mod.build_plan(rep, brief, answers or {})
     declared = (built.brief or {}).get("autonomous_findings") or []
     if declared:
         rep.setdefault("findings", [])
@@ -1704,6 +1754,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("run", "pipeline completa: ingest->plan->subs->render->qc (Fase 7)")
     p.add_argument("--input", required=True)
     p.add_argument("--brief", default=None)
+    p.add_argument("--payload", default=None)
+    p.add_argument("--prompt", default=None)
     p.add_argument("--answers", default=None)
     p.add_argument("--workdir", default=None)
     p.add_argument("--width", type=int, default=640)
