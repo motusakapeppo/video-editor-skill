@@ -10,6 +10,7 @@ e ``punch`` su una clip del corpus e pretende che il numero di frame non cambi.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -26,10 +27,11 @@ from vx import (  # noqa: E402
     subs,
 )
 
-CORPUS = ROOT / "tests" / "stock_corpus"
+CORPUS = Path(os.environ.get("VX_CORPUS", str(ROOT / "tests" / "stock_corpus")))
 WORK = ROOT / "tests" / "_out"
 PASS = 0
 FAIL = 0
+SKIP = 0
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -37,6 +39,12 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     PASS += ok
     FAIL += not ok
     print(f"  [{'PASS' if ok else 'FAIL'}] {label:46} {detail}")
+
+
+def skip(label: str, reason: str) -> None:
+    global SKIP
+    SKIP += 1
+    print(f"  [SKIP] {label:46} {reason}")
 
 
 def run_effect(src: Path, fragment: str, out: Path) -> object:
@@ -76,7 +84,19 @@ def main() -> int:
     check("tre clip con parole", len(word_clips) == 3, str(len(word_clips)))
     for clip in word_clips:
         path = CORPUS / clip["path"]
+        if not path.is_file():
+            skip(
+                f"{clip['name']}: transient == stored",
+                f"corpus assente: {clip['path']}",
+            )
+            continue
         transcript = subs.transcribe(str(path))
+        if transcript.skipped_reason or not transcript.words:
+            skip(
+                f"{clip['name']}: transient == stored",
+                transcript.skipped_reason or "nessuna parola trascritta",
+            )
+            continue
         got = animplan.transient(path, transcript.words)
         stored = clip["transient_ratio"]
         check(
@@ -220,37 +240,40 @@ def main() -> int:
         check("Gate 2 accetta il grafo", False, str(exc.result.get("checks")))
 
     print("\nframe: i tre effetti preservano numero di frame e geometria")
-    WORK.mkdir(parents=True, exist_ok=True)
     src = CORPUS / "bright_45.mp4"
-    info = probe.probe(str(src))
-    shot = {
-        "duration": 0.25,
-        "width": info.width,
-        "height": info.height,
-        "fps": info.fps,
-    }
-    for name in ("fade", "wipe", "punch"):
-        fragment = animplan.chain_for_shot({"name": name, "count": 1}, shot)
-        out = WORK / f"animplan_{name}.mp4"
-        proc = run_effect(src, fragment, out)
-        check(f"{name}: ffmpeg rc=0", proc.rc == 0, proc.tail(2) if proc.rc else "")
-        if proc.rc != 0:
-            check(f"{name}: frame preservati", False, "ffmpeg fallito")
-            check(f"{name}: geometria preservata", False, "ffmpeg fallito")
-            continue
-        got = probe.probe(str(out), count_frames=True)
-        check(
-            f"{name}: frame preservati",
-            got.nb_frames == info.nb_frames,
-            f"{got.nb_frames} vs {info.nb_frames}",
-        )
-        check(
-            f"{name}: geometria preservata",
-            (got.width, got.height) == (info.width, info.height),
-            f"{got.width}x{got.height}",
-        )
+    if not src.is_file():
+        skip("tre effetti: frame e geometria", f"corpus assente: {src.name}")
+    else:
+        WORK.mkdir(parents=True, exist_ok=True)
+        info = probe.probe(str(src))
+        shot = {
+            "duration": 0.25,
+            "width": info.width,
+            "height": info.height,
+            "fps": info.fps,
+        }
+        for name in ("fade", "wipe", "punch"):
+            fragment = animplan.chain_for_shot({"name": name, "count": 1}, shot)
+            out = WORK / f"animplan_{name}.mp4"
+            proc = run_effect(src, fragment, out)
+            check(f"{name}: ffmpeg rc=0", proc.rc == 0, proc.tail(2) if proc.rc else "")
+            if proc.rc != 0:
+                check(f"{name}: frame preservati", False, "ffmpeg fallito")
+                check(f"{name}: geometria preservata", False, "ffmpeg fallito")
+                continue
+            got = probe.probe(str(out), count_frames=True)
+            check(
+                f"{name}: frame preservati",
+                got.nb_frames == info.nb_frames,
+                f"{got.nb_frames} vs {info.nb_frames}",
+            )
+            check(
+                f"{name}: geometria preservata",
+                (got.width, got.height) == (info.width, info.height),
+                f"{got.width}x{got.height}",
+            )
 
-    print(f"\n{PASS} PASS / {FAIL} FAIL")
+    print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP")
     return 0 if FAIL == 0 else 1
 
 
