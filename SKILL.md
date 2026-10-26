@@ -197,4 +197,4 @@ Si caricano su richiesta, non si incollano qui.
 - `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi
 - `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap
 - `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo
-- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione, identità del sorgente
+- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume

@@ -14,6 +14,11 @@ oppure restituisce il percorso originale se la clip è già conforme.
   in `bt2020*`, oppure 10-bit con transfer non BT.709.
 - **SAR**: `sample_aspect_ratio` diverso da 1:1.
 - **Rotazione**: `side_data_list.rotation` o tag `rotate`.
+- **Risoluzione**: area oltre `1920*1080*1.5` **e** scala utile `< 1`. La scala
+  utile è `max(1080/crop_w0, 1920/crop_h0)`, dove `crop_w0`/`crop_h0` sono il crop
+  9:16 della sorgente già corretta per rotazione e SAR. Sotto 1 la sorgente può
+  ancora alimentare un crop 1080×1920 senza upscale: si ridimensiona; a 1 o
+  sopra non si tocca, perché ridurre peggiorerebbe l'output.
 
 ## Staging
 
@@ -25,6 +30,15 @@ Solo se una delle condizioni è vera: `stage_00_ingest_<stem>.mp4`, scritto con
 - VFR: `fps=fps=<mediana dei delta>`.
 - Rotazione: ffmpeg autoruota in input; il file di stage non porta più la
   matrice di visualizzazione.
+- Risoluzione: `scale=<w>:<h>:flags=lanczos`, con dimensioni pari e aspect
+  conservato. Ordine: SAR, downscale, tonemap, fps, `format=yuv420p`. Con SAR e
+  downscale insieme si emette un solo `setsar=1` prima e uno dopo lo scale: il
+  filtro `scale` ricalcola il SAR per conservare il DAR, quindi senza il secondo
+  `setsar=1` il file di stage non sarebbe 1:1. Il target è calcolato sulle
+  dimensioni **display** (dopo rotazione e SAR): un 4K landscape diventa
+  3412×1920, un 4K verticale 1080×1920, un 8K landscape 3412×1920. Il tetto
+  1920×1080 cieco non è usato perché trasformerebbe il crop 9:16 di un 4K in un
+  upscale 1,78×, che il QC segnala come `upscale_ratio`.
 
 ## Integrazione
 
@@ -44,10 +58,20 @@ le evidenze sono sul timeline normalizzato, non su quello originale.
   modulo fallisce con `IngestError`; non copia l'HDR fingendo una conversione.
 - `zscale` e `tonemap` devono esistere nella build (`ff.require` lo impone).
 - La finestra VFR è di 10 s: un cambio di rate dopo la finestra non è rilevato.
-- 4K, clip da 10/30/60 minuti e CI multi-piattaforma sono Fase 2.2+, non qui.
+- Il pavimento 1080×1920 è calcolato sul crop 9:16. Un output 1:1 da una
+  sorgente verticale larga 1080 non può che upscalare: la sorgente non contiene
+  i pixel, e nessuna politica di downscale può inventarli.
+- Il file di stage è anche la sorgente del render, quindi il downscale riduce
+  anche i pixel disponibili al compositor. Per questo il target non scende mai
+  sotto il crop dichiarato.
 
 ## Test
 
 `tests/test_ingest.py`: unit VFR/HDR/SAR/rotazione, passthrough su CFR SDR,
 VFR reale, HDR reale con metadata, SAR reale, e `vx run` su VFR con QC pass e
 sha del sorgente intatto.
+
+`tests/test_ingest_downscale.py`: dieci casi di geometria (4K, 8K, verticale,
+4K ruotato, DCI, quadrato, 2.39:1, Full HD, SAR), ordine dei filtri, e staging
+reale con probe del file prodotto, SAR 1:1, rotazione azzerata e sha del
+sorgente invariato.
