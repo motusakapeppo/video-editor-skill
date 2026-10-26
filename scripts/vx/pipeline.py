@@ -223,10 +223,32 @@ def run(
     beats: Optional[Sequence[float]] = None,
     reference: Optional[str | Path] = None,
     lossless_gate: bool = True,
+    verdict: Any = None,
 ) -> Dict[str, Any]:
-    """Esegue il piano. Salta i passi che il piano non contiene."""
+    """Esegue il piano. Salta i passi che il piano non contiene.
+
+    REGOLA IMPRESSA (non aggirabile): senza un brief firmato dal direttore non si
+    renderizza. Se `verdict` manca, o non e' firmato, il rendering viene rifiutato
+    prima di toccare un solo frame. E' la correzione strutturale dell'errore in cui
+    sono incorso: avevo reso uno spot scrivendo stile e animazione a mano, saltando
+    la giuria, e presentando il risultato come lavoro della skill.
+    """
     if not p.ok:
         raise contract.QCFailure({"plan": p.to_dict()})
+
+    from . import board as board_mod  # noqa: PLC0415
+
+    if verdict is None:
+        raise contract.QCFailure({
+            "step": "jury",
+            "failures": [
+                "nessun brief della giuria: la skill non renderizza su decisioni scritte "
+                "a mano. Convoca i ruoli (board.convene) e fai firmare il direttore."
+            ],
+        })
+    brief = board_mod.merge(verdict)
+    if not brief:
+        raise contract.QCFailure({"step": "jury", "failures": ["brief vuoto"]})
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
     report: Dict[str, Any] = {"steps": [], "engine": p.engine}
@@ -281,6 +303,28 @@ def run(
         wrap_chars=p.text["wrap_chars"],
     )
     payload.beats = list(beats or [])
+    # lo stile viene dal brief firmato: font, corpo, inchiostro, animazione
+    def _rgb(v):
+        if isinstance(v, (list, tuple)) and len(v) >= 3:
+            return tuple(int(x) for x in v[:3])
+        s = str(v or "").lstrip("#")
+        return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4)) if len(s) == 6 else None
+
+    _fp = brief.get("font_path")
+    if not _fp and brief.get("font"):
+        from . import creative as creative_mod  # noqa: PLC0415
+        _fp = next((f["path"] for f in creative_mod.font_pool()
+                    if f["name"] == brief["font"]), None)
+    payload.style = {
+        "font_path": _fp or payload.font_path,
+        "font_px": int(brief.get("font_px") or payload.font_px),
+        "ink": _rgb(brief.get("ink")) or (255, 255, 255),
+        "accent": _rgb(brief.get("accent")),
+        "case": brief.get("case", "mixed"),
+        "fade_ms": int(brief.get("fade_ms", 0)),
+        "pop_ms": int(brief.get("pop_ms", pop_ms_default(payload))),
+        "animation": brief.get("animation") or {},
+    }
     payload.elements = []
     for ov in p.overlays:
         if "composite_graphics" in p.steps:
@@ -345,6 +389,10 @@ def run(
                 c for c in exc.result.get("checks", []) if c["status"] == "fail"
             ]
     return report
+
+
+def pop_ms_default(payload: Any) -> int:
+    return int(getattr(payload, "font_px", 24))
 
 
 def _font_path() -> str:

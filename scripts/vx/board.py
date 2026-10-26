@@ -163,11 +163,10 @@ def convene(proposals: Sequence[Proposal], material: Dict[str, Any]) -> Verdict:
     else:
         verdict.notes.append("nessun direttore: il brief resta senza firma")
 
-    missing = [
-        r
-        for r in ("tipografo", "colorista", "montatore")
-        if not any(o == r for o in owners.values())
-    ]
+    covered = set(owners.values())
+    if "animatore" in covered:
+        covered.add("montatore")   # l'animatore possiede anche i tempi
+    missing = [r for r in ("tipografo", "colorista", "montatore") if r not in covered]
     if missing:
         verdict.ok = False
         verdict.notes.append(f"domini scoperti: {missing}")
