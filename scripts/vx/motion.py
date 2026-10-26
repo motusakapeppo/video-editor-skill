@@ -487,11 +487,17 @@ def render_layer(
         else:
             word_text = word.text
         if word.beat and 0.0 <= (t - word.t_start) < BEAT_FLASH_MS / 1000.0:
-            accent = style.get("accent")
-            if isinstance(accent, (list, tuple)) and len(accent) >= 3:
-                colour = (int(accent[0]), int(accent[1]), int(accent[2]))
+            # palette a rotazione: una tinta per cue, se il brief la fornisce
+            pal = style.get("palette") or []
+            if pal:
+                pick = pal[cue_idx % len(pal)]
+                colour = (int(pick[0]), int(pick[1]), int(pick[2]))
             else:
-                colour = (255, 60, 60) if not light_bg else (170, 0, 0)
+                accent = style.get("accent")
+                if isinstance(accent, (list, tuple)) and len(accent) >= 3:
+                    colour = (int(accent[0]), int(accent[1]), int(accent[2]))
+                else:
+                    colour = (255, 60, 60) if not light_bg else (170, 0, 0)
         f = font
         if abs(scale - 1.0) > 1e-3:
             f = font.font_variant(size=max(8, int(round(payload.font_px * scale))))

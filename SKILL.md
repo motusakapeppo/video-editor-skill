@@ -243,9 +243,13 @@ bit-exact contro `vf_curves.c`) · `creative` (analisi materiale -> parametri) �
    media 0.245, p05 0.161, p95 0.447). Il colore dell'inchiostro va scelto sulla
    patch peggiore sotto i glifi, per ogni cue. **Questo errore ha gia' prodotto
    cinque decisioni sbagliate.**
-2. **peso del font** — `creative._measure_font` usa la larghezza della "I", che
-   premia i corsivi (ha scelto Kunstler Script). Va usata la copertura d'inchiostro
-   su una stringa (misurata: Showcard Gothic 0.681, Impact 0.655).
+2. **peso del font** — tre proxy sbagliati provati, tre fallimenti documentati:
+   la larghezza della "I" premia i corsivi (Kunstler Script); il filtro per nome
+   contiene "black" premia il gotico (ITC Blackadder, reso in un testo illeggibile);
+   il massimo stem premia i serif (Garamond). **L'unica misura che ha funzionato e'
+   la copertura d'inchiostro su una stringa** (Showcard Gothic 0.681, Impact 0.655,
+   Gill Sans Ultra Bold 0.654): va calcolata dentro `_measure_font`, non dedotta dal
+   nome ne' dal glifo "I".
 3. **effetti solo-Chromium** — `blur_in`, `glitch`, `mask_wipe`,
    `blend_difference`, `elastic_3d` sono dichiarati ma non eseguiti: serve lo
    strato CSS. `board.required_engine()` li instrada gia' al motore giusto.

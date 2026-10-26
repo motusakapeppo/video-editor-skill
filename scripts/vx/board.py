@@ -38,7 +38,7 @@ ROLES: Dict[str, Dict[str, Any]] = {
         "quale misura lo giustifica (avanzamento, spessore, densita' di testo).",
     },
     "colorista": {
-        "owns": ["ink", "accent", "grade"],
+        "owns": ["ink", "accent", "palette", "grade"],
         "must_cite": "luma p01/p50/p99 o saturazione misurate",
         "ask": "Definisci inchiostro, accento e curva di grade. Ogni scelta deve "
         "nascere da una misura di luma o saturazione del materiale.",
