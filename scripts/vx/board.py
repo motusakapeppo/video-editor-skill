@@ -25,6 +25,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .registry import ANIMATION_CAPABILITIES
+
 __all__ = ["ROLES", "Proposal", "Verdict", "convene", "validate", "merge",
            "open_domains", "CLOSED_BY_PRINCIPLE", "OPEN_BY_TASTE",
            "context_for", "verify_numbers", "METHODS",
@@ -382,32 +384,16 @@ def verify_numbers(proposal: "Proposal", material: Dict[str, Any]) -> List[str]:
 # vocabolario delle animazioni e motore che le sa eseguire
 # --------------------------------------------------------------------------- #
 
-# Ogni effetto dichiara il motore minimo che lo sa fare. Non e' una preferenza:
-# e' una capacita'. Se l'animatore chiede un effetto che Pillow non sa eseguire,
-# il motore sale a Chromium automaticamente.
-ANIMATION_CAPABILITIES: Dict[str, str] = {
-    "none": "pillow",
-    "fade": "pillow",
-    "pop": "pillow",
-    "slide_up": "pillow",
-    "slide_left": "pillow",
-    "slide_right": "pillow",
-    "typeon": "pillow",
-    "blur_in": "chromium",       # sfocatura animata del testo o dello sfondo
-    "glitch": "chromium",        # displacement / RGB split
-    "mask_wipe": "chromium",     # clip-path / gradient mask
-    "blend_difference": "chromium",  # mix-blend-mode contro il video vivo
-    "elastic_3d": "chromium",    # prospettiva / rotate3d con easing elastico
-}
-
-_ENGINE_RANK = {"pillow": 0, "chromium": 1}
+# Il vocabolario vive in vx.registry: qui si importa, non si riscrive. Un effetto
+# che non e' nel registry non esiste, e non puo' essere dichiarato.
+_ENGINE_RANK = {"ffmpeg": 0}
 
 
 def required_engine(animation: Optional[Dict[str, Any]]) -> str:
     """Il motore minimo che sa eseguire TUTTO cio' che l'animazione chiede."""
     if not animation:
-        return "pillow"
-    need = "pillow"
+        return "ffmpeg"
+    need = "ffmpeg"
     effects: List[str] = []
     for cue in animation.get("per_cue", []) or []:
         effects.append(str(cue.get("in", "none")))

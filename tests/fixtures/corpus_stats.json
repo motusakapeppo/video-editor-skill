@@ -1,0 +1,362 @@
+{
+  "schema": "vx.corpus_stats/1.0",
+  "corpus_hash": "704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+  "generated_by": "tests/measure_corpus.py",
+  "clips": [
+    {
+      "name": "bright_45",
+      "path": "bright_45.mp4",
+      "duration_s": 5.0,
+      "fps": 25.0,
+      "width": 1080,
+      "height": 1350,
+      "hue_mass_top3": [
+        {
+          "hue": 0,
+          "mass": 0.0
+        },
+        {
+          "hue": 0,
+          "mass": 0.0
+        },
+        {
+          "hue": 0,
+          "mass": 0.0
+        }
+      ],
+      "luma_p50": 0.5,
+      "contrast": 1.0,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": null,
+      "face_present": false,
+      "onsets_per_s": 5.7846,
+      "first_speech_onset_s": null,
+      "first3s_motion": 34.327,
+      "transient_ratio": null,
+      "transient_basis": "no_words",
+      "transient_provenance": "unmeasured:no_words",
+      "words": 0
+    },
+    {
+      "name": "dark_916",
+      "path": "dark_916.mp4",
+      "duration_s": 5.0,
+      "fps": 25.0,
+      "width": 1080,
+      "height": 1920,
+      "hue_mass_top3": [
+        {
+          "hue": 260,
+          "mass": 0.6456
+        },
+        {
+          "hue": 238,
+          "mass": 0.28
+        },
+        {
+          "hue": 282,
+          "mass": 0.0577
+        }
+      ],
+      "luma_p50": 0.0366,
+      "contrast": 0.0158,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": null,
+      "face_present": false,
+      "onsets_per_s": 5.7846,
+      "first_speech_onset_s": null,
+      "first3s_motion": 0.938,
+      "transient_ratio": null,
+      "transient_basis": "no_words",
+      "transient_provenance": "unmeasured:no_words",
+      "words": 0
+    },
+    {
+      "name": "landscape_169",
+      "path": "landscape_169.mp4",
+      "duration_s": 8.0,
+      "fps": 30.0,
+      "width": 1920,
+      "height": 1080,
+      "hue_mass_top3": [
+        {
+          "hue": 60,
+          "mass": 0.167
+        },
+        {
+          "hue": 0,
+          "mass": 0.1655
+        },
+        {
+          "hue": 180,
+          "mass": 0.1666
+        }
+      ],
+      "luma_p50": 0.5042,
+      "contrast": 0.7655,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": null,
+      "face_present": false,
+      "onsets_per_s": 5.625,
+      "first_speech_onset_s": null,
+      "first3s_motion": 1.887,
+      "transient_ratio": null,
+      "transient_basis": "no_words",
+      "transient_provenance": "unmeasured:no_words",
+      "words": 0
+    },
+    {
+      "name": "square_11",
+      "path": "square_11.mp4",
+      "duration_s": 7.0,
+      "fps": 24.0,
+      "width": 1080,
+      "height": 1080,
+      "hue_mass_top3": [
+        {
+          "hue": 180,
+          "mass": 0.1554
+        },
+        {
+          "hue": 300,
+          "mass": 0.1554
+        },
+        {
+          "hue": 240,
+          "mass": 0.1448
+        }
+      ],
+      "luma_p50": 0.3082,
+      "contrast": 1.0,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": null,
+      "face_present": false,
+      "onsets_per_s": 0.1425,
+      "first_speech_onset_s": null,
+      "first3s_motion": 0.0,
+      "transient_ratio": null,
+      "transient_basis": "no_words",
+      "transient_provenance": "unmeasured:no_words",
+      "words": 0
+    },
+    {
+      "name": "vertical_916",
+      "path": "vertical_916.mp4",
+      "duration_s": 6.0,
+      "fps": 25.0,
+      "width": 1080,
+      "height": 1920,
+      "hue_mass_top3": [
+        {
+          "hue": 0,
+          "mass": 0.2441
+        },
+        {
+          "hue": 180,
+          "mass": 0.2435
+        },
+        {
+          "hue": 120,
+          "mass": 0.1337
+        }
+      ],
+      "luma_p50": 0.502,
+      "contrast": 0.7655,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": null,
+      "face_present": false,
+      "onsets_per_s": 0.1662,
+      "first_speech_onset_s": null,
+      "first3s_motion": 7.529,
+      "transient_ratio": null,
+      "transient_basis": "no_words",
+      "transient_provenance": "unmeasured:no_words",
+      "words": 0
+    },
+    {
+      "name": "real_anthem_169",
+      "path": "real/anthem_169.webm",
+      "duration_s": 15.026,
+      "fps": 24.0,
+      "width": 1920,
+      "height": 1080,
+      "hue_mass_top3": [
+        {
+          "hue": 210,
+          "mass": 0.5706
+        },
+        {
+          "hue": 340,
+          "mass": 0.0919
+        },
+        {
+          "hue": 74,
+          "mass": 0.0491
+        }
+      ],
+      "luma_p50": 0.8677,
+      "contrast": 1.0,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": {
+        "x": -0.1068,
+        "y": 0.0
+      },
+      "face_present": true,
+      "onsets_per_s": 4.5277,
+      "first_speech_onset_s": 0.0,
+      "first3s_motion": 6.6373,
+      "transient_ratio": 7.6358,
+      "transient_basis": "words",
+      "transient_provenance": "measured:word_onsets",
+      "words": 33
+    },
+    {
+      "name": "real_interview_169",
+      "path": "real/interview_169.webm",
+      "duration_s": 60.026,
+      "fps": 29.97,
+      "width": 1920,
+      "height": 1080,
+      "hue_mass_top3": [
+        {
+          "hue": 212,
+          "mass": 0.5289
+        },
+        {
+          "hue": 12,
+          "mass": 0.1802
+        },
+        {
+          "hue": 38,
+          "mass": 0.1077
+        }
+      ],
+      "luma_p50": 0.2327,
+      "contrast": 0.9465,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": {
+        "x": -0.1064,
+        "y": 0.0
+      },
+      "face_present": true,
+      "onsets_per_s": 4.5168,
+      "first_speech_onset_s": 6.0,
+      "first3s_motion": 34.4243,
+      "transient_ratio": 3.6337,
+      "transient_basis": "words",
+      "transient_provenance": "measured:word_onsets",
+      "words": 115
+    },
+    {
+      "name": "real_street_169",
+      "path": "real/street_169.webm",
+      "duration_s": 58.78,
+      "fps": 29.97,
+      "width": 1280,
+      "height": 720,
+      "hue_mass_top3": [
+        {
+          "hue": 226,
+          "mass": 0.19
+        },
+        {
+          "hue": 252,
+          "mass": 0.1011
+        },
+        {
+          "hue": 36,
+          "mass": 0.135
+        }
+      ],
+      "luma_p50": 0.2614,
+      "contrast": 0.9536,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": {
+        "x": 0.2891,
+        "y": 0.0
+      },
+      "face_present": true,
+      "onsets_per_s": 0.2722,
+      "first_speech_onset_s": null,
+      "first3s_motion": 11.3453,
+      "transient_ratio": null,
+      "transient_basis": "no_words",
+      "transient_provenance": "unmeasured:no_words",
+      "words": 0
+    },
+    {
+      "name": "real_vertical_916",
+      "path": "real/vertical_916.webm",
+      "duration_s": 15.026,
+      "fps": 24.0,
+      "width": 1080,
+      "height": 1920,
+      "hue_mass_top3": [
+        {
+          "hue": 210,
+          "mass": 0.4856
+        },
+        {
+          "hue": 340,
+          "mass": 0.1228
+        },
+        {
+          "hue": 74,
+          "mass": 0.0553
+        }
+      ],
+      "luma_p50": 0.8868,
+      "contrast": 1.0,
+      "ink_coverage_pct": null,
+      "ink_coverage_note": "source clip: ink coverage is only meaningful on a rendered deliverable",
+      "subject_offset": null,
+      "face_present": false,
+      "onsets_per_s": 4.5277,
+      "first_speech_onset_s": 0.0,
+      "first3s_motion": 18.1303,
+      "transient_ratio": 3.1694,
+      "transient_basis": "words",
+      "transient_provenance": "measured:word_onsets",
+      "words": 33
+    }
+  ],
+  "drivers": {
+    "transient_ratio": {
+      "p33": 3.4758,
+      "p67": 4.9944,
+      "n": 3
+    },
+    "hue_mass_top3_mass": {
+      "p33": 0.1817,
+      "p67": 0.5012,
+      "n": 9
+    },
+    "luma_p50": {
+      "p33": 0.2914,
+      "p67": 0.5028,
+      "n": 9
+    },
+    "onsets_per_s": {
+      "p33": 2.9887,
+      "p67": 4.9227,
+      "n": 9
+    },
+    "first3s_motion": {
+      "p33": 4.9272,
+      "p67": 13.7879,
+      "n": 9
+    }
+  },
+  "notes": [
+    "ink_coverage_pct is null on source clips: it is only meaningful on a rendered deliverable.",
+    "transient_ratio basis: words; 3/9 clips yielded words."
+  ]
+}
