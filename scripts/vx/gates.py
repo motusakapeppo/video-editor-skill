@@ -226,6 +226,130 @@ def pre_render(
     return result
 
 
+def _media_duration(info: Any) -> Optional[float]:
+    """Duration from a probe dict (``format.duration``) or a flat media dict."""
+    if not isinstance(info, dict):
+        return None
+    fmt = info.get("format")
+    if isinstance(fmt, dict) and fmt.get("duration") is not None:
+        try:
+            return float(fmt["duration"])
+        except (TypeError, ValueError):
+            return None
+    for key in ("duration", "analysis_duration"):
+        if info.get(key) is not None:
+            try:
+                return float(info[key])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def validate_gate1_durations(
+    plan: Any,
+    media_info_map: Dict[str, Dict[str, Any]],
+    *,
+    fps: Optional[float] = None,
+) -> GateResult:
+    """Gate 1 for an EDL v2 plan: every clip inside its own source.
+
+    The single-source gate compares against one project duration. Here each
+    clip is checked against the duration of the source it actually cites, so a
+    valid ``src_out`` on A does not hide an overrun on B. Raises ``QCFailure``
+    with the offending ``clip_id`` and ``source_id`` in the check detail.
+    """
+    result = GateResult("gate1_multisource")
+    total = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+    if total <= 0:
+        result.checks.append(
+            Check(
+                "timeline_duration",
+                "fail",
+                total,
+                "> 0",
+                "EDL timeline has no positive duration",
+            )
+        )
+        raise contract.QCFailure(result.to_dict())
+
+    pairs: List[tuple] = []
+    for kind, tracks in (
+        ("video", getattr(plan, "video_tracks", ())),
+        ("audio", getattr(plan, "audio_tracks", ())),
+    ):
+        for track in tracks:
+            for clip in getattr(track, "clips", ()):
+                pairs.append((kind, clip))
+
+    for kind, clip in pairs:
+        base = f"{kind} clip {clip.clip_id}"
+        info = media_info_map.get(clip.source_id)
+        if info is None:
+            result.checks.append(
+                Check(
+                    "source_present",
+                    "fail",
+                    clip.source_id,
+                    "media_info_map",
+                    f"{base} cites {clip.source_id!r}, missing from media_info_map",
+                )
+            )
+            continue
+        max_duration = _media_duration(info)
+        if max_duration is None:
+            result.checks.append(
+                Check(
+                    "source_duration",
+                    "fail",
+                    clip.source_id,
+                    "> 0",
+                    f"{base}: no duration for source {clip.source_id!r}",
+                )
+            )
+            continue
+        inside_source = (
+            float(clip.src_in) >= -1e-6
+            and float(clip.src_out) <= max_duration + 1e-6
+            and float(clip.src_out) > float(clip.src_in)
+        )
+        result.checks.append(
+            Check(
+                "clip_inside_source",
+                "pass" if inside_source else "fail",
+                float(clip.src_out),
+                max_duration,
+                (
+                    f"{base} inside {clip.source_id} (0..{max_duration:.3f})"
+                    if inside_source
+                    else (
+                        f"{base} src_out={float(clip.src_out):.3f} exceeds "
+                        f"source {clip.source_id} duration {max_duration:.3f}"
+                    )
+                ),
+            )
+        )
+        inside_timeline = (
+            float(clip.dst_in) >= -1e-6 and float(clip.dst_out) <= total + 1e-6
+        )
+        result.checks.append(
+            Check(
+                "clip_inside_timeline",
+                "pass" if inside_timeline else "fail",
+                float(clip.dst_out),
+                total,
+                (
+                    f"{base} inside 0..{total:.3f}"
+                    if inside_timeline
+                    else f"{base} dst_out={float(clip.dst_out):.3f} exceeds timeline {total:.3f}"
+                ),
+            )
+        )
+
+    if not result.ok:
+        raise contract.QCFailure(result.to_dict())
+    return result
+
+
 # --------------------------------------------------------------------------- #
 # Gate 2 — un solo passaggio per picture e sound
 # --------------------------------------------------------------------------- #

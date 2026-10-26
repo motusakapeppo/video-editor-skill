@@ -879,6 +879,199 @@ def verify_treatments(
             )
 
 
+def edl_input_map(staged_sources: Mapping[str, str]) -> Dict[str, int]:
+    return {source_id: index for index, source_id in enumerate(staged_sources)}
+
+
+def _edl_clips(plan: Any, *, layers: Optional[set] = None) -> List[Any]:
+    clips = []
+    for track in getattr(plan, "video_tracks", ()):
+        for clip in getattr(track, "clips", ()):
+            if layers is None or clip.layer in layers:
+                clips.append(clip)
+    return sorted(
+        clips, key=lambda clip: (float(clip.dst_in), int(clip.layer), clip.clip_id)
+    )
+
+
+def _edl_audio_clips(plan: Any) -> List[Any]:
+    clips = []
+    for track in getattr(plan, "audio_tracks", ()):
+        clips.extend(getattr(track, "clips", ()))
+    return sorted(clips, key=lambda clip: float(clip.dst_in))
+
+
+def _edl_normalise(clip: Any, index: int, width: int, height: int) -> str:
+    return (
+        f"[{index}:v]trim=start={float(clip.src_in):.6f}:"
+        f"end={float(clip.src_out):.6f},setpts=PTS-STARTPTS,"
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p"
+    )
+
+
+def build_edl_filtergraph(
+    plan: Any,
+    source_to_index: Mapping[str, int],
+    *,
+    has_audio: Optional[bool] = None,
+) -> str:
+    """A-Roll and its dialogue are concatenated together; B-roll is overlaid at dst_in.
+
+    Pad indices come from ``source_to_index``, never from a hardcoded ``[0:v]``.
+    """
+    width, height = (int(value) for value in plan.resolution)
+    video_clips = _edl_clips(plan, layers={0})
+    audio_clips = _edl_audio_clips(plan)
+    audio = bool(audio_clips) if has_audio is None else bool(has_audio)
+    if not video_clips:
+        raise RenderFailure("EDL has no layer-0 video clips")
+
+    needed = {clip.source_id for clip in video_clips}
+    needed |= {clip.source_id for clip in audio_clips}
+    missing = sorted(needed - set(source_to_index))
+    if missing:
+        raise RenderFailure("staged sources missing: " + ", ".join(missing))
+
+    if audio:
+        if len(audio_clips) != len(video_clips):
+            raise RenderFailure(
+                "EDL audio must mirror the A-Roll clips for the combined concat"
+            )
+        for video_clip, audio_clip in zip(video_clips, audio_clips):
+            if (
+                abs(float(video_clip.dst_in) - float(audio_clip.dst_in)) > 1e-6
+                or abs(float(video_clip.dst_out) - float(audio_clip.dst_out)) > 1e-6
+            ):
+                raise RenderFailure(
+                    "EDL audio must mirror the A-Roll timing for the combined concat"
+                )
+
+    parts: List[str] = []
+    for index, clip in enumerate(video_clips):
+        index_in = source_to_index[clip.source_id]
+        parts.append(_edl_normalise(clip, index_in, width, height) + f"[v{index}]")
+        if audio:
+            audio_clip = audio_clips[index]
+            audio_index = source_to_index[audio_clip.source_id]
+            parts.append(
+                f"[{audio_index}:a]atrim=start={float(audio_clip.src_in):.6f}:"
+                f"end={float(audio_clip.src_out):.6f},"
+                f"asetpts=PTS-STARTPTS[a{index}]"
+            )
+
+    if len(video_clips) == 1:
+        base = "[v0]"
+        audio_out = "[a0]" if audio else ""
+    elif audio:
+        inputs = "".join(f"[v{i}][a{i}]" for i in range(len(video_clips)))
+        parts.append(f"{inputs}concat=n={len(video_clips)}:v=1:a=1[base][aout]")
+        base = "[base]"
+        audio_out = "[aout]"
+    else:
+        inputs = "".join(f"[v{i}]" for i in range(len(video_clips)))
+        parts.append(f"{inputs}concat=n={len(video_clips)}:v=1:a=0[base]")
+        base = "[base]"
+        audio_out = ""
+
+    overlay_clips = _edl_clips(plan, layers=set(range(1, 64)))
+    for index, clip in enumerate(overlay_clips):
+        index_in = source_to_index[clip.source_id]
+        duration = float(clip.dst_out) - float(clip.dst_in)
+        chain = _edl_normalise(clip, index_in, width, height)
+        if clip.transition_in is not None and clip.transition_in.duration_sec > 0:
+            fade_in = min(float(clip.transition_in.duration_sec), duration)
+            chain += f",fade=t=in:st=0:d={fade_in:.6f}"
+        if clip.transition_out is not None and clip.transition_out.duration_sec > 0:
+            fade_out = min(float(clip.transition_out.duration_sec), duration)
+            chain += (
+                f",fade=t=out:st={max(0.0, duration - fade_out):.6f}:d={fade_out:.6f}"
+            )
+        chain += f",setpts=PTS-STARTPTS+{float(clip.dst_in):.6f}/TB[ov{index}]"
+        parts.append(chain)
+        parts.append(
+            f"{base}[ov{index}]overlay=enable='between(t,"
+            f"{float(clip.dst_in):.6f},{float(clip.dst_out):.6f})':"
+            f"eof_action=pass:format=auto[base{index}]"
+        )
+        base = f"[base{index}]"
+
+    parts.append(f"{base}null[vout]")
+    if audio and audio_out != "[aout]":
+        parts.append(f"{audio_out}anull[aout]")
+    return ";".join(parts)
+
+
+def build_edl_command(
+    plan: Any,
+    staged_sources: Mapping[str, str],
+    output_path: str | Path,
+    *,
+    graph_path: str | Path,
+    has_audio: Optional[bool] = None,
+    crf: int = 17,
+    preset: str = "fast",
+) -> List[str]:
+    audio = (
+        bool(getattr(plan, "audio_tracks", ()))
+        if has_audio is None
+        else bool(has_audio)
+    )
+    args: List[str] = []
+    for path in staged_sources.values():
+        args += ["-i", str(path)]
+    args += ["-filter_complex_script", str(graph_path), "-map", "[vout]"]
+    if audio:
+        args += ["-map", "[aout]"]
+    args += [
+        "-c:v",
+        "libx264",
+        "-crf",
+        str(int(crf)),
+        "-preset",
+        str(preset),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+    if audio:
+        args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
+    args += ["-movflags", "+faststart", str(output_path)]
+    return args
+
+
+def render_edl(
+    plan: Any,
+    staged_sources: Mapping[str, str],
+    output_path: str | Path,
+    *,
+    workdir: str | Path,
+    has_audio: Optional[bool] = None,
+    crf: int = 17,
+    preset: str = "fast",
+) -> Path:
+    work = Path(workdir)
+    work.mkdir(parents=True, exist_ok=True)
+    mapping = edl_input_map(staged_sources)
+    graph = build_edl_filtergraph(plan, mapping, has_audio=has_audio)
+    script = write_script(graph, work / "edl_graph.txt")
+    args = build_edl_command(
+        plan,
+        staged_sources,
+        output_path,
+        graph_path=script,
+        has_audio=has_audio,
+        crf=crf,
+        preset=preset,
+    )
+    proc = ff.run_ff(args)
+    if not proc.ok:
+        raise RenderFailure(f"EDL render failed: {proc.tail(15)}")
+    out = Path(output_path)
+    if not out.is_file() or out.stat().st_size == 0:
+        raise RenderFailure("EDL render produced no file")
+    return out
+
+
 def render(
     plan: EditPlan,
     media: dict,
