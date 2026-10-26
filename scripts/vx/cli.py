@@ -1755,7 +1755,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_edl(args: argparse.Namespace) -> int:
-    from . import gates, ingest, render
+    from . import gates, grammar, ingest, render
     from . import probe as probe_mod
     from .edl_plan import EDLPlan, EDLValidationError
 
@@ -1763,6 +1763,17 @@ def cmd_edl(args: argparse.Namespace) -> int:
         plan = EDLPlan.from_dict(_load_json(Path(args.plan)))
     except EDLValidationError as exc:
         _out({"ok": False, "errors": exc.errors})
+        return 2
+
+    violations = grammar.validate_cinematic_rules(plan)
+    if violations:
+        _out(
+            {
+                "ok": False,
+                "errors": [item.details for item in violations],
+                "grammar": [item.to_dict() for item in violations],
+            }
+        )
         return 2
 
     if args.edl_cmd == "validate":

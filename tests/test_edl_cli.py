@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -197,6 +198,18 @@ def main() -> int:
         )
         check("sorgente mancante rc 2", missing.returncode == 2, missing.returncode)
         check("sorgente mancante nominata", "src_B" in missing.stdout, missing.stdout)
+
+        base = _plan(a, b)
+        no_broll = replace(base, video_tracks=(base.video_tracks[0],))
+        grammar_path = tmp / "grammar.json"
+        grammar_path.write_text(json.dumps(no_broll.to_dict()), encoding="utf-8")
+        grammar_run = _cli(["edl", "validate", "--plan", str(grammar_path), "--json"])
+        check("grammar rc 2", grammar_run.returncode == 2, grammar_run.returncode)
+        check(
+            "grammar nomina il jump cut",
+            "Jump cut" in grammar_run.stdout,
+            grammar_run.stdout[-200:],
+        )
 
         bad = tmp / "bad.json"
         bad.write_text(json.dumps(_plan(a, b, bad=True).to_dict()), encoding="utf-8")
