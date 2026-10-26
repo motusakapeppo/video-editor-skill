@@ -290,11 +290,12 @@ def run(
         report["graded"] = str(graded)
 
     lay = layout.build(p.canvas["width"], p.canvas["height"], overlay_assets or {})
+    _src_frames, _src_dur, _src_fps = motion.expected_frames(graded)
     payload = motion.build_payload(
         cues,
         width=p.canvas["width"],
         height=p.canvas["height"],
-        fps=25.0,
+        fps=_src_fps,
         aspect=p.canvas["aspect_ratio"],
         font_path=_font_path(),
         margin_lr=p.text["margin_lr"],
@@ -358,7 +359,7 @@ def run(
     _frames, _dur, _fps = motion.expected_frames(graded)
     res = gates.post_render(
         contract.EditPlan(),
-        {"fps": 25.0, "duration": 200.0},
+        {"fps": _src_fps, "duration": 200.0},
         Path(out),
         workdir=work,
         planned_total=_dur,
@@ -396,11 +397,16 @@ def pop_ms_default(payload: Any) -> int:
 
 
 def _font_path() -> str:
-    candidates = [
-        Path(r"C:\Users\motus\AppData\Local\Microsoft\Windows\Fonts\Antonio-Bold.ttf"),
-        Path(r"C:\Windows\Fonts\ariblk.ttf"),
-    ]
-    for c in candidates:
-        if c.is_file():
-            return str(c)
-    raise contract.QCFailure({"step": "font", "failures": ["nessun font disponibile"]})
+    """Il miglior font misurabile disponibile: nessun nome scritto a mano."""
+    from . import creative as creative_mod  # noqa: PLC0415
+
+    pool = creative_mod.font_pool()
+    if not pool:
+        raise contract.QCFailure({"step": "font",
+                                  "failures": ["nessun font misurabile sul sistema"]})
+    heavy = [f for f in pool
+             if any(w in f["name"].lower() for w in
+                    ("black", "heavy", "ultra", "bold", "demi", "condensed"))
+             and 0.30 <= f["advance"] <= 0.62]
+    best = max(heavy or pool, key=lambda f: f["stem"])
+    return str(best["path"])

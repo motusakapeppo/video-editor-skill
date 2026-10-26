@@ -261,3 +261,18 @@ bit-exact contro `vf_curves.c`) Â· `creative` (analisi materiale -> parametri) Â
 
 Quando un agente sbaglia, si guarda **prima il contesto che ha ricevuto, poi il suo
 giudizio**. Se l'errore si ripete, il contesto si corregge nel codice, non nella chat.
+
+### Portabilita' (regola, non aspirazione)
+
+Nessun percorso, nome di font, fps o risoluzione di questa macchina o di questo
+progetto e' scritto nel codice:
+
+- cartelle font: `creative._font_dirs()` le scopre in base al sistema operativo
+  (Windows, macOS, Linux) piu' `assets/fonts` del progetto;
+- font di default: `pipeline._font_path()` sceglie dal pool misurato, filtrando i nomi
+  che dichiarano peso (black/heavy/ultra/bold/demi/condensed) ed escludendo i corsivi;
+- fps: `pipeline.run` legge quello del materiale con `motion.expected_frames`;
+- canvas: viene dal materiale quando la sorgente e' gia' nel formato di consegna,
+  altrimenti dalla piattaforma dedotta dalla richiesta.
+
+Se una costante di questo elenco ricompare nel codice, e' una regressione.

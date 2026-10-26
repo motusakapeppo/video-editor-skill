@@ -23,12 +23,31 @@ import numpy as np
 
 __all__ = ["Material", "Style", "analyse", "brief", "font_pool"]
 
-PROJECT_FONTS = Path(__file__).resolve().parents[2] / "assets" / "fonts"
-FONT_DIRS = [
-    Path(r"C:\Windows\Fonts"),
-    Path(r"C:\Users\motus\AppData\Local\Microsoft\Windows\Fonts"),
-    PROJECT_FONTS,
-]
+def _font_dirs() -> List[Path]:
+    """Cartelle font del sistema in cui si trova la macchina, piu' quelle del progetto.
+
+    Niente percorsi scritti a mano: la skill deve funzionare su un'altra macchina
+    senza modifiche. Ordine: progetto, utente, sistema.
+    """
+    import os  # noqa: PLC0415
+
+    dirs: List[Path] = [Path(__file__).resolve().parents[2] / "assets" / "fonts"]
+    home = Path.home()
+    dirs += [home / ".fonts", home / ".local" / "share" / "fonts"]
+    if os.name == "nt":
+        windir = os.environ.get("WINDIR") or r"C:\Windows"
+        dirs.append(Path(windir) / "Fonts")
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            dirs.append(Path(local) / "Microsoft" / "Windows" / "Fonts")
+    elif os.uname().sysname == "Darwin":
+        dirs += [Path("/System/Library/Fonts"), Path("/Library/Fonts")]
+    else:
+        dirs += [Path("/usr/share/fonts"), Path("/usr/local/share/fonts")]
+    return [d for d in dirs if d.is_dir()]
+
+
+FONT_DIRS = _font_dirs()
 
 # Nessun registro di quattro voci: si scandisce il sistema e si misura. Il font
 # viene scelto per PROPRIETA' misurate (larghezza d'avanzamento e spessore del
