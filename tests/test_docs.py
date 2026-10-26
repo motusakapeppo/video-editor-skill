@@ -126,6 +126,15 @@ def main() -> int:
         docs.match(promised_brief, promised) is False,
     )
 
+    for variant in ("Glitch", "glitch-effect", "GLITCH"):
+        shouted = text + f"\nusato anche {variant}\n"
+        shouted_brief = copy.deepcopy(b)
+        shouted_brief["docs_match"]["doc_sha256"] = prove._sha256_text(shouted)
+        check(
+            f"variante {variant} rifiutata",
+            docs.match(shouted_brief, shouted) is False,
+        )
+
     missing_sentence = copy.deepcopy(b)
     lines = [ln for ln in text.splitlines() if not ln.startswith("Riduzione di scope")]
     missing_text = "\n".join(lines)

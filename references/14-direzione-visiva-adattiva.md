@@ -127,8 +127,10 @@ L'hash del ledger deve comparire nel testo, l'hash del documento deve coincidere
 l'insieme degli effetti dichiarati deve essere uguale all'insieme degli effetti
 eseguiti, le tre frasi obbligatorie devono essere presenti alla lettera, e il
 testo non deve nominare effetti che non sono stati eseguiti: né un nome del
-vocabolario corrente né un nome ritirato (`registry.RETIRED_EFFECTS`). Un nome
-nella prosa è una promessa; se il video non la mantiene, il cancello fallisce.
+vocabolario corrente né un nome ritirato (`registry.RETIRED_EFFECTS`). La ricerca
+ignora maiuscole e minuscole e considera `glitch-effect` una menzione di `glitch`:
+un nome travestito resta un nome. Un nome nella prosa è una promessa; se il video
+non la mantiene, il cancello fallisce.
 
 **Cosa NON certifica:** che la prosa sia completa o utile. Certifica che non
 contraddice il ledger e che non promette effetti inesistenti.
@@ -143,7 +145,7 @@ contraddice il ledger e che non promette effetti inesistenti.
   `designated_by:"verdict"`;
 - baseline: 104 assert verdi (15 decisioni + 53 corpus + 36 colore); nuovi:
   gradeplan 35, cutplan 15, animplan 49, palette 32, screen 23, ledger 8,
-  distinct 13, docs 6, autonomia 7, visual corpus 16, graph identity 12;
+  distinct 13, docs 9, autonomia 7, visual corpus 16, graph identity 12;
 - palette: `bright_45` neutral `#2e2e2e/#f22424`, `dark_916` mono `#231e2e/#6924f2`,
   distanza di hue 100°, contrasti 5.03:1 e 15.50:1 per il testo;
 - transient: i tre clip con parole riproducono i valori memorizzati con

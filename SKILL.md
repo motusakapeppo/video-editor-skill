@@ -290,13 +290,13 @@ La tornata visiva (W0–W2.5) aggiunge un secondo strato, con un solo vocabolari
 - `tests/test_screen.py` — 23 assert su offset, centro e inazione
 - `tests/test_ledger.py` — 8 assert sul ledger (`applied:true` => filtro eseguito)
 - `tests/test_distinct.py` — 13 assert su `distinct_surface`, `hook_distinct`, `coverage_gate`
-- `tests/test_docs.py` — 6 assert su `docs_match`
+- `tests/test_docs.py` — 9 assert su `docs_match`, varianti comprese
 - `tests/test_autonomy.py` — 7 assert: la corsa notturna non chiede e registra i default
 - `tests/test_graph_identity.py` — 12 assert: `visual=None` resta identico byte per byte (hash dorato)
 - `tests/run_visual_corpus.py` — 16 assert: due progetti, due render, tutti i cancelli
 - `tests/stock_corpus/real/LICENSES.md` — provenienza del materiale reale
 
-Totale: 104 assert di base + 216 nuovi = 320.
+Totale: 104 assert di base + 219 nuovi = 323.
 
 ### Regola che vale sopra le altre
 

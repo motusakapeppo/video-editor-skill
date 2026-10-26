@@ -592,7 +592,7 @@ def _named_effects(text: str) -> set:
     return {
         name
         for name in names
-        if re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", text)
+        if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text, re.IGNORECASE)
     }
 
 
