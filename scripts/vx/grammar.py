@@ -14,10 +14,11 @@ Citations live in references/10-grammatica-del-montaggio.md.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 from . import contract
+from .edl_plan import EDLPlan
 
 
 @dataclass
@@ -391,3 +392,121 @@ def plan_multisource(
             else ""
         ),
     }
+
+
+class GrammarError(Exception):
+    """The EDL violates a cinematic rule without coverage."""
+
+    def __init__(self, violations: List["GrammarViolation"]) -> None:
+        self.violations = list(violations)
+        super().__init__(
+            "; ".join(item.details for item in self.violations) or "grammar violation"
+        )
+
+
+@dataclass(frozen=True)
+class GrammarViolation:
+    rule: str
+    cut_time_sec: float
+    clip_from_id: str
+    clip_to_id: str
+    source_from_id: str
+    source_to_id: str
+    details: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _has_broll_coverage(plan: EDLPlan, cut_time: float) -> bool:
+    for track in plan.video_tracks:
+        for clip in track.clips:
+            if clip.layer < 1:
+                continue
+            if (
+                float(clip.dst_in) <= cut_time + 0.05
+                and float(clip.dst_out) >= cut_time - 0.05
+            ):
+                return True
+    return False
+
+
+def validate_cinematic_rules(plan: EDLPlan) -> List[GrammarViolation]:
+    """30-degree jump-cut and 180-degree axis checks on the layer-0 sequence.
+
+    A cut between two different sources is a jump cut when neither the angle
+    (>=30 degrees) nor the focal length (>=20 mm) changes. Crossing the action
+    axis (angle sign flips with both angles non-neutral) is refused unless a
+    B-roll clip covers the cut. Same-source cuts are not angle checks: the
+    camera did not change.
+    """
+    violations: List[GrammarViolation] = []
+    main_clips = sorted(
+        (
+            clip
+            for track in plan.video_tracks
+            for clip in track.clips
+            if clip.layer == 0
+        ),
+        key=lambda clip: float(clip.dst_in),
+    )
+    for first, second in zip(main_clips, main_clips[1:]):
+        if first.source_id == second.source_id:
+            continue
+        source_a = plan.sources.get(first.source_id)
+        source_b = plan.sources.get(second.source_id)
+        if source_a is None or source_b is None:
+            continue
+        camera_a = source_a.camera
+        camera_b = source_b.camera
+        cut_time = float(second.dst_in)
+        delta_angle = abs(float(camera_a.angle_deg) - float(camera_b.angle_deg))
+        delta_focal = abs(
+            float(camera_a.focal_length_mm) - float(camera_b.focal_length_mm)
+        )
+        covered = _has_broll_coverage(plan, cut_time)
+
+        if delta_angle < 30.0 and delta_focal < 20.0 and not covered:
+            violations.append(
+                GrammarViolation(
+                    rule="30_DEGREE_RULE",
+                    cut_time_sec=cut_time,
+                    clip_from_id=first.clip_id,
+                    clip_to_id=second.clip_id,
+                    source_from_id=first.source_id,
+                    source_to_id=second.source_id,
+                    details=(
+                        f"Jump cut rilevato: d_angle={delta_angle:.1f} deg (<30), "
+                        f"d_focal={delta_focal:.1f}mm (<20) senza B-roll."
+                    ),
+                )
+            )
+
+        if (
+            float(camera_a.angle_deg) * float(camera_b.angle_deg) < 0
+            and abs(float(camera_a.angle_deg)) > 1.0
+            and abs(float(camera_b.angle_deg)) > 1.0
+            and not covered
+        ):
+            violations.append(
+                GrammarViolation(
+                    rule="180_DEGREE_RULE",
+                    cut_time_sec=cut_time,
+                    clip_from_id=first.clip_id,
+                    clip_to_id=second.clip_id,
+                    source_from_id=first.source_id,
+                    source_to_id=second.source_id,
+                    details=(
+                        f"Scavalcamento dell'asse di campo: da "
+                        f"{float(camera_a.angle_deg):.1f} deg a "
+                        f"{float(camera_b.angle_deg):.1f} deg senza B-roll."
+                    ),
+                )
+            )
+    return violations
+
+
+def assert_cinematic_rules(plan: EDLPlan) -> None:
+    violations = validate_cinematic_rules(plan)
+    if violations:
+        raise GrammarError(violations)
