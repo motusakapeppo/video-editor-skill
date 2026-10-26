@@ -143,16 +143,88 @@ def ffmpeg_filter(node: GradeNode) -> str:
     return ",".join(parts)
 
 
-def _spline(points):
-    """Spline cubica naturale sugli anchor, come il filtro curves di FFmpeg."""
-    from scipy.interpolate import CubicSpline  # noqa: PLC0415
+def _clip8(v: float) -> int:
+    """av_clip_uint8: cast troncante verso zero, poi clamp. Non e' un arrotondamento."""
+    i = int(v)
+    return 0 if i < 0 else (255 if i > 255 else i)
 
-    xs = np.array([p[0] for p in points], dtype=np.float64)
-    ys = np.array([p[1] for p in points], dtype=np.float64)
-    if len(xs) == 2:
-        return lambda v: np.interp(v, xs, ys)
-    cs = CubicSpline(xs, ys, bc_type="natural")
-    return lambda v: np.clip(cs(np.clip(v, xs[0], xs[-1])), 0.0, 1.0)
+
+def _ffmpeg_lut(points) -> "np.ndarray":
+    """Port 1:1 di `interpolate()` in libavfilter/vf_curves.c.
+
+    Tre dettagli decidono la fedelta', e nessuno dei tre e' la matematica della
+    spline in se':
+      * la variabile locale e' xx = (x - x_start) / scale, con scale = 255, NON
+        (x - x_start) / h: l'inizio dell'intervallo e' gia' quantizzato a intero;
+      * i valori sono troncati (av_clip_uint8 fa cast a int), non arrotondati;
+      * fuori dal primo e dall'ultimo punto la LUT e' piatta sul valore del punto.
+    """
+    n = len(points)
+    lut = np.zeros(256, dtype=np.uint8)
+    scale = 255
+    if n == 0:
+        return np.arange(256, dtype=np.uint8)
+    if n == 1:
+        lut[:] = _clip8(points[0][1] * scale)
+        return lut
+
+    xs = [float(pt[0]) for pt in points]
+    ys = [float(pt[1]) for pt in points]
+    h = [xs[i + 1] - xs[i] for i in range(n - 1)]
+
+    r = [0.0] * n
+    for i in range(1, n - 1):
+        r[i] = 6.0 * ((ys[i + 1] - ys[i]) / h[i] - (ys[i] - ys[i - 1]) / h[i - 1])
+
+    bd = [0.0] * n
+    md = [0.0] * n
+    ad = [0.0] * n
+    md[0] = md[n - 1] = 1.0
+    for i in range(1, n - 1):
+        bd[i] = h[i - 1]
+        md[i] = 2.0 * (h[i - 1] + h[i])
+        ad[i] = h[i]
+
+    for i in range(1, n):
+        den = md[i] - bd[i] * ad[i - 1]
+        k = 1.0 / den if den else 1.0
+        ad[i] *= k
+        r[i] = (r[i] - bd[i] * r[i - 1]) * k
+    for i in range(n - 2, -1, -1):
+        r[i] = r[i] - ad[i] * r[i + 1]
+
+    first = int(xs[0] * scale)
+    if first > 0:
+        lut[:first] = _clip8(ys[0] * scale)
+
+    for i in range(n - 1):
+        yc, yn = ys[i], ys[i + 1]
+        a = yc
+        b = (yn - yc) / h[i] - h[i] * r[i] / 2.0 - h[i] * (r[i + 1] - r[i]) / 6.0
+        c = r[i] / 2.0
+        d = (r[i + 1] - r[i]) / (6.0 * h[i])
+        x0 = int(xs[i] * scale)
+        x1 = int(xs[i + 1] * scale)
+        for x in range(x0, x1 + 1):
+            xx = (x - x0) / scale
+            yy = a + b * xx + c * xx * xx + d * xx * xx * xx
+            lut[x] = _clip8(yy * scale)
+
+    last = int(xs[-1] * scale)
+    if last < scale:
+        lut[last:] = _clip8(ys[-1] * scale)
+    return lut
+
+
+def _curve_fn(points):
+    """Applica la LUT sull'indice a 8 bit, come fa il filtro frame per frame."""
+    lut = _ffmpeg_lut(points).astype(np.float32) / 255.0
+
+    def apply(v):
+        idx = np.clip(np.rint(v * 255.0), 0, 255).astype(np.intp)
+        return lut[idx]
+
+    return apply
 
 
 def apply_pillow(img: Image.Image, node: GradeNode) -> Image.Image:
@@ -163,7 +235,7 @@ def apply_pillow(img: Image.Image, node: GradeNode) -> Image.Image:
 
     if node.type == "curve":
         if node.master:
-            f = _spline(node.master)
+            f = _curve_fn(node.master)
             # curves=m agisce su OGNI canale, non sulla luma: f(R), f(G), f(B).
             rgb = np.stack([f(rgb[:, :, i]) for i in range(3)], axis=2)
         if node.desaturate:
@@ -174,7 +246,7 @@ def apply_pillow(img: Image.Image, node: GradeNode) -> Image.Image:
         for i, key in enumerate("rgb"):
             pts = node.channels.get(key)
             if pts:
-                rgb[:, :, i] = _spline(pts)(rgb[:, :, i])
+                rgb[:, :, i] = _curve_fn(pts)(rgb[:, :, i])
         if node.vignette:
             h, w = rgb.shape[:2]
             yy, xx = np.mgrid[0:h, 0:w]
