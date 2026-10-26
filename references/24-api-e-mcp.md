@@ -131,6 +131,10 @@ elemento `content`.
 | `-32601` | method not found |
 | `-32602` | invalid params o tool sconosciuto |
 | `-32002` | server non inizializzato |
+| `-32603` | errore interno del gestore: il server resta in ascolto |
+
+Una riga che supera il limite di annidamento del parser riceve `-32700` e il
+server continua a servire le righe successive.
 
 ### I quattro tool
 
@@ -142,8 +146,9 @@ elemento `content`.
 | `vx_auto` | `prompt`, `assets`, `out` | `workdir`, `fps`, `manifest`, `autonomous`, `crf`, `preset` | il report di `auto` |
 
 `vx_auto` è sincrono e può durare minuti: il timeout è del client. Per un
-client interattivo la CLI è preferibile. Scrive `plan.json`,
-`auto_report.json` e `<workdir>/out`.
+client interattivo la CLI è preferibile. Scrive `plan.json` e
+`auto_report.json` sotto `<workdir>`; il master va in `out` e i deliverable in
+`<workdir>/out`.
 
 ### Configurazione del client
 

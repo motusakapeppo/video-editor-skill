@@ -1890,7 +1890,7 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     """Run the stdio MCP server (debug convenience; no flags, the transport is the interface)."""
     from . import mcp_server
 
-    return mcp_server.main()
+    return mcp_server.main([])
 
 
 def _apply_settings(args: argparse.Namespace) -> None:

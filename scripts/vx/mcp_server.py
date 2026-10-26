@@ -22,6 +22,7 @@ INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 NOT_INITIALIZED = -32002
+INTERNAL_ERROR = -32603
 
 DOCTOR_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -315,7 +316,7 @@ def _handle(message: Any, session: Dict[str, bool]) -> Optional[Dict[str, Any]]:
 
     method = message["method"]
     if "id" not in message:
-        if method == "notifications/initialized":
+        if method == "notifications/initialized" and session["negotiated"]:
             session["initialized"] = True
         return None
 
@@ -326,6 +327,7 @@ def _handle(message: Any, session: Dict[str, bool]) -> Optional[Dict[str, Any]]:
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
 
     if method == "initialize":
+        session["negotiated"] = True
         return {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -360,25 +362,43 @@ def _handle(message: Any, session: Dict[str, bool]) -> Optional[Dict[str, Any]]:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    del argv  # no flags: the transport is the interface
+    extra = list(sys.argv[1:] if argv is None else argv)
+    if extra:
+        print(
+            f"vx-mcp: no arguments accepted: {' '.join(extra)}",
+            file=sys.stderr,
+        )
+        return 2
     for stream in (sys.stdin, sys.stdout):
         try:
             stream.reconfigure(encoding="utf-8", newline="\n")  # type: ignore[attr-defined]
         except Exception:  # noqa: BLE001 - captured or older streams
             pass
 
-    session = {"initialized": False}
+    session = {"negotiated": False, "initialized": False}
     for raw in sys.stdin:
         line = raw.strip()
         if not line:
             continue
         try:
             message = json.loads(line)
-        except json.JSONDecodeError as exc:
-            _log(f"parse error: {exc.msg}")
-            _write(_error(None, PARSE_ERROR, f"Parse error: {exc.msg}"))
+        except (json.JSONDecodeError, RecursionError) as exc:
+            reason = getattr(exc, "msg", "nesting too deep")
+            _log(f"parse error: {reason}")
+            _write(_error(None, PARSE_ERROR, f"Parse error: {reason}"))
             continue
-        response = _handle(message, session)
+        try:
+            response = _handle(message, session)
+        except Exception as exc:  # noqa: BLE001 - one request must not stop the loop
+            _log(f"internal error: {type(exc).__name__}: {exc}")
+            _write(
+                _error(
+                    _request_id(message),
+                    INTERNAL_ERROR,
+                    f"Internal error: {type(exc).__name__}",
+                )
+            )
+            continue
         if response is not None:
             _write(response)
     return 0

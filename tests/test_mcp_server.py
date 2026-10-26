@@ -423,6 +423,91 @@ def main() -> int:
         _result(cli_by_id.get(3)),
     )
 
+    deep = "[" * 20000 + "]" * 20000
+    resilience_payload = (
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":'
+        '{"name":"vx_edl_validate","arguments":{"plan":' + deep + "}}}\n"
+        '{"jsonrpc":"2.0","id":2,"method":"ping"}\n'
+    )
+    resilience = subprocess.run(
+        [sys.executable, "-m", "vx.mcp_server"],
+        cwd=str(ROOT),
+        env=cli_env,
+        input=resilience_payload,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+    )
+    resilience_responses = []
+    for line in resilience.stdout.splitlines():
+        if line.strip():
+            resilience_responses.append(json.loads(line))
+    check(
+        "JSON profondo: il server sopravvive",
+        resilience.returncode == 0 and len(resilience_responses) == 2,
+        (resilience.returncode, len(resilience_responses)),
+    )
+    check(
+        "JSON profondo: errore dichiarato",
+        len(resilience_responses) == 2
+        and resilience_responses[0].get("error", {}).get("code") == -32700,
+        resilience_responses[0].get("error") if resilience_responses else None,
+    )
+    check(
+        "JSON profondo: il ping successivo risponde",
+        any(
+            item.get("id") == 2 and item.get("result") == {}
+            for item in resilience_responses
+        ),
+        resilience_responses[-1] if resilience_responses else None,
+    )
+
+    ordering_payload = (
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}\n'
+        '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n'
+    )
+    ordering = subprocess.run(
+        [sys.executable, "-m", "vx.mcp_server"],
+        cwd=str(ROOT),
+        env=cli_env,
+        input=ordering_payload,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    ordering_responses = [
+        json.loads(line) for line in ordering.stdout.splitlines() if line.strip()
+    ]
+    check(
+        "notifica senza initialize non sblocca",
+        len(ordering_responses) == 1
+        and ordering_responses[0].get("error", {}).get("code") == -32002,
+        ordering_responses,
+    )
+
+    argv_proc = subprocess.run(
+        [sys.executable, "-m", "vx.mcp_server", "--help"],
+        cwd=str(ROOT),
+        env=cli_env,
+        input="",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    check(
+        "vx-mcp rifiuta argomenti",
+        argv_proc.returncode == 2 and argv_proc.stdout.strip() == "",
+        (argv_proc.returncode, argv_proc.stdout[:40]),
+    )
+    check(
+        "vx-mcp nomina gli argomenti su stderr",
+        "arguments" in argv_proc.stderr.lower(),
+        argv_proc.stderr.strip()[:60],
+    )
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 
