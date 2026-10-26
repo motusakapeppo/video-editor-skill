@@ -175,6 +175,32 @@ def main() -> int:
     check("build_edl_command senza -af", "-af" not in args)
     check("build_edl_command senza -c copy", "copy" not in args)
 
+    without_progress = render.build_edl_command(
+        plan, {"src_A": "a.mp4"}, "out.mp4", graph_path="g.txt", progress_file=None
+    )
+    with_progress = render.build_edl_command(
+        plan,
+        {"src_A": "a.mp4"},
+        "out.mp4",
+        graph_path="g.txt",
+        progress_file="progress.txt",
+    )
+    check(
+        "progress_file=None: argv identico al precedente",
+        without_progress == expected,
+        without_progress,
+    )
+    check(
+        "progress_file: differisce solo per -progress <path>",
+        with_progress == expected[:-1] + ["-progress", "progress.txt", expected[-1]],
+        with_progress,
+    )
+    check(
+        "progress_file: coppia subito prima dell'output",
+        with_progress[-3:] == ["-progress", "progress.txt", "out.mp4"],
+        with_progress[-3:],
+    )
+
     original = _install_fakes()
     try:
         with tempfile.TemporaryDirectory(prefix="vx-edl-loud-") as raw:
@@ -242,6 +268,38 @@ def main() -> int:
             check("seconda passata: -map [aout]", "[aout]" in second)
             check("seconda passata: -c:v copy", "-c:v copy" in joined, joined[-80:])
             check("seconda passata: nessun -af", "-af" not in second)
+
+        with tempfile.TemporaryDirectory(prefix="vx-edl-loud-") as raw:
+            tmp = Path(raw)
+            CALLS.clear()
+            out = tmp / "progress.mp4"
+            progress_path = str(tmp / "progress.txt")
+            render.render_edl(
+                plan,
+                {"src_A": "a.mp4"},
+                out,
+                workdir=tmp / "work",
+                crf=30,
+                preset="ultrafast",
+                loudness=(-14.0, -1.0),
+                progress_file=progress_path,
+            )
+            first, second = CALLS[0], CALLS[1]
+            check(
+                "progress_file: solo la prima passata lo riceve",
+                "-progress" in first and "-progress" not in second,
+                (first[-4:], second[-4:]),
+            )
+            check(
+                "progress_file: coppia prima dell'output della prima passata",
+                first[-3:]
+                == [
+                    "-progress",
+                    progress_path,
+                    str(tmp / "work" / "final_pre_loudness.mp4"),
+                ],
+                first[-3:],
+            )
     finally:
         _restore(original)
 

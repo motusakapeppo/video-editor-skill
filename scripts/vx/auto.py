@@ -24,7 +24,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from . import (
     asset_triage,
@@ -49,6 +49,21 @@ TARGET_TP = -1.0
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
+
+
+def _notify(
+    progress: Optional[Callable[[float, str], None]],
+    percent: float,
+    stage: str,
+) -> None:
+    """Call the observer, swallowing anything it raises: a broken observer must
+    never break a render."""
+    if progress is None:
+        return
+    try:
+        progress(percent, stage)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _sha256(path: Path) -> str:
@@ -267,7 +282,13 @@ def _assert_sources_unchanged(
         )
 
 
-def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
+def _run_locked(
+    args: Any,
+    workdir: Path,
+    *,
+    progress: Optional[Callable[[float, str], None]] = None,
+    progress_file: Optional[str] = None,
+) -> Dict[str, Any]:
     assets = _discover(args)
     assets_by_id = {asset.asset_id: asset for asset in assets}
     source_sha = _source_hashes(assets)
@@ -286,6 +307,7 @@ def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
         raise contract.VxError("payload senza asset_triage: triage non eseguito")
     selected = list(block.get("selected_assets") or [])
     rejected = list(block.get("rejected_assets") or [])
+    _notify(progress, 5.0, "triage")
 
     fps = _fps(args, selected, assets_by_id)
     timeline_est = _timeline_est(selected, assets_by_id, rejected)
@@ -302,6 +324,7 @@ def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
     _log(f"[auto] staging {len(sources_map)} sorgenti a {fps:g} fps")
     staged = _stage(sources_map, specs, workdir / "stage_00")
     source_refs, media_info_map = _source_refs(staged)
+    _notify(progress, 20.0, "ingest")
 
     plan = contract.payload_to_edl_plan(payload, source_refs, media_info_map, fps=fps)
     errors = plan.validate()
@@ -329,6 +352,7 @@ def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
         asset_id: str(_staged_path(result)) for asset_id, result in staged.items()
     }
     _log(f"[auto] render {plan.duration_sec:.3f}s -> {out}")
+    _notify(progress, 25.0, "render")
     render.render_edl(
         plan,
         staged_paths,
@@ -339,11 +363,15 @@ def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
         preset=str(
             getattr(args, "preset", None) or settings.get("render.preset", "medium")
         ),
+        progress_file=progress_file,
     )
+    _notify(progress, 92.0, "render_done")
 
     qc_result = qc.audit_master(out, target_lufs=TARGET_LUFS, target_tp=TARGET_TP)
+    _notify(progress, 96.0, "qc")
 
     produced = deliverables.produce(plan, out, workdir / "out", workdir=workdir)
+    _notify(progress, 100.0, "deliverables")
 
     _assert_sources_unchanged(assets, source_sha)
 
@@ -394,7 +422,12 @@ def _run_locked(args: Any, workdir: Path) -> Dict[str, Any]:
     return report
 
 
-def run(args: Any) -> Dict[str, Any]:
+def run(
+    args: Any,
+    *,
+    progress: Optional[Callable[[float, str], None]] = None,
+    progress_file: Optional[str] = None,
+) -> Dict[str, Any]:
     """Execute the whole pipeline under the workdir lock and return the report."""
     out = Path(args.out)
     assets_dir = Path(args.assets)
@@ -416,6 +449,8 @@ def run(args: Any) -> Dict[str, Any]:
         heartbeat_seconds=float(settings.get("lock.heartbeat_seconds", 30.0)),
     )
     try:
-        return _run_locked(args, workdir)
+        return _run_locked(
+            args, workdir, progress=progress, progress_file=progress_file
+        )
     finally:
         lock.release(beat)

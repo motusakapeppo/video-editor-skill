@@ -21,7 +21,12 @@ class AutoRequest:
     preset: Optional[str] = None
 
 
-def run_auto(request: AutoRequest) -> Dict[str, Any]:
+def run_auto(
+    request: AutoRequest,
+    *,
+    progress: Optional[Any] = None,
+    progress_file: Optional[str] = None,
+) -> Dict[str, Any]:
     """Run the whole pipeline from a typed request and return its report."""
     from types import SimpleNamespace
 
@@ -38,7 +43,7 @@ def run_auto(request: AutoRequest) -> Dict[str, Any]:
         crf=request.crf,
         preset=request.preset,
     )
-    return auto.run(namespace)
+    return auto.run(namespace, progress=progress, progress_file=progress_file)
 
 
 def triage(

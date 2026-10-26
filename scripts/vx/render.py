@@ -1119,6 +1119,7 @@ def build_edl_command(
     has_audio: Optional[bool] = None,
     crf: int = 17,
     preset: str = "fast",
+    progress_file: Optional[str] = None,
 ) -> List[str]:
     audio = (
         bool(getattr(plan, "audio_tracks", ()))
@@ -1143,7 +1144,11 @@ def build_edl_command(
     ]
     if audio:
         args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
-    args += ["-movflags", "+faststart", str(output_path)]
+    args += ["-movflags", "+faststart"]
+    if progress_file is not None:
+        # ``-progress`` is a global option: it must precede the output path.
+        args += ["-progress", str(progress_file)]
+    args.append(str(output_path))
     return args
 
 
@@ -1157,7 +1162,8 @@ def render_edl(
     crf: int = 17,
     preset: str = "fast",
     loudness: Optional[Tuple[float, float]] = None,
-) -> Path:
+    progress_file: Optional[str] = None,
+) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
     audio = (
@@ -1181,6 +1187,7 @@ def render_edl(
             has_audio=has_audio,
             crf=crf,
             preset=preset,
+            progress_file=progress_file,
         )
         proc = ff.run_ff(args)
         if not proc.ok:
@@ -1198,6 +1205,7 @@ def render_edl(
         has_audio=has_audio,
         crf=crf,
         preset=preset,
+        progress_file=progress_file,
     )
     proc = ff.run_ff(args)
     if not proc.ok:

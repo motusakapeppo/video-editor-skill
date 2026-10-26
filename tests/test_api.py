@@ -89,9 +89,13 @@ def case_run_auto_forwarding() -> None:
     sentinel = {"ok": True}
     original = auto.run
 
-    def recorder(namespace):
+    def recorder(namespace, **kwargs):
         captured["namespace"] = namespace
+        captured["kwargs"] = kwargs
         return sentinel
+
+    def observer(percent, stage):
+        return None
 
     auto.run = recorder
     try:
@@ -106,7 +110,7 @@ def case_run_auto_forwarding() -> None:
             crf=20,
             preset="slow",
         )
-        result = api.run_auto(request)
+        result = api.run_auto(request, progress=observer, progress_file="progress.txt")
     finally:
         auto.run = original
 
@@ -134,11 +138,36 @@ def case_run_auto_forwarding() -> None:
         actual,
     )
     check("run_auto ritorna l'oggetto del recorder", result is sentinel, result)
+    check(
+        "run_auto inoltra progress e progress_file",
+        captured.get("kwargs")
+        == {"progress": observer, "progress_file": "progress.txt"},
+        captured.get("kwargs"),
+    )
+
+
+def case_auto_progress_helper() -> None:
+    seen = []
+    auto._notify(lambda percent, stage: seen.append((percent, stage)), 25.0, "render")
+    check("_notify chiama l'observer", seen == [(25.0, "render")], seen)
+
+    def boom(percent, stage):
+        raise RuntimeError("observer rotto")
+
+    try:
+        auto._notify(boom, 25.0, "render")
+    except Exception as exc:  # noqa: BLE001
+        check("_notify ingoia l'eccezione", False, type(exc).__name__)
+    else:
+        check("_notify ingoia l'eccezione", True)
+
+    auto._notify(None, 25.0, "render")
+    check("_notify senza observer e' un no-op", True)
 
 
 def case_run_auto_silent() -> None:
     original = auto.run
-    auto.run = lambda namespace: {"ok": True}
+    auto.run = lambda namespace, **kwargs: {"ok": True}
     buffer = io.StringIO()
     try:
         with contextlib.redirect_stdout(buffer):
@@ -275,6 +304,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx-api-") as raw:
         tmp = Path(raw)
         case_run_auto_forwarding()
+        case_auto_progress_helper()
         case_run_auto_silent()
         case_triage_empty(tmp)
         case_triage_validation(tmp)
