@@ -120,6 +120,7 @@ Exit code: `0` ok · `2` uso errato · `3` serve l'utente · `4` dipendenza manc
 | `qc` | gate binari sul file renderizzato |
 | `ingest` | protocollo completo di analisi + triage |
 | `run` | pipeline end-to-end |
+| `auto` | prompt + cartella asset → triage, piano, render, QC; scrive `plan.json`, `auto_report.json` e `out/`; exit 0/2/5/6 |
 | `deliverables` | matrice di consegna |
 
 ## Cosa misura
@@ -133,9 +134,9 @@ mouth-aspect-ratio), WPM. Le soglie vivono in un solo posto: `scripts/vx/contrac
 
 ```
 SKILL.md                  ruolo, protocollo, trigger di auto-invocazione
-references/01..22.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
+references/01..23.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
                           accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna, EDL,
-                          render multi-sorgente, regia semantica, grammatica e mixer audio
+                          render multi-sorgente, regia semantica, grammatica e mixer audio, triage e auto
 scripts/vx.py             launcher
 scripts/vx/
   contract.py             interfaccia congelata: schemi, soglie, validatori

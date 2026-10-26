@@ -99,6 +99,8 @@ deliverables in un colpo. Per una corsa manuale restano i comandi singoli:
 & $PY $VX deliverables --plan "<WORK_DIR>\clip-a1b2c3d4\plan.json"
 ```
 
+**Auto.** `vx auto --prompt ... --assets ... --out ...` esegue triage, piano, render e QC in un colpo; scrive `plan.json`, `auto_report.json` e `<workdir>/out`; exit 0/2/5/6.
+
 ### Exit codes
 
 | Codice | Significato | Azione |
@@ -174,8 +176,8 @@ Il renderer scrive `final_full.mp4` nella workdir che riceve e gli stadi in
 `stage/`; `run` gli passa `work/stage`, quindi il master è
 `work/stage/final_full.mp4`. I deliverable vanno in `work/out/` o nella cartella
 di uscita configurata. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`, con le
-sottocartelle `proxy`, `analysis`, `subs`, `stage`, `out`, `qc`; un lock di 30
-minuti impedisce due sessioni sulla stessa workdir.
+sottocartelle `proxy`, `analysis`, `subs`, `stage`, `out`, `qc`; un lock per
+liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
 
 ## Superficie opzionale, non normativa, non raggiungibile dalla CLI
 
@@ -194,7 +196,5 @@ Si caricano su richiesta, non si incollano qui.
 - `references/07-render.md` stadi, tagli, loudnorm; `references/08-qc-e-consegna.md` codici QC e deliverable
 - `references/09-accelerazione-e-vad.md` hardware e VAD; `references/10-grammatica-del-montaggio.md` grammatica e ritmo
 - `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
-- `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi
-- `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap
-- `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo
-- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.1, A/B-Roll, source_id; `references/20-render-multisorgente.md` render N sorgenti, Gate 1 per fonte, `vx edl`; `references/21-regia-semantica-keyword.md` B-roll dalle keyword; `references/22-grammatica-e-mixer-audio.md` 30°/180° e mixer A/B
+- `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap; `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo
+- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.1, A/B-Roll, source_id; `references/20-render-multisorgente.md` render N sorgenti, Gate 1 per fonte, `vx edl`; `references/21-regia-semantica-keyword.md` B-roll dalle keyword; `references/22-grammatica-e-mixer-audio.md` 30°/180° e mixer A/B; `references/23-triage-e-auto.md` triage, EDL 2.2, master e `vx auto`
