@@ -1754,6 +1754,92 @@ def cmd_run(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def cmd_edl(args: argparse.Namespace) -> int:
+    from . import gates, ingest, render
+    from . import probe as probe_mod
+    from .edl_plan import EDLPlan, EDLValidationError
+
+    try:
+        plan = EDLPlan.from_dict(_load_json(Path(args.plan)))
+    except EDLValidationError as exc:
+        _out({"ok": False, "errors": exc.errors})
+        return 2
+
+    if args.edl_cmd == "validate":
+        _out(
+            {
+                "ok": True,
+                "contract_version": plan.contract_version,
+                "sources": list(plan.sources),
+                "video_tracks": len(plan.video_tracks),
+                "audio_tracks": len(plan.audio_tracks),
+                "duration_sec": plan.duration_sec,
+                "resolution": list(plan.resolution),
+            }
+        )
+        return EXIT_OK
+
+    provided: Dict[str, str] = {}
+    for item in args.source or []:
+        source_id, separator, path = str(item).partition("=")
+        if not separator or not source_id or not path:
+            _out({"ok": False, "error": f"--source must be ID=PATH, got {item!r}"})
+            return 2
+        provided[source_id] = path
+    declared = set(plan.sources)
+    missing = sorted(declared - set(provided))
+    if missing:
+        _out({"ok": False, "error": "missing sources: " + ", ".join(missing)})
+        return 2
+    unknown = sorted(set(provided) - declared)
+    if unknown:
+        _out({"ok": False, "error": "unknown sources: " + ", ".join(unknown)})
+        return 2
+
+    work = Path(args.workdir) if args.workdir else Path.cwd() / "edl_work"
+    work.mkdir(parents=True, exist_ok=True)
+    staged = ingest.ingest_sources(provided, work / "stage_00")
+    staged_paths = {
+        source_id: result.staged_path for source_id, result in staged.items()
+    }
+    media_info = {
+        source_id: probe_mod.probe(path).to_dict()
+        for source_id, path in staged_paths.items()
+    }
+    gates.validate_gate1_durations(plan, media_info)
+    if plan.audio_tracks and not all(
+        info.get("has_audio") for info in media_info.values()
+    ):
+        _out(
+            {
+                "ok": False,
+                "error": "plan declares audio but a staged source has no audio",
+            }
+        )
+        return 2
+
+    output = Path(args.out)
+    render.render_edl(
+        plan,
+        staged_paths,
+        output,
+        workdir=work,
+        crf=args.crf,
+        preset=args.preset,
+    )
+    _out(
+        {
+            "ok": True,
+            "output": str(output),
+            "sources": staged_paths,
+            "stage": {
+                source_id: result.to_dict() for source_id, result in staged.items()
+            },
+        }
+    )
+    return EXIT_OK
+
+
 def _apply_settings(args: argparse.Namespace) -> None:
     """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
     from . import settings
@@ -1988,6 +2074,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None, help="percorso del brief JSON")
     p.add_argument("--project", default=None, help="project_id del brief")
     p.set_defaults(func=cmd_visual)
+
+    p = add("edl", "EDL v2.0 multi-sorgente: validate o render")
+    edl_sub = p.add_subparsers(dest="edl_cmd", required=True)
+    v = edl_sub.add_parser("validate", help="valida un EDL v2.0")
+    v.add_argument("--plan", required=True)
+    v.add_argument("--json", action="store_true")
+    v.set_defaults(func=cmd_edl)
+    r = edl_sub.add_parser("render", help="staging di N sorgenti, Gate 1 e render")
+    r.add_argument("--plan", required=True)
+    r.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        metavar="ID=PATH",
+        help="sorgente dichiarata dall'EDL, ripetibile",
+    )
+    r.add_argument("--workdir", default=None)
+    r.add_argument("--out", required=True)
+    r.add_argument("--crf", type=int, default=17)
+    r.add_argument("--preset", default="fast")
+    r.add_argument("--json", action="store_true")
+    r.set_defaults(func=cmd_edl)
 
     return ap
 
