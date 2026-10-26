@@ -14,6 +14,8 @@ Uso:
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from vx import contract, gates, layout, motion, edl as edl_mod, ffmpeg as ff  # noqa: E402
 
-FF = r"C:\Users\motus\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
+FF = shutil.which("ffmpeg") or os.environ.get("VX_FFMPEG")
 CORPUS = ROOT / "tests" / "stock_corpus"
 WORK = ROOT / "tests" / "_out"
 FPS = 25.0
@@ -40,12 +42,29 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 def probe(path: Path) -> dict:
     from vx import motion as motion_mod
+
     frames, dur, fps = motion_mod.expected_frames(path)
-    pr = ff.run_fp(["-v", "error", "-select_streams", "v:0",
-                    "-show_entries", "stream=width,height", "-of", "json", str(path)])
+    pr = ff.run_fp(
+        [
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "json",
+            str(path),
+        ]
+    )
     st = json.loads(pr.stdout)["streams"][0]
-    return {"w": int(st["width"]), "h": int(st["height"]),
-            "fps": fps, "dur": dur, "frames": frames}
+    return {
+        "w": int(st["width"]),
+        "h": int(st["height"]),
+        "fps": fps,
+        "dur": dur,
+        "frames": frames,
+    }
 
 
 def xfade_graph(
@@ -195,16 +214,24 @@ def test_geometry() -> None:
     misura l'errore del test, non del gate (successo davvero: il testo usciva dal
     canvas e la collisione cadeva fuori dalle due box).
     """
-    for w, h, aspect in ((1080, 1920, "9:16"), (1920, 1080, "16:9"),
-                         (1080, 1080, "1:1"), (1080, 1350, "4:5")):
-        lay = layout.Layout(canvas=layout.Rect(0, 0, w, h), graphic=None,
-                            padding=int(0.02 * h), margin_lr=int(0.055 * w))
+    for w, h, aspect in (
+        (1080, 1920, "9:16"),
+        (1920, 1080, "16:9"),
+        (1080, 1080, "1:1"),
+        (1080, 1350, "4:5"),
+    ):
+        lay = layout.Layout(
+            canvas=layout.Rect(0, 0, w, h),
+            graphic=None,
+            padding=int(0.02 * h),
+            margin_lr=int(0.055 * w),
+        )
 
         def box(fx, fy, fw, fh):
             return layout.Rect(int(fx * w), int(fy * h), int(fw * w), int(fh * h))
 
-        text = box(0.06, 0.15, 0.88, 0.30)          # 15%..45% di altezza
-        badge_ok = box(0.075, 0.86, 0.17, 0.042)    # 86%..90%: libero
+        text = box(0.06, 0.15, 0.88, 0.30)  # 15%..45% di altezza
+        badge_ok = box(0.075, 0.86, 0.17, 0.042)  # 86%..90%: libero
         badge_clash = box(0.10, 0.30, 0.17, 0.042)  # dentro la box del testo
 
         try:
@@ -223,6 +250,10 @@ def test_geometry() -> None:
 
 def main() -> int:
     global WORK
+    if not FF:
+        print("usage: python tests/run_corpus.py")
+        print("       ffmpeg not found: install it, add it to PATH, or set VX_FFMPEG")
+        return 2
     WORK.mkdir(parents=True, exist_ok=True)
     clips = [(p.stem, p) for p in sorted(CORPUS.glob("*.mp4"))]
     clips += [(f"real_{p.stem}", p) for p in sorted((CORPUS / "real").glob("*.webm"))]

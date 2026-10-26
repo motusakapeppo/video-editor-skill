@@ -1,7 +1,10 @@
 """vx.qc — binary quality gates over a rendered file.
 
 Every gate is a binary observable with a code. ``QCResult.pass_`` is True iff
-``failures == []``; each check dict is ``{"code","pass","value","limit","detail"}``.
+``failures == []``; each check dict is
+``{"code","pass","status","value","limit","detail"}``. ``status`` is ``"checked"``
+for a gate that actually ran and ``"skipped"`` for one whose treatment is absent
+from the plan — a skip is not a green check.
 
 Gate codes
 ----------
@@ -17,6 +20,7 @@ requires it to be observable.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -25,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import ffmpeg as ff
+from . import fonts as fonts_mod
 from .contract import (
     LOUDNESS_TARGETS,
     QCResult,
@@ -118,11 +123,18 @@ def _run_graph(
 
 
 def _check(
-    code: str, ok: bool, value: Any, limit: Any, detail: str = ""
+    code: str,
+    ok: bool,
+    value: Any,
+    limit: Any,
+    detail: str = "",
+    *,
+    status: str = "checked",
 ) -> Dict[str, Any]:
     return {
         "code": code,
         "pass": bool(ok),
+        "status": status,
         "value": value,
         "limit": limit,
         "detail": detail,
@@ -150,15 +162,119 @@ def _streams(path: Path) -> List[Dict[str, Any]]:
 
 
 def _loudness_target(plan: EditPlan) -> tuple[float, float]:
-    raw = (plan.output or {}).get("loudness") or (plan.render or {}).get("loudness")
-    if isinstance(raw, str) and raw in LOUDNESS_TARGETS:
-        return LOUDNESS_TARGETS[raw]
-    if isinstance(raw, dict):
-        return (
-            _num(raw.get("i", raw.get("target_i")), -14.0),
-            _num(raw.get("tp", raw.get("target_tp")), -1.0),
-        )
-    return LOUDNESS_TARGETS["social"]
+    """(I, TP) from the plan, read by the same function the renderer uses.
+
+    The import is lazy on purpose: ``render`` pulls in the whole ffmpeg stack,
+    and a module-level import here would close an import cycle. Delegating
+    instead of copying is the point — QC and the renderer cannot drift apart.
+    """
+    try:
+        from .render import loudness_target
+    except ImportError:
+        i, tp, _lra = _loudness_target_local(plan)
+        return i, tp
+    i, tp, _lra = loudness_target(_normalise_loudness_keys(plan))
+    return float(i), float(tp)
+
+
+def _normalise_loudness_keys(plan: EditPlan) -> EditPlan:
+    """Copy of ``plan`` with uppercase ``I``/``TP``/``LRA`` renamed to lowercase.
+
+    ``render.loudness_target`` reads lowercase keys out of the loudness dict,
+    while plan.py writes ``{"I","TP"}``. Handing it the raw plan would turn a
+    declared -23/-2 into the -14/-1 social default, so the case is normalised
+    before the shared reader sees it. The plan itself is never mutated.
+    """
+    output = dict(plan.output or {})
+    render_cfg = dict(plan.render or {})
+    changed = False
+    for holder in (output, render_cfg):
+        raw = holder.get("loudness")
+        if not isinstance(raw, dict):
+            continue
+        if not any(key in raw for key in ("I", "TP", "LRA")):
+            continue
+        renamed = dict(raw)
+        for upper, lower in (("I", "i"), ("TP", "tp"), ("LRA", "lra")):
+            if upper in renamed and lower not in renamed:
+                renamed[lower] = renamed.pop(upper)
+        holder["loudness"] = renamed
+        changed = True
+    if not changed:
+        return plan
+    patched = copy.copy(plan)
+    patched.output = output
+    patched.render = render_cfg
+    return patched
+
+
+def _first_num(source: Dict[str, Any], keys: Sequence[str]) -> Optional[float]:
+    for key in keys:
+        if key in source:
+            value = _num(source.get(key), None)
+            if value is not None:
+                return value
+    return None
+
+
+def _loudness_target_local(plan: EditPlan) -> tuple[float, float, float]:
+    """Fallback reader, used only when ``render.loudness_target`` is missing.
+
+    Same precedence as the renderer: profile string, then the lowercase dict
+    written by plan.py, then the uppercase loudnorm treatment params, then
+    ``output.loudness_target``, then the social profile. Uppercase ``I``/``TP``
+    are honoured, so a plan written by plan.py never silently lands on -14/-1.
+    """
+    output = plan.output or {}
+    raw = output.get("loudness") or (plan.render or {}).get("loudness")
+
+    i: Optional[float] = None
+    tp: Optional[float] = None
+    lra: Optional[float] = None
+
+    def absorb(source: Any) -> None:
+        nonlocal i, tp, lra
+        if isinstance(source, str):
+            if source in LOUDNESS_TARGETS:
+                profile_i, profile_tp = LOUDNESS_TARGETS[source]
+                i = float(profile_i) if i is None else i
+                tp = float(profile_tp) if tp is None else tp
+                lra = 11.0 if lra is None else lra
+            return
+        if not isinstance(source, dict):
+            return
+        if i is None:
+            i = _first_num(source, ("i", "I", "target_i"))
+        if tp is None:
+            tp = _first_num(source, ("tp", "TP", "target_tp"))
+        if lra is None:
+            lra = _first_num(source, ("lra", "LRA", "target_lra"))
+
+    absorb(raw)
+    for treatment in plan.treatments or []:
+        if not isinstance(treatment, dict):
+            continue
+        if treatment.get("name") == "loudnorm" and treatment.get("enabled"):
+            absorb(treatment.get("params"))
+            break
+    absorb(output.get("loudness_target"))
+
+    social_i, social_tp = LOUDNESS_TARGETS["social"]
+    return (
+        float(social_i) if i is None else float(i),
+        float(social_tp) if tp is None else float(tp),
+        11.0 if lra is None else float(lra),
+    )
+
+
+def _loudnorm_enabled(plan: EditPlan) -> bool:
+    """True when the plan actually asks the renderer to normalise loudness."""
+    for treatment in plan.treatments or []:
+        if not isinstance(treatment, dict):
+            continue
+        if treatment.get("name") == "loudnorm" and treatment.get("enabled"):
+            return True
+    return False
 
 
 def _ass_seconds(stamp: str) -> float:
@@ -203,7 +319,10 @@ def _ass_cues(path: Path) -> List[Dict[str, Any]]:
 def _font_fallbacks(path: Path, subs_path: Path) -> tuple[int, str]:
     """Burn one frame and count font substitutions in ffmpeg's log."""
     ff.require("subtitles")
-    graph = f"[0:v]subtitles={ass_filter_path(subs_path)}[vo]"
+    graph = (
+        f"[0:v]subtitles={ass_filter_path(subs_path)}"
+        f":fontsdir={fonts_mod.fontsdir_arg()}[vo]"
+    )
     proc = _run_graph(
         graph,
         [path],
@@ -383,8 +502,15 @@ def check_render(
     *,
     subs_path: str | None = None,
     source_fp: dict | None = None,
+    executed_target: dict | None = None,
 ) -> QCResult:
-    """Run every gate over ``out_path`` and return a ``QCResult``."""
+    """Run every gate over ``out_path`` and return a ``QCResult``.
+
+    ``executed_target`` is the ``target`` block returned by ``render.render``:
+    the I/TP/LRA values that actually went into the stage-04 filtergraph. QC
+    compares the measurement against that, never against a re-derivation from
+    the plan, so a declared profile and an executed profile cannot drift apart.
+    """
     target = Path(out_path)
     checks: List[Dict[str, Any]] = []
     metrics: Dict[str, Any] = {}
@@ -426,7 +552,8 @@ def check_render(
             f"{info.width}x{info.height} {info.video_codec}",
         )
     )
-    expect_audio = bool(media.get("has_audio", True))
+    audio_flag = media.get("has_audio")
+    expect_audio = True if audio_flag is None else bool(audio_flag)
     checks.append(
         _check(
             "has_audio",
@@ -481,43 +608,86 @@ def check_render(
     )
 
     # -- loudness ----------------------------------------------------------- #
-    target_i, target_tp = _loudness_target(plan)
+    gated = _loudnorm_enabled(plan)
+    metrics["loudness_gated"] = gated
+    executed = executed_target or {}
+    target_i = _num(executed.get("i"), None)
+    target_tp = _num(executed.get("tp"), None)
     loud = lufs_of(target) if info.has_audio else {}
     metrics["loudness"] = loud
-    if info.has_audio:
-        measured_i = _num(loud.get("input_i"), -99.0)
-        measured_tp = _num(loud.get("input_tp"), -99.0)
-        lufs_delta = abs(measured_i - target_i)
-        # True-peak limiting: landing quieter than target with TP at the ceiling is physics.
-        tp_limited = (
-            measured_i < target_i
-            and measured_tp <= target_tp + LIMITS["true_peak_margin"]
-            and lufs_delta <= 1.0
-        )
+    metrics["loudness_target"] = executed or None
+    if not gated:
+        skip = "SKIPPED: no loudnorm treatment (no finding)"
         checks.append(
             _check(
                 "lufs_delta",
-                lufs_delta <= LIMITS["lufs_delta"] or tp_limited,
-                round(lufs_delta, 3),
+                True,
+                None,
                 LIMITS["lufs_delta"],
-                f"measured={measured_i:.2f} target={target_i:.2f}"
-                + (" true-peak limited" if tp_limited else ""),
+                skip,
+                status="skipped",
             )
         )
         checks.append(
-            _check(
-                "true_peak",
-                measured_tp <= target_tp + LIMITS["true_peak_margin"],
-                round(measured_tp, 3),
-                round(target_tp + LIMITS["true_peak_margin"], 3),
-                f"target_tp={target_tp}",
-            )
+            _check("true_peak", True, None, target_tp, skip, status="skipped")
         )
+    elif target_i is None or target_tp is None:
+        missing = "the plan enabled loudnorm but the render reported no executed target"
+        checks.append(_check("loudness_target_recorded", False, None, True, missing))
+        checks.append(_check("lufs_delta", False, None, LIMITS["lufs_delta"], missing))
+        checks.append(_check("true_peak", False, None, None, missing))
     else:
         checks.append(
-            _check("lufs_delta", True, None, LIMITS["lufs_delta"], "no audio stream")
+            _check(
+                "loudness_target_recorded",
+                True,
+                executed,
+                True,
+                f"executed I={target_i} TP={target_tp}",
+            )
         )
-        checks.append(_check("true_peak", True, None, target_tp, "no audio stream"))
+        if not info.has_audio:
+            checks.append(
+                _check(
+                    "lufs_delta",
+                    False,
+                    None,
+                    LIMITS["lufs_delta"],
+                    "loudnorm requested but the output has no audio stream",
+                )
+            )
+            checks.append(
+                _check("true_peak", False, None, target_tp, "no audio stream")
+            )
+        else:
+            measured_i = _num(loud.get("input_i"), -99.0)
+            measured_tp = _num(loud.get("input_tp"), -99.0)
+            lufs_delta = abs(measured_i - target_i)
+            # True-peak limiting: landing quieter than target with TP at the ceiling is physics.
+            tp_limited = (
+                measured_i < target_i
+                and measured_tp <= target_tp + LIMITS["true_peak_margin"]
+                and lufs_delta <= 1.0
+            )
+            checks.append(
+                _check(
+                    "lufs_delta",
+                    lufs_delta <= LIMITS["lufs_delta"] or tp_limited,
+                    round(lufs_delta, 3),
+                    LIMITS["lufs_delta"],
+                    f"measured={measured_i:.2f} target={target_i:.2f}"
+                    + (" true-peak limited" if tp_limited else ""),
+                )
+            )
+            checks.append(
+                _check(
+                    "true_peak",
+                    measured_tp <= target_tp + LIMITS["true_peak_margin"],
+                    round(measured_tp, 3),
+                    round(target_tp + LIMITS["true_peak_margin"], 3),
+                    f"target_tp={target_tp}",
+                )
+            )
 
     # -- A/V start ---------------------------------------------------------- #
     streams = _streams(target)

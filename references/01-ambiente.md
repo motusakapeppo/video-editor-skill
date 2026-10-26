@@ -82,10 +82,10 @@ YuNet, quindi un semplice `import mediapipe` mentirebbe.
 
 ## GPU
 
-Il toolkit non usa la GPU, anche quando è presente. `vx.subs.transcribe` è
-fissato a `device="cpu"`, `compute_type="int8"`, e OpenCV lavora su CPU. È
-deliberato: la parità proxy/full e la riproducibilità contano più della
-velocità.
+La pipeline prova la GPU a ogni corsa. `vx.accel` verifica CUDA eseguendo una
+trascrizione reale con un timeout duro; se il test passa, Whisper usa
+`device="cuda"`, altrimenti ricade su CPU `int8`. OpenCV lavora su CPU. La GPU
+non è richiesta: è un'accelerazione verificata, non un'assunzione.
 
 ## Reinstallare il venv
 
@@ -144,7 +144,7 @@ I frame di anteprima sono uniformi, mai negli ultimi 0.2 s, con un frame a 1.0 s
 | `YuNet model missing` | asset cancellato | ripristina `assets\models\face_detection_yunet_2023mar.onnx` |
 | `faster-whisper unavailable` | pacchetto assente | `pip install faster-whisper` |
 | `workdir busy (lock age Ns)` | sessione precedente interrotta | cancella `<WORK_DIR>\<stem>-<sha8>\.lock` |
-| Font sostituito in silenzio | Arial Black assente | installa il font, poi `verify_fonts` |
+| Font sostituito | Antonio non caricato da `assets/fonts` | `run` solleva `QCFailure`; controlla `fontsdir` e `OFL.txt` |
 
 ## Note su PowerShell 5.1
 

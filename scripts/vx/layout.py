@@ -3,7 +3,7 @@
 Perche' esiste
 --------------
 Il master di Fase 3 aveva i sottotitoli ancorati a una `MarginV` fissa (150 px su
-1440) mentre la label "MOTUS" occupa la fascia 1236-1296. Risultato misurato sul
+1440) mentre la label del marchio occupa la fascia 1236-1296. Risultato misurato sul
 frame a 0:00: 56 px di sovrapposizione garantita, testo che scorreva sotto la
 wordmark. Nessuna costante scelta a mano puo' sopravvivere a un cambio di asset:
 appena la label si sposta di 20 px il numero diventa sbagliato in silenzio.

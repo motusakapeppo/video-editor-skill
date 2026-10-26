@@ -23,6 +23,7 @@ import numpy as np
 
 __all__ = ["Material", "Style", "analyse", "brief", "font_pool"]
 
+
 def _font_dirs() -> List[Path]:
     """Cartelle font del sistema in cui si trova la macchina, piu' quelle del progetto.
 
@@ -35,8 +36,9 @@ def _font_dirs() -> List[Path]:
     home = Path.home()
     dirs += [home / ".fonts", home / ".local" / "share" / "fonts"]
     if os.name == "nt":
-        windir = os.environ.get("WINDIR") or r"C:\Windows"
-        dirs.append(Path(windir) / "Fonts")
+        windir = os.environ.get("WINDIR")
+        if windir:
+            dirs.append(Path(windir) / "Fonts")
         local = os.environ.get("LOCALAPPDATA")
         if local:
             dirs.append(Path(local) / "Microsoft" / "Windows" / "Fonts")
@@ -241,7 +243,11 @@ def brief(m: Material, *, request: str = "", words: int = 0) -> Style:
     # qualunque valore e non schiaccia tutto a 1.0 (era il difetto: 0.20 e 0.30 di
     # moto finivano entrambi a energia 1.0, quindi lo stesso font per ogni video).
     motion_term = m.motion / (m.motion + 0.15) if m.motion else 0.0
-    onset_term = m.onsets_per_second / (m.onsets_per_second + 2.0) if m.onsets_per_second else 0.0
+    onset_term = (
+        m.onsets_per_second / (m.onsets_per_second + 2.0)
+        if m.onsets_per_second
+        else 0.0
+    )
     energy = 0.6 * motion_term + 0.4 * onset_term
     pool = font_pool()
     if not pool:
@@ -250,7 +256,7 @@ def brief(m: Material, *, request: str = "", words: int = 0) -> Style:
     # larghi e sottili a stretti e pesanti, e l'energia decide DOVE cadere. Il
     # nearest-point collassava sullo stesso font per materiali molto diversi,
     # perche' il centro della distribuzione e' affollato.
-    ranked = sorted(pool, key=lambda f: (f["advance"] + 0.6 * f["stem"]))
+    ranked = sorted(pool, key=lambda f: f["advance"] + 0.6 * f["stem"])
     pos = int(round((1.0 - energy) * (len(ranked) - 1)))
     pos = max(0, min(len(ranked) - 1, pos))
     font = ranked[pos]
@@ -266,14 +272,23 @@ def brief(m: Material, *, request: str = "", words: int = 0) -> Style:
     target_frac = 0.68 + 0.22 * energy
     try:
         from PIL import ImageFont  # noqa: PLC0415
+
         probe = ImageFont.truetype(font["path"], 100)
-        widest = max(probe.getlength(s) for s in ("La città non dorme mai.",
-                                                  "Ascolta quello che dice.",
-                                                  "FUORI SCENA", "Dal 12 novembre."))
+        widest = max(
+            probe.getlength(s)
+            for s in (
+                "La città non dorme mai.",
+                "Ascolta quello che dice.",
+                "FUORI SCENA",
+                "Dal 12 novembre.",
+            )
+        )
         font_px = int(round((m.width * target_frac) / (widest / 100.0)))
         font_px = max(12, min(font_px, int(m.height * 0.14)))
-        reasons.append(f"corpo {font_px}px: riga piu' larga a {target_frac:.2f} della "
-                       f"larghezza con {font['name']} (misurata, non stimata)")
+        reasons.append(
+            f"corpo {font_px}px: riga piu' larga a {target_frac:.2f} della "
+            f"larghezza con {font['name']} (misurata, non stimata)"
+        )
     except Exception:  # noqa: BLE001
         font_px = int(round(0.06 * m.height))
         reasons.append(f"corpo {font_px}px (fallback geometrico)")

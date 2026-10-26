@@ -151,13 +151,28 @@ def _is_vertical(aspect: str) -> bool:
     return h > w
 
 
+def _loudness_target_name(brief: Optional[dict]) -> str:
+    """The profile the brief asks for, falling back to social.
+
+    Single source of truth: the writer (``build_plan``) and the finding
+    (``detect_findings``) both resolve the target through this helper, so the
+    gate can never disagree with the number render will use.
+    """
+    name = (brief or {}).get("loudness") or "social"
+    return name if name in LOUDNESS_TARGETS else "social"
+
+
 # --------------------------------------------------------------------------- #
 # findings
 # --------------------------------------------------------------------------- #
 
 
-def detect_findings(report: dict) -> List[Dict[str, Any]]:
-    """Every gate in the matrix, evaluated against the real numbers only."""
+def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str, Any]]:
+    """Every gate in the matrix, evaluated against the real numbers only.
+
+    ``brief`` supplies the loudness profile: the loudness gate compares the
+    measurement against the same target ``build_plan`` writes into the plan.
+    """
     out: List[Dict[str, Any]] = []
     if not isinstance(report, dict):
         return out
@@ -369,15 +384,18 @@ def detect_findings(report: dict) -> List[Dict[str, Any]]:
 
     loudness = audio.get("loudness") or {}
     input_i = _num(loudness.get("input_i"))
-    if input_i is not None and abs(input_i - (-14.0)) >= 1.0:
+    target_name = _loudness_target_name(brief)
+    target_i = float(LOUDNESS_TARGETS[target_name][0])
+    if input_i is not None and abs(input_i - target_i) >= 1.0:
         out.append(
             _finding(
                 "audio.loudness.off",
                 "warn",
                 "audio.loudness.input_i",
                 round(input_i, 2),
-                -14.0,
-                f"Loudness integrata {input_i:.1f} LUFS (target -14.0, tolleranza 1.0)",
+                target_i,
+                f"Loudness integrata {input_i:.1f} LUFS "
+                f"(target {target_i:.1f}, tolleranza 1.0)",
                 "loudnorm",
             )
         )
@@ -795,7 +813,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
     if answers:
         brief = apply_answers(brief, answers)
 
-    findings = detect_findings(report)
+    findings = detect_findings(report, brief)
     published = _publish(report, findings)
     known = {f["id"]: f for f in published if isinstance(f, dict) and f.get("id")}
 
@@ -817,9 +835,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
             aspect = "9:16"
 
     platform = brief.get("platform") or _default_platform(aspect)
-    target_name = brief.get("loudness") or "social"
-    if target_name not in LOUDNESS_TARGETS:
-        target_name = "social"
+    target_name = _loudness_target_name(brief)
     loud_i, loud_tp = LOUDNESS_TARGETS[target_name]
 
     music_ratio = _num(audio.get("music_ratio")) or 0.0
@@ -1002,10 +1018,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 enabled = False
                 explain = "alte luci bruciate oltre l'8%: serve rifare la ripresa"
         if enabled and under:
-            noise_floor = _num(audio.get("noise_floor_dbfs"))
-            if noise_floor is not None and noise_floor > -45.0:
-                enabled = False
-                explain = "alzare l'esposizione amplificherebbe il rumore di fondo"
+            explain += " [UNVER] amplificazione del rumore del sensore non misurata"
         add("exposure_fix", "technical", enabled, exposure_params, cite, explain)
 
     if "video.color.cast" in known:
@@ -1269,7 +1282,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
         "width": out_w,
         "height": out_h,
         "loudness_target": target_name,
-        "loudness": {"I": loud_i, "TP": loud_tp},
+        "loudness": {"i": float(loud_i), "tp": float(loud_tp), "lra": 11.0},
     }
     render = {
         "codec": "libx264",
@@ -1297,79 +1310,76 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
 
 
 def deliverables(plan: EditPlan, probe: Optional[dict] = None) -> List[Dict[str, Any]]:
-    """Master, one export per platform, subtitles, thumbnail, contact sheet."""
+    """Master, subtitles, thumbnail and contact sheet: only what the pipeline writes.
+
+    No per-platform exports: the render stage produces one master, and nothing
+    in this repo transcodes it into 9:16 / 1:1 / 4:5 / 16:9 variants.
+    """
     if isinstance(plan, EditPlan):
         output = plan.output or {}
         brief = plan.brief or {}
+        treatments = plan.treatments or []
     else:
         output = (plan or {}).get("output") or {}
         brief = (plan or {}).get("brief") or {}
+        treatments = (plan or {}).get("treatments") or []
 
     aspect = output.get("aspect") or "9:16"
-    width, height = output_size(aspect)
+    default_w, default_h = output_size(aspect)
+    width = int(_num(output.get("width")) or default_w)
+    height = int(_num(output.get("height")) or default_h)
     source_note = ""
     if isinstance(probe, dict) and probe.get("width") and probe.get("height"):
         source_note = f" da {probe['width']}x{probe['height']}"
 
-    items: List[Dict[str, Any]] = [
+    has_subtitles = any(
+        isinstance(treatment, dict) and treatment.get("name") == "subtitles"
+        for treatment in treatments
+    )
+    subtitles: Dict[str, Any] = {
+        "name": "subtitles.srt",
+        "path": "out/subtitles.srt",
+        "kind": "subtitles",
+        "available": bool(has_subtitles),
+        "notes": "max 2 righe, 25 cps",
+    }
+    if not has_subtitles:
+        subtitles["reason"] = (
+            "subtitles disabled by brief"
+            if brief.get("subtitles") == "none"
+            else "no speech"
+        )
+
+    return [
         {
             "name": "master.mp4",
+            "path": "out/master.mp4",
             "kind": "master",
             "aspect": aspect,
             "width": width,
             "height": height,
             "notes": f"H.264 CRF 18, yuv420p, faststart{source_note}",
-        }
-    ]
-
-    platforms = brief.get("platforms") or [
-        output.get("platform") or _default_platform(aspect)
-    ]
-    if isinstance(platforms, str):
-        platforms = [platforms]
-    for name in platforms:
-        items.append(
-            {
-                "name": f"{name}.mp4",
-                "kind": "platform",
-                "aspect": aspect,
-                "width": width,
-                "height": height,
-                "notes": f"export {name}",
-            }
-        )
-
-    items.append(
-        {
-            "name": "subtitles.srt",
-            "kind": "subtitles",
-            "aspect": aspect,
-            "width": width,
-            "height": height,
-            "notes": "max 2 righe, 25 cps",
-        }
-    )
-    items.append(
+        },
+        subtitles,
         {
             "name": "thumbnail.jpg",
+            "path": "out/thumbnail.jpg",
             "kind": "thumbnail",
             "aspect": aspect,
             "width": width,
             "height": height,
             "notes": "frame dal hook candidate",
-        }
-    )
-    items.append(
+        },
         {
             "name": "contact_sheet.jpg",
+            "path": "out/contact_sheet.jpg",
             "kind": "contact_sheet",
             "aspect": aspect,
             "width": width,
             "height": height,
             "notes": "griglia 4x4, un frame ogni 2s",
-        }
-    )
-    return items
+        },
+    ]
 
 
 # --------------------------------------------------------------------------- #

@@ -11,6 +11,16 @@ with the two pair gates (``distinct_surface``, ``hook_distinct``), the render
 gate (``coverage_gate``) and the documentation gate (``docs_match``). Every gate
 is binary: it returns ok or it does not, and a measurement it cannot take is a
 failure with the reason, never a fabricated number.
+
+Measurement provenance
+-----------------------
+``APPROVED_GRADE``, ``INK_TOLERANCE``, ``COVERAGE_MIN`` and ``COVERAGE_MAX`` are
+``[MEAS]``: they were measured on a private reference delivery that is not part
+of this repository. They are kept because the gates need a declared band, but
+they cannot be re-derived on a machine that does not hold that file. Point
+``VX_APPROVED_DELIVERY`` (and ``VX_APPROVED_SHA256``) at a copy to re-verify the
+reference; without it the delivery gate reports ``skipped`` and never claims
+``verified``.
 """
 
 from __future__ import annotations
@@ -28,20 +38,50 @@ from typing import Any, Dict, List, Optional
 from .palette import INK_DARK, INK_LIGHT  # the two neutral inks, constants only
 from .registry import (
     ANIMATIONS,
-    APPROVED_DELIVERY_SHA256,
     AXES,
     RETIRED_EFFECTS,
     THRESHOLDS,
+    approved_sha,
 )
 
-# The approved delivery is machine-local and never re-rendered. The environment
-# variable exists so a different workstation can point at its own copy.
-APPROVED_DELIVERY_PATH = Path(
-    os.environ.get(
-        "VX_APPROVED_DELIVERY",
-        r"D:\VOX POPULI - ALBUM\SOCIAL\PUBBLICAZIONI\P_25-10-26\video\MOTUS_vox_FINALE_delivery.mp4",
-    )
+# The approved delivery is machine-local and never re-rendered. There is no
+# default path: a machine without the file must say so, not point at a path that
+# only exists on the author's disk.
+APPROVED_DELIVERY_ENV = "VX_APPROVED_DELIVERY"
+SKIPPED_DETAIL = (
+    "SKIPPED: approved delivery not configured (VX_APPROVED_DELIVERY unset) — declared"
 )
+
+
+def approved_delivery_path() -> Optional[Path]:
+    """The configured approved delivery, or ``None`` when the env var is unset."""
+    raw = os.environ.get(APPROVED_DELIVERY_ENV, "").strip()
+    return Path(raw) if raw else None
+
+
+def approved_available() -> bool:
+    """True only when a delivery is configured AND the file exists."""
+    path = approved_delivery_path()
+    return path is not None and path.is_file()
+
+
+def approved_status() -> Dict[str, Any]:
+    """Where the approved delivery stands: configured, missing, or unset."""
+    path = approved_delivery_path()
+    if path is None:
+        return {
+            "available": False,
+            "path": None,
+            "reason": f"{APPROVED_DELIVERY_ENV} unset",
+        }
+    if not path.is_file():
+        return {
+            "available": False,
+            "path": str(path),
+            "reason": f"configured path missing: {path}",
+        }
+    return {"available": True, "path": str(path), "reason": "configured"}
+
 
 # The V2 grade the delivery was approved with. ``node=None`` means this node, not
 # "no grade": a baseline of zero would make the 0.5x stop rule meaningless.
@@ -169,7 +209,10 @@ def check_ledger(brief: Dict[str, Any]) -> List[str]:
 
 
 def reproduce_sha256(path: str | Path) -> bool:
-    """True only when the file's SHA-256 equals the approved delivery hash."""
+    """True only when the file's SHA-256 equals the configured approved hash."""
+    expected = approved_sha()
+    if expected is None:
+        return False
     source = Path(path)
     if not source.is_file():
         return False
@@ -177,7 +220,57 @@ def reproduce_sha256(path: str | Path) -> bool:
     with source.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest().upper() == APPROVED_DELIVERY_SHA256.upper()
+    return digest.hexdigest().upper() == expected.upper()
+
+
+def delivery_gate(path: Optional[str | Path] = None) -> Dict[str, Any]:
+    """The approved-delivery hash gate, with an explicit ``skipped`` state.
+
+    Three outcomes, never a fourth:
+
+    ``skipped``  no delivery configured — ``ok`` is True because nothing was
+                 claimed, and the detail says so verbatim.
+    ``failed``   a delivery was configured but is missing, or the hash is
+                 unset/mismatched — a real failure, not a skip.
+    ``verified`` the file exists and its SHA-256 matches the configured hash.
+
+    ``path`` overrides the environment for callers that already resolved one.
+    """
+    target = Path(path) if path is not None else approved_delivery_path()
+    result: Dict[str, Any] = {
+        "ok": False,
+        "status": "failed",
+        "detail": "",
+        "path": str(target) if target is not None else None,
+        "sha256": None,
+        "expected": approved_sha(),
+    }
+    if target is None:
+        result.update(ok=True, status="skipped", detail=SKIPPED_DETAIL)
+        return result
+    if not target.is_file():
+        result["detail"] = f"approved delivery configured but missing: {target}"
+        return result
+    expected = approved_sha()
+    if expected is None:
+        result["detail"] = (
+            "approved delivery configured but VX_APPROVED_SHA256 unset — cannot verify"
+        )
+        return result
+
+    digest = hashlib.sha256()
+    with target.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    result["sha256"] = actual
+    if actual.upper() != expected.upper():
+        result["detail"] = (
+            f"sha256 mismatch: expected {expected.upper()}, got {actual.upper()}"
+        )
+        return result
+    result.update(ok=True, status="verified", detail=f"verified: sha256 {actual}")
+    return result
 
 
 def _luma_percentiles(image: Any) -> Dict[str, float]:
@@ -674,24 +767,31 @@ def _selftest() -> int:
         str(errors[:1]),
     )
 
-    if APPROVED_DELIVERY_PATH.is_file():
+    gate = delivery_gate()
+    if gate["status"] == "skipped":
+        print(f"  [SKIP] {gate['detail']}")
+    else:
         check(
             "reproduce_sha256 sul delivery approvato",
-            reproduce_sha256(APPROVED_DELIVERY_PATH),
-            str(APPROVED_DELIVERY_PATH),
+            gate["ok"],
+            gate["detail"],
         )
-    else:
-        print(f"  [SKIP] delivery approvato non presente: {APPROVED_DELIVERY_PATH}")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as handle:
         handle.write(b"not the approved delivery")
         temp_path = Path(handle.name)
     try:
-        check(
-            "reproduce_sha256 su un file estraneo",
-            reproduce_sha256(temp_path) is False,
-            str(temp_path),
-        )
+        if approved_sha() is None:
+            print(
+                "  [SKIP] hash approvato non configurato "
+                "(VX_APPROVED_SHA256 unset) — declared"
+            )
+        else:
+            check(
+                "reproduce_sha256 su un file estraneo",
+                reproduce_sha256(temp_path) is False,
+                str(temp_path),
+            )
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -704,8 +804,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="vx.prove selftest")
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument(
+        "--delivery-gate",
+        action="store_true",
+        help="print the approved-delivery gate as JSON",
+    )
     args = parser.parse_args()
     if args.selftest:
         raise SystemExit(_selftest())
+    if args.delivery_gate:
+        result = delivery_gate()
+        print(json.dumps(result, ensure_ascii=True, sort_keys=True))
+        raise SystemExit(0 if result["ok"] else 1)
     parser.print_help()
     raise SystemExit(2)

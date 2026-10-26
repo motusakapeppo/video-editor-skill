@@ -9,15 +9,16 @@ un limite misurabile.
 |------|--------|
 | Motore | faster-whisper 1.2.1, backend CTranslate2 4.8.3 |
 | Modello predefinito | `small` |
-| Device | `cpu` |
-| Compute type | `int8` |
+| Device | scelto da `vx.accel` (CUDA se il test passa, altrimenti CPU) |
+| Compute type | `float16` su CUDA, `int8` su CPU |
 | Beam size | 5 |
 | Word timestamps | attivi |
 | VAD | attivo per default |
 | `condition_on_previous_text` | `False` |
 
-Il modello è fissato a CPU int8 nel codice: la GPU esiste ma non viene usata,
-perché riproducibilità e parità proxy/full valgono più della velocità.
+Il device non è fissato: `vx.accel` prova CUDA con una trascrizione reale e un
+timeout duro, poi ricade su CPU `int8`. La GPU è un'accelerazione verificata,
+non un'assunzione.
 
 `faster_whisper.Word` porta `start`, `end`, `word`, `probability`. Il campo
 `word` ha quasi sempre uno spazio iniziale e viene ripulito prima di entrare in
@@ -54,7 +55,7 @@ combinato ci sta, altrimenti viene troncata all'inizio della successiva.
 | `PlayResX` / `PlayResY` | `out_w` / `out_h` del render |
 | `WrapStyle` | 2 (nessun wrap automatico) |
 | `ScaledBorderAndShadow` | `yes` |
-| Stile / Font | `Vx` / `Arial Black` |
+| Stile / Font | `Vx` / `Antonio` (incluso in `assets/fonts/` con `OFL.txt`) |
 | `PrimaryColour` | `&H00FFFFFF` (bianco) |
 | `SecondaryColour` | `&H0000D7FF` (arancione, usato dal karaoke) |
 | `OutlineColour` / `BackColour` | `&H00000000` / `&H80000000` |
@@ -92,7 +93,7 @@ Questa è l'unica forma che funziona su ffmpeg 8.1 / Windows:
 |-------|-------|
 | `ass='C\:/work/clip.ass'` | FUNZIONA |
 | `ass=C\:/work/clip.ass` | FALLISCE, i due punti vengono letti come separatore di opzione |
-| `ass='C:/work/clip.ass'` | FALLISCE, i due punti non sono escapati |
+| `ass='<drive>:/work/clip.ass'` | FALLISCE, i due punti non sono escapati |
 | spazi dentro gli apici singoli | FUNZIONA |
 | spazi escapati con backslash | FALLISCE |
 
@@ -101,7 +102,7 @@ La produce `vx.winpath.ass_filter_path`: path in forma POSIX, due punti escapati
 ```powershell
 $PY = "<VENV_DIR>\Scripts\python.exe"
 $env:PYTHONPATH = "<SKILL_DIR>\scripts"
-& $PY -c "from vx.winpath import ass_filter_path; print(ass_filter_path(r'C:\work\clip-a1b2c3d4\subs\clip.ass'))"
+& $PY -c "from vx.winpath import ass_filter_path; print(ass_filter_path(r'<drive>:\work\clip-a1b2c3d4\subs\clip.ass'))"
 ```
 
 ## Verifica del font
@@ -118,8 +119,9 @@ accorge. `verify_fonts` brucia un frame su un canvas nero e legge le righe
 | `requested` | famiglie richieste |
 | `ok` | `rc == 0` e `fallback_count == 0` e nessun errore hard |
 
-Il gate è bloccante: `font_fallback_count` in QC ha limite 0. Se Arial Black è
-installato (`%WINDIR%\Fonts\ariblk.ttf`), il fallback non scatta.
+Il gate è bloccante: `font_fallback_count` in QC ha limite 0. Antonio è
+incluso in `assets/fonts/` e libass riceve `fontsdir`; una sostituzione è un
+fallimento duro (`QCFailure`), non un warning.
 
 ## SRT e statistiche
 

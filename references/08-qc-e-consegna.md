@@ -37,7 +37,13 @@ frame realmente decodificabili.
 
 **`lufs_delta` e `true_peak`.** La misura usa `loudnorm=print_format=json` sul
 file finale. Se non c'è audio, entrambi i gate passano con valore `None`: non
-si può fallire un gate che non si applica.
+si può fallire un gate che non si applica. Se il piano non ha un trattamento
+loudnorm, il QC emette `status:"skipped"`.
+
+Due soglie diverse, entrambe vere: il finding che accende il loudnorm scatta a
+**1.0 LU** di scarto (`plan.py`), il gate QC che verifica il risultato pretende
+**0.3 LU** (`qc.py`). La prima decide se normalizzare, la seconda se il
+risultato è accettabile.
 
 **`av_start_ms`.** Uno skew di 20 ms è il limite oltre il quale un labiale
 comincia a sembrare fuori sincrono. Nasce quasi sempre da un `atrim` senza
@@ -69,10 +75,10 @@ non sarà riproducibile ovunque.
 ## Come si legge un QC fallito
 
 ```powershell
-$VENV = $env:VX_VENV            # es. C:\tools\video_env
+$VENV = $env:VX_VENV            # es. <venv>
 $PY   = "$VENV\Scripts\python.exe"
 $VX   = "<SKILL_DIR>\scripts\vx.py"
-& $PY $VX qc --plan "<WORK_DIR>\clip-a1b2c3d4\plan.json" --render "<WORK_DIR>\clip-a1b2c3d4\out\final_full.mp4"
+& $PY $VX qc --plan "<WORK_DIR>\clip-a1b2c3d4\plan.json" --render "<WORK_DIR>\clip-a1b2c3d4\stage\final_full.mp4"
 ```
 
 Exit code 5 significa QC fallito. Il JSON contiene `failures`, la lista dei
@@ -98,17 +104,13 @@ codici, e `checks`, con `value`, `limit` e `detail` per ognuno.
 
 | Deliverable | Formato | Contenuto |
 |-------------|---------|-----------|
-| Master | mp4, full, `crf 18` | il render approvato, loudness a target |
-| Tagli per piattaforma | mp4 per aspect | stesso master, ricropato per `9:16`, `1:1`, `4:5`, `16:9` |
-| Sottotitoli | srt | testo con timestamp, senza tag karaoke |
-| Thumbnail | jpg o png | frame scelto, alla risoluzione della piattaforma |
-| Contact sheet | jpg o png | griglia di frame a intervalli regolari |
+| `out/master.mp4` | mp4, full, `crf 18` | il render approvato, loudness a target |
+| `out/subtitles.srt` | srt | solo se esiste parlato; testo con timestamp, senza tag karaoke |
+| `out/thumbnail.jpg` | jpg | un frame dal candidato hook |
+| `out/contact_sheet.jpg` | jpg | griglia 4x4, un frame ogni 2 s |
 
-Il master è uno solo. I tagli per piattaforma derivano dal master, non dal
-sorgente: così quello che è stato approvato in anteprima è esattamente quello
-che esce. L'SRT accompagna sempre il master, anche quando i sottotitoli sono
-bruciati nel video: serve per la correzione e per le piattaforme che li vogliono
-separati.
+Sono esattamente quattro artefatti, con sha256 in `out/deliverables.json`.
+L'export multi-aspect non è implementato: non ci sono tagli per piattaforma.
 
 ## Checklist prima della consegna
 
@@ -124,8 +126,8 @@ separati.
 | 8 | Crop dentro il sorgente | `crop_in_bounds` a vero |
 | 9 | Faststart presente | `faststart` a vero |
 | 10 | Formato corretto | `aspect_mismatch` a vero |
-| 11 | SRT presente | file `.srt` nella cartella `out` |
-| 12 | Nome file parlante | `<stem>-<sha8>-<aspect>-<profilo>.mp4` |
+| 11 | SRT presente | `out/subtitles.srt` quando c'è parlato |
+| 12 | Manifest presente | `out/deliverables.json` con i quattro sha256 |
 
 Se uno dei primi dieci fallisce, non si consegna. Non esiste "quasi verde".
 

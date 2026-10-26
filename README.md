@@ -1,5 +1,7 @@
 # video-editor-skill
 
+> Versione: **1.1.0** — protocollo CLI unico, quattro deliverable, nessun export multi-aspect.
+
 > **English TL;DR** — An adaptive video-editing skill for the opencode agent runtime.
 > It measures a video before touching it (jitter, exposure, colour cast, noise floor,
 > dead air, loudness, faces, speech), then **pauses and asks the operator** three
@@ -49,8 +51,8 @@ non la differenza di montaggio.
 Dipendenze Python:
 
 ```powershell
-python -m venv C:\video_env
-C:\video_env\Scripts\python.exe -m pip install opencv-python-headless mediapipe moviepy `
+python -m venv <venv>
+<venv>\Scripts\python.exe -m pip install opencv-python-headless mediapipe moviepy `
   librosa soundfile scipy pydub faster-whisper pyyaml imageio-ffmpeg
 ```
 
@@ -61,8 +63,8 @@ C:\video_env\Scripts\python.exe -m pip install opencv-python-headless mediapipe 
 
 ```json
 {
-  "work_root": "C:/video_work",
-  "venv": "C:/video_env",
+  "work_root": "<work_root>",
+  "venv": "<venv>",
   "proxy_width": 640
 }
 ```
@@ -73,7 +75,7 @@ In alternativa, variabili d'ambiente: `VX_WORK`, `VX_VENV`, `VX_FFMPEG`, `VX_FFP
 2. Verifica l'ambiente. **Non si lavora se questo non dice `ready`:**
 
 ```powershell
-C:\video_env\Scripts\python.exe scripts\vx.py doctor --json
+<venv>\Scripts\python.exe scripts\vx.py doctor --json
 ```
 
 Il modello per il face tracking (`assets/models/face_detection_yunet_2023mar.onnx`) è
@@ -82,14 +84,14 @@ incluso. I modelli Whisper vengono scaricati da HuggingFace al primo uso.
 ## Uso
 
 ```powershell
-$PY = "C:\video_env\Scripts\python.exe"
+$PY = "<venv>\Scripts\python.exe"
 $VX = ".\scripts\vx.py"
 
 # 1. Fase 4 + 5: proxy, pre-analisi, triage. Esce 3 e ti fa le 3 domande.
-& $PY $VX ingest --input "D:\clip.mp4"
+& $PY $VX ingest --input "<clip.mp4>"
 
 # 2. Fase 6 + 7: piano, sottotitoli, render anteprima, render finale, QC.
-& $PY $VX run --input "D:\clip.mp4" --answers "D:\answers.json"
+& $PY $VX run --input "<clip.mp4>" --answers "<answers.json>"
 ```
 
 Ogni comando accetta `--json` (un solo oggetto JSON su stdout, log su stderr).
@@ -124,7 +126,8 @@ mouth-aspect-ratio), WPM. Le soglie vivono in un solo posto: `scripts/vx/contrac
 
 ```
 SKILL.md                  ruolo, protocollo, trigger di auto-invocazione
-references/01..08.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC
+references/01..15.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
+                          accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna
 scripts/vx.py             launcher
 scripts/vx/
   contract.py             interfaccia congelata: schemi, soglie, validatori
@@ -144,7 +147,7 @@ scritto, e il QC ricontrolla lo `sha256` prima di dichiarare finito un render.
 ## Test
 
 ```powershell
-C:\video_env\Scripts\python.exe examples\e2e_check.py C:\percorso\video.mp4
+<venv>\Scripts\python.exe examples\e2e_check.py <video.mp4>
 ```
 
 Verifica il gate di triage (exit 3), la purezza del `--json`, il rispetto della legge

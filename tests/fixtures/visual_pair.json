@@ -672,7 +672,8 @@
   },
   "renders": {
     "real_interview_169": {
-      "path": "C:\\Users\\motus\\.config\\opencode\\skill\\video-editor\\tests\\_out\\visual_corpus\\real_interview_169\\render\\final_proxy.mp4",
+      "path": "tests/_out/visual_corpus/real_interview_169/render/final_proxy.mp4",
+      "provenance": "declared",
       "frames": 150,
       "expected_frames": 150,
       "crop_plan": {
@@ -689,7 +690,8 @@
       "graph_sha256": "b92860667b6297f4bad9c9608034151c4c8296151503fe8e27339784b72b0360"
     },
     "real_street_169": {
-      "path": "C:\\Users\\motus\\.config\\opencode\\skill\\video-editor\\tests\\_out\\visual_corpus\\real_street_169\\render\\final_proxy.mp4",
+      "path": "tests/_out/visual_corpus/real_street_169/render/final_proxy.mp4",
+      "provenance": "declared",
       "frames": 149,
       "expected_frames": 150,
       "crop_plan": {

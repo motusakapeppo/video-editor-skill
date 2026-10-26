@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -1001,7 +1002,17 @@ def cmd_qc(args: argparse.Namespace) -> int:
     if not source:
         raise VxError("serve --input: il piano non contiene la sorgente")
     media = probe_mod.probe(source).to_dict()
-    result = qc.check_render(built, media, args.render, subs_path=args.subs or None)
+    executed = None
+    sidecar = Path(args.plan).parent / "render.json"
+    if sidecar.is_file():
+        executed = (_load_json(sidecar) or {}).get("target")
+    result = qc.check_render(
+        built,
+        media,
+        args.render,
+        subs_path=args.subs or None,
+        executed_target=executed,
+    )
     if args.out:
         Path(args.out).write_text(
             json.dumps(result.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
@@ -1217,48 +1228,107 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     # ---- subtitles
     subs_path: Optional[str] = None
+    hook_path: Optional[str] = None
+    stem = winpath.safe_stem(src.name)
     if _enabled(built, "subtitles"):
         _log("[run] sottotitoli dinamici")
         params = _params(built, "subtitles")
         transcript = state.get("transcript") or subs.transcribe(
             str(src), model=args.model, language=args.lang
         )
-        cues = subs.build_cues(
-            transcript,
-            style=str(params.get("style") or "karaoke"),
-            aspect=str(built.output.get("aspect") or "9:16"),
-            max_chars=params.get("max_chars"),
-            max_lines=params.get("max_lines"),
-            max_cps=params.get("max_cps"),
-        )
-        stem = winpath.safe_stem(src.name)
-        zone = _layout_zone(
-            int(built.output.get("width") or 1080),
-            int(built.output.get("height") or 1920),
-            getattr(args, "overlay", None),
-        )
-        ass = subs.write_ass(
-            cues,
-            work / "subs" / f"{stem}.ass",
-            aspect=str(built.output.get("aspect") or "9:16"),
-            platform=str(built.output.get("platform") or "tiktok"),
-            style=str(params.get("style") or "karaoke"),
-            out_w=int(built.output.get("width") or 1080),
-            out_h=int(built.output.get("height") or 1920),
-            bottom_limit_px=zone.text_limit_y if zone else None,
-            margin_lr=zone.margin_lr if zone else None,
-        )
-        if zone is not None:
-            rep["artifacts"]["gate4"] = _layout_gate(zone, ass)
-            rep["artifacts"]["layout"] = zone.to_dict()
-        srt = subs.write_srt(cues, work / "subs" / f"{stem}.srt")
-        fonts = subs.verify_fonts(ass)
-        subs_path = ass
-        rep["artifacts"]["ass"] = ass
-        rep["artifacts"]["srt"] = srt
-        rep["artifacts"]["fonts"] = fonts
-        if not fonts.get("ok", True):
-            _log(f"[warn] font sostituito da libass: {fonts.get('fonts_used')}")
+        quality = subs.transcript_quality(getattr(transcript, "words", []) or [])
+        if not quality["ok"]:
+            _log(f"[run] sottotitoli non incisi: {quality['reason']}")
+            for t in built.treatments or []:
+                if t.get("name") == "subtitles":
+                    t["enabled"] = False
+                    t.setdefault("reason", {})["explain"] = (
+                        f"non incisi: {quality['reason']}"
+                    )
+            rep.setdefault("skipped", []).append({"treatment": "subtitles", **quality})
+        else:
+            cues = subs.build_cues(
+                transcript,
+                style=str(params.get("style") or "karaoke"),
+                aspect=str(built.output.get("aspect") or "9:16"),
+                max_chars=params.get("max_chars"),
+                max_lines=params.get("max_lines"),
+                max_cps=params.get("max_cps"),
+            )
+            zone = _layout_zone(
+                int(built.output.get("width") or 1080),
+                int(built.output.get("height") or 1920),
+                getattr(args, "overlay", None),
+            )
+            ass = subs.write_ass(
+                cues,
+                work / "subs" / f"{stem}.ass",
+                aspect=str(built.output.get("aspect") or "9:16"),
+                platform=str(built.output.get("platform") or "tiktok"),
+                style=str(params.get("style") or "karaoke"),
+                out_w=int(built.output.get("width") or 1080),
+                out_h=int(built.output.get("height") or 1920),
+                bottom_limit_px=zone.text_limit_y if zone else None,
+                margin_lr=zone.margin_lr if zone else None,
+            )
+            if zone is not None:
+                rep["artifacts"]["gate4"] = _layout_gate(zone, ass)
+                rep["artifacts"]["layout"] = zone.to_dict()
+            srt = subs.write_srt(cues, work / "subs" / f"{stem}.srt")
+            fonts = subs.verify_fonts(ass)
+            if not fonts.get("ok", True):
+                raise QCFailure(
+                    {
+                        "step": "fonts",
+                        "failures": [
+                            f"font sostituito da libass: {fonts.get('fonts_used')}"
+                        ],
+                        "metrics": fonts,
+                    }
+                )
+            subs_path = ass
+            rep["artifacts"]["ass"] = ass
+            rep["artifacts"]["srt"] = srt
+            rep["artifacts"]["fonts"] = fonts
+
+    # ---- hook overlay
+    if _enabled(built, "hook_overlay"):
+        _log("[run] hook overlay")
+        text = (brief.get("hook_text") or "").strip()
+        if not text:
+            words = getattr(state.get("transcript"), "words", []) or []
+            text = " ".join(
+                str(w.get("word") or "").strip()
+                for w in words[:8]
+                if str(w.get("word") or "").strip()
+            ).strip()
+        if not text:
+            for t in built.treatments or []:
+                if t.get("name") == "hook_overlay":
+                    t["enabled"] = False
+                    t.setdefault("reason", {})["explain"] = (
+                        "nessun testo disponibile: overlay non inciso"
+                    )
+            rep.setdefault("skipped", []).append(
+                {
+                    "treatment": "hook_overlay",
+                    "reason": "nessun testo disponibile: overlay non inciso",
+                }
+            )
+            _log("[run] hook overlay non inciso: nessun testo disponibile")
+        else:
+            params = _params(built, "hook_overlay")
+            hook_path = str(
+                subs.write_hook_ass(
+                    work / "subs" / f"{stem}.hook.ass",
+                    text,
+                    out_w=int(built.output.get("width") or 1080),
+                    out_h=int(built.output.get("height") or 1920),
+                    start_s=float(params.get("at") or 0.0),
+                    duration_s=float(params.get("duration") or 3.0),
+                )
+            )
+            rep["artifacts"]["hook"] = hook_path
 
     # ---- crop plan
     crop: Optional[Dict[str, Any]] = None
@@ -1277,8 +1347,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             scene_cuts=(rep["analysis"].get("video") or {}).get("scene_cuts"),
             precision="full",
         )
-    crop = crop_plan.to_dict()
-    built.render["crop"] = crop
+        crop = crop_plan.to_dict()
+        built.render["crop"] = crop
 
     report_io.write(built.to_dict(), work / "plan.json")
 
@@ -1294,6 +1364,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         subs_path=subs_path,
         crop_plan=crop,
         visual=visual,
+        hook_path=hook_path,
     )
     _log(f"[run] anteprima: {preview['path']} ({preview['frames']} frame)")
 
@@ -1308,16 +1379,26 @@ def cmd_run(args: argparse.Namespace) -> int:
         subs_path=subs_path,
         crop_plan=crop,
         visual=visual,
+        hook_path=hook_path,
     )
 
     winpath.heartbeat(work, "qc")
     _log("[run] controllo qualita")
+    report_io.write(
+        {
+            "target": final.get("target"),
+            "loudness": final.get("loudness"),
+            "stages": final.get("stages", []),
+        },
+        work / "render.json",
+    )
     result = qc.check_render(
         final_plan,
         media,
         final["path"],
         subs_path=subs_path,
         source_fp=state["fingerprint"],
+        executed_target=final.get("target"),
     )
     report_io.write(result.to_dict(), work / "qc.json")
     planned_total = (
@@ -1332,7 +1413,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     rep["artifacts"]["render"] = final["path"]
     rep["artifacts"]["preview"] = preview["path"]
     rep["artifacts"]["qc"] = str(work / "qc.json")
-    rep["deliverables"] = plan_mod.deliverables(final_plan, media)
+    from . import deliverables
+
+    out_dir = work / "out"
+    srt_source = Path(rep["artifacts"]["srt"]) if rep["artifacts"].get("srt") else None
+    produced = deliverables.produce(
+        final_plan,
+        Path(final["path"]),
+        out_dir,
+        srt_source=srt_source,
+        workdir=work,
+    )
+    report_io.write({"deliverables": produced}, out_dir / "deliverables.json")
+    rep["deliverables"] = produced
     report_io.write(rep, work / "report.json")
 
     if not args.keep_proxy:
@@ -1617,6 +1710,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except KeyboardInterrupt:
         _log("[aborted]")
         return EXIT_USAGE
+    except Exception as exc:  # noqa: BLE001 - no raw traceback may escape the CLI
+        _log(f"[internal] {type(exc).__name__}: {exc}")
+        _log(traceback.format_exc())
+        return EXIT_RENDER_FAIL
 
 
 if __name__ == "__main__":

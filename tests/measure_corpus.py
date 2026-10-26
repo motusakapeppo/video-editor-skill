@@ -5,6 +5,11 @@ nine clips the verdict names, records every number with its basis, and writes
 ``tests/fixtures/corpus_stats.json``. When a measurement cannot be computed it is
 stored as ``null`` with the reason — never replaced by a plausible number.
 
+Fixtures are written only with an explicit ``--write``; without it the run is a
+dry run and no file is touched. ``renderer_delta.json`` is written only when the
+approved delivery is configured and measurable, so a machine without the private
+reference cannot overwrite the recorded baseline with ``null``.
+
 Run with ``PYTHONPATH=<repo>/scripts`` and the video venv.
 """
 
@@ -245,10 +250,38 @@ def _percentiles(values: List[Optional[float]]) -> Dict[str, Any]:
     }
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="measure the nine-clip corpus")
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="write tests/fixtures/*.json (default: dry run, writes nothing)",
+    )
+    args = parser.parse_args(argv)
+
     items = _clips()
     if len(items) != 9:
         print(f"corpus inatteso: {len(items)} clip invece di 9")
+        return 1
+
+    status = prove.approved_status()
+    if not args.write:
+        print(f"dry run: {len(items)} clip, nessun fixture scritto (usa --write)")
+        if status["available"]:
+            print(f"delivery approvato: {status['path']}")
+        elif status["path"] is None:
+            print(
+                "SKIPPED: approved delivery not configured "
+                f"({status['reason']}) — renderer_delta.json lasciato intatto"
+            )
+        else:
+            print(f"delivery approvato configurato ma assente: {status['reason']}")
+        return 0
+
+    if status["path"] is not None and not status["available"]:
+        print(f"delivery approvato configurato ma assente: {status['reason']}")
         return 1
 
     corpus_hash = _corpus_hash(items)
@@ -379,16 +412,24 @@ def main() -> int:
     )
     print(f"scritto {stats_path}")
 
-    try:
-        baseline = prove.renderer_delta(prove.APPROVED_DELIVERY_PATH)
-        delta_note = (
-            "max |ffmpeg-pillow| su p01/p50/p99, nodo V2 approvato, "
-            f"12 campioni su {prove.APPROVED_DELIVERY_PATH.name}"
-        )
-    except Exception as exc:  # noqa: BLE001 - a missing delivery is a null, not a crash
-        baseline = None
-        delta_note = f"non misurabile: {exc}"
     delta_path = FIXTURES / "renderer_delta.json"
+    if not status["available"]:
+        print(
+            "SKIPPED: approved delivery not configured "
+            f"({status['reason']}) — {delta_path.name} lasciato intatto"
+        )
+        return 0
+    try:
+        baseline = prove.renderer_delta(status["path"])
+    except Exception as exc:  # noqa: BLE001 - never null the baseline on a failed measure
+        print(
+            f"renderer_delta non misurabile: {exc} — {delta_path.name} lasciato intatto"
+        )
+        return 1
+    delta_note = (
+        "max |ffmpeg-pillow| su p01/p50/p99, nodo V2 approvato, "
+        f"12 campioni su {Path(status['path']).name}"
+    )
     delta_path.write_text(
         json.dumps(
             {"baseline": baseline, "n_samples": SAMPLES, "note": delta_note},

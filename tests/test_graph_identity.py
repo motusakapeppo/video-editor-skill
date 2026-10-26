@@ -23,7 +23,8 @@ PASS = 0
 FAIL = 0
 
 # Grafo dorato: due tagli contigui 0..2.5..5.0, 4:5, proxy, media sintetico.
-GOLDEN_SHA256 = "7e5ace15d4743e2208f64f25258cd4d86f386c46a2b5aae9f1fdd9b4530be75d"
+# Include l'afade ai giunti interni (12 ms, nessun cambio di durata).
+GOLDEN_SHA256 = "82567f4790b8e54f27296adf1c7a84c97d6cbdd432e4d813100b9f888db81403"
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -83,7 +84,16 @@ def main() -> int:
     wired = render.build_filtergraph(plan, media, visual=visual)
     check("il percorso visuale cambia il grafo", wired != base)
     check("il grade entra in ogni segmento", wired.count("curves=m=") == 2)
-    check("l'animazione entra in ogni segmento", wired.count("fade=t=in") == 2)
+    check("l'animazione entra in ogni segmento", wired.count(",fade=t=in") == 2)
+    check(
+        "afade ai giunti interni, uno in e uno out",
+        base.count(",afade=t=in") == 1 and base.count(",afade=t=out") == 1,
+    )
+    check("nessun acrossfade (durata invariata)", "acrossfade" not in base)
+    first_audio = base.split("[a0]")[0].rsplit(";", 1)[-1]
+    last_audio = base.split("[a1]")[0].rsplit(";", 1)[-1]
+    check("nessun fade in sul primo segmento", "afade=t=in" not in first_audio)
+    check("nessun fade out sull'ultimo segmento", "afade=t=out" not in last_audio)
     check("Gate 2 regge anche con il visual", gates.graph(wired).ok)
     check(
         "i tagli video restano due",

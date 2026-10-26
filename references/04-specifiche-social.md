@@ -18,6 +18,9 @@ Il proxy mantiene lo stesso aspect a 640 px di larghezza. Serve per
 l'anteprima: costa un quarto del decode e le metriche sono normalizzate sulla
 scala, quindi i numeri restano confrontabili.
 
+Una corsa produce **un solo** aspect: quello scelto nel brief. Non esistono
+export multi-aspect né tagli per piattaforma.
+
 ## Safe zone
 
 Rettangoli in pixel su una tela 1080x1920, nel formato `(x1, x2, y1, y2)`.
@@ -87,7 +90,7 @@ Il margine laterale è 60 px per lato. Il font di base è `0.062 * out_h`, cioè
 
 La dimensione viene poi ridotta se la cue più lunga non ci sta:
 `size = min(base, (out_w - 80) / (longest * 0.50))`. Il fattore 0.50 è
-l'avanzamento misurato di Arial Black maiuscolo, con margine di sicurezza.
+l'avanzamento misurato di Antonio maiuscolo, con margine di sicurezza.
 
 ## Hook
 

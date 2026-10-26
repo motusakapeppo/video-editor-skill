@@ -15,15 +15,24 @@ made-up one is not.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 SCHEMA = "vx.visual/1.0"
 
-# The approved delivery is never re-rendered: only its hash is compared.
-APPROVED_DELIVERY_SHA256 = (
-    "189605431798F66A3A96DC4FFA4AEC9042DD0AE30B2AC47C79EEEF400D3364EB"
-)
+# The approved delivery is never re-rendered: only its hash is compared. The hash
+# is machine-local, so it is read from the environment and never hardcoded here.
+# An empty value means "not configured": the delivery gate then reports
+# ``skipped`` instead of pretending the reference was verified.
+APPROVED_DELIVERY_SHA256_ENV = "VX_APPROVED_SHA256"
+APPROVED_DELIVERY_SHA256 = os.environ.get(APPROVED_DELIVERY_SHA256_ENV, "").strip()
+
+
+def approved_sha() -> Optional[str]:
+    """The expected SHA-256 of the approved delivery, or ``None`` when unset."""
+    return APPROVED_DELIVERY_SHA256 or None
+
 
 # Families are the surface dimensions a brief may diverge on.
 FAMILIES = ("colour", "rhythm", "geometry", "typography")
@@ -159,12 +168,18 @@ def _selftest() -> int:
         print(f"  {name}: {ANIMATION_CAPABILITIES[name]}")
 
     check("schema", SCHEMA == "vx.visual/1.0", SCHEMA)
-    check(
-        "hash del delivery",
-        len(APPROVED_DELIVERY_SHA256) == 64
-        and APPROVED_DELIVERY_SHA256 == APPROVED_DELIVERY_SHA256.upper(),
-        APPROVED_DELIVERY_SHA256[:12] + "...",
-    )
+    sha = approved_sha()
+    if sha is None:
+        print(
+            "  [SKIP] hash del delivery non configurato "
+            "(VX_APPROVED_SHA256 unset) — declared"
+        )
+    else:
+        check(
+            "hash del delivery",
+            len(sha) == 64 and all(char in "0123456789abcdefABCDEF" for char in sha),
+            sha[:12] + "...",
+        )
     check(
         "capacità == vocabolario",
         set(ANIMATION_CAPABILITIES) == set(ANIMATIONS),

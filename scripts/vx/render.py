@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import ffmpeg as ff
+from . import fonts as fonts_mod
 from .contract import (
     LOUDNESS_TARGETS,
     EditPlan,
@@ -49,6 +50,8 @@ __all__ = [
     "loudnorm_two_pass",
     "swap_proxy_to_full",
     "build_trim_graph",
+    "loudness_target",
+    "verify_treatments",
 ]
 
 TRF_NAME = "transforms.trf"
@@ -131,9 +134,23 @@ def _precision(plan: EditPlan, precision: str) -> str:
     return precision or str((plan.render or {}).get("precision") or "full")
 
 
-def _loudness_target(plan: EditPlan) -> Tuple[float, float, float]:
-    """(I, TP, LRA) from the plan, defaulting to the social profile."""
-    raw = (plan.output or {}).get("loudness") or (plan.render or {}).get("loudness")
+def loudness_target(plan: EditPlan) -> Tuple[float, float, float]:
+    """(I, TP, LRA) from the plan, first hit wins.
+
+    Merge order, so the *executed* declaration beats the hardcoded fallback:
+
+      a. ``output.loudness`` as a profile name -> ``LOUDNESS_TARGETS[name]``
+      b. ``output.loudness`` as a dict with lowercase ``i``/``tp``/``lra``
+      c. the ``loudnorm`` treatment params with ffmpeg-style ``I``/``TP``/``LRA``
+      d. ``output.loudness_target`` as a profile name
+      e. the social profile (-14, -1, 11) only as a last resort
+
+    Public on purpose: ``qc.py`` mirrors this so the render and the check agree
+    on what was declared.
+    """
+    out_cfg = plan.output or {}
+    render_cfg = plan.render or {}
+    raw = out_cfg.get("loudness") or render_cfg.get("loudness")
     if isinstance(raw, str) and raw in LOUDNESS_TARGETS:
         i, tp = LOUDNESS_TARGETS[raw]
         return float(i), float(tp), 11.0
@@ -143,8 +160,24 @@ def _loudness_target(plan: EditPlan) -> Tuple[float, float, float]:
             _num(raw.get("tp", raw.get("target_tp")), -1.0),
             _num(raw.get("lra", raw.get("target_lra")), 11.0),
         )
+    params = _params(plan, "loudnorm")
+    if any(key in params for key in ("I", "TP", "LRA")):
+        return (
+            _num(params.get("I"), -14.0),
+            _num(params.get("TP"), -1.0),
+            _num(params.get("LRA"), 11.0),
+        )
+    name = out_cfg.get("loudness_target") or render_cfg.get("loudness_target")
+    if isinstance(name, str) and name in LOUDNESS_TARGETS:
+        i, tp = LOUDNESS_TARGETS[name]
+        return float(i), float(tp), 11.0
     i, tp = LOUDNESS_TARGETS["social"]
     return float(i), float(tp), 11.0
+
+
+def _loudness_target(plan: EditPlan) -> Tuple[float, float, float]:
+    """Thin alias kept for callers that predate the public name."""
+    return loudness_target(plan)
 
 
 @contextmanager
@@ -273,13 +306,82 @@ def _eq_chain(plan: EditPlan) -> Optional[str]:
     return "eq=" + ":".join(parts)
 
 
+def _db_to_linear(db: float) -> float:
+    """dB -> linear amplitude, the unit acompressor's threshold/makeup expect."""
+    return 10.0 ** (db / 20.0)
+
+
 def _audio_chain(plan: EditPlan) -> str:
+    """Audio filters for the joined stream, in plan order.
+
+    Only what the plan enabled is emitted: denoise, then compress, then the
+    mandatory resample. ``denoise`` prefers the plan's ``fallback`` filter when
+    no numeric ``noise_floor`` was declared (plan.py ships ``highpass=f=80``);
+    otherwise it uses ``afftdn``. ``compress`` reads plan.py's key names
+    (``threshold_db``/``attack_ms``/``release_ms``/``ratio``) and falls back to
+    sane defaults when a key is absent. The plan declares threshold and makeup
+    in dB; acompressor wants linear amplitude, so both are converted.
+    """
     parts: List[str] = []
     if _enabled(plan, "denoise"):
-        nf = _num(_params(plan, "denoise").get("noise_floor"), -25.0)
-        parts.append(f"afftdn=nf={nf:.1f}")
+        params = _params(plan, "denoise")
+        floor = params.get("noise_floor")
+        try:
+            numeric_floor: Optional[float] = float(floor)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            numeric_floor = None
+        if numeric_floor is None and params.get("fallback"):
+            parts.append(str(params["fallback"]))
+        else:
+            parts.append(f"afftdn=nf={_num(floor, -25.0):.1f}")
+    if _enabled(plan, "compress"):
+        params = _params(plan, "compress")
+        threshold_db = _num(params.get("threshold_db", params.get("threshold")), -18.0)
+        ratio = _num(params.get("ratio"), 3.0)
+        attack = _num(params.get("attack_ms", params.get("attack")), 10.0)
+        release = _num(params.get("release_ms", params.get("release")), 200.0)
+        makeup_db = _num(params.get("makeup_db", params.get("makeup")), 2.0)
+        parts.append(
+            f"acompressor=threshold={_db_to_linear(threshold_db):.6f}"
+            f":ratio={ratio:.2f}:attack={attack:.1f}:release={release:.1f}"
+            f":makeup={_db_to_linear(makeup_db):.6f}"
+        )
     parts.append("aresample=48000")
     return ",".join(parts)
+
+
+def _fade_chain(index: int, count: int, duration: float, fade: float) -> str:
+    """Interior-joint ``afade`` in/out for one audio segment, or ``""``.
+
+    One truth for both graph builders. No fade at the very start or the very
+    end: only joints between two segments get one. ``afade`` never changes the
+    duration (``acrossfade`` would), so ``expected_frames`` stays exact. A
+    segment too short to hold two fades is left alone.
+    """
+    if fade <= 0 or duration <= 2 * fade:
+        return ""
+    span = min(fade, duration / 2.0)
+    parts: List[str] = []
+    if index > 0:
+        parts.append(f"afade=t=in:st=0:d={span:.3f}")
+    if index < count - 1:
+        parts.append(f"afade=t=out:st={duration - span:.6f}:d={span:.3f}")
+    return ",".join(parts)
+
+
+def _detect_graph(plan: EditPlan) -> str:
+    """vidstabdetect pass, driven by the plan's stabilize params.
+
+    ``shakiness`` (4/6/8 from plan.py) and ``accuracy`` (9) come from the
+    treatment; the historical 5/9 are only the fallback when a key is absent.
+    """
+    params = _params(plan, "stabilize")
+    shakiness = int(_num(params.get("shakiness"), 5))
+    accuracy = int(_num(params.get("accuracy"), 9))
+    return (
+        f"[0:v]vidstabdetect=shakiness={shakiness}:accuracy={accuracy}"
+        f":result={TRF_NAME}[vo]"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -332,6 +434,7 @@ def build_filtergraph(
     precision: str = "full",
     crop_plan: dict | None = None,
     visual: dict | None = None,
+    hook_path: str | None = None,
 ) -> str:
     """Return the complete ``-filter_complex`` graph for one render pass.
 
@@ -371,10 +474,11 @@ def build_filtergraph(
                 head += "," + extra
         parts.append(head + f"[v{index}]")
         if has_audio:
-            parts.append(
-                f"[0:a]atrim=start={start:.6f}:end={end:.6f},"
-                f"asetpts=PTS-STARTPTS[a{index}]"
-            )
+            audio = f"[0:a]atrim=start={start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS"
+            fade = _fade_chain(index, len(segments), end - start, FADE_MS / 1000.0)
+            if fade:
+                audio += "," + fade
+            parts.append(audio + f"[a{index}]")
 
     if len(segments) == 1:
         video_label, audio_label = "[v0]", "[a0]"
@@ -393,7 +497,13 @@ def build_filtergraph(
     pre: List[str] = []
     if _enabled(plan, "stabilize"):
         # Two-pass: the detect pass is run by render() into workdir/transforms.trf.
-        pre.append(f"vidstabtransform=input={TRF_NAME}:smoothing=10:zoom=0:optzoom=1")
+        stab = _params(plan, "stabilize")
+        smoothing = int(_num(stab.get("smoothing"), 10))
+        stab_zoom = int(_num(stab.get("zoom"), 0))
+        pre.append(
+            f"vidstabtransform=input={TRF_NAME}:smoothing={smoothing}"
+            f":zoom={stab_zoom}:optzoom=1"
+        )
 
     post: List[str] = []
     zoom = _zoom_chain(plan, precision)
@@ -402,8 +512,14 @@ def build_filtergraph(
     eq = _eq_chain(plan)
     if eq:
         post.append(eq)
+    if hook_path:
+        post.append(
+            f"subtitles={ass_filter_path(hook_path)}:fontsdir={fonts_mod.fontsdir_arg()}"
+        )
     if subs_path:
-        post.append(f"subtitles={ass_filter_path(subs_path)}")
+        post.append(
+            f"subtitles={ass_filter_path(subs_path)}:fontsdir={fonts_mod.fontsdir_arg()}"
+        )
 
     if crop_plan is not None and str(crop_plan.get("mode")) == "fit":
         out_w, out_h = output_size(_aspect(plan), precision)
@@ -462,11 +578,9 @@ def build_trim_graph(
         )
         if with_audio:
             audio = f"[0:a]atrim=start={start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS"
-            if fade > 0:
-                span = end - start
-                audio += f",afade=t=in:st=0:d={fade:.3f}"
-                if span > fade:
-                    audio += f",afade=t=out:st={span - fade:.6f}:d={fade:.3f}"
+            fade_text = _fade_chain(index, len(segments), end - start, fade)
+            if fade_text:
+                audio += "," + fade_text
             parts.append(f"{audio}[a{index}]")
 
     if len(segments) == 1:
@@ -643,6 +757,99 @@ def _encode_args(plan: EditPlan, precision: str) -> List[str]:
     return [*choice["args"], "-pix_fmt", "yuv420p"]
 
 
+TREATMENT_TOKENS: Dict[str, Tuple[str, ...]] = {
+    "denoise": ("afftdn", "highpass"),
+    "compress": ("acompressor",),
+    "stabilize": ("vidstabtransform",),
+    "loudnorm": ("loudnorm",),
+    "color_fix": ("eq", "colorbalance", "curves"),
+    "exposure_fix": ("eq",),
+    "subtitles": ("subtitles=",),
+    "hook_overlay": ("hook.ass",),
+    # autoframe/zoom are resolved to the concrete geometry below. A bare
+    # "crop" or "scale" appears in every graph, so it would be an unfalsifiable
+    # gate: the audit's rule is that a bypassable control is a useless control.
+    "autoframe": ("__autoframe_geometry__",),
+    "fit": ("gblur=sigma=",),
+    "zoom": ("__zoom_geometry__",),
+}
+
+# EXEMPT: cut_silence is expressed in the segment count (the cuts themselves),
+# never as a filter node, so there is no token to look for.
+TREATMENT_EXEMPT = ("cut_silence",)
+
+
+def _expected_fragment(
+    plan: EditPlan,
+    name: str,
+    media: Optional[Dict[str, Any]],
+    precision: str,
+    crop_plan: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """The concrete filter fragment an enabled treatment must leave in the graph.
+
+    ``None`` means the plain token is already discriminating. An impossible
+    token means the plan declared the treatment but its input is missing: that
+    is a failure, never a pass.
+    """
+    if name == "autoframe":
+        if not crop_plan or media is None:
+            return "__autoframe_without_crop_plan__"
+        return _crop_scale(plan, media, crop_plan, precision).split(",")[0]
+    if name == "zoom":
+        fragment = _zoom_chain(plan, precision)
+        return fragment.split(",")[0] if fragment else "__zoom_without_filter__"
+    if name in ("color_fix", "exposure_fix"):
+        fragment = _eq_chain(plan)
+        return fragment.split(",")[0] if fragment else "__eq_without_filter__"
+    return None
+
+
+def verify_treatments(
+    plan: EditPlan,
+    scripts: Iterable[str],
+    *,
+    media: Optional[Dict[str, Any]] = None,
+    precision: str = "full",
+    crop_plan: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Runtime gate: every enabled treatment must appear in a written script.
+
+    Anti-"declared but not executed": a plan can declare a treatment that the
+    graph builder silently drops. This walks the filter_complex scripts that
+    were actually written to disk and raises ``RenderFailure`` with the missing
+    fragment when an enabled treatment left no trace. Geometry-bearing
+    treatments (autoframe, zoom, grade) are checked against the exact fragment
+    derived from the plan, not against a word that occurs in every graph.
+    """
+    text = "\n".join(str(item) for item in scripts)
+    for treatment in plan.treatments or []:
+        if not isinstance(treatment, dict) or not treatment.get("enabled"):
+            continue
+        name = str(treatment.get("name") or "")
+        if name and name not in TREATMENT_TOKENS and name not in TREATMENT_EXEMPT:
+            raise RenderFailure(
+                {
+                    "step": "verify_treatments",
+                    "treatment": name,
+                    "missing": "no ledger entry for this treatment",
+                }
+            )
+    for name, tokens in TREATMENT_TOKENS.items():
+        if not _enabled(plan, name):
+            continue
+        expected = _expected_fragment(plan, name, media, precision, crop_plan)
+        candidates = (expected,) if expected is not None else tokens
+        if not any(token and token in text for token in candidates):
+            raise RenderFailure(
+                {
+                    "step": "verify_treatments",
+                    "treatment": name,
+                    "missing": candidates[0],
+                }
+            )
+
+
 def render(
     plan: EditPlan,
     media: dict,
@@ -652,6 +859,7 @@ def render(
     subs_path: str | None = None,
     crop_plan: dict | None = None,
     visual: dict | None = None,
+    hook_path: str | None = None,
 ) -> dict:
     """Render ``plan`` and return a result dict.
 
@@ -659,7 +867,8 @@ def render(
       01 trim/atrim + concat          (only when stabilization needs a source)
       02 vidstabdetect -> transforms.trf
       03 full graph -> stage/03_video.mp4
-      04 loudnorm second pass -> final (faststart)
+      04 loudnorm second pass -> final (faststart), only when the plan enabled
+         loudnorm; otherwise 04 remux stream-copies stage 03 to final
 
     ``visual`` is the adaptive visual decision dict (see
     :func:`build_filtergraph`); it is passed through to the graph untouched.
@@ -682,6 +891,10 @@ def render(
     fps = _num(media.get("fps"), DEFAULT_FPS) or DEFAULT_FPS
     has_audio = bool(media.get("has_audio", True))
     stages: List[str] = []
+    scripts: List[str] = []
+
+    def _record(path: str) -> None:
+        scripts.append(Path(path).read_text(encoding="utf-8"))
 
     # -- stage 02: stabilization detect pass -------------------------------- #
     if _enabled(plan, "stabilize"):
@@ -689,6 +902,7 @@ def render(
         ff.require("vidstabtransform")
         trim_graph = build_trim_graph(plan.cuts, fps=fps, with_audio=False)
         trim_script = write_script(trim_graph, stage_dir / "01_trim.txt")
+        _record(trim_script)
         trim_out = stage_dir / "01_trim.mp4"
         proc = ff.run_ff(
             [
@@ -706,10 +920,9 @@ def render(
             raise RenderFailure(f"stage 01 (trim) failed: {proc.tail(12)}")
         stages.append("01_trim")
 
-        detect_graph = (
-            f"[0:v]vidstabdetect=shakiness=5:accuracy=9:result={TRF_NAME}[vo]"
-        )
+        detect_graph = _detect_graph(plan)
         detect_script = write_script(detect_graph, stage_dir / "02_detect.txt")
+        _record(detect_script)
         with _in_dir(work):
             proc = ff.run_ff(
                 [
@@ -733,13 +946,21 @@ def render(
 
     # -- stage 03: the full graph ------------------------------------------- #
     graph = build_filtergraph(
-        plan, media, subs_path=subs_path, precision=precision, visual=visual
+        plan,
+        media,
+        subs_path=subs_path,
+        precision=precision,
+        visual=visual,
+        hook_path=hook_path,
     )
     if crop_plan:
         # Rebuild with the crop plan folded in (build_filtergraph is crop-free by
         # contract; the crop plan is a render-time argument).
-        graph = _graph_with_crop(plan, media, crop_plan, subs_path, precision, visual)
+        graph = _graph_with_crop(
+            plan, media, crop_plan, subs_path, precision, visual, hook_path
+        )
     script = write_script(graph, stage_dir / "03_graph.txt")
+    _record(script)
     stage03 = stage_dir / "03_video.mp4"
 
     args: List[str] = [
@@ -766,22 +987,30 @@ def render(
         raise RenderFailure(f"stage 03 (graph) failed: {proc.tail(15)}")
     stages.append("03_graph")
 
-    # -- stage 04: loudnorm second pass ------------------------------------- #
+    # -- stage 04: loudnorm second pass, or a plain remux ------------------- #
     final = work / f"final_{precision}.mp4"
-    target_i, target_tp, target_lra = _loudness_target(plan)
+    target_i, target_tp, target_lra = loudness_target(plan)
     stats: Dict[str, float] = {}
-    if has_audio:
+    if has_audio and _enabled(plan, "loudnorm"):
+        # Two passes: measure stage 03, then apply the measured values. The
+        # filter graph goes to a script file (the project's hard rule: never
+        # -af), so the executed declaration is the one on disk.
         stats = _measure_loudness(stage03)
+        af_args = loudnorm_two_pass(
+            stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
+        )
+        graph04 = f"[0:a]{af_args[1]}[aout]"
+        script04 = write_script(graph04, work / "04_loudnorm.txt")
+        _record(script04)
         args = [
             "-i",
             str(stage03),
+            "-filter_complex_script",
+            script04,
             "-map",
             "0:v:0",
             "-map",
-            "0:a:0",
-            *loudnorm_two_pass(
-                stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
-            ),
+            "[aout]",
             "-c:v",
             "copy",  # audio-only pass: the video stream is already final
             "-c:a",
@@ -799,21 +1028,22 @@ def render(
             raise RenderFailure(f"stage 04 (loudnorm) failed: {proc.tail(12)}")
         stages.append("04_loudnorm")
     else:
-        args = [
-            "-i",
-            str(stage03),
-            "-map",
-            "0:v:0",
-            "-c:v",
-            "copy",
-            "-movflags",
-            "+faststart",
-            str(final),
-        ]
+        # No loudnorm finding: do not invent a normalization. Stream copy is
+        # allowed here because this stage does not cut.
+        args = ["-i", str(stage03), "-map", "0:v:0"]
+        if has_audio:
+            args += ["-map", "0:a:0"]
+        args += ["-c", "copy", "-movflags", "+faststart", str(final)]
         proc = ff.run_ff(args, loglevel="error")
         if not proc.ok:
             raise RenderFailure(f"stage 04 (remux) failed: {proc.tail(12)}")
         stages.append("04_remux")
+
+    if not final.exists():
+        raise RenderFailure(f"stage 04 produced no output: {final}")
+    verify_treatments(
+        plan, scripts, media=media, precision=precision, crop_plan=crop_plan
+    )
 
     frames = _frame_count(final)
     out_w, out_h = output_size(_aspect(plan), precision)
@@ -844,6 +1074,7 @@ def _graph_with_crop(
     subs_path: Optional[str],
     precision: str,
     visual: Optional[Dict[str, Any]] = None,
+    hook_path: Optional[str] = None,
 ) -> str:
     """Same graph as ``build_filtergraph`` but with an explicit crop plan."""
     return build_filtergraph(
@@ -853,6 +1084,7 @@ def _graph_with_crop(
         precision=precision,
         crop_plan=crop_plan,
         visual=visual,
+        hook_path=hook_path,
     )
 
 

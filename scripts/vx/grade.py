@@ -1,6 +1,6 @@
 """vx.grade — nodi cromatici parametrici, matematica per-pixel.
 
-Il motore non sa cosa sia il look di Motus. Riceve un nodo e lo esegue:
+Il motore non sa cosa sia il look del committente. Riceve un nodo e lo esegue:
 
     {"type": "none"}
     {"type": "duotone", "shadows": "#000000", "highlights": "#ff3333"}
@@ -62,7 +62,9 @@ class GradeNode:
             return {
                 "type": "curve",
                 "master": [list(pt) for pt in self.master],
-                "channels": {k: [list(pt) for pt in v] for k, v in self.channels.items()},
+                "channels": {
+                    k: [list(pt) for pt in v] for k, v in self.channels.items()
+                },
                 "desaturate": self.desaturate,
                 "grain": self.grain,
                 "vignette": self.vignette,
@@ -252,7 +254,7 @@ def apply_pillow(img: Image.Image, node: GradeNode) -> Image.Image:
             yy, xx = np.mgrid[0:h, 0:w]
             cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
             r = np.sqrt(((xx - cx) / cx) ** 2 + ((yy - cy) / cy) ** 2) / np.sqrt(2)
-            rgb = rgb * np.clip(1.0 - node.vignette * r ** 2, 0.0, 1.0)[:, :, None]
+            rgb = rgb * np.clip(1.0 - node.vignette * r**2, 0.0, 1.0)[:, :, None]
         return Image.fromarray(np.clip(rgb * 255.0, 0, 255).astype(np.uint8), "RGB")
 
     y = LUMA[0] * rgb[:, :, 0] + LUMA[1] * rgb[:, :, 1] + LUMA[2] * rgb[:, :, 2]

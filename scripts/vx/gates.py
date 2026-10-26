@@ -544,13 +544,24 @@ def _selftest() -> int:
     expect("grafo senza audio rifiutato", lambda: graph(bad), True)
 
     print("Gate 3 — file finale")
-    good_file = Path(
-        r"D:\VOX POPULI - ALBUM\SOCIAL\PUBBLICAZIONI\P_25-10-26\video\motus_vox_v3_3x4.mp4"
-    )
-    bad_file = Path(r"D:\video_work\vox\stress\DIFETTOSO_motus_vox_v2_3x4_subs.mp4")
-    tmp = Path(r"D:\video_work\_gates")
+    import os
+    import tempfile
+
+    good_raw = os.environ.get("VX_GATE3_GOOD")
+    bad_raw = os.environ.get("VX_GATE3_BAD")
+    tmp_raw = os.environ.get("VX_GATE3_WORKDIR")
+    if not good_raw and not bad_raw:
+        print(
+            "  [SKIP] Gate 3: set VX_GATE3_GOOD and/or VX_GATE3_BAD to run the "
+            "file checks"
+        )
+        print(f"\n{'TUTTO OK' if failures == 0 else str(failures) + ' FALLITI'}")
+        return 0 if failures == 0 else 1
+    good_file = Path(good_raw) if good_raw else None
+    bad_file = Path(bad_raw) if bad_raw else None
+    tmp = Path(tmp_raw) if tmp_raw else Path(tempfile.mkdtemp(prefix="vx_gates_"))
     tmp.mkdir(parents=True, exist_ok=True)
-    if good_file.is_file():
+    if good_file is not None and good_file.is_file():
         res = post_render(
             plan_ok,
             {"fps": 25.0, "duration": 22.84},
@@ -562,7 +573,9 @@ def _selftest() -> int:
             f"  [{'PASS' if res.ok else 'FAIL'}] v3 passa tutti i controlli ({len(res.checks)})"
         )
         failures += 0 if res.ok else 1
-    if bad_file.is_file():
+    elif good_file is not None:
+        print(f"  [SKIP] VX_GATE3_GOOD non esiste: {good_file}")
+    if bad_file is not None and bad_file.is_file():
         copy = tmp / "v2_difettoso.mp4"
         shutil.copy2(bad_file, copy)
         expect(
@@ -598,27 +611,39 @@ COLOR_SAMPLES = 12
 # Tolleranze sul confronto a parita' di sorgente. Sono strette di proposito: il
 # grade lo fa lo stesso codice, quindi una differenza misurabile e' un errore, non
 # una sfumatura. Misurato: 0.000 fra un file e se stesso.
-COLOR_TOLERANCE = {"luma_p01": 0.010, "luma_p50": 0.020, "luma_p99": 0.030,
-                   "mid_sat": 0.050, "hi_sat": 0.050}
+COLOR_TOLERANCE = {
+    "luma_p01": 0.010,
+    "luma_p50": 0.020,
+    "luma_p99": 0.030,
+    "mid_sat": 0.050,
+    "hi_sat": 0.050,
+}
 
 
-def _frame_stats(video: str | Path, at: float, region: tuple[float, float],
-                 inset: float = 0.0) -> dict:
+def _frame_stats(
+    video: str | Path, at: float, region: tuple[float, float], inset: float = 0.0
+) -> dict:
     import cv2  # noqa: PLC0415
     import numpy as np  # noqa: PLC0415
 
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
-        raise contract.QCFailure({"gate": "color", "failures": [f"non apribile: {video}"]})
+        raise contract.QCFailure(
+            {"gate": "color", "failures": [f"non apribile: {video}"]}
+        )
     cap.set(cv2.CAP_PROP_POS_MSEC, at * 1000.0)
     ok, frame = cap.read()
     cap.release()
     if not ok or frame is None:
-        raise contract.QCFailure({"gate": "color", "failures": [f"frame non leggibile a {at}"]})
+        raise contract.QCFailure(
+            {"gate": "color", "failures": [f"frame non leggibile a {at}"]}
+        )
     h, w = frame.shape[0], frame.shape[1]
     y0, y1 = int(h * region[0]), int(h * region[1])
     x0, x1 = int(w * inset), int(w * (1.0 - inset))
-    rgb = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    rgb = (
+        cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    )
     luma = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
     hi = rgb.max(axis=2)
     lo = rgb.min(axis=2)
@@ -658,7 +683,9 @@ def color(
 
     frames, dur, _fps = motion_mod.expected_frames(reference)
     if dur <= 0:
-        raise contract.QCFailure({"gate": "color", "failures": ["durata non leggibile"]})
+        raise contract.QCFailure(
+            {"gate": "color", "failures": ["durata non leggibile"]}
+        )
     times = [dur * i / max(1, samples - 1) * 0.999 for i in range(samples)]
 
     worst = {k: 0.0 for k in tol}
@@ -675,10 +702,14 @@ def color(
         for key in tol:
             worst[key] = max(worst[key], abs(cand[key] - ref[key]))
     if used < max(2, samples // 2):
-        raise contract.QCFailure({
-            "gate": "color",
-            "failures": [f"solo {used} campioni validi su {samples}: misura non affidabile"],
-        })
+        raise contract.QCFailure(
+            {
+                "gate": "color",
+                "failures": [
+                    f"solo {used} campioni validi su {samples}: misura non affidabile"
+                ],
+            }
+        )
 
     for key, limit in tol.items():
         delta = worst[key]
@@ -704,8 +735,10 @@ def layout_elements(lay, boxes, *, text_box=None) -> GateResult:
     colliderebbero con tutto. Si controllano i badge fra loro e contro il testo.
     """
     result = GateResult("layout_elements")
-    items = {k: (v if isinstance(v, layout_mod.Rect) else layout_mod.Rect(*v))
-             for k, v in (boxes or {}).items()}
+    items = {
+        k: (v if isinstance(v, layout_mod.Rect) else layout_mod.Rect(*v))
+        for k, v in (boxes or {}).items()
+    }
     if text_box is not None and not isinstance(text_box, layout_mod.Rect):
         text_box = layout_mod.Rect(*text_box)
     if text_box is not None:
@@ -714,7 +747,7 @@ def layout_elements(lay, boxes, *, text_box=None) -> GateResult:
     names = sorted(items)
     collisions = []
     for i, a in enumerate(names):
-        for b in names[i + 1:]:
+        for b in names[i + 1 :]:
             inter = items[a].intersection(items[b])
             if inter is not None:
                 collisions.append({"a": a, "b": b, "area": inter.area})
@@ -729,8 +762,7 @@ def layout_elements(lay, boxes, *, text_box=None) -> GateResult:
             or "nessuna sovrapposizione fra elementi",
         )
     )
-    outside = [k for k, r in items.items()
-               if not lay.canvas.contains(r)]
+    outside = [k for k, r in items.items() if not lay.canvas.contains(r)]
     result.checks.append(
         Check(
             "elements_in_canvas",
@@ -745,8 +777,9 @@ def layout_elements(lay, boxes, *, text_box=None) -> GateResult:
     return result
 
 
-def calibrate(node, video, *, at: float = 0.0, tolerance: float = 0.025,
-              workdir=None) -> GateResult:
+def calibrate(
+    node, video, *, at: float = 0.0, tolerance: float = 0.025, workdir=None
+) -> GateResult:
     """Gate 5 dinamico: le due implementazioni dello stesso nodo devono combaciare.
 
     Non confronta un file con un master statico: prende UN frame, applica il nodo
@@ -767,21 +800,61 @@ def calibrate(node, video, *, at: float = 0.0, tolerance: float = 0.025,
     work.mkdir(parents=True, exist_ok=True)
     src = work / "cal_frame.png"
     proc = subprocess.run(
-        [ff.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{at:.3f}",
-         "-i", str(video), "-frames:v", "1", str(src)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        [
+            ff.ffmpeg(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            f"{at:.3f}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            str(src),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     if proc.returncode != 0 or not src.exists():
-        raise contract.QCFailure({"gate": "color_calibration",
-                                  "failures": [f"frame non estraibile a {at}: {proc.stderr[-200:]}"]})
+        raise contract.QCFailure(
+            {
+                "gate": "color_calibration",
+                "failures": [f"frame non estraibile a {at}: {proc.stderr[-200:]}"],
+            }
+        )
 
     via_ff = work / "cal_ff.png"
     proc = subprocess.run(
-        [ff.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
-         "-vf", grade_mod.ffmpeg_filter(node), "-frames:v", "1", str(via_ff)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace")
+        [
+            ff.ffmpeg(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(src),
+            "-vf",
+            grade_mod.ffmpeg_filter(node),
+            "-frames:v",
+            "1",
+            str(via_ff),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     if proc.returncode != 0:
-        raise contract.QCFailure({"gate": "color_calibration",
-                                  "failures": [f"filtro non applicabile: {proc.stderr[-200:]}"]})
+        raise contract.QCFailure(
+            {
+                "gate": "color_calibration",
+                "failures": [f"filtro non applicabile: {proc.stderr[-200:]}"],
+            }
+        )
 
     img_ff = Image.open(via_ff).convert("RGB")
     img_pl = grade_mod.apply_pillow(Image.open(src), node)
@@ -810,12 +883,22 @@ def calibrate(node, video, *, at: float = 0.0, tolerance: float = 0.025,
             worst = max(worst, delta)
         limit = tolerance if key.startswith("p") else max(tolerance, 0.05)
         result.checks.append(
-            Check(key, "pass" if delta <= limit else "fail", round(delta, 4),
-                  f"<= {limit}", f"ffmpeg {a[key]:.4f} vs pillow {b[key]:.4f}")
+            Check(
+                key,
+                "pass" if delta <= limit else "fail",
+                round(delta, 4),
+                f"<= {limit}",
+                f"ffmpeg {a[key]:.4f} vs pillow {b[key]:.4f}",
+            )
         )
     result.checks.append(
-        Check("max_dl", "pass" if worst <= tolerance else "fail",
-              round(worst, 4), f"<= {tolerance}", "scarto massimo di luma")
+        Check(
+            "max_dl",
+            "pass" if worst <= tolerance else "fail",
+            round(worst, 4),
+            f"<= {tolerance}",
+            "scarto massimo di luma",
+        )
     )
     if not result.ok:
         raise contract.QCFailure(result.to_dict())

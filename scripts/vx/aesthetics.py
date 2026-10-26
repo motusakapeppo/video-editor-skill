@@ -302,7 +302,7 @@ def shot_graph(
     return video + ";" + audio, placement
 
 
-def _selftest() -> int:
+def _selftest(src: Path, workdir: Path, ffmpeg: str) -> int:
     import json as _json
     import subprocess
     import sys
@@ -310,7 +310,6 @@ def _selftest() -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from vx import bpm, contract, edl as edl_mod, gates, grammar
 
-    src = Path(r"D:\Downloads\IMG_9928.MOV")
     est = bpm.estimate_best(str(src), seconds=90)
     grid = grammar.beat_grid(str(src), max_seconds=200)
     intent = [{"label": "9928", "start": 97.0, "duration": 3.56}]
@@ -326,12 +325,12 @@ def _selftest() -> int:
         f"(volto: {placement.face_found})"
     )
     graph = video_part + f";[v0][a0]concat=n=1:v=1:a=1[v][a]"
-    script = Path(r"D:\video_work\vox\fase3\shot_graph.txt")
+    script = workdir / "shot_graph.txt"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(graph, encoding="utf-8", newline="\n")
 
-    out = Path(r"D:\video_work\vox\fase3\shot_aesthetic.mp4")
-    ff = r"C:\Users\motus\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
+    out = workdir / "shot_aesthetic.mp4"
+    ff = ffmpeg
     proc = subprocess.run(
         [
             ff,
@@ -376,7 +375,7 @@ def _selftest() -> int:
         contract.EditPlan(),
         {"fps": 25.0, "duration": 200.0},
         out,
-        workdir=Path(r"D:\video_work\vox\fase3"),
+        workdir=workdir,
         planned_total=shot.duration,
     )
     for check in result.checks:
@@ -386,4 +385,23 @@ def _selftest() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(_selftest())
+    import argparse
+    import os
+    import shutil
+
+    parser = argparse.ArgumentParser(description="vx.aesthetics self-test")
+    parser.add_argument("--src", default=os.environ.get("VX_DEMO_SRC"))
+    parser.add_argument("--workdir", default=os.environ.get("VX_DEMO_WORK"))
+    parser.add_argument(
+        "--ffmpeg",
+        default=shutil.which("ffmpeg") or os.environ.get("VX_FFMPEG"),
+    )
+    args = parser.parse_args()
+    if not args.src or not args.workdir or not args.ffmpeg:
+        print(
+            "usage: python -m vx.aesthetics --src <video> --workdir <dir> "
+            "[--ffmpeg <path>]"
+        )
+        print("       (or set VX_DEMO_SRC, VX_DEMO_WORK, VX_FFMPEG)")
+        raise SystemExit(2)
+    raise SystemExit(_selftest(Path(args.src), Path(args.workdir), args.ffmpeg))

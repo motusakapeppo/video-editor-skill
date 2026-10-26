@@ -1,6 +1,6 @@
 {
-  "work_root": "C:/video_work",
-  "venv": "C:/video_env",
+  "work_root": "<work_root>",
+  "venv": "<venv>",
   "ffmpeg": null,
   "ffprobe": null,
   "whisper_cache": null,

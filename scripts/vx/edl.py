@@ -253,17 +253,12 @@ def validate(edl: Edl, media: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "failed": exc.result, "graph": graph}
 
 
-def _selftest() -> int:
+def _selftest(srcs: dict[str, str]) -> int:
     import sys
 
     sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
     from vx import bpm, grammar
 
-    srcs = {
-        "9928": r"D:\Downloads\IMG_9928.MOV",
-        "9929": r"D:\Downloads\IMG_9929.MOV",
-        "9930": r"D:\Downloads\IMG_9930.MOV",
-    }
     estimates, grids = {}, {}
     for key, path in srcs.items():
         estimates[key] = bpm.estimate_best(path, seconds=120)
@@ -315,4 +310,37 @@ def _selftest() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(_selftest())
+    import argparse
+    import json
+    import os
+
+    parser = argparse.ArgumentParser(description="vx.edl self-test")
+    parser.add_argument(
+        "--src",
+        action="append",
+        default=[],
+        metavar="LABEL=PATH",
+        help="source clip, repeatable (or set VX_DEMO_SOURCES as JSON)",
+    )
+    args = parser.parse_args()
+    srcs: dict[str, str] = {}
+    raw = os.environ.get("VX_DEMO_SOURCES")
+    if raw:
+        srcs.update(json.loads(raw))
+    for item in args.src:
+        label, _, path = item.partition("=")
+        if not label or not path:
+            print("usage: --src LABEL=PATH")
+            raise SystemExit(2)
+        srcs[label] = path
+    required = {"9928", "9929", "9930"}
+    missing = required - set(srcs)
+    if missing:
+        print(
+            "usage: python -m vx.edl --src 9928=<video> --src 9929=<video> "
+            "--src 9930=<video>"
+        )
+        print(f"       missing labels: {', '.join(sorted(missing))}")
+        print('       (or set VX_DEMO_SOURCES=\'{"9928": "<video>", ...}\')')
+        raise SystemExit(2)
+    raise SystemExit(_selftest(srcs))

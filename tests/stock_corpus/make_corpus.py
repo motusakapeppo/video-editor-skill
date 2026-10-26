@@ -18,13 +18,15 @@ Uso:
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(__file__).resolve().parent
-FF = r"C:\Users\motus\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
+FF = shutil.which("ffmpeg") or os.environ.get("VX_FFMPEG")
 
 SPECS = [
     (
@@ -130,6 +132,10 @@ def build(name, w, h, dur, fps, src, *, force=False) -> Path:
 
 def main() -> int:
     force = "--force" in sys.argv
+    if not FF:
+        print("usage: python tests/stock_corpus/make_corpus.py [--force]")
+        print("       ffmpeg not found: install it, add it to PATH, or set VX_FFMPEG")
+        return 2
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"corpus in {OUT}")
     for name, w, h, dur, fps, src in SPECS:

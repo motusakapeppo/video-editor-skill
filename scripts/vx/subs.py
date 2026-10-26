@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from . import ffmpeg as ff
+from . import fonts as fonts_mod
 from .contract import (
     EXIT_MISSING_DEP,
     EXIT_OK,
@@ -49,10 +50,11 @@ __all__ = [
     "verify_fonts",
     "burn_filter",
     "transcript_stats",
+    "transcript_quality",
     "measure_bbox",
-    "plate_filter",
     "declared_box",
     "wrap_text",
+    "write_hook_ass",
     "main",
 ]
 
@@ -63,16 +65,14 @@ DEFAULT_FONT = "Antonio"
 # set di cue reale, 0.394 in maiuscolo. 0.42 e' il limite prudente usato per il box
 # dichiarato, cosi' il cancello 4 non protegge un ingombro ottimistico.
 #
-# BorderStyle 1 con Outline e Shadow a zero: il testo e' nudo, e la placca non la
-# disegna libass. La disegna `drawbox` nel burn, una sola per cue e larga quanto
-# l'inchiostro misurato — perche' con BorderStyle 3 libass dipinge un rettangolo
-# per OGNI riga, e due righe danno due blocchi di larghezza diversa (sembra un
-# errore, non uno stile).
+# BorderStyle 1: il testo ha un contorno vero, non una placca. I valori sotto sono
+# quelli misurati a 1080x1920 (references/04-specifiche-social.md:85): outline 7,
+# shadow 4 sul verticale; 4 e 2 sull'orizzontale a 1080 di altezza. In `write_ass`
+# vengono riscalati su `out_h`, cosi' la proporzione resta la stessa a ogni
+# risoluzione invece di essere un numero magico legato a un solo output.
 BORDER_STYLE_VERTICAL = 1
 BOX_PADDING_VERTICAL = 0
 BACK_COLOUR = "&H80000000"
-PLATE_PAD = 20
-PLATE_OPACITY = 0.65
 
 # Animazione: dissolvenza morbida ai due capi e pop-in dal 95% al 100%. Il pop
 # parte piu' piccolo e finisce esattamente al 100%, quindi non supera mai il box
@@ -87,8 +87,9 @@ BEAT_COLOUR = "&H0000FF&"
 BEAT_FLASH_MS = 70
 BEAT_MAX_PER_CUE = 4
 
-OUTLINE_VERTICAL = 0
-SHADOW_VERTICAL = 0
+# Valori di riferimento alla risoluzione documentata; `_scaled` li porta a out_h.
+OUTLINE_VERTICAL = 7
+SHADOW_VERTICAL = 4
 OUTLINE_HORIZONTAL = 4
 SHADOW_HORIZONTAL = 2
 
@@ -217,6 +218,11 @@ def _limits(
     lines = max_lines if max_lines is not None else THRESHOLDS["sub_max_lines"]
     cps = max_cps if max_cps is not None else THRESHOLDS["sub_max_cps"]
     return max(1, int(chars)), max(1, int(lines)), float(cps)
+
+
+def _scaled(value: int, out_h: int, ref_h: int) -> int:
+    """Reference px at `ref_h` -> px at `out_h`, never below 1."""
+    return max(1, int(round(float(value) * float(out_h) / float(ref_h))))
 
 
 # --------------------------------------------------------------------------- #
@@ -566,10 +572,14 @@ def write_ass(
     if vertical:
         base = int(round(0.070 * out_h))
         default_outline = (
-            BOX_PADDING_VERTICAL if border_style == 3 else OUTLINE_VERTICAL
+            BOX_PADDING_VERTICAL
+            if border_style == 3
+            else _scaled(OUTLINE_VERTICAL, out_h, 1920)
         )
         outline = default_outline if outline is None else int(outline)
-        shadow = SHADOW_VERTICAL if shadow is None else int(shadow)
+        shadow = (
+            _scaled(SHADOW_VERTICAL, out_h, 1920) if shadow is None else int(shadow)
+        )
         chars = WRAP_CHARS_VERTICAL if wrap_chars is None else int(wrap_chars)
         insets = PLATFORM_INSETS.get(platform, (0, 0, 0, 0))
         scale = out_h / 1920.0
@@ -583,8 +593,14 @@ def write_ass(
         )
     else:
         base = int(round(0.045 * out_h))
-        outline = OUTLINE_HORIZONTAL if outline is None else int(outline)
-        shadow = SHADOW_HORIZONTAL if shadow is None else int(shadow)
+        outline = (
+            _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
+            if outline is None
+            else int(outline)
+        )
+        shadow = (
+            _scaled(SHADOW_HORIZONTAL, out_h, 1080) if shadow is None else int(shadow)
+        )
         chars = 42 if wrap_chars is None else int(wrap_chars)
         margin_v = 40
 
@@ -681,6 +697,67 @@ def write_ass(
 
 
 # --------------------------------------------------------------------------- #
+# 3b. hook card — one event, no karaoke
+# --------------------------------------------------------------------------- #
+
+
+def write_hook_ass(
+    path,
+    text,
+    *,
+    out_w,
+    out_h,
+    start_s=0.0,
+    duration_s=3.0,
+    style="hook",
+    font=None,
+) -> Path:
+    """One ASS event for the hook card: uppercase, no karaoke, one Dialogue line."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    body = " ".join(str(text).split()).upper()
+    family = font or DEFAULT_FONT
+    margin_lr = 60
+    margin_v = 40
+    base = int(round(0.045 * out_h))
+    avail = max(64, int(out_w) - 2 * margin_lr)
+    size = max(24, min(base, int(avail / (max(1, len(body)) * _CHAR_EM))))
+    outline = _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
+    shadow = _scaled(SHADOW_HORIZONTAL, out_h, 1080)
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {out_w}\n"
+        f"PlayResY: {out_h}\n"
+        "WrapStyle: 2\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: {style},{family},{size},&H00FFFFFF,&H0000D7FF,&H00000000,"
+        f"{BACK_COLOUR},-1,0,0,0,100,100,0,0,{BORDER_STYLE_VERTICAL},"
+        f"{outline},{shadow},2,{margin_lr},{margin_lr},{margin_v},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+        "Effect, Text\n"
+    )
+    start = float(start_s)
+    end = start + float(duration_s)
+    event = (
+        f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},{style},,0,0,0,,"
+        f"{_ass_escape(body)}\n"
+    )
+    target.write_text(header + event, encoding="utf-8", newline="\n")
+    return target.resolve()
+
+
+# --------------------------------------------------------------------------- #
 # 4. SRT writer
 # --------------------------------------------------------------------------- #
 
@@ -702,8 +779,13 @@ def write_srt(cues: List[Cue], dst) -> str:
 
 
 def burn_filter(ass_path) -> str:
-    """`ass='D\\:/work/a.ass'` — the only supported way to pass a path."""
-    return "ass=" + ass_filter_path(ass_path)
+    """`ass='D\\:/work/a.ass':fontsdir='.../assets/fonts'`.
+
+    The bundled font directory is part of the filter on purpose: libass prefers
+    a font it can load from `fontsdir` over a system substitute, so the render
+    is the same on a clean machine as on this one.
+    """
+    return "ass=" + ass_filter_path(ass_path) + ":fontsdir=" + fonts_mod.fontsdir_arg()
 
 
 def _playres(ass_text: str) -> tuple[int, int]:
@@ -720,11 +802,44 @@ def _first_dialogue_start(ass_text: str) -> float:
     return 0.0
 
 
+def _declared_style(ass_text: str) -> tuple[str, int]:
+    for line in ass_text.splitlines():
+        if not line.startswith("Style:"):
+            continue
+        fields = line.split(",")
+        if len(fields) < 3:
+            continue
+        name = fields[0].split(":", 1)[1].strip()
+        try:
+            return name, int(fields[2])
+        except ValueError:
+            return name, 0
+    return "", 0
+
+
+def _resolved_style_size(log: str, style_name: str) -> int:
+    """Font size libass reports for `style_name` in its verbose `Style:` dump."""
+    if not style_name:
+        return 0
+    pattern = re.compile(r"Style:\s*" + re.escape(style_name) + r",([^\n]*)")
+    for match in pattern.finditer(log):
+        fields = match.group(1).split(",")
+        if len(fields) < 2:
+            continue
+        try:
+            return int(fields[1])
+        except ValueError:
+            continue
+    return 0
+
+
 def verify_fonts(ass_path, *, log_path=None) -> Dict[str, Any]:
     """Burn one frame and read libass' `fontselect:` decisions.
 
     libass substitutes a missing family silently, so this is the only way to
-    know the render will use the font we asked for.
+    know the render will use the font we asked for.  The same log carries the
+    `Style:` line libass parsed: if its font size differs from the one the ASS
+    declares, the style was not understood and the frame is not trustworthy.
     """
     src = Path(ass_path)
     result: Dict[str, Any] = {
@@ -739,6 +854,7 @@ def verify_fonts(ass_path, *, log_path=None) -> Dict[str, Any]:
     ass_text = src.read_text(encoding="utf-8", errors="replace")
     w, h = _playres(ass_text)
     start = _first_dialogue_start(ass_text)
+    style_name, declared_size = _declared_style(ass_text)
 
     args = [
         "-f",
@@ -778,17 +894,31 @@ def verify_fonts(ass_path, *, log_path=None) -> Dict[str, Any]:
         marker in log
         for marker in ("Could not open", "Error initializing", "No such file")
     )
+    resolved_size = _resolved_style_size(log, style_name)
+    size_ok = bool(declared_size > 0 and resolved_size == declared_size)
     result["fallback_count"] = fallback
     result["fonts_used"] = sorted(set(chosen))
     result["requested"] = sorted(set(requested))
+    result["declared_size"] = declared_size
+    result["resolved_size"] = resolved_size
+    result["size_ok"] = size_ok
     result["rc"] = proc.rc
     result["ok"] = bool(
-        proc.rc == 0 and fallback == 0 and not hard_error and len(chosen) > 0
+        proc.rc == 0
+        and fallback == 0
+        and not hard_error
+        and len(chosen) > 0
+        and size_ok
     )
     if not chosen:
         result["error"] = (
             "no fontselect line in the log: the frame carried no text, so the "
             "font was never exercised"
+        )
+    elif not size_ok:
+        result["error"] = (
+            f"font size mismatch: ass declares {declared_size}, libass resolved "
+            f"{resolved_size}"
         )
     return result
 
@@ -889,7 +1019,9 @@ def measure_bbox(
             "w": int(xs.max() - xs.min() + 1) + 2 * pad,
             "h": int(ys.max() - ys.min() + 1) + 2 * pad,
         }
-        out["cues"].append({"index": i, "start": round(start, 3), "end": round(end, 3), "bbox": box})
+        out["cues"].append(
+            {"index": i, "start": round(start, 3), "end": round(end, 3), "bbox": box}
+        )
         x1, y1 = min(x1, box["x"]), min(y1, box["y"])
         x2, y2 = max(x2, box["x"] + box["w"]), max(y2, box["y"] + box["h"])
 
@@ -900,45 +1032,6 @@ def measure_bbox(
         out["min_left"] = int(x1)
         out["ok"] = True
     return out
-
-
-def plate_filter(
-    ass_path,
-    *,
-    workdir=None,
-    pad: int = PLATE_PAD,
-    opacity: float = PLATE_OPACITY,
-    out_w: int = 1080,
-    out_h: int = 1440,
-    bottom_limit: Optional[int] = None,
-) -> str:
-    """drawbox chain that paints ONE plate per cue, under the text.
-
-    The geometry comes from the ink libass actually rendered, so the plate hugs the
-    words instead of guessing. With BorderStyle 3 libass would draw one box per
-    LINE, which is why this lives here: one cue, one rectangle.
-    """
-    ink = measure_bbox(ass_path, workdir=workdir, outline_px=0, shadow_px=0)
-    if not ink.get("ok"):
-        return ""
-    boxes = []
-    for cue in ink["cues"]:
-        box = cue.get("bbox")
-        if not box:
-            continue
-        x = max(0, box["x"] - pad)
-        y = max(0, box["y"] - pad)
-        w = min(out_w - x, box["w"] + 2 * pad)
-        h = box["h"] + 2 * pad
-        if bottom_limit is not None:
-            h = min(h, int(bottom_limit) - y)
-        if w <= 0 or h <= 0:
-            continue
-        boxes.append(
-            f"drawbox=x={x}:y={y}:w={w}:h={h}:color=black@{opacity:.2f}:t=fill"
-            f":enable='between(t,{cue['start']:.3f},{cue['end']:.3f})'"
-        )
-    return ",".join(boxes)
 
 
 # --------------------------------------------------------------------------- #
@@ -998,6 +1091,32 @@ def declared_box(ass_path) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # 6. stats
 # --------------------------------------------------------------------------- #
+
+
+def transcript_quality(words) -> Dict[str, Any]:
+    """Burn gate from references/12-lezioni-dal-campo.md:70-80.
+
+    Fewer than 12 words or a mean probability below 0.55 means the transcript is
+    not trustworthy enough to be burned into the picture.  A missing probability
+    counts as 0, never as an optimistic default.
+    """
+    items = [w for w in (words or []) if (w.get("word") or "").strip()]
+    count = len(items)
+    probs = [float(w.get("probability") or 0.0) for w in items]
+    mean = sum(probs) / len(probs) if probs else 0.0
+    ok = count >= 12 and mean >= 0.55
+    if count < 12:
+        reason = f"{count} parole: sotto le 12 minime"
+    elif mean < 0.55:
+        reason = f"probabilita' media {mean:.2f}: sotto 0.55"
+    else:
+        reason = f"{count} parole / probabilita' media {mean:.2f}"
+    return {
+        "ok": ok,
+        "word_count": count,
+        "mean_probability": round(mean, 4),
+        "reason": reason,
+    }
 
 
 def transcript_stats(tr: Transcript) -> Dict[str, Any]:

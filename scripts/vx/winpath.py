@@ -22,7 +22,7 @@ _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 def ass_filter_path(path: str | Path) -> str:
     """Return the value to place inside `subtitles=` / `ass=` (already quoted)."""
-    p = Path(path).resolve().as_posix()  # D:/work/clip.ass
+    p = Path(path).resolve().as_posix()  # <drive>:/work/clip.ass
     escaped = p.replace(":", "\\:")  # D\\:/work/clip.ass
     return f"'{escaped}'"
 

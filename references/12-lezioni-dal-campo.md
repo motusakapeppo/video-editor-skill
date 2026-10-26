@@ -71,7 +71,8 @@ durata, frame, decodifica. Solo dopo si scala. Costo: 10 secondi. Risparmio: un 
 
 **Regola.** La trascrizione si valuta prima di incidere: parole ≥ 12 e probabilità media
 ≥ 0,55. Sotto soglia **non si brucia** — meglio nessun sottotitolo che parole sbagliate
-indelebilmente incise nel video.
+indelebilmente incise nel video. È implementato in `subs.transcript_quality`, e
+`cli.cmd_run` disattiva il trattamento sottotitoli quando la guardia non passa.
 
 ```python
 probs = [w.get("probability", 0) for w in tr.words]

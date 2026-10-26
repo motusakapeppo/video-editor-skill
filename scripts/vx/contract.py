@@ -14,7 +14,7 @@ SCHEMA = "vx.report/1.0"
 TRIAGE_SCHEMA = "vx.triage/1.0"
 PLAN_SCHEMA = "vx.plan/1.0"
 QC_SCHEMA = "vx.qc/1.0"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 PROXY_WIDTH = 640
 SAMPLE_FPS_VIDEO = 10.0

@@ -10,7 +10,7 @@ scelta qui nasce da una misura, non da una copia.
 | 01 | `stage/01_trim.mp4` | trim/atrim + concat, solo se serve la stabilizzazione |
 | 02 | `transforms.trf` | `vidstabdetect`, solo se `stabilize` è attivo |
 | 03 | `stage/03_video.mp4` | grafo completo, video e audio |
-| 04 | `final_full.mp4` | secondo passaggio `loudnorm`, `+faststart` |
+| 04 | `final_full.mp4` | secondo passaggio `loudnorm` se il trattamento è attivo, altrimenti `04_remux`; `+faststart` |
 
 Lo stadio 01 esiste solo perché `vidstabdetect` deve vedere il video già tagliato: senza stabilizzazione si salta e si va diretti al grafo completo.
 
@@ -58,7 +58,7 @@ senza lo snap, `trim` produce un frame in più o in meno. `expected_frames` è
 
 | Costante | Valore | Effetto |
 |----------|--------|---------|
-| `FADE_MS` | 12 | `afade` in ingresso e in uscita su ogni segmento |
+| `FADE_MS` | 12 | `afade` in ingresso e in uscita a ogni giunto interno del grafo finale |
 | `acrossfade` | vietato | accorcia il totale della propria durata, circa 10 ms |
 
 `afade` non cambia la durata: il conteggio dei frame resta esatto. `acrossfade`
@@ -70,8 +70,8 @@ percezione e toglie il click al giunto.
 
 | Passaggio | Filtro | Parametri |
 |-----------|--------|-----------|
-| detect | `vidstabdetect` | `shakiness=5:accuracy=9` |
-| transform | `vidstabtransform` | `smoothing=10:zoom=0:optzoom=1` |
+| detect | `vidstabdetect` | `shakiness` 4/6/8 dal piano, `accuracy=9` |
+| transform | `vidstabtransform` | `smoothing` e `zoom` dal piano, `optzoom=1` |
 
 Il file `.trf` viene referenziato con il **solo nome**, e il processo ffmpeg
 gira con `cwd` uguale alla workdir: un path assoluto Windows dentro il
@@ -92,7 +92,11 @@ invece di comprimere, e il risultato resta prevedibile. Se la misura è
 inutilizzabile (`nan`, stringa vuota, `None`), il codice ricade sulla modalità
 dinamica: è la rete di sicurezza, non la scelta preferita.
 
-Atteso: il secondo passaggio porta l'integrato a **-14.0 LUFS**, scarto entro 0.3 LU, quindi `lufs_delta` passa.
+Atteso: il secondo passaggio porta l'integrato a **-14.0 LUFS**. Il finding che
+accende il loudnorm scatta a **1.0 LU** di scarto (`plan.py`); il gate QC che lo
+verifica pretende **0.3 LU** (`qc.py`). Sono due soglie diverse e non in
+contraddizione: la prima decide se normalizzare, la seconda se il risultato è
+accettabile.
 
 Il video non viene riencodato in questo stadio: `-c:v copy`. L'audio sì, in AAC
 192k a 48 kHz. Il `+faststart` sposta l'atomo `moov` prima di `mdat`, così la
@@ -138,7 +142,7 @@ da `crop` centrato.
 ## Comandi
 
 ```powershell
-$VENV = $env:VX_VENV            # es. C:\tools\video_env
+$VENV = $env:VX_VENV            # es. <venv>
 $PY   = "$VENV\Scripts\python.exe"
 $VX   = "<SKILL_DIR>\scripts\vx.py"
 & $PY $VX render --plan "<WORK_DIR>\clip-a1b2c3d4\plan.json" --precision proxy

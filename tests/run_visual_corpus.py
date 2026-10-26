@@ -56,6 +56,14 @@ PASS = 0
 FAIL = 0
 
 
+def _rel(path: str) -> str:
+    """Path relative to the repo root, so the fixture stays portable."""
+    try:
+        return Path(path).resolve().relative_to(ROOT).as_posix()
+    except ValueError:
+        return Path(path).name
+
+
 def check(label: str, ok: bool, detail: str = "") -> None:
     global PASS, FAIL
     PASS += ok
@@ -506,7 +514,8 @@ def main() -> int:
                 },
                 "renders": {
                     name: {
-                        "path": results[name]["path"],
+                        "path": _rel(results[name]["path"]),
+                        "provenance": "declared",
                         "frames": results[name]["frames"],
                         "expected_frames": results[name]["expected_frames"],
                         "crop_plan": crop_plans[name],
