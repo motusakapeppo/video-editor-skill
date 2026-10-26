@@ -58,6 +58,7 @@ FINDING_IDS: tuple[str, ...] = (
     "faces.none",
     "faces.single",
     "faces.multi_span",
+    "faces.multi_concurrent",
     "faces.track_broken",
     "speech.present",
     "speech.fast",
@@ -69,7 +70,13 @@ FINDING_IDS: tuple[str, ...] = (
 
 TRIAGE_ONLY = frozenset({"format.unknown", "hook.missing", "subs.unknown"})
 CREATIVE_PRIORITY = ("autoframe", "hook_overlay", "zoom", "fit")
-FACE_PRIORITY = ("faces.multi_span", "faces.track_broken", "faces.single", "faces.none")
+FACE_PRIORITY = (
+    "faces.multi_span",
+    "faces.multi_concurrent",
+    "faces.track_broken",
+    "faces.single",
+    "faces.none",
+)
 
 _ANSWER_KEYS = {"target_format": "format", "hook": "hook", "subtitles": "subtitles"}
 _PASSTHROUGH = (
@@ -114,6 +121,7 @@ def _finding(
     threshold: Any,
     evidence: str,
     treatment: Optional[str],
+    span: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
     return {
         "id": fid,
@@ -123,6 +131,7 @@ def _finding(
         "threshold": threshold,
         "evidence": evidence,
         "suggested_treatment": treatment,
+        "span": span,
     }
 
 
@@ -261,18 +270,30 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
         )
 
     worst_freeze: Optional[float] = None
+    freeze_spans: List[tuple[float, float]] = []
     for freeze in video.get("freezes") or []:
         if not isinstance(freeze, dict):
             continue
-        span = _num(freeze.get("duration"))
-        if span is None:
-            start = _num(freeze.get("start"))
-            end = _num(freeze.get("end"))
-            span = (end - start) if (start is not None and end is not None) else None
-        if span is not None and span >= THRESHOLDS["freeze_min"]:
-            if worst_freeze is None or span > worst_freeze:
-                worst_freeze = span
+        length = _num(freeze.get("duration"))
+        start = _num(freeze.get("start"))
+        end = _num(freeze.get("end"))
+        if length is None:
+            length = (end - start) if (start is not None and end is not None) else None
+        if length is not None and length >= THRESHOLDS["freeze_min"]:
+            if worst_freeze is None or length > worst_freeze:
+                worst_freeze = length
+            if start is None and end is not None:
+                start = end - length
+            if end is None and start is not None:
+                end = start + length
+            if start is not None and end is not None and end > start:
+                freeze_spans.append((start, end))
     if worst_freeze is not None:
+        freeze_hull = (
+            [min(s for s, _ in freeze_spans), max(e for _, e in freeze_spans)]
+            if freeze_spans
+            else None
+        )
         out.append(
             _finding(
                 "video.freeze.static",
@@ -283,6 +304,7 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
                 f"Immagine ferma per {worst_freeze:.1f}s "
                 f"(soglia {THRESHOLDS['freeze_min']:.1f}s)",
                 "cut_silence",
+                span=freeze_hull,
             )
         )
 
@@ -342,17 +364,25 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
         )
 
     dead_total = 0.0
+    dead_spans: List[tuple[float, float]] = []
     for span in audio.get("dead_air") or []:
         if not isinstance(span, dict):
             continue
+        start = _num(span.get("start"))
+        end = _num(span.get("end"))
         length = _num(span.get("duration"))
         if length is None:
-            start = _num(span.get("start"))
-            end = _num(span.get("end"))
             length = (end - start) if (start is not None and end is not None) else 0.0
         dead_total += max(0.0, length)
+        if start is not None and end is not None and end > start:
+            dead_spans.append((start, end))
     if duration > 0 and dead_total / duration >= THRESHOLDS["dead_air_ratio"]:
         ratio = dead_total / duration
+        dead_hull = (
+            [min(s for s, _ in dead_spans), max(e for _, e in dead_spans)]
+            if dead_spans
+            else None
+        )
         out.append(
             _finding(
                 "audio.dead_air.excess",
@@ -364,6 +394,7 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
                 f"({100 * ratio:.0f}%, soglia "
                 f"{100 * THRESHOLDS['dead_air_ratio']:.0f}%)",
                 "cut_silence",
+                span=dead_hull,
             )
         )
 
@@ -466,6 +497,24 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
                         0.95,
                         f"I volti coprono il {100 * span_x:.0f}% della larghezza "
                         "(soglia 95%)",
+                        "autoframe",
+                    )
+                )
+            if (
+                detected_ratio > 0
+                and concurrent is not None
+                and int(concurrent) >= 2
+                and (span_x or 0.0) <= 0.95
+            ):
+                out.append(
+                    _finding(
+                        "faces.multi_concurrent",
+                        "info",
+                        "faces.max_concurrent",
+                        int(concurrent),
+                        2,
+                        f"{int(concurrent)} volti in scena: nessun inseguimento, "
+                        "riempio con fit e sfondo sfocato",
                         "autoframe",
                     )
                 )
@@ -577,8 +626,21 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
                     1,
                     f"Nessun aggancio nei primi {THRESHOLDS['hook_window']:.0f}s",
                     "hook_overlay",
+                    span=[0.0, min(duration, THRESHOLDS["hook_window"])],
                 )
             )
+
+    # Every finding carries a source-time span. Findings without a natural
+    # interval fall back to the whole source, clamped to its duration.
+    for finding in out:
+        span = finding.get("span")
+        if not isinstance(span, (list, tuple)) or len(span) < 2:
+            finding["span"] = [0.0, duration]
+        else:
+            finding["span"] = [
+                clamp(float(span[0]), 0.0, duration),
+                clamp(float(span[1]), 0.0, duration),
+            ]
 
     return out
 
@@ -589,7 +651,15 @@ def _publish(report: dict, findings: List[Dict[str, Any]]) -> List[Dict[str, Any
     if not isinstance(existing, list):
         existing = []
     fresh = {f["id"] for f in findings}
-    kept = [f for f in existing if isinstance(f, dict) and f.get("id") not in fresh]
+    for finding in findings:
+        finding.pop("stale", None)
+    kept = []
+    for finding in existing:
+        if not isinstance(finding, dict) or finding.get("id") in fresh:
+            continue
+        carried = dict(finding)
+        carried["stale"] = True
+        kept.append(carried)
     report["findings"] = kept + findings
     return report["findings"]
 
@@ -780,7 +850,11 @@ def _autoframe_params(
             False,
             "il crop verticale taglierebbe oltre il 60% dell'altezza: non lo faccio",
         )
-    return params, True, "volti distanti: riempio con fit e sfondo sfocato"
+    return (
+        params,
+        True,
+        "due volti in scena: nessun inseguimento, riempio con fit e sfondo sfocato",
+    )
 
 
 def _sub_style(brief: dict, aspect: str, speech: dict) -> str:
@@ -814,6 +888,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
         brief = apply_answers(brief, answers)
 
     findings = detect_findings(report, brief)
+    fresh = {f["id"]: f for f in findings if isinstance(f, dict) and f.get("id")}
     published = _publish(report, findings)
     known = {f["id"]: f for f in published if isinstance(f, dict) and f.get("id")}
 
@@ -857,7 +932,18 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
         params: Dict[str, Any],
         finding_id: str,
         explain: str,
+        *,
+        witnesses: Optional[Sequence[str]] = None,
     ) -> None:
+        ids = tuple(witnesses) if witnesses is not None else (finding_id,)
+        evidence: List[Dict[str, Any]] = []
+        for fid in ids:
+            finding = fresh.get(fid)
+            span = (finding or {}).get("span")
+            if finding is None or not isinstance(span, (list, tuple)) or len(span) < 2:
+                evidence.append({"finding_id": fid, "t0": None, "t1": None})
+            else:
+                evidence.append({"finding_id": fid, "t0": span[0], "t1": span[1]})
         treatments.append(
             {
                 "name": name,
@@ -865,6 +951,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 "enabled": bool(enabled),
                 "params": params,
                 "reason": {"finding_id": finding_id, "explain": explain},
+                "evidence": evidence,
             }
         )
 
@@ -1189,8 +1276,11 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 )
 
     # -- cuts -------------------------------------------------------------- #
+    cut_witnesses = tuple(
+        fid for fid in ("audio.dead_air.excess", "video.freeze.static") if fid in fresh
+    )
     spans: List[Dict[str, float]] = []
-    if "audio.dead_air.excess" in known:
+    if "audio.dead_air.excess" in fresh:
         for span in audio.get("dead_air") or []:
             if not isinstance(span, dict):
                 continue
@@ -1200,7 +1290,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                     "end": _num(span.get("end")) or 0.0,
                 }
             )
-    if "video.freeze.static" in known:
+    if "video.freeze.static" in fresh:
         for freeze in video.get("freezes") or []:
             if not isinstance(freeze, dict):
                 continue
@@ -1219,9 +1309,9 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
     cuts, removed = _build_cuts(spans, duration)
 
     cut_finding = None
-    if "audio.dead_air.excess" in known:
+    if "audio.dead_air.excess" in fresh:
         cut_finding = "audio.dead_air.excess"
-    elif "video.freeze.static" in known:
+    elif "video.freeze.static" in fresh:
         cut_finding = "video.freeze.static"
 
     if cut_finding:
@@ -1243,6 +1333,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 cut_params,
                 cut_finding,
                 "detector musicale incerto: nessun taglio alla cieca",
+                witnesses=cut_witnesses,
             )
         elif music_ratio > 0.5:
             add(
@@ -1252,6 +1343,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 cut_params,
                 cut_finding,
                 "musica in sottofondo: tagliare i silenzi spezzerebbe il brano",
+                witnesses=cut_witnesses,
             )
             cuts = []
         elif not cuts or _is_full_range(cuts, duration):
@@ -1262,6 +1354,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 cut_params,
                 cut_finding,
                 "nessun silenzio da tagliare che valga il taglio",
+                witnesses=cut_witnesses,
             )
             cuts = []
         else:
@@ -1272,6 +1365,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
                 cut_params,
                 cut_finding,
                 f"taglio {removed:.1f}s di silenzi e freeze",
+                witnesses=cut_witnesses,
             )
 
     # -- output ------------------------------------------------------------ #

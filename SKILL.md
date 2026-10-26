@@ -16,7 +16,7 @@ description: |-
 license: MIT
 compatibility: opencode
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   engine: vx (python 3.10 + ffmpeg 8.1 + opencv + faster-whisper)
   venv: "<VENV_DIR>"
   ffmpeg: "8.1"
@@ -112,8 +112,12 @@ deliverables in un colpo. Per una corsa manuale restano i comandi singoli:
 
 ## Legge fondamentale
 
-1. Nessun finding, nessun trattamento. Ogni trattamento attivo deve citare un
-   `reason.finding_id` che esiste nel report, altrimenti il piano è invalido.
+1. Nessun finding, nessun trattamento. Ogni trattamento attivo porta `evidence`,
+   una lista non vuota di testimoni `{finding_id,t0,t1}`: `evidence[0].finding_id`
+   è il `reason.finding_id`, ogni testimone copia lo span sorgente del finding, e
+   per `cut_silence` ogni intervallo rimosso cade dentro l'unione dei testimoni.
+   La legge è imposta da `plan`/`run` (exit 2), `pre_render` (exit 5) e `render`
+   (exit 6): un finding stantio o uno span che non combacia ferma il render.
 2. Massimo 3 trattamenti creativi (`autoframe`, `zoom`, `hook_overlay`, `fit`).
    Un solo passaggio di stabilizzazione.
 3. Il brief dell'utente vince sempre sulla rilevazione automatica. Se l'utente

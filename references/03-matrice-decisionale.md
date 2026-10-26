@@ -45,12 +45,20 @@ finding. Tre finding di ritmo non autorizzano tre zoom.
 |--------|-------------|
 | `treatment X has no reason.finding_id` | trattamento senza giustificazione |
 | `treatment X cites unknown finding F` | il finding citato non esiste nel report |
+| `treatment X has no evidence` | trattamento attivo senza lista di testimoni |
+| `treatment X evidence[0] does not match reason.finding_id` | il primo testimone non è il finding del `reason` |
+| `treatment X cites finding F with no span` | il finding non porta uno span sorgente |
+| `treatment X witness F does not copy the finding span` | lo span del testimone non combacia col finding |
+| `treatment X witness F outside 0..D` | lo span esce dalla durata del sorgente |
+| `treatment X cites stale finding F` | il finding è stato ricalcolato e non è più fresco |
+| `treatment X must carry exactly one witness` | solo `cut_silence` può citare più finding |
+| `cut_silence removes a-b outside the witness union` | un intervallo rimosso cade fuori dai testimoni |
 | `N creative treatments > 3` | budget creativo sfondato |
 | `more than one stabilization pass` | doppia stabilizzazione |
 | `output.aspect missing` | formato di uscita non dichiarato |
 
-Un piano che non passa la validazione non si renderizza. Non è un avviso, è un
-errore bloccante.
+Un piano che non passa la validazione non si renderizza: `plan`/`run` escono 2,
+`pre_render` esce 5, `render` esce 6. Non è un avviso, è un errore bloccante.
 
 ## Ordine di applicazione
 
@@ -79,12 +87,14 @@ tagliato, e il crop virtuale ha bisogno delle coordinate del sorgente.
       "name": "autoframe",
       "enabled": true,
       "reason": { "finding_id": "F-faces-01" },
+      "evidence": [{ "finding_id": "F-faces-01", "t0": 0.0, "t1": 12.4 }],
       "params": { "mode": "track" }
     },
     {
       "name": "loudnorm",
       "enabled": true,
       "reason": { "finding_id": "F-audio-03" },
+      "evidence": [{ "finding_id": "F-audio-03", "t0": 0.0, "t1": 12.4 }],
       "params": { "target": "social" }
     }
   ],
@@ -92,8 +102,12 @@ tagliato, e il crop virtuale ha bisogno delle coordinate del sorgente.
 }
 ```
 
-Due trattamenti, uno creativo e uno tecnico. Ogni trattamento cita un finding.
-`output.aspect` è dichiarato. Il piano passa.
+Due trattamenti, uno creativo e uno tecnico. Ogni trattamento cita un finding e ne
+copia lo span in `evidence`. `output.aspect` è dichiarato. Il piano passa.
+
+`cut_silence` è l'unica eccezione: può citare più finding, e ogni intervallo
+rimosso dai `cuts` deve cadere dentro l'unione dei loro span. Un taglio che tocca
+un silenzio non testimoniato invalida il piano.
 
 ## Cosa non è un finding
 

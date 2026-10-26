@@ -1,12 +1,15 @@
 # video-editor-skill
 
-> Versione: **1.1.0** — protocollo CLI unico, quattro deliverable, nessun export multi-aspect.
+> Versione: **1.2.0** — protocollo CLI unico, quattro deliverable, nessun export multi-aspect.
 
 > **English TL;DR** — An adaptive video-editing skill for the opencode agent runtime.
 > It measures a video before touching it (jitter, exposure, colour cast, noise floor,
 > dead air, loudness, faces, speech), then **pauses and asks the operator** three
-> questions before applying anything. No finding → no treatment. The source file is
-> never modified.
+> questions before applying anything. No finding → no treatment: every enabled
+> treatment carries a non-empty `evidence` list of `{finding_id,t0,t1}` witnesses
+> that copy the finding's source-time span, and `cut_silence` must keep every
+> removed interval inside the union of its witnesses. The source file is never
+> modified.
 
 Skill di montaggio assistito per opencode. Non è un preset: è una pipeline che misura,
 decide, chiede conferma, e solo allora tocca il video.
@@ -21,11 +24,15 @@ ingest ──▶ proxy 640px ──▶ pre-analisi ──▶ TRIAGE (exit 3, ti 
 
 ## La legge che lo rende adattivo
 
-**Nessun finding, nessun trattamento.** Ogni effetto attivo deve citare una misura
-che lo giustifica (`reason.finding_id`). Niente hook, niente zoom, niente sottotitoli,
-niente auto-framing se i dati o il brief dell'utente non li chiedono. Massimo tre
-trattamenti creativi per video; un solo passaggio di stabilizzazione; il brief vince
-sempre sulla rilevazione automatica.
+**Nessun finding, nessun trattamento.** Ogni effetto attivo porta `evidence`, una
+lista non vuota di testimoni `{finding_id,t0,t1}`: il primo testimone è il
+`reason.finding_id`, ognuno copia lo span sorgente del finding, e per `cut_silence`
+ogni intervallo rimosso cade dentro l'unione dei testimoni. Un finding stantio o
+uno span che non combacia ferma il piano (exit 2), il pre-render (exit 5) e il
+render (exit 6). Niente hook, niente zoom, niente sottotitoli, niente auto-framing
+se i dati o il brief dell'utente non li chiedono. Massimo tre trattamenti creativi
+per video; un solo passaggio di stabilizzazione; il brief vince sempre sulla
+rilevazione automatica.
 
 Se il brief non dichiara formato, hook e sottotitoli, il comando `ingest` **esce con
 codice 3** e stampa un briefing con i numeri reali del tuo materiale e tre domande.
@@ -150,9 +157,10 @@ scritto, e il QC ricontrolla lo `sha256` prima di dichiarare finito un render.
 <venv>\Scripts\python.exe examples\e2e_check.py <video.mp4>
 ```
 
-Verifica il gate di triage (exit 3), la purezza del `--json`, il rispetto della legge
-"nessun finding → nessun trattamento", i tagli dentro la durata, il tetto dei
-trattamenti creativi.
+Verifica il gate di triage (exit 3), la purezza del `--json`, la citazione del finding
+da parte di ogni trattamento attivo, i tagli dentro la durata, il tetto dei trattamenti
+creativi. La legge dei testimoni (`evidence`, span copiato, unione per `cut_silence`)
+è coperta da `tests/test_evidence_law.py` e `tests/test_evidence_gate.py`.
 
 ## Licenza
 

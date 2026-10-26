@@ -97,9 +97,16 @@ def _probe(path: Path) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def pre_render(plan, media: Dict[str, Any]) -> GateResult:
-    """The plan must add up before a single frame is rendered."""
+def pre_render(
+    plan, media: Dict[str, Any], *, findings: Optional[List[Dict[str, Any]]] = None
+) -> GateResult:
+    """The plan must add up before a single frame is rendered.
+
+    ``findings`` is the report's evidence list.  A plan that enables a treatment
+    without a report to back it is refused: no finding, no treatment.
+    """
     result = GateResult("pre_render")
+    plan_dict = plan.to_dict() if hasattr(plan, "to_dict") else plan
     cuts = list(getattr(plan, "cuts", None) or [])
     fps = float(media.get("fps") or 0.0)
     duration = float(media.get("duration") or 0.0)
@@ -114,7 +121,50 @@ def pre_render(plan, media: Dict[str, Any]) -> GateResult:
                 "probe gave no duration: nothing can be validated",
             )
         )
-        return result
+        raise contract.QCFailure(result.to_dict())
+
+    treatments = list(
+        (plan_dict.get("treatments") if isinstance(plan_dict, dict) else None)
+        or getattr(plan, "treatments", None)
+        or []
+    )
+    enabled = [t for t in treatments if isinstance(t, dict) and t.get("enabled")]
+    if enabled and findings is None:
+        result.checks.append(
+            Check(
+                "evidence_findings",
+                "fail",
+                None,
+                "report.findings",
+                f"{len(enabled)} enabled treatments but no findings: evidence missing",
+            )
+        )
+    elif findings is None:
+        result.checks.append(
+            Check(
+                "evidence",
+                "skipped",
+                0,
+                "n/a",
+                "no enabled treatments: nothing to justify",
+            )
+        )
+    else:
+        errors = contract.validate_evidence(plan_dict, findings, duration=duration)
+        for err in errors:
+            result.checks.append(
+                Check("evidence", "fail", err, "valid evidence", str(err))
+            )
+        if not errors:
+            result.checks.append(
+                Check(
+                    "evidence",
+                    "pass",
+                    len(enabled),
+                    "n/a",
+                    f"{len(enabled)} enabled treatments backed by findings",
+                )
+            )
 
     if not cuts:
         result.checks.append(

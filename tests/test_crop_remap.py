@@ -115,7 +115,15 @@ def _render_plan() -> contract.EditPlan:
         output={"aspect": "9:16", "width": 1080, "height": 1920},
         cuts=[{"in": 0.0, "out": 2.0}, {"in": 3.0, "out": 5.0}],
         render={"precision": "full"},
-        treatments=[{"name": "autoframe", "enabled": True, "params": {}}],
+        treatments=[
+            {
+                "name": "autoframe",
+                "enabled": True,
+                "params": {},
+                "reason": {"finding_id": "faces.single", "explain": "test"},
+                "evidence": [{"finding_id": "faces.single", "t0": 0.0, "t1": 5.0}],
+            }
+        ],
     )
 
 
@@ -376,7 +384,15 @@ def run_real() -> None:
                 "preset": "veryfast",
                 "crf": 20,
             },
-            treatments=[{"name": "autoframe", "enabled": True, "params": {}}],
+            treatments=[
+                {
+                    "name": "autoframe",
+                    "enabled": True,
+                    "params": {},
+                    "reason": {"finding_id": "faces.single", "explain": "test"},
+                    "evidence": [{"finding_id": "faces.single", "t0": 0.0, "t1": 5.0}],
+                }
+            ],
         )
         crop = _track_crop()
         crop["boxes"] = [

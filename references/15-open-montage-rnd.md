@@ -85,7 +85,7 @@ esiste. Non abbiamo `narrative_role`, `shot_intent`, `information_role`,
 chiuso) obbligatorio su `EdlShot`, validato in `validate_plan`, più il controllo
 referenziale che loro non hanno: se un taglio cita uno span, `span.start <= in` e
 `span.end >= out`; se cita un frame, il frame cade in `[in, out]`.
-Perché non ora: senza un livello semantico che assegni il ruolo, il campo sarebbe
+Il motivo del rinvio: senza un livello semantico che assegni il ruolo, il campo sarebbe
 un default decorativo — esattamente il "dichiarato ma non eseguito" che questa
 fase combatte. Va introdotto insieme al pianificatore semantico, con il suo test.
 
@@ -200,19 +200,21 @@ siamo avanti su `frames`, `t_in/t_out` espliciti, `cut_on`
 `treatments[].reason.finding_id`. Loro hanno un `reason` per taglio, ma **non
 obbligatorio** e senza alcun puntatore a una misura.
 
-**L'aggiunta minima, e perché è meglio di `narrative_role`.** Un oggetto
-`evidence {finding_id, t0, t1, frame}` per taglio, validato in
-`gates.pre_render`: `finding_id` deve esistere nel report, e l'intervallo del
-taglio deve essere **contenuto** nell'evidenza citata (`t0 <= in`, `out <= t1`).
-Il contenimento è la parte che rende la citazione falsificabile. `narrative_role`
-invece non può essere sbagliato — qualunque taglio può essere etichettato
-`deliver_payload` — e vive a granularità di scena. Va tenuto come etichetta
-derivata opzionale, non come gate.
+**L'aggiunta minima, e perché è meglio di `narrative_role`.** L'evidenza è
+implementata a livello di trattamento, non di taglio: ogni trattamento attivo
+porta `evidence`, una lista non vuota di testimoni `{finding_id,t0,t1}`. Il primo
+testimone è il `reason.finding_id`; ogni testimone copia lo span sorgente del
+finding (nessun restringimento, nessuna espansione); per `cut_silence` ogni
+intervallo rimosso deve cadere dentro l'unione dei testimoni. Il contenimento è
+la parte che rende la citazione falsificabile. `narrative_role` invece non può
+essere sbagliato — qualunque taglio può essere etichettato `deliver_payload` — e
+vive a granularità di scena. Va tenuto come etichetta derivata opzionale, non
+come gate.
 
-**Perché non ora.** È un cambio di contratto (`EditPlan.cuts` è
-`List[Dict[str, float]]`) e richiede che il pianificatore semantico produca
-l'evidenza. Introdurlo prima significherebbe un default, cioè di nuovo il
-dichiarato-non-eseguito. Va in Fase 4, con il test di contenimento.
+La legge è imposta in tre punti: `plan`/`run` (exit 2), `gates.pre_render`
+(exit 5) e `render.render` (exit 6). Un finding stantio, uno span che non
+combacia o un taglio fuori dall'unione dei testimoni ferma il render prima di
+ffmpeg.
 
 ---
 
@@ -223,4 +225,4 @@ dichiarato-non-eseguito. Va in Fase 4, con il test di contenimento.
 | 2026-10-26 | QC legge il target **eseguito** dal render, non lo ri-deriva | `qc.check_render`, `cli.cmd_run`, `cli.cmd_qc` | `test_qc_loudness` 8/0; `test_cli_run` 58/0 |
 | 2026-10-26 | `has_audio` senza default `True` | `qc.check_render` | `test_qc_loudness` |
 | 2026-10-26 | Quattro trigger per il motore browser (shader, backdrop-filter, layout reflow, blend su animato) | `references/15` §3 | documentazione, nessun codice |
-| — | `evidence {finding_id,t0,t1,frame}` + contenimento in `gates.pre_render` | Fase 4, non implementato | da scrivere col pianificatore semantico |
+| 2026-10-26 | `evidence` a livello di trattamento: lista di testimoni `{finding_id,t0,t1}`, span copiato, unione per `cut_silence` | `contract.validate_evidence`, `plan`, `gates.pre_render`, `render.render` | `test_evidence_law`, `test_evidence_gate` |

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -964,7 +965,55 @@ def cmd_deliverables(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _norm_source_path(value: Any) -> str:
+    try:
+        return os.path.normcase(os.path.abspath(str(value)))
+    except (OSError, ValueError):
+        return str(value)
+
+
+def _same_number(a: Any, b: Any) -> bool:
+    try:
+        return abs(float(a) - float(b)) <= 1e-3
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _resolve_report(
+    args: argparse.Namespace, plan_path: Path
+) -> Optional[Dict[str, Any]]:
+    """Explicit ``--report`` -> sibling ``report.json`` -> None."""
+    explicit = getattr(args, "report", None)
+    if explicit:
+        path: Optional[Path] = Path(explicit)
+    else:
+        sibling = plan_path.parent / "report.json"
+        path = sibling if sibling.is_file() else None
+    if path is None:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VxError(f"report illeggibile: {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise VxError(f"report non e' un oggetto JSON: {path}")
+    return data
+
+
+def _verify_source_identity(report: Dict[str, Any], media: Dict[str, Any]) -> None:
+    """The report must describe the same source the renderer is about to read."""
+    source = report.get("source")
+    if not isinstance(source, dict):
+        raise VxError("report.source mancante: impossibile provare la sorgente")
+    if _norm_source_path(source.get("path")) != _norm_source_path(media.get("path")):
+        raise VxError("report.source.path non combacia con il media analizzato")
+    for key in ("size", "mtime", "duration", "width", "height"):
+        if key in source and key in media and not _same_number(source[key], media[key]):
+            raise VxError(f"report.source.{key} non combacia con il media analizzato")
+
+
 def cmd_render(args: argparse.Namespace) -> int:
+    from . import gates
     from . import probe as probe_mod
     from . import render
 
@@ -973,6 +1022,19 @@ def cmd_render(args: argparse.Namespace) -> int:
     if not source:
         raise VxError("serve --input: il piano non contiene la sorgente")
     media = probe_mod.probe(source).to_dict()
+
+    report = _resolve_report(args, Path(args.plan))
+    if report is None:
+        enabled = [t for t in (built.treatments or []) if t.get("enabled")]
+        if enabled:
+            _log(
+                "[render] piano con trattamenti attivi ma nessun report: "
+                "l'evidenza non e' verificabile"
+            )
+            return EXIT_USAGE
+    else:
+        _verify_source_identity(report, media)
+
     visual = (
         _visual_from_brief(_load_json(args.visual_brief))
         if getattr(args, "visual_brief", None)
@@ -980,6 +1042,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     )
     work = Path(args.workdir) if args.workdir else winpath.work_root() / "manual"
     _log(f"[render] precision={args.precision}")
+    gates.pre_render(built, media, findings=(report or {}).get("findings"))
     result = render.render(
         built,
         media,
@@ -1350,10 +1413,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         crop = crop_plan.to_dict()
         built.render["crop"] = crop
 
-    report_io.write(built.to_dict(), work / "plan.json")
-
     # ---- preview on the proxy, then full-res delivery
-    gates.pre_render(built, media)
+    gates.pre_render(built, media, findings=rep.get("findings"))
+    report_io.write(built.to_dict(), work / "plan.json")
     winpath.heartbeat(work, "render_preview")
     _log("[run] render anteprima (proxy)")
     preview = render.render(
@@ -1577,6 +1639,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--precision", default="full", choices=["proxy", "full"])
     p.add_argument("--workdir", default=None)
     p.add_argument("--subs", default=None)
+    p.add_argument(
+        "--report",
+        default=None,
+        help="report.json con findings/source: default il sibling del piano",
+    )
     p.add_argument(
         "--visual-brief",
         default=None,

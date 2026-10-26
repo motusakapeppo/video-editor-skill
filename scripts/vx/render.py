@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from . import contract
 from . import ffmpeg as ff
 from . import fonts as fonts_mod
 from .contract import (
@@ -879,6 +880,13 @@ def render(
 
     Raises ``RenderFailure`` on any non-zero ffmpeg exit.
     """
+    plan_dict = plan.to_dict() if hasattr(plan, "to_dict") else plan
+    shape_errors = contract.validate_evidence_shape(plan_dict)
+    if shape_errors:
+        raise RenderFailure(
+            "plan without evidence: " + "; ".join(str(e) for e in shape_errors)
+        )
+
     precision = _precision(plan, precision)
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)

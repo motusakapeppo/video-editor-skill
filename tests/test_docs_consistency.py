@@ -38,9 +38,19 @@ def main() -> int:
     contract = read(CONTRACT)
 
     # -- version --------------------------------------------------------- #
-    check("SKILL.md dichiara 1.1.0", 'version: "1.1.0"' in skill)
-    check("README.md dichiara 1.1.0", "1.1.0" in readme)
-    check("contract.VERSION e' 1.1.0", 'VERSION = "1.1.0"' in contract)
+    check("SKILL.md dichiara 1.2.0", 'version: "1.2.0"' in skill)
+    check("README.md dichiara 1.2.0", "1.2.0" in readme)
+    check("contract.VERSION e' 1.2.0", 'VERSION = "1.2.0"' in contract)
+
+    # -- witness law ----------------------------------------------------- #
+    for name, text in (("SKILL.md", skill), ("README.md", readme)):
+        check(
+            f"{name}: legge dei testimoni", "evidence" in text and "cut_silence" in text
+        )
+        check(
+            f"{name}: exit 2/5/6",
+            all(code in text for code in ("exit 2", "exit 5", "exit 6")),
+        )
 
     # -- size and single protocol --------------------------------------- #
     lines = len(skill.splitlines())

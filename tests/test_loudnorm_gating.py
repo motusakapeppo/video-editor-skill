@@ -90,6 +90,17 @@ def main() -> int:
                         "name": "loudnorm",
                         "enabled": True,
                         "params": {"I": -14.0, "TP": -1.0, "LRA": 11.0},
+                        "reason": {
+                            "finding_id": "audio.loudness.off",
+                            "explain": "test",
+                        },
+                        "evidence": [
+                            {
+                                "finding_id": "audio.loudness.off",
+                                "t0": 0.0,
+                                "t1": 4.0,
+                            }
+                        ],
                     }
                 ]
             ),

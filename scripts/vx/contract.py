@@ -1,4 +1,4 @@
-"""vx.contract — FROZEN interface v1.0.0 for the video-editor skill.
+"""vx.contract — FROZEN interface v1.2.0 for the video-editor skill.
 
 stdlib only. Every other module may import this; this module imports nothing local.
 Changing anything here is a version bump (see SKILL.md "contratto").
@@ -12,9 +12,9 @@ from typing import Any, Dict, List, Optional
 
 SCHEMA = "vx.report/1.0"
 TRIAGE_SCHEMA = "vx.triage/1.0"
-PLAN_SCHEMA = "vx.plan/1.0"
+PLAN_SCHEMA = "vx.plan/1.1"
 QC_SCHEMA = "vx.qc/1.0"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 PROXY_WIDTH = 640
 SAMPLE_FPS_VIDEO = 10.0
@@ -388,6 +388,203 @@ def validate_report(report: Dict[str, Any]) -> List[str]:
     return errors
 
 
+def _is_number(value: Any) -> bool:
+    """True for real numbers; booleans are not numbers here."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _finding_span(finding: Dict[str, Any]) -> Optional[tuple[float, float]]:
+    span = finding.get("span")
+    if not isinstance(span, (list, tuple)) or len(span) != 2:
+        return None
+    if not (_is_number(span[0]) and _is_number(span[1])):
+        return None
+    return float(span[0]), float(span[1])
+
+
+def _merge_intervals(
+    intervals: List[tuple[float, float]],
+) -> List[tuple[float, float]]:
+    if not intervals:
+        return []
+    ordered = sorted(intervals)
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        if start <= merged[-1][1] + 1e-9:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _removed_intervals(
+    cuts: List[Dict[str, Any]], duration: Optional[float]
+) -> List[tuple[float, float]]:
+    """Complement of the keep-ranges: the source intervals a cut removes."""
+    keep: List[tuple[float, float]] = []
+    for cut in cuts:
+        if not isinstance(cut, dict):
+            continue
+        start = cut.get("in")
+        end = cut.get("out")
+        if _is_number(start) and _is_number(end) and float(end) > float(start):
+            keep.append((float(start), float(end)))
+    if not keep:
+        return []
+    merged = _merge_intervals(keep)
+    removed: List[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in merged:
+        if start > cursor + 1e-9:
+            removed.append((cursor, start))
+        cursor = max(cursor, end)
+    if duration is not None and cursor < float(duration) - 1e-9:
+        removed.append((cursor, float(duration)))
+    return removed
+
+
+def _covered(
+    start: float,
+    end: float,
+    merged: List[tuple[float, float]],
+    tolerance: float,
+) -> bool:
+    for low, high in merged:
+        if start >= low - tolerance and end <= high + tolerance:
+            return True
+    return False
+
+
+def validate_evidence_shape(plan: Dict[str, Any]) -> List[str]:
+    """Shape-only check: enabled treatments carry a non-empty witness list.
+
+    A witness is ``{finding_id, t0, t1}`` with numeric ``t0 <= t1`` and the
+    first witness must cite the treatment's own ``reason.finding_id``. Disabled
+    treatments are exempt: they may carry null witnesses.
+    """
+    errors: List[str] = []
+    for treatment in plan.get("treatments") or []:
+        if not isinstance(treatment, dict) or not treatment.get("enabled"):
+            continue
+        name = treatment.get("name")
+        evidence = treatment.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            errors.append(f"treatment {name} has no evidence")
+            continue
+        reason_id = (treatment.get("reason") or {}).get("finding_id")
+        first = evidence[0]
+        if not isinstance(first, dict):
+            errors.append(f"treatment {name} evidence[0] is not an object")
+            continue
+        if first.get("finding_id") != reason_id:
+            errors.append(
+                f"treatment {name} evidence[0] does not match reason.finding_id"
+            )
+        for index, witness in enumerate(evidence):
+            if not isinstance(witness, dict):
+                errors.append(f"treatment {name} evidence[{index}] is not an object")
+                continue
+            finding_id = witness.get("finding_id")
+            if not isinstance(finding_id, str) or not finding_id:
+                errors.append(f"treatment {name} evidence[{index}] has no finding_id")
+            t0 = witness.get("t0")
+            t1 = witness.get("t1")
+            if not (_is_number(t0) and _is_number(t1)):
+                errors.append(
+                    f"treatment {name} evidence[{index}] has a non-numeric span"
+                )
+            elif float(t0) > float(t1):
+                errors.append(f"treatment {name} evidence[{index}] has t0 > t1")
+    return errors
+
+
+def validate_evidence(
+    plan: Dict[str, Any],
+    findings: List[Dict[str, Any]],
+    duration: Optional[float] = None,
+) -> List[str]:
+    """Full evidence law: witnesses must be fresh, spanned and exact.
+
+    Every witness copies its finding's source-time span (no narrowing, no
+    expansion). ``cut_silence`` may cite several findings, and every removed
+    source interval must lie inside the union of its witnesses (1e-3). Every
+    other treatment carries exactly one witness and needs exact span equality
+    (1e-6).
+    """
+    errors: List[str] = list(validate_evidence_shape(plan))
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for finding in findings or []:
+        if isinstance(finding, dict) and finding.get("id"):
+            by_id[finding["id"]] = finding
+
+    for treatment in plan.get("treatments") or []:
+        if not isinstance(treatment, dict) or not treatment.get("enabled"):
+            continue
+        name = treatment.get("name")
+        if name == "cut_silence" and duration is None:
+            errors.append(
+                "treatment cut_silence requires a duration to verify coverage"
+            )
+        evidence = treatment.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            continue  # shape already reported it
+        if name != "cut_silence" and len(evidence) != 1:
+            errors.append(f"treatment {name} must carry exactly one witness")
+
+        witness_intervals: List[tuple[float, float]] = []
+        for index, witness in enumerate(evidence):
+            if not isinstance(witness, dict):
+                continue
+            finding_id = witness.get("finding_id")
+            t0 = witness.get("t0")
+            t1 = witness.get("t1")
+            if not (_is_number(t0) and _is_number(t1)):
+                continue  # shape already reported it
+            t0 = float(t0)
+            t1 = float(t1)
+            if t0 > t1:
+                continue  # shape already reported it
+            if t1 - t0 <= 0:
+                errors.append(f"treatment {name} evidence[{index}] is zero-length")
+                continue
+            finding = by_id.get(finding_id)
+            if finding is None:
+                errors.append(f"treatment {name} cites unknown finding {finding_id}")
+                continue
+            if finding.get("stale"):
+                errors.append(f"treatment {name} cites stale finding {finding_id}")
+                continue
+            span = _finding_span(finding)
+            if span is None:
+                errors.append(
+                    f"treatment {name} cites finding {finding_id} with no span"
+                )
+                continue
+            if abs(t0 - span[0]) > 1e-6 or abs(t1 - span[1]) > 1e-6:
+                errors.append(
+                    f"treatment {name} witness {finding_id} does not copy the "
+                    "finding span"
+                )
+                continue
+            if duration is not None and (t0 < -1e-6 or t1 > float(duration) + 1e-6):
+                errors.append(
+                    f"treatment {name} witness {finding_id} outside 0..{duration}"
+                )
+                continue
+            witness_intervals.append((t0, t1))
+
+        if name == "cut_silence" and witness_intervals:
+            removed = _removed_intervals(plan.get("cuts") or [], duration)
+            merged = _merge_intervals(witness_intervals)
+            for start, end in removed:
+                if not _covered(start, end, merged, 1e-3):
+                    errors.append(
+                        f"cut_silence removes {start:.3f}-{end:.3f} outside the "
+                        "witness union"
+                    )
+    return errors
+
+
 def validate_plan(
     plan: Dict[str, Any], report: Optional[Dict[str, Any]] = None
 ) -> List[str]:
@@ -421,6 +618,10 @@ def validate_plan(
     out = plan.get("output") or {}
     if not out.get("aspect"):
         errors.append("output.aspect missing")
+    if report is not None:
+        findings = report.get("findings") or []
+        duration = (report.get("source") or {}).get("duration")
+        errors.extend(validate_evidence(plan, findings, duration))
     return errors
 
 

@@ -94,11 +94,18 @@ un taglio produrrebbe una panoramica fantasma fra due inquadrature diverse.
 | `track` | tutti gli altri casi con volto | crop che segue il soggetto |
 
 La classificazione del framing avviene prima, in `vx.faces`: nessuna track dà
-`center`, `span_x_ratio > 0.95` dà `fit`, `max_concurrent >= 2` dà `multi`,
-altrimenti `single`. `LOCK_FACE_WIDTH_RATIO = 0.55`: se il volto occupa più del
-55% della larghezza del crop, muoverlo lo farebbe uscire, quindi si blocca.
-`FIT_SPAN_RATIO = 0.95`: se i volti coprono più del 95% della larghezza del
-sorgente, un crop verticale li taglierebbe, quindi si passa al blur-pad.
+`center`, `span_x_ratio > 0.95` dà `fit`, `max_concurrent >= 2` dà l'etichetta
+`multi`, altrimenti `single`. `LOCK_FACE_WIDTH_RATIO = 0.55`: se il volto occupa
+più del 55% della larghezza del crop, muoverlo lo farebbe uscire, quindi si
+blocca. `FIT_SPAN_RATIO = 0.95`: se i volti coprono più del 95% della larghezza
+del sorgente, un crop verticale li taglierebbe, quindi si passa al blur-pad.
+
+La quarta regola è un finding, non un'etichetta: `max_concurrent >= 2` con
+`span_x_ratio <= 0.95` produce `faces.multi_concurrent`, che il piano traduce in
+`autoframe` con `mode: fit` (sfondo sfocato, nessun inseguimento). Il valore
+`multi` che `faces.py` assegna a `framing` è solo un'etichetta di inquadratura,
+non un finding: non entra in `reason.finding_id` e non autorizza da solo un
+trattamento.
 
 ## Geometria
 
