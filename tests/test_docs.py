@@ -118,6 +118,14 @@ def main() -> int:
         docs.match(unexecuted, unexecuted_text) is False,
     )
 
+    promised = text + "\nusato anche glitch e elastic_3d\n"
+    promised_brief = copy.deepcopy(b)
+    promised_brief["docs_match"]["doc_sha256"] = prove._sha256_text(promised)
+    check(
+        "testo che nomina effetti non eseguiti rifiutato",
+        docs.match(promised_brief, promised) is False,
+    )
+
     missing_sentence = copy.deepcopy(b)
     lines = [ln for ln in text.splitlines() if not ln.startswith("Riduzione di scope")]
     missing_text = "\n".join(lines)

@@ -69,6 +69,16 @@ ANIMATION_CAPABILITIES: Dict[str, str] = {
     name: spec["engine"] for name, spec in ANIMATIONS.items()
 }
 
+# Never executable, but still refuseable: the docs gate scans prose for these
+# names so a retired effect cannot come back as a promise.
+RETIRED_EFFECTS = (
+    "blur_in",
+    "glitch",
+    "mask_wipe",
+    "blend_difference",
+    "elastic_3d",
+)
+
 AXES = (
     "palette",
     "grade",

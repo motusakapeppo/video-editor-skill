@@ -19,13 +19,20 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .palette import INK_DARK, INK_LIGHT  # the two neutral inks, constants only
-from .registry import ANIMATIONS, APPROVED_DELIVERY_SHA256, AXES, THRESHOLDS
+from .registry import (
+    ANIMATIONS,
+    APPROVED_DELIVERY_SHA256,
+    AXES,
+    RETIRED_EFFECTS,
+    THRESHOLDS,
+)
 
 # The approved delivery is machine-local and never re-rendered. The environment
 # variable exists so a different workstation can point at its own copy.
@@ -579,6 +586,16 @@ def _declared_effects(brief: Dict[str, Any]) -> set:
     return declared
 
 
+def _named_effects(text: str) -> set:
+    """Effect names that appear in prose, executable or retired."""
+    names = (set(ANIMATIONS) - {"none"}) | set(RETIRED_EFFECTS)
+    return {
+        name
+        for name in names
+        if re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", text)
+    }
+
+
 def docs_match(brief: Dict[str, Any], docs_text: str) -> bool:
     """The documentation gate: the docs must describe exactly what executed.
 
@@ -606,6 +623,9 @@ def docs_match(brief: Dict[str, Any], docs_text: str) -> bool:
 
     executed_names = {item.get("name") for item in executed if isinstance(item, dict)}
     if _declared_effects(brief) != executed_names:
+        return False
+
+    if _named_effects(docs_text) - executed_names:
         return False
 
     for sentence in MANDATORY_SENTENCES:

@@ -125,10 +125,13 @@ Misura una copertura, non una qualità.
 
 L'hash del ledger deve comparire nel testo, l'hash del documento deve coincidere,
 l'insieme degli effetti dichiarati deve essere uguale all'insieme degli effetti
-eseguiti, e le tre frasi obbligatorie devono essere presenti alla lettera.
+eseguiti, le tre frasi obbligatorie devono essere presenti alla lettera, e il
+testo non deve nominare effetti che non sono stati eseguiti: né un nome del
+vocabolario corrente né un nome ritirato (`registry.RETIRED_EFFECTS`). Un nome
+nella prosa è una promessa; se il video non la mantiene, il cancello fallisce.
 
 **Cosa NON certifica:** che la prosa sia completa o utile. Certifica che non
-contraddice il ledger.
+contraddice il ledger e che non promette effetti inesistenti.
 
 ## 6. Le misure di stanotte
 
@@ -140,7 +143,7 @@ contraddice il ledger.
   `designated_by:"verdict"`;
 - baseline: 104 assert verdi (15 decisioni + 53 corpus + 36 colore); nuovi:
   gradeplan 35, cutplan 15, animplan 49, palette 32, screen 23, ledger 8,
-  distinct 13, docs 5, visual corpus 16;
+  distinct 13, docs 6, autonomia 7, visual corpus 16, graph identity 12;
 - palette: `bright_45` neutral `#2e2e2e/#f22424`, `dark_916` mono `#231e2e/#6924f2`,
   distanza di hue 100°, contrasti 5.03:1 e 15.50:1 per il testo;
 - transient: i tre clip con parole riproducono i valori memorizzati con
@@ -212,6 +215,19 @@ $env:PYTHONPATH = "<SKILL_DIR>\scripts"
 
 `vx visual --source <clip> --measurements <json> --out <brief.json>` costruisce il
 brief; `vx render --visual-brief <brief.json>` lo esegue.
+
+### La corsa notturna
+
+`ingest --autonomous` e `run --autonomous` non restituiscono mai exit 3. Quando il
+brief non dichiara formato, hook e sottotitoli, il comando registra nel report
+`triage.status="autonomous"` con i tre default e la provenienza
+`declared:autonomous`, poi prosegue: il formato viene dal materiale, l'hook resta
+inazione, i sottotitoli seguono il ritmo del parlato (`_sub_style`). `plan` e
+`triage` restano comandi interattivi: chiedono solo quando c'è qualcuno davanti.
+
+Senza questa modalità il percorso legacy si fermava con `EXIT_NEEDS_INPUT`, che in
+una corsa notturna significa una notte ferma. La modalità è una scelta esplicita,
+non un default: chi vuole essere interpellato non la usa.
 
 ## 10. Le tre frasi che devono restare
 

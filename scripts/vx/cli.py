@@ -1089,9 +1089,17 @@ def _ingest(src: Path, args: argparse.Namespace) -> Dict[str, Any]:
     report_io.merge(rep, "findings", plan_mod.detect_findings(rep))
 
     brief = _load_brief(args.brief)
+    autonomous = bool(getattr(args, "autonomous", False))
     _log("[7/7] triage")
-    request = plan_mod.needs_triage(brief, rep)
-    rep["triage"] = request
+    request = plan_mod.needs_triage(brief, rep, autonomous=autonomous)
+    if autonomous:
+        rep["triage"] = {
+            "status": "autonomous",
+            "questions": [],
+            "defaults": plan_mod.autonomous_defaults(rep, brief),
+        }
+    else:
+        rep["triage"] = request
     report_io.write(rep, report_path)
     if request is not None:
         report_io.write(request, work / "triage.json")
@@ -1119,14 +1127,20 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     state = _ingest(src, args)
 
     request = state["triage"]
+    recorded = (state["report"] or {}).get("triage")
+    autonomous = bool(getattr(args, "autonomous", False))
     if args.json:
         _out(
             {
                 "workdir": str(state["workdir"]),
                 "report": str(state["report_path"]),
                 "proxy": state["proxy"],
-                "triage": request,
-                "verdict": "needs_user_input" if request else "ready_for_plan",
+                "triage": recorded,
+                "verdict": (
+                    "autonomous"
+                    if autonomous
+                    else ("needs_user_input" if request else "ready_for_plan")
+                ),
                 "resume_command": (request or {}).get("resume_command"),
             }
         )
@@ -1135,6 +1149,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             print(triage.to_markdown(request))
             print(f"\nReport: {state['report_path']}")
             print(f"Anteprime: {state['contact_sheet']}")
+        elif autonomous:
+            print("Modalita' autonoma: nessuna domanda, default registrati nel report.")
+            print(f"Report: {state['report_path']}")
         else:
             print("Brief completo: pronto per il piano.")
             print(f"Report: {state['report_path']}")
@@ -1159,6 +1176,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     work: Path = state["workdir"]
     media = state["probe"]
     brief = _load_brief(args.brief)
+    if answers is None and getattr(args, "autonomous", False):
+        answers = {}
     if answers is None:
         request = state["triage"] or plan_mod.needs_triage(brief, rep)
         if request is not None:
@@ -1168,7 +1187,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 print(triage.to_markdown(request))
             return EXIT_NEEDS_INPUT
     else:
-        brief["_answers_path"] = str(Path(args.answers).resolve())
+        brief["_answers_path"] = (
+            None if not args.answers else str(Path(args.answers).resolve())
+        )
 
     brief = plan_mod.apply_answers(brief, answers or {})
     brief.setdefault("source", (rep.get("source") or {}).get("path"))
@@ -1488,6 +1509,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thumbs", type=int, default=8)
     p.add_argument("--sample-fps", type=float, default=SAMPLE_FPS_VIDEO)
     p.add_argument(
+        "--autonomous",
+        action="store_true",
+        help="non chiede mai: registra i default nel report e prosegue",
+    )
+    p.add_argument(
         "--speech",
         action="store_true",
         help="accetta per compatibilita: il parlato e attivo di default",
@@ -1510,6 +1536,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--thumbs", type=int, default=8)
     p.add_argument("--sample-fps", type=float, default=SAMPLE_FPS_VIDEO)
+    p.add_argument(
+        "--autonomous",
+        action="store_true",
+        help="non chiede mai: usa i default registrati e prosegue",
+    )
     p.add_argument(
         "--speech",
         action="store_true",

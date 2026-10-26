@@ -595,8 +595,44 @@ def _brief_complete(brief: dict) -> bool:
     )
 
 
-def needs_triage(brief: dict, report: dict) -> Optional[dict]:
-    """None when the brief answers format/hook/subtitles, else the briefing."""
+def autonomous_defaults(report: dict, brief: dict) -> dict:
+    """What an unattended run uses when nobody can answer: material aspect,
+    no hook overlay, subtitles chosen from the speech rate. Every value carries
+    ``declared:autonomous`` so the report can be audited later."""
+    brief = brief if isinstance(brief, dict) else {}
+    report = report if isinstance(report, dict) else {}
+    source = report.get("source") or {}
+    aspect = brief.get("format")
+    if aspect not in ASPECTS:
+        aspect = (
+            _aspect_of(
+                int(_num(source.get("width")) or 0),
+                int(_num(source.get("height")) or 0),
+            )
+            or "9:16"
+        )
+        if aspect not in ASPECTS:
+            aspect = "9:16"
+    return {
+        "target_format": {"value": aspect, "provenance": "declared:autonomous"},
+        "hook": {
+            "value": brief.get("hook") or "none",
+            "provenance": "declared:autonomous",
+        },
+        "subtitles": {
+            "value": brief.get("subtitles") or "auto",
+            "provenance": "declared:autonomous",
+        },
+    }
+
+
+def needs_triage(brief: dict, report: dict, autonomous: bool = False) -> Optional[dict]:
+    """None when the brief answers format/hook/subtitles, else the briefing.
+
+    ``autonomous=True`` is the night path: it never returns a briefing and never
+    stops for an answer. The caller records the defaults in the report."""
+    if autonomous:
+        return None
     brief = brief if isinstance(brief, dict) else {}
     if _brief_complete(brief):
         return None
@@ -790,7 +826,9 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
     music_confidence = _num(audio.get("music_confidence")) or 0.0
     word_count = _num(speech.get("word_count")) or 0.0
     music_only = music_ratio > 0.6 and word_count == 0
-    detector_floor = _num((_settings().get("audio") or {}).get("detector_min_confidence")) or 0.6
+    detector_floor = (
+        _num((_settings().get("audio") or {}).get("detector_min_confidence")) or 0.6
+    )
     music_uncertain = music_confidence < detector_floor
     tone = brief.get("tone")
 

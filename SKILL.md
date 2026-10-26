@@ -84,6 +84,12 @@ $VX   = "<SKILL_DIR>\scripts\vx.py"
 **2. Exit code 3 significa che serve l'utente.** Mostra il briefing con le 3
 domande e FERMATI. Non indovinare il formato, non proseguire con un default.
 
+In una corsa notturna, senza nessuno davanti, si aggiunge `--autonomous` a
+`ingest` o `run`: il comando non restituisce mai 3, registra i tre default nel
+report (`triage.status = "autonomous"`, `triage.defaults`, provenienza
+`declared:autonomous`) e prosegue. Il formato viene dal materiale, l'hook resta
+inazione, i sottotitoli seguono il ritmo del parlato.
+
 **3. Plan.** Le risposte dell'utente diventano un piano verificabile.
 
 ```powershell
@@ -268,8 +274,9 @@ La tornata visiva (W0–W2.5) aggiunge un secondo strato, con un solo vocabolari
 3. **effetti solo-Chromium — chiuso il 26/10/2026.** I cinque effetti fantasma
    sono stati rimossi dal vocabolario: `registry.ANIMATIONS` contiene solo
    `none`, `fade`, `wipe`, `punch`, tutti ffmpeg single-stream. `motion_browser.py`
-   resta in quarantena: conservato, non importato. Non c'è più un effetto
-   dichiarato e non eseguito.
+   resta in quarantena: conservato, e nessuna animazione del vocabolario lo
+   seleziona; gli import lazy che `motion.py` aveva già non sono raggiunti dal
+   percorso visivo. Non c'è più un effetto dichiarato e non eseguito.
 
 ### Test che esistono
 
@@ -283,12 +290,13 @@ La tornata visiva (W0–W2.5) aggiunge un secondo strato, con un solo vocabolari
 - `tests/test_screen.py` — 23 assert su offset, centro e inazione
 - `tests/test_ledger.py` — 8 assert sul ledger (`applied:true` => filtro eseguito)
 - `tests/test_distinct.py` — 13 assert su `distinct_surface`, `hook_distinct`, `coverage_gate`
-- `tests/test_docs.py` — 5 assert su `docs_match`
+- `tests/test_docs.py` — 6 assert su `docs_match`
+- `tests/test_autonomy.py` — 7 assert: la corsa notturna non chiede e registra i default
 - `tests/test_graph_identity.py` — 12 assert: `visual=None` resta identico byte per byte (hash dorato)
 - `tests/run_visual_corpus.py` — 16 assert: due progetti, due render, tutti i cancelli
 - `tests/stock_corpus/real/LICENSES.md` — provenienza del materiale reale
 
-Totale: 104 assert di base + 208 nuovi = 312.
+Totale: 104 assert di base + 216 nuovi = 320.
 
 ### Regola che vale sopra le altre
 
@@ -363,12 +371,20 @@ esegue, inserendo le catene di grade e animazione nel grafo.
 | `distinct_surface` | che due brief divergono su almeno tre famiglie di superficie (colore, ritmo, geometria, tipografia) | la differenza di montaggio (rinviata) e la distinzione su materiale arbitrario futuro |
 | `hook_distinct` | che i primi 3 secondi hanno tipo di hook e animazione diversi | che l'hook trattenga |
 | `coverage_gate` | che l'inchiostro stia fra 0.30% e 2.00% su 12 frame | che il testo sia leggibile o corretto; `overlay == ink` perché le decorazioni sono fuori scope |
-| `docs_match` | che il testo contenga l'hash del ledger, l'hash del documento, gli effetti eseguiti e le tre frasi | che la prosa sia completa o utile |
+| `docs_match` | che il testo contenga l'hash del ledger, l'hash del documento, gli effetti eseguiti e le tre frasi, e che non nomini effetti non eseguiti (né del vocabolario né ritirati) | che la prosa sia completa o utile |
 
 Il ledger è il presupposto: `check_ledger` rifiuta un brief in cui `applied:true`
 non punti a un filtro reale (`executed.name != "none"`, filtro non vuoto, `rc 0`,
 `frames > 0`). **Regola: `applied:true` => filtro eseguito.** Nessun effetto
 dichiarato e non eseguito.
+
+### Corsa notturna
+
+`ingest --autonomous` e `run --autonomous` non restituiscono mai exit 3: registrano
+i tre default nel report (`triage.status="autonomous"`, provenienza
+`declared:autonomous`) e proseguono. Il formato viene dal materiale, l'hook resta
+inazione, i sottotitoli seguono il ritmo del parlato. `plan` e `triage` restano i
+comandi interattivi, per quando c'è qualcuno davanti.
 
 ### Le tre frasi che devono restare
 
