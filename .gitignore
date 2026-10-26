@@ -23,6 +23,11 @@ sample.mp4
 out/
 work/
 
+# artefatti di build del packaging (pip install -e .)
+*.egg-info/
+build/
+dist/
+
 # artefatti prodotti dal test end-to-end
 examples/answers.json
 examples/brief.json

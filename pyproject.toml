@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vx-video-editor"
+version = "1.5.0"
+description = "Assisted video editing toolkit driven by measurement, not presets."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+vx = "vx.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "scripts"}
+packages = ["vx"]
