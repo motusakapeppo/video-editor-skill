@@ -280,6 +280,9 @@ class ProbeResult:
     color: Dict[str, Any] = field(default_factory=dict)
     size: int = 0
     mtime: float = 0.0
+    # "video" | "image" | "audio". Appended last so positional construction
+    # keeps working; probe() always reports "video".
+    kind: str = "video"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
