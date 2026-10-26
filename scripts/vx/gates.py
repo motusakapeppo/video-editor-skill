@@ -740,3 +740,80 @@ def layout_elements(lay, boxes, *, text_box=None) -> GateResult:
     if not result.ok:
         raise LayoutFailure(result.to_dict())
     return result
+
+
+def calibrate(node, video, *, at: float = 0.0, tolerance: float = 0.025,
+              workdir=None) -> GateResult:
+    """Gate 5 dinamico: le due implementazioni dello stesso nodo devono combaciare.
+
+    Non confronta un file con un master statico: prende UN frame, applica il nodo
+    con FFmpeg e con Pillow, e misura lo scarto di luma ai livelli di ingresso. Se
+    divergono oltre la tolleranza, il motore e' respinto PRIMA del render completo.
+
+    Vale per qualunque nodo e per qualunque risoluzione: la mappatura e' per-pixel,
+    quindi non contiene coordinate.
+    """
+    import subprocess  # noqa: PLC0415
+
+    from PIL import Image  # noqa: PLC0415
+
+    from . import ffmpeg as ff  # noqa: PLC0415
+    from . import grade as grade_mod  # noqa: PLC0415
+
+    work = Path(workdir) if workdir else Path(".")
+    work.mkdir(parents=True, exist_ok=True)
+    src = work / "cal_frame.png"
+    proc = subprocess.run(
+        [ff.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{at:.3f}",
+         "-i", str(video), "-frames:v", "1", str(src)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc.returncode != 0 or not src.exists():
+        raise contract.QCFailure({"gate": "color_calibration",
+                                  "failures": [f"frame non estraibile a {at}: {proc.stderr[-200:]}"]})
+
+    via_ff = work / "cal_ff.png"
+    proc = subprocess.run(
+        [ff.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+         "-vf", grade_mod.ffmpeg_filter(node), "-frames:v", "1", str(via_ff)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise contract.QCFailure({"gate": "color_calibration",
+                                  "failures": [f"filtro non applicabile: {proc.stderr[-200:]}"]})
+
+    img_ff = Image.open(via_ff).convert("RGB")
+    img_pl = grade_mod.apply_pillow(Image.open(src), node)
+
+    import numpy as np  # noqa: PLC0415
+
+    def stats(im):
+        rgb = np.asarray(im, dtype=np.float32) / 255.0
+        y = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+        hi, lo = rgb.max(axis=2), rgb.min(axis=2)
+        sat = np.where(hi > 1e-6, (hi - lo) / np.maximum(hi, 1e-6), 0.0)
+        mid = (y > 0.35) & (y < 0.65)
+        return {
+            "p01": float(np.percentile(y, 1)),
+            "p50": float(np.percentile(y, 50)),
+            "p99": float(np.percentile(y, 99)),
+            "mid_sat": float(sat[mid].mean()) if mid.any() else 0.0,
+        }
+
+    a, b = stats(img_ff), stats(img_pl)
+    result = GateResult("color_calibration")
+    worst = 0.0
+    for key in ("p01", "p50", "p99", "mid_sat"):
+        delta = abs(a[key] - b[key])
+        if key.startswith("p"):
+            worst = max(worst, delta)
+        limit = tolerance if key.startswith("p") else max(tolerance, 0.05)
+        result.checks.append(
+            Check(key, "pass" if delta <= limit else "fail", round(delta, 4),
+                  f"<= {limit}", f"ffmpeg {a[key]:.4f} vs pillow {b[key]:.4f}")
+        )
+    result.checks.append(
+        Check("max_dl", "pass" if worst <= tolerance else "fail",
+              round(worst, 4), f"<= {tolerance}", "scarto massimo di luma")
+    )
+    if not result.ok:
+        raise contract.QCFailure(result.to_dict())
+    return result
