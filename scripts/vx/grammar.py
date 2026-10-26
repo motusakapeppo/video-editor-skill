@@ -431,16 +431,8 @@ def _has_broll_coverage(plan: EDLPlan, cut_time: float) -> bool:
     return False
 
 
-def validate_cinematic_rules(plan: EDLPlan) -> List[GrammarViolation]:
-    """30-degree jump-cut and 180-degree axis checks on the layer-0 sequence.
-
-    A cut between two different sources is a jump cut when neither the angle
-    (>=30 degrees) nor the focal length (>=20 mm) changes. Crossing the action
-    axis (angle sign flips with both angles non-neutral) is refused unless a
-    B-roll clip covers the cut. Same-source cuts are not angle checks: the
-    camera did not change.
-    """
-    violations: List[GrammarViolation] = []
+def _main_cuts(plan: EDLPlan):
+    """Layer-0 cuts between two different, declared sources, in timeline order."""
     main_clips = sorted(
         (
             clip
@@ -457,56 +449,147 @@ def validate_cinematic_rules(plan: EDLPlan) -> List[GrammarViolation]:
         source_b = plan.sources.get(second.source_id)
         if source_a is None or source_b is None:
             continue
-        camera_a = source_a.camera
-        camera_b = source_b.camera
-        cut_time = float(second.dst_in)
-        delta_angle = abs(float(camera_a.angle_deg) - float(camera_b.angle_deg))
-        delta_focal = abs(
-            float(camera_a.focal_length_mm) - float(camera_b.focal_length_mm)
-        )
-        covered = _has_broll_coverage(plan, cut_time)
+        yield first, second, source_a.camera, source_b.camera
 
-        if delta_angle < 30.0 and delta_focal < 20.0 and not covered:
-            violations.append(
-                GrammarViolation(
-                    rule="30_DEGREE_RULE",
-                    cut_time_sec=cut_time,
-                    clip_from_id=first.clip_id,
-                    clip_to_id=second.clip_id,
-                    source_from_id=first.source_id,
-                    source_to_id=second.source_id,
-                    details=(
-                        f"Jump cut rilevato: d_angle={delta_angle:.1f} deg (<30), "
-                        f"d_focal={delta_focal:.1f}mm (<20) senza B-roll."
-                    ),
-                )
-            )
+
+def camera_exemptions(plan: EDLPlan) -> List[Dict[str, Any]]:
+    """Cuts whose camera rule was skipped because the metadata is not declared.
+
+    ``None`` means "not declared", never "0 degrees / 35 mm". A skipped check is
+    a declared omission, so it is reported instead of silently passing.
+    """
+    exemptions: List[Dict[str, Any]] = []
+    for first, second, camera_a, camera_b in _main_cuts(plan):
+        missing_30: List[str] = []
+        if camera_a.angle_deg is None or camera_b.angle_deg is None:
+            missing_30.append("angle_deg")
+        if camera_a.focal_length_mm is None or camera_b.focal_length_mm is None:
+            missing_30.append("focal_length_mm")
+        missing_180: List[str] = []
+        if camera_a.angle_deg is None or camera_b.angle_deg is None:
+            missing_180.append("angle_deg")
+        if not missing_30 and not missing_180:
+            continue
+        if missing_30 and missing_180:
+            rule = "both"
+            missing = sorted(set(missing_30) | set(missing_180))
+        elif missing_30:
+            rule = "30deg"
+            missing = missing_30
+        else:
+            rule = "180deg"
+            missing = missing_180
+        exemptions.append(
+            {
+                "cut_time_sec": float(second.dst_in),
+                "clip_from_id": first.clip_id,
+                "clip_to_id": second.clip_id,
+                "missing": missing,
+                "rule": rule,
+            }
+        )
+    exemptions.sort(
+        key=lambda item: (
+            item["cut_time_sec"],
+            item["clip_from_id"],
+            item["clip_to_id"],
+        )
+    )
+    return exemptions
+
+
+def validate_cinematic_rules(plan: EDLPlan) -> List[GrammarViolation]:
+    """30-degree jump-cut and 180-degree axis checks on the layer-0 sequence.
+
+    A cut between two different sources is a jump cut when neither the angle
+    (>=30 degrees) nor the focal length (>=20 mm) changes. Crossing the action
+    axis (angle sign flips with both angles non-neutral) is refused unless a
+    B-roll clip covers the cut. Same-source cuts are not angle checks: the
+    camera did not change.
+
+    A rule is skipped when the metadata it needs is not declared; those skips
+    are reported by :func:`camera_exemptions`, never treated as a pass.
+    """
+    violations: List[GrammarViolation] = []
+    for first, second, camera_a, camera_b in _main_cuts(plan):
+        cut_time = float(second.dst_in)
+        covered = _has_broll_coverage(plan, cut_time)
+        angle_a = camera_a.angle_deg
+        angle_b = camera_b.angle_deg
+        focal_a = camera_a.focal_length_mm
+        focal_b = camera_b.focal_length_mm
 
         if (
-            float(camera_a.angle_deg) * float(camera_b.angle_deg) < 0
-            and abs(float(camera_a.angle_deg)) > 1.0
-            and abs(float(camera_b.angle_deg)) > 1.0
-            and not covered
+            angle_a is not None
+            and angle_b is not None
+            and focal_a is not None
+            and focal_b is not None
         ):
-            violations.append(
-                GrammarViolation(
-                    rule="180_DEGREE_RULE",
-                    cut_time_sec=cut_time,
-                    clip_from_id=first.clip_id,
-                    clip_to_id=second.clip_id,
-                    source_from_id=first.source_id,
-                    source_to_id=second.source_id,
-                    details=(
-                        f"Scavalcamento dell'asse di campo: da "
-                        f"{float(camera_a.angle_deg):.1f} deg a "
-                        f"{float(camera_b.angle_deg):.1f} deg senza B-roll."
-                    ),
+            delta_angle = abs(float(angle_a) - float(angle_b))
+            delta_focal = abs(float(focal_a) - float(focal_b))
+            if delta_angle < 30.0 and delta_focal < 20.0 and not covered:
+                violations.append(
+                    GrammarViolation(
+                        rule="30_DEGREE_RULE",
+                        cut_time_sec=cut_time,
+                        clip_from_id=first.clip_id,
+                        clip_to_id=second.clip_id,
+                        source_from_id=first.source_id,
+                        source_to_id=second.source_id,
+                        details=(
+                            f"Jump cut rilevato: d_angle={delta_angle:.1f} deg (<30), "
+                            f"d_focal={delta_focal:.1f}mm (<20) senza B-roll."
+                        ),
+                    )
                 )
-            )
+
+        if angle_a is not None and angle_b is not None:
+            if (
+                float(angle_a) * float(angle_b) < 0
+                and abs(float(angle_a)) > 1.0
+                and abs(float(angle_b)) > 1.0
+                and not covered
+            ):
+                violations.append(
+                    GrammarViolation(
+                        rule="180_DEGREE_RULE",
+                        cut_time_sec=cut_time,
+                        clip_from_id=first.clip_id,
+                        clip_to_id=second.clip_id,
+                        source_from_id=first.source_id,
+                        source_to_id=second.source_id,
+                        details=(
+                            f"Scavalcamento dell'asse di campo: da "
+                            f"{float(angle_a):.1f} deg a "
+                            f"{float(angle_b):.1f} deg senza B-roll."
+                        ),
+                    )
+                )
     return violations
 
 
-def assert_cinematic_rules(plan: EDLPlan) -> None:
+def assert_cinematic_rules(plan: EDLPlan, *, require_camera: bool = False) -> None:
     violations = validate_cinematic_rules(plan)
     if violations:
         raise GrammarError(violations)
+    if require_camera:
+        exemptions = camera_exemptions(plan)
+        if exemptions:
+            raise GrammarError(
+                [
+                    GrammarViolation(
+                        rule="CAMERA_UNDECLARED",
+                        cut_time_sec=item["cut_time_sec"],
+                        clip_from_id=item["clip_from_id"],
+                        clip_to_id=item["clip_to_id"],
+                        source_from_id="",
+                        source_to_id="",
+                        details=(
+                            f"Camera non dichiarata ({', '.join(item['missing'])}): "
+                            f"regola {item['rule']} saltata al taglio "
+                            f"{item['cut_time_sec']:.3f}s."
+                        ),
+                    )
+                    for item in exemptions
+                ]
+            )

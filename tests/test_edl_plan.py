@@ -78,8 +78,8 @@ def _src(path="a.mp4", sha=None, duration=20.0):
     return model.SourceRef(path=path, sha256=sha or "a" * 64, duration=duration)
 
 
-def _c(cid, si=0.0, so=10.0, di=0.0, do=10.0, *, source_id="src_01", layer=0, role="main_talking_head", tin=None, tout=None):
-    return model.ClipSegment(clip_id=cid, source_id=source_id, src_in=si, src_out=so, dst_in=di, dst_out=do, layer=layer, role=role, transition_in=tin, transition_out=tout)
+def _c(cid, si=0.0, so=10.0, di=0.0, do=10.0, *, source_id="src_01", layer=0, role="main_talking_head", tin=None, tout=None, gain_db=0.0):
+    return model.ClipSegment(clip_id=cid, source_id=source_id, src_in=si, src_out=so, dst_in=di, dst_out=do, layer=layer, role=role, transition_in=tin, transition_out=tout, gain_db=gain_db)
 
 
 def _b(cid, si, so, di, do):
@@ -91,7 +91,7 @@ def _t(tid, clips, role="main"):
 
 
 def _p(**kw):
-    base = dict(contract_version="2.1.0", fps=25.0, duration_sec=20.0, aspect_ratio="9:16", resolution=(1080, 1920),
+    base = dict(contract_version="2.2.0", fps=25.0, duration_sec=20.0, aspect_ratio="9:16", resolution=(1080, 1920),
                 sources={"src_01": _src(), "src_02": _src("b.mp4", "b" * 64)},
                 video_tracks=(_t(0, [_c("c1"), _c("c2", 10, 20, 10, 20)]),),
                 audio_tracks=(_t(0, [_c("a1", 0, 20, 0, 20, role="dialogue")], "dialogue"),), notes=())
@@ -139,8 +139,8 @@ def _set(d, path, value=1):
 def case_m1() -> None:
     if not _ready("M1 import / re-export identity"): return
     from vx import edl as edl_mod
-    check("M1 schema", model.EDL_SCHEMA == "vx.edl/2.1", model.EDL_SCHEMA)
-    check("M1 version", model.EDL_CONTRACT_VERSION == "2.1.0")
+    check("M1 schema", model.EDL_SCHEMA == "vx.edl/2.2", model.EDL_SCHEMA)
+    check("M1 version", model.EDL_CONTRACT_VERSION == "2.2.0")
     check("M1 re-export", getattr(edl_mod, "EDLPlan", None) is model.EDLPlan)
     err = model.EDLValidationError(["boom"])
     check("M1 errors", err.errors == ["boom"], err.errors)
@@ -162,6 +162,7 @@ def case_m2() -> None:
 def case_m3() -> None:
     if not _ready("M3 contract_version"): return
     _r("M3 wrong version", _p(contract_version="1.0.0"))
+    _r("M3 old 2.1", _p(contract_version="2.1.0"))
 
 
 def case_m4() -> None:
@@ -345,7 +346,7 @@ def case_m24() -> None:
     default = _src()
     check(
         "M24 camera default",
-        (default.camera.angle_deg, default.camera.focal_length_mm) == (0.0, 35.0),
+        (default.camera.angle_deg, default.camera.focal_length_mm) == (None, None),
         default.camera,
     )
     plan = _p(
@@ -420,10 +421,98 @@ def case_m24() -> None:
         check("M24 camera non oggetto", False, "accettata")
 
 
+def case_m25() -> None:
+    if not _ready("M25 gain_db"): return
+    p = _v(_c("c1", gain_db=-6.0))
+    d = p.to_dict()
+    clip = d["tracks"]["video"][0]["clips"][0]
+    check("M25 gain emesso", clip.get("gain_db") == -6.0, clip)
+    back = model.EDLPlan.from_dict(d)
+    check("M25 gain round-trip", back == p and back.video_tracks[0].clips[0].gain_db == -6.0)
+    zero = _v(_c("c1")).to_dict()["tracks"]["video"][0]["clips"][0]
+    check("M25 zero omesso", "gain_db" not in zero, zero)
+    _r("M25 gain < -60", _v(_c("c1", gain_db=-61.0)))
+    _r("M25 gain > 24", _v(_c("c1", gain_db=25.0)))
+    _r("M25 gain nan", _v(_c("c1", gain_db=float("nan"))))
+    _a("M25 gain -60", _v(_c("c1", gain_db=-60.0)))
+    _a("M25 gain 24", _v(_c("c1", gain_db=24.0)))
+
+
+def _audio_plan(**kw):
+    dialogue = _t(0, [_c("a1", 0, 20, 0, 20, role="dialogue")], "dialogue")
+    music = _t(1, [_c("m1", 0, 20, 0, 20, role="music")], "music")
+    return _p(audio_tracks=(dialogue, music), **kw)
+
+
+def case_m26() -> None:
+    if not _ready("M26 ducking"): return
+    spec = model.DuckingSpec()
+    p = _audio_plan(ducking=spec)
+    d = p.to_dict()
+    check("M26 ducking emesso", d.get("ducking") == spec.to_dict(), d.get("ducking"))
+    check(
+        "M26 top keys con ducking",
+        set(d) == {"contract_version", "timeline", "sources", "tracks", "ducking"},
+        sorted(d),
+    )
+    back = model.EDLPlan.from_dict(d)
+    check("M26 ducking round-trip", back == p and back.ducking == spec)
+    check("M26 ducking assente di default", "ducking" not in _p().to_dict())
+    _a("M26 valido", p)
+    for label, kw in [
+        ("threshold basso", dict(threshold=0.0001)),
+        ("threshold alto", dict(threshold=1.5)),
+        ("ratio basso", dict(ratio=0.5)),
+        ("ratio alto", dict(ratio=21.0)),
+        ("attack basso", dict(attack_ms=0.0)),
+        ("attack alto", dict(attack_ms=2001.0)),
+        ("release basso", dict(release_ms=0.0)),
+        ("release alto", dict(release_ms=9001.0)),
+        ("makeup negativo", dict(makeup_db=-1.0)),
+        ("makeup alto", dict(makeup_db=37.0)),
+    ]:
+        _r(f"M26 {label}", _audio_plan(ducking=model.DuckingSpec(**kw)))
+    _r(
+        "M26 ruoli uguali",
+        _audio_plan(
+            ducking=model.DuckingSpec(sidechain_role="music", target_role="music")
+        ),
+    )
+    _r("M26 senza music", _p(ducking=model.DuckingSpec()))
+    _r(
+        "M26 senza dialogue",
+        _p(
+            audio_tracks=(
+                _t(0, [_c("m1", 0, 20, 0, 20, role="music")], "music"),
+            ),
+            ducking=model.DuckingSpec(),
+        ),
+    )
+
+
+def case_m27() -> None:
+    if not _ready("M27 audio gain object form"): return
+    clip = _c("a1", 0, 20, 0, 20, role="dialogue", gain_db=-3.0)
+    p = _p(audio_tracks=(_t(0, [clip], "dialogue"),))
+    d = p.to_dict()
+    a = d["tracks"]["audio"][0]
+    check(
+        "M27 forma oggetto con gain",
+        "clips" in a and a["clips"][0].get("gain_db") == -3.0,
+        a,
+    )
+    back = model.EDLPlan.from_dict(d)
+    check(
+        "M27 round-trip",
+        back == p and back.audio_tracks[0].clips[0].gain_db == -3.0,
+    )
+    flat = _p().to_dict()["tracks"]["audio"][0]
+    check("M27 zero resta piatto", "clips" not in flat and "gain_db" not in flat, flat)
+
+
 # --------------------------------------------------------------------------- #
 # builder cases
 # --------------------------------------------------------------------------- #
-
 
 def _builder(label):
     try:
@@ -587,7 +676,9 @@ def main() -> int:
              ("M15 coverage", case_m15), ("M16 J/L cuts", case_m16), ("M17 audio shorthand", case_m17),
              ("M18 immutability", case_m18), ("M19 JSON on disk", case_m19), ("M20 builder happy path", case_m20),
              ("M21 builder clock mapping", case_m21), ("M22 builder rejects", case_m22),
-             ("M23 real clip round-trip", case_m23), ("M24 camera metadata", case_m24)]
+             ("M23 real clip round-trip", case_m23), ("M24 camera metadata", case_m24),
+             ("M25 gain_db", case_m25), ("M26 ducking", case_m26),
+             ("M27 audio gain object form", case_m27)]
     for label, fn in cases:
         print(f"\n{label}")
         run_case(label, fn)

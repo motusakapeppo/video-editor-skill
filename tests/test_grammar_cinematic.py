@@ -154,6 +154,83 @@ def main() -> int:
         "stessa sorgente: nessun angolo", grammar.validate_cinematic_rules(same) == []
     )
 
+    unknown = _plan(
+        SourceRef("a.mp4", "a" * 64, 20.0, CameraSpec()),
+        SourceRef("b.mp4", "b" * 64, 20.0, CameraSpec()),
+    )
+    check("camera ignota: fixture valida", unknown.validate() == [], unknown.validate())
+    check(
+        "camera ignota: nessuna violazione",
+        grammar.validate_cinematic_rules(unknown) == [],
+    )
+    exemptions = grammar.camera_exemptions(unknown)
+    check("camera ignota: una esenzione", len(exemptions) == 1, exemptions)
+    if exemptions:
+        check(
+            "camera ignota: regola both", exemptions[0]["rule"] == "both", exemptions[0]
+        )
+        check(
+            "camera ignota: missing",
+            exemptions[0]["missing"] == ["angle_deg", "focal_length_mm"],
+            exemptions[0],
+        )
+        check(
+            "camera ignota: taglio al secondo 5",
+            abs(exemptions[0]["cut_time_sec"] - 5.0) < 1e-9,
+            exemptions[0],
+        )
+
+    partial = _plan(
+        _source("a", 0.0, 35.0),
+        SourceRef("b.mp4", "b" * 64, 20.0, CameraSpec(10.0, None)),
+    )
+    check(
+        "camera parziale: nessuna violazione",
+        grammar.validate_cinematic_rules(partial) == [],
+    )
+    exemptions = grammar.camera_exemptions(partial)
+    check("camera parziale: una esenzione", len(exemptions) == 1, exemptions)
+    if exemptions:
+        check(
+            "camera parziale: regola 30deg",
+            exemptions[0]["rule"] == "30deg",
+            exemptions[0],
+        )
+        check(
+            "camera parziale: missing",
+            exemptions[0]["missing"] == ["focal_length_mm"],
+            exemptions[0],
+        )
+
+    try:
+        grammar.assert_cinematic_rules(unknown)
+    except grammar.GrammarError as exc:
+        check("require_camera default non solleva", False, exc)
+    else:
+        check("require_camera default non solleva", True)
+
+    try:
+        grammar.assert_cinematic_rules(unknown, require_camera=True)
+    except grammar.GrammarError as exc:
+        check("require_camera solleva", len(exc.violations) == 1, exc)
+    except Exception as exc:  # noqa: BLE001
+        check("require_camera solleva", False, f"{type(exc).__name__}: {exc}")
+    else:
+        check("require_camera solleva", False, "nessuna eccezione")
+
+    try:
+        grammar.assert_cinematic_rules(bad30, require_camera=True)
+    except grammar.GrammarError as exc:
+        check("require_camera con camera dichiarata", len(exc.violations) == 1, exc)
+    except Exception as exc:  # noqa: BLE001
+        check(
+            "require_camera con camera dichiarata",
+            False,
+            f"{type(exc).__name__}: {exc}",
+        )
+    else:
+        check("require_camera con camera dichiarata", False, "nessuna eccezione")
+
     try:
         grammar.assert_cinematic_rules(bad30)
     except grammar.GrammarError as exc:

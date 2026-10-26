@@ -1766,12 +1766,14 @@ def cmd_edl(args: argparse.Namespace) -> int:
         return 2
 
     violations = grammar.validate_cinematic_rules(plan)
+    exemptions = grammar.camera_exemptions(plan)
     if violations:
         _out(
             {
                 "ok": False,
                 "errors": [item.details for item in violations],
                 "grammar": [item.to_dict() for item in violations],
+                "camera_exemptions": exemptions,
             }
         )
         return 2
@@ -1786,6 +1788,7 @@ def cmd_edl(args: argparse.Namespace) -> int:
                 "audio_tracks": len(plan.audio_tracks),
                 "duration_sec": plan.duration_sec,
                 "resolution": list(plan.resolution),
+                "camera_exemptions": exemptions,
             }
         )
         return EXIT_OK

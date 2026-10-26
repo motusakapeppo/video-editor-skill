@@ -18,14 +18,14 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
-EDL_SCHEMA = "vx.edl/2.1"
-EDL_CONTRACT_VERSION = "2.1.0"
+EDL_SCHEMA = "vx.edl/2.2"
+EDL_CONTRACT_VERSION = "2.2.0"
 
 _SOURCE_KEY = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ASPECT = re.compile(r"^(\d+):(\d+)$")
 
-_TOP_KEYS = {"contract_version", "timeline", "sources", "tracks"}
+_TOP_KEYS = {"contract_version", "timeline", "sources", "tracks", "ducking"}
 _TIMELINE_KEYS = {"fps", "duration_sec", "aspect_ratio", "resolution"}
 _SOURCE_KEYS = {"path", "sha256", "duration", "camera"}
 _CAMERA_KEYS = {"angle_deg", "focal_length_mm"}
@@ -42,8 +42,18 @@ _CLIP_KEYS = {
     "role",
     "transition_in",
     "transition_out",
+    "gain_db",
 }
 _TRANSITION_KEYS = {"type", "duration_sec"}
+_DUCKING_KEYS = {
+    "sidechain_role",
+    "target_role",
+    "threshold",
+    "ratio",
+    "attack_ms",
+    "release_ms",
+    "makeup_db",
+}
 
 
 class EDLValidationError(ValueError):
@@ -112,14 +122,18 @@ class _FrozenMap(Mapping):
 
 @dataclass(frozen=True)
 class CameraSpec:
-    angle_deg: float = 0.0
-    focal_length_mm: float = 35.0
+    """Camera metadata. ``None`` means "not declared", never a guessed default."""
+
+    angle_deg: Optional[float] = None
+    focal_length_mm: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "angle_deg": self.angle_deg,
-            "focal_length_mm": self.focal_length_mm,
-        }
+        data: Dict[str, Any] = {}
+        if self.angle_deg is not None:
+            data["angle_deg"] = self.angle_deg
+        if self.focal_length_mm is not None:
+            data["focal_length_mm"] = self.focal_length_mm
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> "CameraSpec":
@@ -127,9 +141,11 @@ class CameraSpec:
             return cls()
         if not isinstance(data, dict):
             raise ValueError("camera must be an object")
+        angle = data.get("angle_deg")
+        focal = data.get("focal_length_mm")
         return cls(
-            angle_deg=float(data.get("angle_deg", 0.0)),
-            focal_length_mm=float(data.get("focal_length_mm", 35.0)),
+            angle_deg=None if angle is None else float(angle),
+            focal_length_mm=None if focal is None else float(focal),
         )
 
 
@@ -148,6 +164,48 @@ class Transition:
 
 
 @dataclass(frozen=True)
+class DuckingSpec:
+    """Declared sidechain ducking. Ranges mirror ffmpeg 8.1 ``sidechaincompress``.
+
+    ``makeup_db`` is non-negative because ffmpeg's linear ``makeup`` has a
+    minimum of 1: a negative dB value cannot be expressed.
+    """
+
+    sidechain_role: str = "dialogue"
+    target_role: str = "music"
+    threshold: float = 0.05
+    ratio: float = 8.0
+    attack_ms: float = 20.0
+    release_ms: float = 250.0
+    makeup_db: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "sidechain_role": self.sidechain_role,
+            "target_role": self.target_role,
+            "threshold": self.threshold,
+            "ratio": self.ratio,
+            "attack_ms": self.attack_ms,
+            "release_ms": self.release_ms,
+            "makeup_db": self.makeup_db,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "DuckingSpec":
+        if not isinstance(data, dict):
+            raise ValueError("ducking must be an object")
+        return cls(
+            sidechain_role=data.get("sidechain_role", "dialogue"),
+            target_role=data.get("target_role", "music"),
+            threshold=float(data.get("threshold", 0.05)),
+            ratio=float(data.get("ratio", 8.0)),
+            attack_ms=float(data.get("attack_ms", 20.0)),
+            release_ms=float(data.get("release_ms", 250.0)),
+            makeup_db=float(data.get("makeup_db", 0.0)),
+        )
+
+
+@dataclass(frozen=True)
 class ClipSegment:
     # clip_id is a label, not content: the flattened audio form cannot carry
     # it, so equality is defined on the segment itself. Uniqueness is checked
@@ -162,6 +220,7 @@ class ClipSegment:
     role: str = "main_talking_head"
     transition_in: Optional[Transition] = None
     transition_out: Optional[Transition] = None
+    gain_db: float = 0.0
 
     @property
     def duration(self) -> float:
@@ -189,6 +248,7 @@ class EDLPlan:
     video_tracks: Tuple[Track, ...]
     audio_tracks: Tuple[Track, ...] = ()
     notes: Tuple[str, ...] = ()
+    ducking: Optional[DuckingSpec] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", _FrozenMap(self.sources))
@@ -254,9 +314,11 @@ class EDLPlan:
             if not isinstance(ref.camera, CameraSpec):
                 errors.append(f"sources.{key}.camera must be a CameraSpec")
             else:
-                if not _is_num(ref.camera.angle_deg):
+                if ref.camera.angle_deg is not None and not _is_num(
+                    ref.camera.angle_deg
+                ):
                     errors.append(f"sources.{key}.camera.angle_deg must be finite")
-                if (
+                if ref.camera.focal_length_mm is not None and (
                     not _is_num(ref.camera.focal_length_mm)
                     or float(ref.camera.focal_length_mm) <= 0
                 ):
@@ -284,6 +346,7 @@ class EDLPlan:
 
         self._validate_coverage(errors)
         self._validate_dialogue_offsets(errors)
+        self._validate_ducking(errors)
         return errors
 
     @staticmethod
@@ -367,6 +430,11 @@ class EDLPlan:
             errors.append(f"{base}.layer must be an int >= 0")
         elif clip.role == "broll_overlay" and clip.layer < 1:
             errors.append(f"{base}: role broll_overlay requires layer >= 1")
+
+        if not _is_num(clip.gain_db):
+            errors.append(f"{base}.gain_db must be finite")
+        elif not (-60.0 <= float(clip.gain_db) <= 24.0):
+            errors.append(f"{base}.gain_db must be in [-60, 24]")
 
         for name, transition in (
             ("transition_in", clip.transition_in),
@@ -491,10 +559,50 @@ class EDLPlan:
                             f"from the nearest video cut (max 1.5s)"
                         )
 
+    def _validate_ducking(self, errors: List[str]) -> None:
+        spec = self.ducking
+        if spec is None:
+            return
+        if not isinstance(spec, DuckingSpec):
+            errors.append("ducking must be a DuckingSpec")
+            return
+
+        for name in ("sidechain_role", "target_role"):
+            value = getattr(spec, name)
+            if not isinstance(value, str) or not value:
+                errors.append(f"ducking.{name} must be non-empty")
+        if (
+            isinstance(spec.sidechain_role, str)
+            and isinstance(spec.target_role, str)
+            and spec.sidechain_role
+            and spec.target_role
+            and spec.sidechain_role == spec.target_role
+        ):
+            errors.append("ducking.sidechain_role and ducking.target_role must differ")
+
+        for name, low, high in (
+            ("threshold", 0.000976563, 1.0),
+            ("ratio", 1.0, 20.0),
+            ("attack_ms", 0.01, 2000.0),
+            ("release_ms", 0.01, 9000.0),
+            ("makeup_db", 0.0, 36.0),
+        ):
+            value = getattr(spec, name)
+            if not _is_num(value):
+                errors.append(f"ducking.{name} must be finite")
+            elif not (low <= float(value) <= high):
+                errors.append(f"ducking.{name} must be in [{low}, {high}]")
+
+        roles = {track.role for track in self.audio_tracks if isinstance(track, Track)}
+        for name in ("sidechain_role", "target_role"):
+            value = getattr(spec, name)
+            if isinstance(value, str) and value and value not in roles:
+                errors.append(f"ducking.{name} {value!r} is not an audio track role")
+
     # -- serialization ----------------------------------------------------- #
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "contract_version": self.contract_version,
             "timeline": {
                 "fps": self.fps,
@@ -512,6 +620,9 @@ class EDLPlan:
                 ],
             },
         }
+        if self.ducking is not None:
+            data["ducking"] = self.ducking.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EDLPlan":
@@ -565,6 +676,18 @@ class EDLPlan:
             raw_tracks.get("audio"), "audio", errors, clip_factory=_audio_track_clips
         )
 
+        ducking: Optional[DuckingSpec] = None
+        raw_ducking = data.get("ducking")
+        if raw_ducking is not None:
+            if not isinstance(raw_ducking, dict):
+                errors.append("ducking: must be an object")
+            else:
+                _reject_unknown(raw_ducking, _DUCKING_KEYS, "ducking", errors)
+                try:
+                    ducking = DuckingSpec.from_dict(raw_ducking)
+                except (TypeError, ValueError) as exc:
+                    errors.append(f"ducking: {exc}")
+
         plan = cls(
             contract_version=data.get("contract_version", EDL_CONTRACT_VERSION),
             fps=timeline.get("fps"),
@@ -574,6 +697,7 @@ class EDLPlan:
             sources=sources,
             video_tracks=video_tracks,
             audio_tracks=audio_tracks,
+            ducking=ducking,
         )
         errors.extend(plan.validate())
         if errors:
@@ -611,12 +735,14 @@ def _clip_to_dict(clip: ClipSegment) -> Dict[str, Any]:
         data["transition_in"] = _transition_to_dict(clip.transition_in)
     if clip.transition_out is not None:
         data["transition_out"] = _transition_to_dict(clip.transition_out)
+    if clip.gain_db != 0.0:
+        data["gain_db"] = clip.gain_db
     return data
 
 
 def _track_to_dict(track: Track, *, video: bool) -> Dict[str, Any]:
     data: Dict[str, Any] = {"track_id": track.track_id, "role": track.role}
-    if not video and len(track.clips) == 1:
+    if not video and len(track.clips) == 1 and track.clips[0].gain_db == 0.0:
         clip = track.clips[0]
         data.update(
             {
@@ -739,6 +865,7 @@ def _clip_from_dict(
         transition_out=_transition_from_dict(
             raw.get("transition_out"), f"{path}.transition_out", errors
         ),
+        gain_db=raw.get("gain_db", 0.0),
     )
 
 

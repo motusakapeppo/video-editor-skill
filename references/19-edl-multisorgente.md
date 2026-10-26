@@ -1,15 +1,16 @@
-# 19 — EDL multi-sorgente v2.1
+# 19 — EDL multi-sorgente v2.2
 
 Il motore mono-sorgente (`Edl`, un clip → una timeline) non basta più quando il
 montaggio accosta A-Roll e B-Roll da file diversi. Questo modulo aggiunge il
-contratto **EDL v2.1.0** (v2.0 + metadati camera) senza toccare `Edl`: il modello
-vive in `scripts/vx/edl_plan.py`, `edl.py` lo ri-esporta in fondo al file.
+contratto **EDL v2.2.0** (v2.1 + gain per clip, ducking dichiarato, camera
+opzionale) senza toccare `Edl`: il modello vive in `scripts/vx/edl_plan.py`,
+`edl.py` lo ri-esporta in fondo al file.
 
 ## Forma JSON
 
 ```json
 {
-  "contract_version": "2.1.0",
+  "contract_version": "2.2.0",
   "timeline": {"fps": 25.0, "duration_sec": 45.0, "aspect_ratio": "9:16", "resolution": [1080, 1920]},
   "sources": {"src_01": {"path": "stage/main.mp4", "sha256": "<64 hex>", "duration": 45.0,
                           "camera": {"angle_deg": 0.0, "focal_length_mm": 35.0}}},
@@ -17,7 +18,8 @@ vive in `scripts/vx/edl_plan.py`, `edl.py` lo ri-esporta in fondo al file.
     "video": [
       {"track_id": 0, "role": "main", "clips": [
         {"clip_id": "c1", "source_id": "src_01", "src_in": 0.0, "src_out": 10.0,
-         "dst_in": 0.0, "dst_out": 10.0, "layer": 0, "role": "main_talking_head"}
+         "dst_in": 0.0, "dst_out": 10.0, "layer": 0, "role": "main_talking_head",
+         "gain_db": -3.0}
       ]},
       {"track_id": 1, "role": "broll", "clips": [
         {"clip_id": "b1", "source_id": "src_02", "src_in": 0.0, "src_out": 2.0,
@@ -29,7 +31,10 @@ vive in `scripts/vx/edl_plan.py`, `edl.py` lo ri-esporta in fondo al file.
       {"track_id": 0, "role": "dialogue", "source_id": "src_01",
        "src_in": 0.0, "src_out": 10.0, "dst_in": 0.0, "dst_out": 10.0}
     ]
-  }
+  },
+  "ducking": {"sidechain_role": "dialogue", "target_role": "music",
+              "threshold": 0.05, "ratio": 8.0, "attack_ms": 20.0,
+              "release_ms": 250.0, "makeup_db": 0.0}
 }
 ```
 
@@ -37,9 +42,15 @@ Regole di serializzazione:
 
 - le tracce video portano sempre `clips`;
 - una traccia audio con **un solo** clip è la forma piatta qui sopra (senza
-  `clip_id`, `layer`, `clips`); con più clip passa a `clips`. Un oggetto che
-  contiene sia i campi diretti sia `clips` viene rifiutato: niente doppia
-  grammatica silenziosa;
+  `clip_id`, `layer`, `clips`); con più clip passa a `clips`. La forma piatta è
+  usata **solo** quando il clip ha `gain_db == 0.0`: un gain diverso da zero
+  richiede la forma `{"clips": [...]}`, altrimenti il valore andrebbe perso. Un
+  oggetto che contiene sia i campi diretti sia `clips` viene rifiutato: niente
+  doppia grammatica silenziosa;
+- `gain_db` è emesso **solo** quando diverso da `0.0`;
+- `ducking` è emesso **solo** quando non è `None`: senza ducking le chiavi di
+  primo livello restano esattamente `contract_version, timeline, sources,
+  tracks`;
 - `resolution` è una coppia di interi pari positivi; `aspect_ratio` è `W:H`;
 - `sha256` è esattamente 64 caratteri esadecimali minuscoli;
 - `clip_id` è un'etichetta, non contenuto: la forma piatta dell'audio non può
@@ -53,10 +64,12 @@ Regole di serializzazione:
 `EDLValidationError`. Chiavi sconosciute a ogni livello sono rifiutate con il
 percorso esatto.
 
-- `contract_version` esattamente `2.1.0`; `fps > 0`; `duration_sec > 0`.
+- `contract_version` esattamente `2.2.0`; un documento `2.1.0` è rifiutato con
+  lo stesso errore di versione; `fps > 0`; `duration_sec > 0`.
 - `sources` non vuota; chiavi `[A-Za-z0-9_.-]+`; path non vuoto; sha a 64 hex.
-- ogni `camera`, se presente, ha `angle_deg` finito e `focal_length_mm > 0`;
-  il default è `0°/35mm`.
+- ogni `camera` è **opzionale**: `angle_deg` e `focal_length_mm` possono essere
+  `None` (= non dichiarato). Se dichiarati, `angle_deg` è finito e
+  `focal_length_mm > 0`. `CameraSpec()` vale `(None, None)`, non `0°/35mm`.
 - almeno una traccia video, ogni traccia con almeno un clip; `clip_id` unico
   globalmente; `track_id` unico dentro video e dentro audio (video e audio
   possono riusare lo stesso id).
@@ -65,6 +78,7 @@ percorso esatto.
   quella sorgente per più di un frame (`1/fps`).
 - `dst_in >= 0`, `dst_out <= duration_sec`; `layer >= 0`; un clip
   `broll_overlay` deve stare su `layer >= 1`.
+- `gain_db` finito e in `[-60, +24]`; il default è `0.0`.
 - transizioni: tipo non vuoto, durata tra 0 e `min(durata clip, 1.5)`.
 - nessuna sovrapposizione tra clip della **stessa traccia e stesso layer**;
   la sovrapposizione tra layer diversi è il senso del B-roll.
@@ -75,6 +89,13 @@ percorso esatto.
   interno `(0, duration_sec)` deve distare al massimo 1,5 s da un confine video
   di layer 0. Le tracce `music`/`sfx` sono ignorate; un unico clip audio che
   attraversa più tagli video, senza confini interni, è valido.
+- `ducking`, se presente, è un `DuckingSpec` con `sidechain_role` e
+  `target_role` non vuoti e **diversi**; entrambi devono esistere tra i `role`
+  delle tracce audio, altrimenti il ducking sarebbe un no-op silenzioso.
+  Intervalli (ffmpeg 8.1): `threshold` 0.000976563..1, `ratio` 1..20,
+  `attack_ms` 0.01..2000, `release_ms` 0.01..9000, `makeup_db` 0..36 (il
+  `makeup` lineare di ffmpeg ha minimo 1: un valore negativo in dB non è
+  esprimibile).
 
 ## Legge dell'evidenza multi-sorgente
 
@@ -130,16 +151,18 @@ fps=None, duration=None, aspect_ratio="9:16", resolution=None) -> BuiltEdl`
   EDL usa `render.render_edl`, descritto in
   `references/20-render-multisorgente.md`.
 - `amix` somma le tracce senza un inviluppo di crossfade: l'overlap J/L può
-  alzare il livello. La dissolvenza audio non è ancora nel contratto.
+  alzare il livello. `ducking` è dichiarato nel contratto ma il renderer non lo
+  applica ancora: nessun `sidechaincompress` viene emesso.
 - La camera è per sorgente, non per clip: la stessa sorgente usata con
   inquadrature diverse non è distinguibile.
 - `notes` non è serializzato: il formato del contratto non lo prevede.
 
 ## Test
 
-`tests/test_edl_plan.py`: 108 assert. Modello (forma JSON, chiavi sconosciute,
-sorgenti, camera, id, aritmetica dei tempi, layer, transizioni, copertura, J/L,
-shorthand audio, immutabilità, round-trip su disco) e builder (due tracce,
+`tests/test_edl_plan.py`: 138 assert. Modello (forma JSON, chiavi sconosciute,
+sorgenti, camera opzionale, id, aritmetica dei tempi, layer, transizioni,
+copertura, J/L, shorthand audio, immutabilità, round-trip su disco, `gain_db`,
+`DuckingSpec` e forma oggetto dell'audio con gain) e builder (due tracce,
 mappatura dell'orologio, witness, cinque rifiuti, round-trip su due clip reali
 generate con ffmpeg).
 

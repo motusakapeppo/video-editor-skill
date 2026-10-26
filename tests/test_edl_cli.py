@@ -15,7 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from vx import probe  # noqa: E402
-from vx.edl_plan import ClipSegment, EDLPlan, SourceRef, Track, Transition  # noqa: E402
+from vx.edl_plan import (  # noqa: E402
+    CameraSpec,
+    ClipSegment,
+    EDLPlan,
+    SourceRef,
+    Track,
+    Transition,
+)
 
 PASS = 0
 FAIL = 0
@@ -80,8 +87,8 @@ def _plan(a: Path, b: Path, *, bad: bool = False) -> EDLPlan:
     duration = 3.0 if bad else 2.0
     end = 3.0 if bad else 2.0
     sources = {
-        "src_A": SourceRef(str(a), _sha256(a), 2.0),
-        "src_B": SourceRef(str(b), _sha256(b), 2.0),
+        "src_A": SourceRef(str(a), _sha256(a), 2.0, CameraSpec(0.0, 35.0)),
+        "src_B": SourceRef(str(b), _sha256(b), 2.0, CameraSpec(10.0, 35.0)),
     }
     c1 = ClipSegment("c1", "src_A", 0.0, 1.0, 0.0, 1.0, 0, "main_talking_head")
     c2 = ClipSegment("c2", "src_B", 1.0, end, 1.0, end, 0, "main_talking_head")
@@ -210,6 +217,35 @@ def main() -> int:
             "Jump cut" in grammar_run.stdout,
             grammar_run.stdout[-200:],
         )
+
+        unknown = replace(
+            base,
+            sources={
+                "src_A": SourceRef(str(a), _sha256(a), 2.0),
+                "src_B": SourceRef(str(b), _sha256(b), 2.0),
+            },
+        )
+        unknown_path = tmp / "unknown_camera.json"
+        unknown_path.write_text(json.dumps(unknown.to_dict()), encoding="utf-8")
+        unknown_run = _cli(["edl", "validate", "--plan", str(unknown_path), "--json"])
+        check(
+            "camera ignota rc 0", unknown_run.returncode == 0, unknown_run.stderr[-160:]
+        )
+        try:
+            unknown_payload = json.loads(unknown_run.stdout)
+        except Exception as exc:  # noqa: BLE001
+            check("camera_exemptions JSON", False, f"{type(exc).__name__}: {exc}")
+        else:
+            check(
+                "camera_exemptions presente",
+                "camera_exemptions" in unknown_payload,
+                unknown_payload,
+            )
+            check(
+                "camera_exemptions non vuote",
+                len(unknown_payload.get("camera_exemptions", [])) >= 1,
+                unknown_payload.get("camera_exemptions"),
+            )
 
         bad = tmp / "bad.json"
         bad.write_text(json.dumps(_plan(a, b, bad=True).to_dict()), encoding="utf-8")
