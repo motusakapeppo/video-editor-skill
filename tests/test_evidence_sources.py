@@ -1,4 +1,4 @@
-"""Phase 3.1 multi-source evidence law: red contract for v1.4.0.
+"""Phase 3.1 multi-source evidence law: red contract for v1.5.0.
 
 Run from the repo root:
 
@@ -242,10 +242,10 @@ def version_case() -> None:
         version = contract.VERSION
         doc = contract.__doc__ or ""
     except AttributeError as exc:
-        check("E10 contract VERSION 1.4.0", False, f"AttributeError: {exc}")
+        check("E10 contract VERSION 1.5.0", False, f"AttributeError: {exc}")
         return
-    ok = version == "1.4.0" and "FROZEN interface v1.4.0" in doc
-    check("E10 contract VERSION 1.4.0", ok, f"VERSION={version!r}")
+    ok = version == "1.5.0" and "FROZEN interface v1.5.0" in doc
+    check("E10 contract VERSION 1.5.0", ok, f"VERSION={version!r}")
 
 
 # --------------------------------------------------------------------------- #

@@ -38,9 +38,9 @@ def main() -> int:
     contract = read(CONTRACT)
 
     # -- version --------------------------------------------------------- #
-    check("SKILL.md dichiara 1.4.0", 'version: "1.4.0"' in skill)
-    check("README.md dichiara 1.4.0", "1.4.0" in readme)
-    check("contract.VERSION e' 1.4.0", 'VERSION = "1.4.0"' in contract)
+    check("SKILL.md dichiara 1.5.0", 'version: "1.5.0"' in skill)
+    check("README.md dichiara 1.5.0", "1.5.0" in readme)
+    check("contract.VERSION e' 1.5.0", 'VERSION = "1.5.0"' in contract)
 
     # -- witness law ----------------------------------------------------- #
     for name, text in (("SKILL.md", skill), ("README.md", readme)):

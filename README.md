@@ -1,6 +1,6 @@
 # video-editor-skill
 
-> Versione: **1.4.0** — protocollo CLI unico, quattro deliverable, nessun export multi-aspect.
+> Versione: **1.5.0** — protocollo CLI unico, quattro deliverable, nessun export multi-aspect.
 
 > **English TL;DR** — An adaptive video-editing skill for the opencode agent runtime.
 > It measures a video before touching it (jitter, exposure, colour cast, noise floor,

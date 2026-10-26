@@ -326,13 +326,28 @@ def _font_choice(
 
 
 def parse_and_decide(
-    prompt: str, assets: Optional[Sequence[str]] = None
+    prompt: str,
+    assets: Optional[Sequence[str]] = None,
+    *,
+    asset_pool: Optional[Sequence[Any]] = None,
+    force_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Classify the request, then either execute (strict) or choose (autonomous)."""
+    """Classify the request, then either execute (strict) or choose (autonomous).
+
+    `assets` remains the font registry: names only. `asset_pool` is a sequence of
+    `asset_triage.AssetInfo`; when non-empty the payload carries the triage
+    verdict under `asset_triage`. `force_mode` overrides only the strict/autonomous
+    decision, never the specificity score.
+    """
+    if force_mode not in (None, "strict", "autonomous"):
+        raise contract.VxError(
+            f"force_mode {force_mode!r} not in None/strict/autonomous"
+        )
     text = prompt or ""
     lower = text.lower()
     score, matches = calculate_specificity_score(text)
-    mode = "strict" if score >= STRICT_THRESHOLD else "autonomous"
+    detected_mode = "strict" if score >= STRICT_THRESHOLD else "autonomous"
+    mode = force_mode or detected_mode
     vintage = bool(re.search(r"\b(vintage|retr[oò])\b", lower))
     dynamic = bool(re.search(r"\b(dinamic|incalzante)", lower))
 
@@ -428,7 +443,7 @@ def parse_and_decide(
             "rationale": font_note or "font certificato per la safe area",
         }
 
-    return {
+    payload: Dict[str, Any] = {
         "contract_version": contract.VERSION,
         "execution_context": {
             "mode": mode,
@@ -449,6 +464,14 @@ def parse_and_decide(
             "engine": engine,
         },
     }
+    if asset_pool is not None and len(asset_pool) > 0:
+        # Local import: asset_triage imports contract and probe, so a module-level
+        # import here would risk a cycle.
+        from . import asset_triage
+
+        triage = asset_triage.triage_assets(asset_pool, (spec["w"], spec["h"]))
+        payload["asset_triage"] = triage.payload_block()
+    return payload
 
 
 def _hex_rgb(value: object) -> tuple[float, float, float]:
@@ -552,6 +575,16 @@ def payload_to_edit_plan(
                 "reason": "nota di stile: il bridge non crea sottotitoli",
             }
         )
+    if "asset_triage" in payload:
+        unsupported.append(
+            {
+                "field": "asset_triage",
+                "reason": (
+                    "il bridge EditPlan non esegue una timeline multitrack: "
+                    "il verdetto di triage resta nel payload"
+                ),
+            }
+        )
 
     return contract.EditPlan(
         output={"aspect": aspect, "width": width, "height": height},
@@ -572,6 +605,13 @@ def validate_scene_payload(payload: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     if not isinstance(payload, dict):
         return ["payload is not an object"]
+    if "asset_triage" in payload:
+        from . import asset_triage
+
+        errors.extend(
+            f"asset_triage.{error}"
+            for error in asset_triage.validate_payload_block(payload["asset_triage"])
+        )
     if payload.get("contract_version") != contract.VERSION:
         errors.append(
             f"contract_version must be {contract.VERSION!r}, "

@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from vx import contract, decide  # noqa: E402
+from vx import asset_triage, contract, decide  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -140,6 +140,85 @@ def main() -> int:
             "[asset_missing]" in str(exc),
             str(exc),
         )
+
+    forced_auto = decide.parse_and_decide(ambiguous, force_mode="autonomous")
+    check(
+        "force_mode autonomous: salta il gate strict",
+        forced_auto["execution_context"]["mode"] == "autonomous",
+        forced_auto["execution_context"]["mode"],
+    )
+    ambiguous_score, _ = decide.calculate_specificity_score(ambiguous)
+    check(
+        "force_mode non altera lo score",
+        forced_auto["execution_context"]["specificity_score"] == ambiguous_score,
+        forced_auto["execution_context"]["specificity_score"],
+    )
+
+    try:
+        decide.parse_and_decide("un reel con stile vintage", force_mode="strict")
+        check("force_mode strict: vintage blocca ancora", False, "no exception")
+    except decide.AmbiguousContractError as exc:
+        check(
+            "force_mode strict: vintage blocca ancora",
+            "[vague_vintage]" in str(exc),
+            str(exc),
+        )
+
+    try:
+        decide.parse_and_decide("un reel", force_mode="loose")
+        check("force_mode invalido rifiutato", False, "no exception")
+    except contract.VxError as exc:
+        check("force_mode invalido rifiutato", "force_mode" in str(exc), str(exc))
+
+    check(
+        "senza pool nessun blocco asset_triage",
+        "asset_triage" not in auto,
+        sorted(auto),
+    )
+
+    music = asset_triage.AssetInfo(
+        asset_id="music-1",
+        kind="audio",
+        path="music-1.wav",
+        duration_sec=30.0,
+        has_audio=True,
+        role="music",
+    )
+    pooled = decide.parse_and_decide(
+        "un reel con font BebasNeue", assets=["Antonio"], asset_pool=[music]
+    )
+    expected_block = asset_triage.triage_assets([music], (1080, 1920)).payload_block()
+    check(
+        "asset_pool: blocco identico a payload_block()",
+        pooled.get("asset_triage") == expected_block,
+        pooled.get("asset_triage"),
+    )
+    check(
+        "asset_pool: validator verde",
+        decide.validate_scene_payload(pooled) == [],
+        decide.validate_scene_payload(pooled),
+    )
+    bad_block = copy.deepcopy(pooled)
+    bad_block["asset_triage"]["selected_assets"][0]["role"] = ""
+    check(
+        "asset_triage: errore prefissato",
+        any(
+            error.startswith("asset_triage.selected_assets[0].role:")
+            for error in decide.validate_scene_payload(bad_block)
+        ),
+        decide.validate_scene_payload(bad_block),
+    )
+    check(
+        "asset_pool vuoto: nessun blocco",
+        "asset_triage"
+        not in decide.parse_and_decide("un reel con stile vintage", asset_pool=[]),
+    )
+    check(
+        "asset_pool non tocca i font",
+        pooled["execution_context"]["creative_rationale"]["typography"]["font_family"]
+        == "Antonio",
+        pooled["execution_context"]["creative_rationale"]["typography"],
+    )
 
     broken = copy.deepcopy(auto)
     broken["execution_context"]["mode"] = "weird"

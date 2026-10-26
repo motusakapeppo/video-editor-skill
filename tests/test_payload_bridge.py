@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from vx import contract, decide, render  # noqa: E402
+from vx import asset_triage, contract, decide, render  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -82,6 +82,37 @@ def main() -> int:
     )
     check(
         "output e cut eseguiti", {"output", "cut"} <= set(bridge.get("executed") or [])
+    )
+    check(
+        "payload senza asset_triage resta valido",
+        decide.validate_scene_payload(payload) == [],
+        decide.validate_scene_payload(payload),
+    )
+
+    music = asset_triage.AssetInfo(
+        asset_id="music-1",
+        kind="audio",
+        path="music-1.wav",
+        duration_sec=30.0,
+        has_audio=True,
+        role="music",
+    )
+    pooled = decide.parse_and_decide("un reel con stile vintage", asset_pool=[music])
+    pooled_plan = contract.payload_to_edit_plan(pooled, MEDIA)
+    pooled_bridge = pooled_plan.brief.get("bridge") or {}
+    pooled_unsupported = {
+        item.get("field"): item.get("reason")
+        for item in pooled_bridge.get("unsupported") or []
+    }
+    check(
+        "asset_triage dichiarato non eseguito",
+        "asset_triage" in pooled_unsupported,
+        sorted(pooled_unsupported),
+    )
+    check(
+        "reason nomina la timeline multitrack",
+        "multitrack" in (pooled_unsupported.get("asset_triage") or ""),
+        pooled_unsupported.get("asset_triage"),
     )
 
     strict = decide.parse_and_decide(

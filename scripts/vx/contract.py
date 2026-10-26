@@ -1,4 +1,4 @@
-"""vx.contract — FROZEN interface v1.4.0 for the video-editor skill.
+"""vx.contract — FROZEN interface v1.5.0 for the video-editor skill.
 
 stdlib only. Every other module may import this; this module imports nothing local.
 Changing anything here is a version bump (see SKILL.md "contratto").
@@ -15,7 +15,7 @@ SCHEMA = "vx.report/1.0"
 TRIAGE_SCHEMA = "vx.triage/1.0"
 PLAN_SCHEMA = "vx.plan/1.1"
 QC_SCHEMA = "vx.qc/1.0"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 PROXY_WIDTH = 640
 SAMPLE_FPS_VIDEO = 10.0
