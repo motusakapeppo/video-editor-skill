@@ -1,0 +1,713 @@
+{
+  "schema": "vx.distinct_matrix/1.0",
+  "corpus_hash": "704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+  "designated": {
+    "pair": [
+      "real_interview_169",
+      "real_street_169"
+    ],
+    "designated_by": "verdict",
+    "families": {
+      "colour": true,
+      "rhythm": true,
+      "geometry": true,
+      "typography": false
+    },
+    "hook_types": {
+      "a": "visual",
+      "b": "title"
+    }
+  },
+  "pairs": [
+    {
+      "a": "bright_45",
+      "b": "dark_916",
+      "families": {
+        "colour": true,
+        "rhythm": false,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.9833,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "bright_45",
+      "b": "landscape_169",
+      "families": {
+        "colour": true,
+        "rhythm": false,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4991,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "bright_45",
+      "b": "real_anthem_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.7116,
+      "hook_types": {
+        "a": "visual",
+        "b": "text"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "bright_45",
+      "b": "real_interview_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.8168,
+      "hook_types": {
+        "a": "visual",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "bright_45",
+      "b": "real_street_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4261,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "bright_45",
+      "b": "real_vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.6637,
+      "hook_types": {
+        "a": "visual",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "bright_45",
+      "b": "square_11",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4556,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "bright_45",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.6213,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "dark_916",
+      "b": "landscape_169",
+      "families": {
+        "colour": true,
+        "rhythm": false,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.702,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "dark_916",
+      "b": "real_anthem_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.2717,
+      "hook_types": {
+        "a": "title",
+        "b": "text"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "dark_916",
+      "b": "real_interview_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.2665,
+      "hook_types": {
+        "a": "title",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "dark_916",
+      "b": "real_street_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.7118,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "dark_916",
+      "b": "real_vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.3196,
+      "hook_types": {
+        "a": "title",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "dark_916",
+      "b": "square_11",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.7019,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "dark_916",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.514,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "landscape_169",
+      "b": "real_anthem_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.5947,
+      "hook_types": {
+        "a": "title",
+        "b": "text"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "landscape_169",
+      "b": "real_interview_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4355,
+      "hook_types": {
+        "a": "title",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "landscape_169",
+      "b": "real_street_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.119,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "landscape_169",
+      "b": "real_vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4726,
+      "hook_types": {
+        "a": "title",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "landscape_169",
+      "b": "square_11",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.0435,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "landscape_169",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.188,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "real_anthem_169",
+      "b": "real_interview_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": true,
+      "hue_l1": 0.1886,
+      "hook_types": {
+        "a": "text",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_anthem_169",
+      "b": "real_street_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": true,
+        "typography": false
+      },
+      "geometry_available": true,
+      "hue_l1": 0.4757,
+      "hook_types": {
+        "a": "text",
+        "b": "title"
+      },
+      "distinct_ok": true,
+      "hook_distinct": true,
+      "passes_both": true
+    },
+    {
+      "a": "real_anthem_169",
+      "b": "real_vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.1221,
+      "hook_types": {
+        "a": "text",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_anthem_169",
+      "b": "square_11",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.5744,
+      "hook_types": {
+        "a": "text",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_anthem_169",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.5627,
+      "hook_types": {
+        "a": "text",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_interview_169",
+      "b": "real_street_169",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": true,
+        "typography": false
+      },
+      "geometry_available": true,
+      "hue_l1": 0.4453,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": true,
+      "hook_distinct": true,
+      "passes_both": true
+    },
+    {
+      "a": "real_interview_169",
+      "b": "real_vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.1531,
+      "hook_types": {
+        "a": "visual",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "real_interview_169",
+      "b": "square_11",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4354,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_interview_169",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.3741,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_street_169",
+      "b": "real_vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.397,
+      "hook_types": {
+        "a": "title",
+        "b": "visual"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_street_169",
+      "b": "square_11",
+      "families": {
+        "colour": true,
+        "rhythm": false,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.0987,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "real_street_169",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": false,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.1978,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    },
+    {
+      "a": "real_vertical_916",
+      "b": "square_11",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4523,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "real_vertical_916",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.4406,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": true,
+      "passes_both": false
+    },
+    {
+      "a": "square_11",
+      "b": "vertical_916",
+      "families": {
+        "colour": true,
+        "rhythm": false,
+        "geometry": false,
+        "typography": false
+      },
+      "geometry_available": false,
+      "hue_l1": 0.1879,
+      "hook_types": {
+        "a": "title",
+        "b": "title"
+      },
+      "distinct_ok": false,
+      "hook_distinct": false,
+      "passes_both": false
+    }
+  ],
+  "summary": {
+    "total": 36,
+    "distinct_ok": 2,
+    "hook_distinct": 18,
+    "passes_both": 2
+  }
+}

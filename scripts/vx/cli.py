@@ -73,6 +73,391 @@ def _load_plan(path: str | Path):
     return EditPlan(**{k: v for k, v in data.items() if k in known})
 
 
+def _visual_from_brief(brief: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The renderer's ``visual`` dict from a ``vx.visual/1.0`` brief.
+
+    ``build_visual_brief`` stores the full decision objects under ``_visual``;
+    the renderer only needs the per-segment chains, so the single decisions are
+    repeated for every segment (``i % len`` with one entry).
+    """
+    vis = brief.get("_visual") or {}
+    if not isinstance(vis, dict) or not vis:
+        return None
+    return {
+        "grade_nodes": [vis.get("grade_node") or {"type": "none"}],
+        "animations": [vis.get("animation") or {"name": "none"}],
+    }
+
+
+def _corpus_hash() -> str:
+    """The corpus hash the thresholds carry, or a clear failure."""
+    from .registry import THRESHOLDS
+
+    for entry in THRESHOLDS.values():
+        provenance = str(entry.get("provenance") or "")
+        if provenance.startswith("corpus_hash:"):
+            return provenance.split(":", 1)[1]
+    raise VxError(
+        "soglie non misurate: serve tests/fixtures/corpus_stats.json per il corpus_hash"
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _cut_density_choice(measurements: Dict[str, Any]) -> Dict[str, Any]:
+    """The cut-density choice from ``onsets_per_s`` and the corpus thresholds.
+
+    Bands from ``registry.THRESHOLDS["cut_density"]``: under p33 -> 3.0 s,
+    between p33 and p67 -> 2.0 s, over p67 -> 1.2 s. The confidence mirrors
+    ``animplan``: 0.5 on the cut point, rising on a tenth of the band width.
+    """
+    from .registry import THRESHOLDS
+
+    entry = THRESHOLDS.get("cut_density") or {}
+    p33, p67 = entry.get("p33"), entry.get("p67")
+    provenance = entry.get("provenance") or "unmeasured"
+    onsets = measurements.get("onsets_per_s")
+    if onsets is None or p33 is None or p67 is None:
+        return {
+            "value": 2.0,
+            "driver_value": None,
+            "threshold": {"p33": p33, "p67": p67},
+            "provenance": provenance,
+            "inaction_reason": (
+                "onsets_per_s non misurato: densita' di default 2.0 s, inazione."
+            ),
+            "confidence": 0.5,
+            "applied": False,
+        }
+    onsets = float(onsets)
+    p33, p67 = float(p33), float(p67)
+    if onsets < p33:
+        value, distance = 3.0, p33 - onsets
+    elif onsets <= p67:
+        value, distance = 2.0, min(onsets - p33, p67 - onsets)
+    else:
+        value, distance = 1.2, onsets - p67
+    spread = p67 - p33
+    span = 0.1 * spread if spread > 0.0 else 0.0
+    confidence = 0.5 + 0.5 * min(1.0, distance / span) if span > 0.0 else 1.0
+    uncertain = 0.2 <= confidence <= 0.8
+    if uncertain:
+        reason = (
+            f"confidenza {confidence:.3f} in [0.2, 0.8]: inazione, densita' di "
+            "default 2.0 s."
+        )
+        value = 2.0
+    elif onsets < p33:
+        reason = f"onsets_per_s {onsets:.4f} < p33 {p33:.4f}: taglio largo 3.0 s."
+    elif onsets <= p67:
+        reason = (
+            f"p33 {p33:.4f} <= onsets_per_s {onsets:.4f} <= p67 {p67:.4f}: "
+            "taglio 2.0 s."
+        )
+    else:
+        reason = f"onsets_per_s {onsets:.4f} > p67 {p67:.4f}: taglio stretto 1.2 s."
+    return {
+        "value": value,
+        "driver_value": onsets,
+        "threshold": {"p33": p33, "p67": p67},
+        "provenance": provenance,
+        "inaction_reason": reason,
+        "confidence": round(float(confidence), 4),
+        "applied": not uncertain,
+    }
+
+
+def _typography_choice(measurements: Dict[str, Any]) -> Dict[str, Any]:
+    """The typography choice from the ink coverage measured on a render.
+
+    Under 0.45% the body grows by 8 px, over 0.94% it shrinks by 8 px, in the
+    band it stays. An unmeasured ink (source clips) is inaction at 0.5: nothing
+    is known, nothing is changed.
+    """
+    ink = measurements.get("ink_coverage_pct")
+    if ink is None:
+        return {
+            "value": 0,
+            "driver_value": None,
+            "threshold": {"low": 0.45, "high": 0.94},
+            "provenance": "measured:delivery",
+            "inaction_reason": (
+                "ink_coverage_pct non misurata: corpo invariato, inazione."
+            ),
+            "confidence": 0.5,
+            "applied": False,
+        }
+    ink = float(ink)
+    if ink < 0.45:
+        value, distance = 8, 0.45 - ink
+        reason = f"ink {ink:.4f}% < 0.45%: corpo +8 px."
+    elif ink > 0.94:
+        value, distance = -8, ink - 0.94
+        reason = f"ink {ink:.4f}% > 0.94%: corpo -8 px."
+    else:
+        value, distance = 0, min(ink - 0.45, 0.94 - ink)
+        reason = f"ink {ink:.4f}% nella banda 0.45-0.94%: corpo invariato."
+    confidence = min(1.0, distance / 0.12)
+    uncertain = 0.2 <= confidence <= 0.8
+    if uncertain:
+        reason = (
+            f"confidenza {confidence:.3f} in [0.2, 0.8]: inazione, corpo invariato."
+        )
+        value = 0
+    return {
+        "value": value,
+        "driver_value": ink,
+        "threshold": {"low": 0.45, "high": 0.94},
+        "provenance": "measured:delivery",
+        "inaction_reason": reason,
+        "confidence": round(float(confidence), 4),
+        "applied": not uncertain,
+    }
+
+
+def build_visual_brief(
+    source: str | Path,
+    measurements: Dict[str, Any],
+    *,
+    delivery: str | Path | None = None,
+    project: str | None = None,
+) -> Dict[str, Any]:
+    """Build a ``vx.visual/1.0`` brief from the measured clip.
+
+    The six choices come from the decision modules (``palette``, ``gradeplan``,
+    ``animplan``, ``screen`` at one timestamp 10% into the clip) plus the
+    cut-density and typography rules. Two normalisations happen here, by
+    contract:
+
+    * P3 — ``analyze.measure_color`` returns the cast in pixel units; any cast
+      whose absolute value exceeds 1.0 is divided by 255 before it reaches
+      ``gradeplan``, and ``cast_normalised`` is recorded on the brief.
+    * P4 — ``gradeplan``/``animplan`` return ``inaction`` as a sentence; the
+      brief stores the boolean (``not applied``) and the sentence goes to
+      ``inaction_reason``.
+
+    ``executed`` is left empty: the caller fills it from the real render. The
+    full decision objects are kept under ``_visual`` so the renderer can splice
+    the chains without re-deciding.
+    """
+    from . import animplan, brief as brief_mod, gradeplan
+    from . import palette as palette_mod
+    from . import probe as probe_mod
+    from . import screen as screen_mod
+    from .registry import THRESHOLDS
+
+    src = Path(source)
+    if not src.is_file():
+        raise VxError(f"sorgente mancante: {src}")
+    m = dict(measurements or {})
+
+    cast_normalised = False
+    for key in ("cast_rg", "cast_by"):
+        value = m.get(key)
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and abs(float(value)) > 1.0
+        ):
+            m[key] = float(value) / 255.0
+            cast_normalised = True
+
+    duration = m.get("duration_s")
+    width = m.get("width")
+    height = m.get("height")
+    if duration is None or not width or not height:
+        info = probe_mod.probe(str(src))
+        duration = float(info.duration) if duration is None else float(duration)
+        width = int(info.width) if not width else int(width)
+        height = int(info.height) if not height else int(height)
+
+    pal = palette_mod.decide(m)
+    grade = gradeplan.decide(m, pal)
+    ratio = m.get("transient_ratio")
+    anim = animplan.decide(
+        None if ratio is None else float(ratio), m.get("onsets_per_s")
+    )
+    comp = screen_mod.decide(str(src), float(duration) * 0.10, int(width), int(height))[
+        "composition"
+    ]
+    cut = _cut_density_choice(m)
+    typo = _typography_choice(m)
+
+    anim_th = THRESHOLDS.get("animation") or {}
+    brief = brief_mod.new_brief(project or src.stem, _sha256_file(src), _corpus_hash())
+    brief["measurements"] = {
+        "transient_ratio": m.get("transient_ratio"),
+        "transient_p33": anim_th.get("p33"),
+        "transient_p67": anim_th.get("p67"),
+        "hue_mass_top3": m.get("hue_mass_top3") or [],
+        "ink_coverage_pct": m.get("ink_coverage_pct"),
+        "subject_offset": m.get("subject_offset"),
+        "onsets_per_s": m.get("onsets_per_s"),
+        "first_speech_onset_s": m.get("first_speech_onset_s"),
+        "first3s_motion": m.get("first3s_motion"),
+        "face_present": bool(m.get("face_present")),
+        "luma_p50": m.get("luma_p50"),
+        "contrast": m.get("contrast"),
+    }
+    brief["cast_normalised"] = cast_normalised
+    if delivery is not None:
+        brief["delivery"] = str(delivery)
+    brief["_visual"] = {
+        "grade_node": grade["node"],
+        "animation": anim,
+        "palette": pal,
+        "composition": comp,
+    }
+
+    choices = brief["choices"]
+    choices["palette"].update(
+        driver=pal["driver"],
+        value=pal["family"],
+        provenance=pal["provenance"],
+        inaction=bool(pal["inaction"]),
+        inaction_reason=pal["inaction_reason"],
+        confidence=pal["confidence"],
+        applied=pal["applied"],
+    )
+    choices["grade"].update(
+        driver=grade["driver"],
+        value=grade["node"]["type"],
+        provenance=grade["provenance"],
+        inaction=not grade["applied"],
+        inaction_reason=grade["inaction"],
+        confidence=grade["confidence"],
+        applied=grade["applied"],
+    )
+    choices["animation"].update(
+        driver=anim["driver"],
+        value=anim["name"],
+        name=anim["name"],
+        count=anim["count"],
+        direction_basis="asserted",
+        provenance=anim["provenance"],
+        inaction=not anim["applied"],
+        inaction_reason=anim["inaction"],
+        confidence=anim["confidence"],
+        applied=anim["applied"],
+    )
+    choices["cut_density"].update(
+        driver="onsets_per_s",
+        value=cut["value"],
+        provenance=cut["provenance"],
+        inaction=not cut["applied"],
+        inaction_reason=cut["inaction_reason"],
+        confidence=cut["confidence"],
+        applied=cut["applied"],
+    )
+    choices["composition"].update(
+        driver=comp["driver"],
+        value=comp["value"] if comp["value"] is not None else "centre",
+        provenance=comp["provenance"],
+        inaction=bool(comp["inaction"]),
+        inaction_reason=comp["inaction_reason"],
+        confidence=comp["confidence"],
+        applied=comp["applied"],
+    )
+    choices["typography"].update(
+        driver="ink_coverage_pct",
+        value=typo["value"],
+        provenance=typo["provenance"],
+        inaction=not typo["applied"],
+        inaction_reason=typo["inaction_reason"],
+        confidence=typo["confidence"],
+        applied=typo["applied"],
+    )
+
+    brief_mod.add_reason(
+        brief,
+        "palette",
+        pal["driver"],
+        pal["value"],
+        {
+            "p33": (THRESHOLDS.get("palette") or {}).get("p33"),
+            "p67": (THRESHOLDS.get("palette") or {}).get("p67"),
+        },
+        pal["provenance"],
+        pal["inaction_reason"],
+    )
+    brief_mod.add_reason(
+        brief,
+        "grade",
+        grade["driver"],
+        grade["value"],
+        {
+            "p33": (THRESHOLDS.get("grade") or {}).get("p33"),
+            "p67": (THRESHOLDS.get("grade") or {}).get("p67"),
+        },
+        grade["provenance"],
+        grade["inaction"],
+    )
+    brief_mod.add_reason(
+        brief,
+        "animation",
+        anim["driver"],
+        anim["value"],
+        {"p33": anim_th.get("p33"), "p67": anim_th.get("p67")},
+        anim["provenance"],
+        anim["inaction"],
+        direction_basis="asserted",
+    )
+    brief_mod.add_reason(
+        brief,
+        "cut_density",
+        "onsets_per_s",
+        cut["driver_value"],
+        cut["threshold"],
+        cut["provenance"],
+        cut["inaction_reason"],
+    )
+    brief_mod.add_reason(
+        brief,
+        "composition",
+        comp["driver"],
+        comp["value"],
+        screen_mod.OFFSET_THRESHOLD,
+        comp["provenance"],
+        comp["inaction_reason"],
+    )
+    brief_mod.add_reason(
+        brief,
+        "typography",
+        "ink_coverage_pct",
+        typo["driver_value"],
+        typo["threshold"],
+        typo["provenance"],
+        typo["inaction_reason"],
+    )
+    return brief
+
+
+def cmd_visual(args: argparse.Namespace) -> int:
+    measurements = _load_json(args.measurements)
+    brief = build_visual_brief(
+        args.source, measurements, delivery=args.delivery, project=args.project
+    )
+    if args.out:
+        out = Path(args.out)
+    else:
+        src = Path(args.source)
+        out = src.parent / f"{src.stem}.visual.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    from . import brief as brief_mod
+
+    out.write_text(brief_mod.to_json(brief), encoding="utf-8")
+    print(str(out))
+    return EXIT_OK
+
+
 def _enabled(plan, name: str) -> bool:
     for item in plan.treatments or []:
         if item.get("name") == name:
@@ -372,6 +757,11 @@ def cmd_render(args: argparse.Namespace) -> int:
     if not source:
         raise VxError("serve --input: il piano non contiene la sorgente")
     media = probe_mod.probe(source).to_dict()
+    visual = (
+        _visual_from_brief(_load_json(args.visual_brief))
+        if getattr(args, "visual_brief", None)
+        else None
+    )
     work = Path(args.workdir) if args.workdir else winpath.work_root() / "manual"
     _log(f"[render] precision={args.precision}")
     result = render.render(
@@ -381,6 +771,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         workdir=work,
         subs_path=args.subs or None,
         crop_plan=(built.render or {}).get("crop"),
+        visual=visual,
     )
     _out({k: v for k, v in result.items() if k not in ("graph", "script")})
     return EXIT_OK
@@ -566,6 +957,11 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     brief = plan_mod.apply_answers(brief, answers or {})
     brief.setdefault("source", (rep.get("source") or {}).get("path"))
+    visual = (
+        _visual_from_brief(_load_json(args.visual_brief))
+        if getattr(args, "visual_brief", None)
+        else None
+    )
 
     if (
         str(brief.get("subtitles") or "auto") != "none"
@@ -661,6 +1057,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         workdir=work / "stage",
         subs_path=subs_path,
         crop_plan=crop,
+        visual=visual,
     )
     _log(f"[run] anteprima: {preview['path']} ({preview['frames']} frame)")
 
@@ -674,6 +1071,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         workdir=work / "stage",
         subs_path=subs_path,
         crop_plan=crop,
+        visual=visual,
     )
 
     winpath.heartbeat(work, "qc")
@@ -850,6 +1248,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--precision", default="full", choices=["proxy", "full"])
     p.add_argument("--workdir", default=None)
     p.add_argument("--subs", default=None)
+    p.add_argument(
+        "--visual-brief",
+        default=None,
+        help="brief vx.visual/1.0: inserisce le catene grade+animazione nel grafo",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_render)
 
@@ -906,6 +1309,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--keep-proxy", action="store_true")
     p.add_argument(
+        "--visual-brief",
+        default=None,
+        help="brief vx.visual/1.0: inserisce le catene grade+animazione nel grafo",
+    )
+    p.add_argument(
         "--overlay",
         action="append",
         default=None,
@@ -921,6 +1329,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_deliverables)
+
+    p = add("visual", "brief vx.visual/1.0 dalle misure del clip (W2.5)")
+    p.add_argument("--source", required=True, help="sorgente del clip")
+    p.add_argument("--measurements", required=True, help="JSON con le misure del clip")
+    p.add_argument("--delivery", default=None, help="delivery di riferimento (audit)")
+    p.add_argument("--out", default=None, help="percorso del brief JSON")
+    p.add_argument("--project", default=None, help="project_id del brief")
+    p.set_defaults(func=cmd_visual)
 
     return ap
 

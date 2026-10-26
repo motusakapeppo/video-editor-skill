@@ -6,13 +6,17 @@ registry — only the vocabulary constants. If the brief claims an effect that w
 not executed, or a confidence that contradicts its own inaction rule, the prover
 fails it.
 
-Wave 0 ships the ledger and the renderer delta. The surface/hook/docs gates land
-in Wave 2.5; their absence here is deliberate, not an oversight.
+Wave 0 shipped the ledger and the renderer delta. Wave 2.5 completes the prover
+with the two pair gates (``distinct_surface``, ``hook_distinct``), the render
+gate (``coverage_gate``) and the documentation gate (``docs_match``). Every gate
+is binary: it returns ok or it does not, and a measurement it cannot take is a
+failure with the reason, never a fabricated number.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import subprocess
@@ -20,7 +24,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .registry import ANIMATIONS, APPROVED_DELIVERY_SHA256, AXES
+from .palette import INK_DARK, INK_LIGHT  # the two neutral inks, constants only
+from .registry import ANIMATIONS, APPROVED_DELIVERY_SHA256, AXES, THRESHOLDS
 
 # The approved delivery is machine-local and never re-rendered. The environment
 # variable exists so a different workstation can point at its own copy.
@@ -88,6 +93,8 @@ def check_ledger(brief: Dict[str, Any]) -> List[str]:
         ):
             if field not in choice:
                 errors.append(f"{axis}: campo {field} mancante")
+        if not isinstance(choice.get("inaction"), bool):
+            errors.append(f"{axis}: inaction non booleano")
 
         provenance = choice.get("provenance")
         if not isinstance(provenance, str) or not provenance.startswith(
@@ -261,6 +268,332 @@ def renderer_delta(video: str | Path, node: Optional[Any] = None) -> float:
     if samples == 0:
         raise RuntimeError(f"nessun frame misurabile in {video}")
     return round(worst, 6)
+
+
+# --------------------------------------------------------------------------- #
+# Wave 2.5 — the binary gates
+# --------------------------------------------------------------------------- #
+
+# The ink mask tolerance. Declared, not invented: it is the half-width within
+# which a pixel counts as the declared ink, and it is validated on the approved
+# delivery, where the same mask measures a 0.458% median — the 0.45% lower edge
+# the typography thresholds were cut from.
+INK_TOLERANCE = 0.06
+# The healthy ink band, in percent of the frame. The typography driver measures
+# 0.45–0.94% on the delivery; the gate tolerates the wider band.
+COVERAGE_MIN = 0.30
+COVERAGE_MAX = 2.00
+COVERAGE_SAMPLES = 12
+
+# Pair-gate thresholds. Every one is declared in the verdict, not measured here.
+HUE_L1_THRESHOLD = 0.15
+RHYTHM_TARGET_DELTA = 0.4
+GEOMETRY_OFFSET = 0.05
+TYPOGRAPHY_SIZE_DELTA = 8
+# P1: a hook that opens on speech within 0.4 s (and a face) is a "text" hook.
+HOOK_ONSET_TEXT = 0.4
+
+# The three sentences every documentation must carry, verbatim.
+MANDATORY_SENTENCES = (
+    (
+        "La direzione ratio↑→animazione più dura è asserita, non misurata; "
+        "solo i punti di taglio sono empirici."
+    ),
+    (
+        "Il gate `distinct_surface` certifica solo la divergenza di superficie "
+        "fra due brief; non certifica la differenza di montaggio e non pretende "
+        "di certificare la distinzione su materiale arbitrario futuro."
+    ),
+    (
+        "Riduzione di scope rispetto all'ODG: le decorazioni sono fuori da "
+        "questa tornata per motivo di budget, non per motivo di gate; il gate "
+        "non le richiede e la loro assenza non è un fallimento."
+    ),
+)
+
+
+def canonical_json(obj: Any) -> str:
+    """The repo's canonical JSON: sorted keys, stable whitespace."""
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _choice(brief: Dict[str, Any], axis: str) -> Dict[str, Any]:
+    choice = (brief.get("choices") or {}).get(axis)
+    return choice if isinstance(choice, dict) else {}
+
+
+def _measure(brief: Dict[str, Any], key: str) -> Any:
+    return (brief.get("measurements") or {}).get(key)
+
+
+def _hue_l1(a: Dict[str, Any], b: Dict[str, Any]) -> float:
+    """L1 distance between the two hue-mass vectors, as stored (peak rank)."""
+    pairs_a = _measure(a, "hue_mass_top3") or []
+    pairs_b = _measure(b, "hue_mass_top3") or []
+    total = 0.0
+    for i in range(3):
+        ma = pairs_a[i].get("mass") if i < len(pairs_a) else None
+        mb = pairs_b[i].get("mass") if i < len(pairs_b) else None
+        total += abs(float(ma or 0.0) - float(mb or 0.0))
+    return round(total, 6)
+
+
+def _size_delta(choice: Dict[str, Any]) -> float:
+    """The typography size delta in px; a non-numeric value counts as 0."""
+    value = choice.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def hook_type(brief: Dict[str, Any]) -> str:
+    """P1 hook taxonomy: ``text`` | ``visual`` | ``title``.
+
+    ``text`` only when speech starts within 0.4 s on a faced clip; otherwise
+    ``visual`` when the first-3-seconds motion reaches the corpus p67; else
+    ``title``. A missing measurement never invents a bucket.
+    """
+    onset = _measure(brief, "first_speech_onset_s")
+    if (
+        onset is not None
+        and float(onset) <= HOOK_ONSET_TEXT
+        and bool(_measure(brief, "face_present"))
+    ):
+        return "text"
+    motion = _measure(brief, "first3s_motion")
+    p67 = (THRESHOLDS.get("hook") or {}).get("p67")
+    if motion is not None and p67 is not None and float(motion) >= float(p67):
+        return "visual"
+    return "title"
+
+
+def hook_distinct(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    """P1: the hooks differ only when hook_type AND animation.name differ.
+
+    The Lead's "3 of 4 components" version is rejected: it could pass with
+    identical animation, which would certify a hook the renderer never
+    distinguishes.
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    name_a = _choice(a, "animation").get("name")
+    name_b = _choice(b, "animation").get("name")
+    return hook_type(a) != hook_type(b) and name_a != name_b
+
+
+def distinct_surface(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """The surface-divergence gate between two briefs. Binary, with receipts.
+
+    Families:
+      colour     palette family differs OR grade node type differs OR hue L1 >= 0.15
+      rhythm     |cut target delta| >= 0.4 OR animation name/count differs
+      geometry   both offsets measured AND |dx| >= 0.05 or |dy| >= 0.05
+      typography font differs OR size delta >= 8 px
+
+    When geometry is available the gate needs geometry AND two of the other
+    three; when it is not, typography cannot substitute it: all three remaining
+    families must differ. Scope is ``surface_only`` by contract.
+    """
+    fam_a = str(_choice(a, "palette").get("value"))
+    fam_b = str(_choice(b, "palette").get("value"))
+    node_a = str(_choice(a, "grade").get("value"))
+    node_b = str(_choice(b, "grade").get("value"))
+    l1 = _hue_l1(a, b)
+    colour = fam_a != fam_b or node_a != node_b or l1 >= HUE_L1_THRESHOLD
+
+    target_a = _choice(a, "cut_density").get("value")
+    target_b = _choice(b, "cut_density").get("value")
+    anim_a, anim_b = _choice(a, "animation"), _choice(b, "animation")
+    rhythm_target = (
+        isinstance(target_a, (int, float))
+        and isinstance(target_b, (int, float))
+        and not isinstance(target_a, bool)
+        and not isinstance(target_b, bool)
+        and abs(float(target_a) - float(target_b)) >= RHYTHM_TARGET_DELTA
+    )
+    rhythm = (
+        rhythm_target
+        or anim_a.get("name") != anim_b.get("name")
+        or anim_a.get("count") != anim_b.get("count")
+    )
+
+    off_a = _measure(a, "subject_offset")
+    off_b = _measure(b, "subject_offset")
+    geometry_available = off_a is not None and off_b is not None
+    geometry = False
+    if geometry_available:
+        dx = abs(float(off_a.get("x") or 0.0) - float(off_b.get("x") or 0.0))
+        dy = abs(float(off_a.get("y") or 0.0) - float(off_b.get("y") or 0.0))
+        geometry = dx >= GEOMETRY_OFFSET or dy >= GEOMETRY_OFFSET
+
+    typo_a, typo_b = _choice(a, "typography"), _choice(b, "typography")
+    typography = (
+        typo_a.get("font") != typo_b.get("font")
+        or abs(_size_delta(typo_a) - _size_delta(typo_b)) >= TYPOGRAPHY_SIZE_DELTA
+    )
+
+    if geometry_available:
+        ok = geometry and sum((colour, rhythm, typography)) >= 2
+    else:
+        ok = colour and rhythm and typography
+
+    return {
+        "ok": bool(ok),
+        "scope": "surface_only",
+        "families": {
+            "colour": bool(colour),
+            "rhythm": bool(rhythm),
+            "geometry": bool(geometry),
+            "typography": bool(typography),
+        },
+        "geometry_available": bool(geometry_available),
+        "hue_l1": l1,
+        "hook_types": {"a": hook_type(a), "b": hook_type(b)},
+    }
+
+
+def coverage_gate(brief: Dict[str, Any], render_path: str | Path) -> Dict[str, Any]:
+    """The render gate: the ink coverage must sit in the healthy band.
+
+    Twelve evenly spaced frames are decoded from the render; a pixel counts as
+    ink when its max-channel distance from the declared ink colour is within
+    ``INK_TOLERANCE``. The ink colour is the one the palette would pick for this
+    brief (light ink under luma 0.5, dark ink above — the same rule
+    ``palette._ink`` applies). ``ink`` is the median fraction in percent.
+
+    P5: with decorations out of scope there is no second layer to measure, so
+    ``overlay_pct`` IS ``ink_pct`` — the same number under the name the contract
+    uses for it. This is not a skipped measurement; it is the honest statement
+    that only one layer exists.
+
+    A render that cannot be read is a failed gate with the reason, never a
+    fabricated number.
+    """
+    import cv2  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    result: Dict[str, Any] = {
+        "ok": False,
+        "ink_pct": None,
+        "overlay_pct": None,
+        "n_frames": 0,
+        "thresholds": {"ink_min": COVERAGE_MIN, "ink_max": COVERAGE_MAX},
+        "tolerance": INK_TOLERANCE,
+    }
+    path = Path(render_path)
+    if not path.is_file():
+        result["error"] = f"render mancante: {path}"
+        return result
+
+    luma = _measure(brief, "luma_p50")
+    value = 0.5 if luma is None else float(luma)
+    ink = INK_LIGHT if value < 0.5 else INK_DARK
+    result["ink"] = "#{:02x}{:02x}{:02x}".format(*ink)
+    ink_arr = np.array(ink, dtype=np.float32) / 255.0
+
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        result["error"] = f"render non apribile: {path}"
+        return result
+    frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    duration = frames / fps if frames > 0 and fps > 0 else 0.0
+    if duration <= 0.0:
+        capture.release()
+        result["error"] = f"durata non misurabile: {path}"
+        return result
+
+    fractions: List[float] = []
+    for index in range(COVERAGE_SAMPLES):
+        at = duration * (index + 0.5) / COVERAGE_SAMPLES
+        capture.set(cv2.CAP_PROP_POS_MSEC, at * 1000.0)
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            continue
+        rgb = frame[:, :, ::-1].astype(np.float32) / 255.0
+        distance = np.abs(rgb - ink_arr).max(axis=2)
+        fractions.append(float((distance <= INK_TOLERANCE).mean()) * 100.0)
+    capture.release()
+
+    if not fractions:
+        result["error"] = f"nessun frame leggibile: {path}"
+        return result
+
+    ink_pct = round(float(np.median(fractions)), 4)
+    result["ink_pct"] = ink_pct
+    # P5: decorations are out of scope, so the overlay layer does not exist and
+    # its coverage is the text ink coverage. One measurement, two contract names.
+    result["overlay_pct"] = ink_pct
+    result["n_frames"] = len(fractions)
+    result["ok"] = bool(
+        COVERAGE_MIN <= ink_pct <= COVERAGE_MAX
+        and result["overlay_pct"] <= COVERAGE_MAX
+    )
+    return result
+
+
+def _declared_effects(brief: Dict[str, Any]) -> set:
+    """The effect names the choices declare, per axis.
+
+    ``grade`` declares its node type, ``animation`` its name, ``cut_density``
+    the snap and ``composition`` the crop — the latter two only when applied.
+    ``palette`` and ``typography`` declare no ffmpeg effect in
+    ``vx.visual/1.0`` (the palette drives colours for a later wave, typography
+    has no burn of its own), so they always declare ``none``.
+    """
+    declared: set = set()
+    for axis in AXES:
+        choice = _choice(brief, axis)
+        if axis == "grade":
+            declared.add(str(choice.get("value") or "none"))
+        elif axis == "animation":
+            declared.add(str(choice.get("name") or "none"))
+        elif axis == "cut_density":
+            declared.add("snap" if choice.get("applied") else "none")
+        elif axis == "composition":
+            declared.add("crop" if choice.get("applied") else "none")
+        else:  # palette, typography
+            declared.add("none")
+    return declared
+
+
+def docs_match(brief: Dict[str, Any], docs_text: str) -> bool:
+    """The documentation gate: the docs must describe exactly what executed.
+
+    Four conditions, all binary: the ledger hash (sha256 of the canonical
+    ``executed`` list) appears in the text; the text's sha256 equals the
+    ``docs_match.doc_sha256`` the brief carries; the declared effect names equal
+    the executed names; and the three mandatory sentences are present verbatim.
+    """
+    if not isinstance(brief, dict) or not isinstance(docs_text, str):
+        return False
+    executed = brief.get("executed")
+    if not isinstance(executed, list):
+        return False
+
+    ledger_hash = hashlib.sha256(canonical_json(executed).encode("utf-8")).hexdigest()
+    if ledger_hash not in docs_text:
+        return False
+
+    docs = brief.get("docs_match") or {}
+    doc_hash = docs.get("doc_sha256")
+    if not isinstance(doc_hash, str) or not doc_hash:
+        return False
+    if doc_hash != _sha256_text(docs_text):
+        return False
+
+    executed_names = {item.get("name") for item in executed if isinstance(item, dict)}
+    if _declared_effects(brief) != executed_names:
+        return False
+
+    for sentence in MANDATORY_SENTENCES:
+        if sentence not in docs_text:
+            return False
+    return True
 
 
 def _selftest() -> int:

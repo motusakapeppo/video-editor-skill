@@ -287,6 +287,43 @@ def _audio_chain(plan: EditPlan) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _visual_fragment(
+    visual: Dict[str, Any],
+    index: int,
+    start: float,
+    end: float,
+    media: Dict[str, Any],
+    fps: float,
+) -> str:
+    """Grade + animation chains for one segment, or ``""`` when both are empty.
+
+    The grade node is ``visual["grade_nodes"][i % len]``, the animation choice
+    ``visual["animations"][i % len]``. Empty fragments are skipped entirely so
+    the joined graph never carries a dangling comma. Imported lazily: a caller
+    that never passes ``visual`` pays no import and sees no behaviour change.
+    """
+    from . import animplan, gradeplan  # noqa: PLC0415
+
+    fragments: List[str] = []
+    nodes = visual.get("grade_nodes") or []
+    if nodes:
+        chain = gradeplan.chain_for_shot(nodes[index % len(nodes)])
+        if chain:
+            fragments.append(chain)
+    choices = visual.get("animations") or []
+    if choices:
+        shot = {
+            "duration": end - start,
+            "width": media.get("width"),
+            "height": media.get("height"),
+            "fps": fps,
+        }
+        chain = animplan.chain_for_shot(choices[index % len(choices)], shot)
+        if chain:
+            fragments.append(chain)
+    return ",".join(fragments)
+
+
 def build_filtergraph(
     plan: EditPlan,
     media: dict,
@@ -294,24 +331,45 @@ def build_filtergraph(
     subs_path: str | None = None,
     precision: str = "full",
     crop_plan: dict | None = None,
+    visual: dict | None = None,
 ) -> str:
     """Return the complete ``-filter_complex`` graph for one render pass.
 
     Outputs are labelled ``[vout]`` and, when the source has audio, ``[aout]``.
     The graph is a single line: it is written verbatim to a ``.txt`` and passed
     through ``-filter_complex_script`` (the Windows 8191-char limit is real).
+
+    ``visual`` carries the adaptive visual decisions (``vx.visual/1.0``): when
+    present, each video segment gets the grade chain and the animation chain
+    spliced in after ``format=yuv420p`` and before its ``[vN]`` label. Empty
+    chains are skipped, so a visual of only no-op decisions yields a graph
+    byte-identical to ``visual=None``. ``visual["width"]``/``["height"]``
+    override the media geometry when present.
     """
     precision = _precision(plan, precision)
     fps = _num(media.get("fps"), DEFAULT_FPS) or DEFAULT_FPS
     has_audio = bool(media.get("has_audio", True))
     segments = _segments(plan, media)
 
+    media_eff: Dict[str, Any] = media
+    if visual:
+        media_eff = dict(media)
+        if visual.get("width") is not None:
+            media_eff["width"] = visual["width"]
+        if visual.get("height") is not None:
+            media_eff["height"] = visual["height"]
+
     parts: List[str] = []
     for index, (start, end) in enumerate(segments):
-        parts.append(
+        head = (
             f"[0:v]trim=start={start:.6f}:end={end:.6f},"
-            f"setpts=PTS-STARTPTS,setsar=1,format=yuv420p[v{index}]"
+            f"setpts=PTS-STARTPTS,setsar=1,format=yuv420p"
         )
+        if visual:
+            extra = _visual_fragment(visual, index, start, end, media_eff, fps)
+            if extra:
+                head += "," + extra
+        parts.append(head + f"[v{index}]")
         if has_audio:
             parts.append(
                 f"[0:a]atrim=start={start:.6f}:end={end:.6f},"
@@ -362,7 +420,7 @@ def build_filtergraph(
         )
         parts.append(f"[vfit]{','.join(post + ['setsar=1', 'format=yuv420p'])}[vout]")
     else:
-        chain = pre + [_crop_scale(plan, media, crop_plan, precision)] + post
+        chain = pre + [_crop_scale(plan, media_eff, crop_plan, precision)] + post
         chain += ["format=yuv420p", "setsar=1"]
         parts.append(f"{video_label}{','.join(chain)}[vout]")
 
@@ -593,6 +651,7 @@ def render(
     workdir: str | Path,
     subs_path: str | None = None,
     crop_plan: dict | None = None,
+    visual: dict | None = None,
 ) -> dict:
     """Render ``plan`` and return a result dict.
 
@@ -601,6 +660,9 @@ def render(
       02 vidstabdetect -> transforms.trf
       03 full graph -> stage/03_video.mp4
       04 loudnorm second pass -> final (faststart)
+
+    ``visual`` is the adaptive visual decision dict (see
+    :func:`build_filtergraph`); it is passed through to the graph untouched.
 
     Raises ``RenderFailure`` on any non-zero ffmpeg exit.
     """
@@ -670,11 +732,13 @@ def render(
         stages.append("02_detect")
 
     # -- stage 03: the full graph ------------------------------------------- #
-    graph = build_filtergraph(plan, media, subs_path=subs_path, precision=precision)
+    graph = build_filtergraph(
+        plan, media, subs_path=subs_path, precision=precision, visual=visual
+    )
     if crop_plan:
         # Rebuild with the crop plan folded in (build_filtergraph is crop-free by
         # contract; the crop plan is a render-time argument).
-        graph = _graph_with_crop(plan, media, crop_plan, subs_path, precision)
+        graph = _graph_with_crop(plan, media, crop_plan, subs_path, precision, visual)
     script = write_script(graph, stage_dir / "03_graph.txt")
     stage03 = stage_dir / "03_video.mp4"
 
@@ -779,6 +843,7 @@ def _graph_with_crop(
     crop_plan: Dict[str, Any],
     subs_path: Optional[str],
     precision: str,
+    visual: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Same graph as ``build_filtergraph`` but with an explicit crop plan."""
     return build_filtergraph(
@@ -787,6 +852,7 @@ def _graph_with_crop(
         subs_path=subs_path,
         precision=precision,
         crop_plan=crop_plan,
+        visual=visual,
     )
 
 

@@ -1,0 +1,651 @@
+{
+  "schema": "vx.visual_pair/1.0",
+  "designated": {
+    "pair": [
+      "real_interview_169",
+      "real_street_169"
+    ],
+    "designated_by": "verdict"
+  },
+  "briefs": {
+    "real_interview_169": {
+      "schema": "vx.visual/1.0",
+      "project_id": "real_interview_169",
+      "source_sha256": "eadeaae2dae6502c0a1f24a0e644baa0d5734adad4bf70209fdd6a037a6daa86",
+      "corpus_hash": "704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+      "choices": {
+        "palette": {
+          "driver": "hue_mass_top3",
+          "value": "neutral",
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": true,
+          "confidence": 0.2308,
+          "applied": false,
+          "inaction_reason": "massa dominante 0.5289 a meta' strada fra p33 0.1817 e p67 0.5012: inazione, famiglia neutra."
+        },
+        "grade": {
+          "driver": "luma_p50",
+          "value": "none",
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": true,
+          "confidence": 0.4892,
+          "applied": false,
+          "inaction_reason": "confidenza 0.489 in [0.2, 0.8]: inazione, nessun nodo cromatico."
+        },
+        "animation": {
+          "driver": "transient_ratio",
+          "value": "wipe",
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": false,
+          "confidence": 1.0,
+          "applied": true,
+          "name": "wipe",
+          "count": 1,
+          "direction_basis": "asserted",
+          "inaction_reason": "p33 3.4758 <= transient_ratio 3.6337 <= p67 4.9944: wipe."
+        },
+        "cut_density": {
+          "driver": "onsets_per_s",
+          "value": 2.0,
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": false,
+          "confidence": 1.0,
+          "applied": true,
+          "inaction_reason": "p33 2.9887 <= onsets_per_s 4.5168 <= p67 4.9227: taglio 2.0 s."
+        },
+        "composition": {
+          "driver": "subject_offset",
+          "value": "centre",
+          "provenance": "declared:1/20_width",
+          "inaction": true,
+          "confidence": 0.5,
+          "applied": false,
+          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+        },
+        "typography": {
+          "driver": "ink_coverage_pct",
+          "value": 0,
+          "provenance": "measured:delivery",
+          "inaction": true,
+          "confidence": 0.5,
+          "applied": false,
+          "inaction_reason": "ink_coverage_pct non misurata: corpo invariato, inazione."
+        }
+      },
+      "measurements": {
+        "transient_ratio": 3.6337,
+        "transient_p33": 3.4758,
+        "transient_p67": 4.9944,
+        "hue_mass_top3": [
+          {
+            "hue": 212,
+            "mass": 0.5289
+          },
+          {
+            "hue": 12,
+            "mass": 0.1802
+          },
+          {
+            "hue": 38,
+            "mass": 0.1077
+          }
+        ],
+        "ink_coverage_pct": null,
+        "subject_offset": {
+          "x": -0.1064,
+          "y": 0.0
+        },
+        "onsets_per_s": 4.5168,
+        "first_speech_onset_s": 6.0,
+        "first3s_motion": 34.4243,
+        "face_present": true,
+        "luma_p50": 0.2327,
+        "contrast": 0.9465
+      },
+      "reasons": [
+        {
+          "axis": "palette",
+          "driver": "hue_mass_top3",
+          "value": 0.5289,
+          "threshold": {
+            "p33": 0.1817,
+            "p67": 0.5012
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "massa dominante 0.5289 a meta' strada fra p33 0.1817 e p67 0.5012: inazione, famiglia neutra."
+        },
+        {
+          "axis": "grade",
+          "driver": "luma_p50",
+          "value": 0.2327,
+          "threshold": {
+            "p33": 0.2914,
+            "p67": 0.5028
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "confidenza 0.489 in [0.2, 0.8]: inazione, nessun nodo cromatico."
+        },
+        {
+          "axis": "animation",
+          "driver": "transient_ratio",
+          "value": 3.6337,
+          "threshold": {
+            "p33": 3.4758,
+            "p67": 4.9944
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "p33 3.4758 <= transient_ratio 3.6337 <= p67 4.9944: wipe.",
+          "direction_basis": "asserted"
+        },
+        {
+          "axis": "cut_density",
+          "driver": "onsets_per_s",
+          "value": 4.5168,
+          "threshold": {
+            "p33": 2.9887,
+            "p67": 4.9227
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "p33 2.9887 <= onsets_per_s 4.5168 <= p67 4.9227: taglio 2.0 s."
+        },
+        {
+          "axis": "composition",
+          "driver": "subject_offset",
+          "value": null,
+          "threshold": 0.05,
+          "provenance": "declared:1/20_width",
+          "decision": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+        },
+        {
+          "axis": "typography",
+          "driver": "ink_coverage_pct",
+          "value": null,
+          "threshold": {
+            "low": 0.45,
+            "high": 0.94
+          },
+          "provenance": "measured:delivery",
+          "decision": "ink_coverage_pct non misurata: corpo invariato, inazione."
+        }
+      ],
+      "executed": [
+        {
+          "axis": "palette",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 150,
+          "at": null
+        },
+        {
+          "axis": "grade",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 150,
+          "at": null
+        },
+        {
+          "axis": "animation",
+          "name": "wipe",
+          "engine": "ffmpeg",
+          "filter": "geq=lum='if(lt(X,W*T/2.5025),lum(X,Y),0)':cb='if(lt(X,W*T/2.5025),cb(X,Y),128)':cr='if(lt(X,W*T/2.5025),cr(X,Y),128)'",
+          "rc": 0,
+          "frames": 150,
+          "at": 0.0
+        },
+        {
+          "axis": "cut_density",
+          "name": "snap",
+          "engine": "ffmpeg",
+          "filter": "concat=n=2:v=1:a=1",
+          "rc": 0,
+          "frames": 150,
+          "at": 0.0
+        },
+        {
+          "axis": "composition",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 150,
+          "at": null
+        },
+        {
+          "axis": "typography",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 150,
+          "at": null
+        }
+      ],
+      "skeleton": "deferred",
+      "distinct_surface": {
+        "ok": true,
+        "scope": "surface_only",
+        "families": [
+          "colour",
+          "rhythm",
+          "geometry"
+        ],
+        "geometry_available": true
+      },
+      "docs_match": {
+        "ok": false,
+        "doc_sha256": "7f6bec987c906bff486bafc178b58376e21282a4adc915ad366428dcf4c98253",
+        "ledger_sha256": "2c9043d602191af8382c60d6053604bf88fc6a7c76736d68dd070c6a7f793a4e"
+      },
+      "cast_normalised": false,
+      "_visual": {
+        "grade_node": {
+          "type": "none"
+        },
+        "animation": {
+          "name": "wipe",
+          "count": 1,
+          "driver": "transient_ratio",
+          "value": 3.6337,
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": "p33 3.4758 <= transient_ratio 3.6337 <= p67 4.9944: wipe.",
+          "confidence": 1.0,
+          "applied": true,
+          "direction_basis": "asserted",
+          "note": "transient_ratio p33/p67 misurate su n=3 di 9 clip (solo clip con parole): campione piccolo, direzione asserita."
+        },
+        "palette": {
+          "family": "neutral",
+          "colors": {
+            "bg": "#2e2e2e",
+            "accent": "#2484f2",
+            "text": "#fafaf8",
+            "deco": "#697a8c"
+          },
+          "hues": {
+            "h0": 212,
+            "h1": 12,
+            "h2": 38
+          },
+          "contrast": {
+            "text_vs_bg": 12.9942,
+            "deco_vs_bg": 3.0801,
+            "text_correction": "passed",
+            "deco_correction": "passed"
+          },
+          "driver": "hue_mass_top3",
+          "value": 0.5289,
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": true,
+          "inaction_reason": "massa dominante 0.5289 a meta' strada fra p33 0.1817 e p67 0.5012: inazione, famiglia neutra.",
+          "confidence": 0.2308,
+          "applied": false,
+          "note": "masses 0.5289/0.1802/0.1077"
+        },
+        "composition": {
+          "name": "centre",
+          "crop": {
+            "crop_w": 810,
+            "crop_h": 1080,
+            "x": 554,
+            "y": 0,
+            "face_found": false
+          },
+          "driver": "subject_offset",
+          "value": null,
+          "provenance": "declared:1/20_width",
+          "inaction": true,
+          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta.",
+          "confidence": 0.5,
+          "applied": false
+        }
+      }
+    },
+    "real_street_169": {
+      "schema": "vx.visual/1.0",
+      "project_id": "real_street_169",
+      "source_sha256": "e3030c7ab50c2dfb9e19e1e9d657da04d5844cd16289858a9969349a30e5c69f",
+      "corpus_hash": "704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+      "choices": {
+        "palette": {
+          "driver": "hue_mass_top3",
+          "value": "dual",
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": false,
+          "confidence": 0.0692,
+          "applied": true,
+          "inaction_reason": "massa dominante 0.1900 -> famiglia dual."
+        },
+        "grade": {
+          "driver": "luma_p50",
+          "value": "none",
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": true,
+          "confidence": 0.25,
+          "applied": false,
+          "inaction_reason": "confidenza 0.250 in [0.2, 0.8]: inazione, nessun nodo cromatico."
+        },
+        "animation": {
+          "driver": "transient_ratio",
+          "value": "none",
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": true,
+          "confidence": 0.5,
+          "applied": false,
+          "name": "none",
+          "count": 0,
+          "direction_basis": "asserted",
+          "inaction_reason": "transient_ratio non misurata (nessuna parola): nessuna animazione."
+        },
+        "cut_density": {
+          "driver": "onsets_per_s",
+          "value": 3.0,
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": false,
+          "confidence": 1.0,
+          "applied": true,
+          "inaction_reason": "onsets_per_s 0.2722 < p33 2.9887: taglio largo 3.0 s."
+        },
+        "composition": {
+          "driver": "subject_offset",
+          "value": "centre",
+          "provenance": "declared:1/20_width",
+          "inaction": true,
+          "confidence": 0.5,
+          "applied": false,
+          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+        },
+        "typography": {
+          "driver": "ink_coverage_pct",
+          "value": 0,
+          "provenance": "measured:delivery",
+          "inaction": true,
+          "confidence": 0.5,
+          "applied": false,
+          "inaction_reason": "ink_coverage_pct non misurata: corpo invariato, inazione."
+        }
+      },
+      "measurements": {
+        "transient_ratio": null,
+        "transient_p33": 3.4758,
+        "transient_p67": 4.9944,
+        "hue_mass_top3": [
+          {
+            "hue": 226,
+            "mass": 0.19
+          },
+          {
+            "hue": 252,
+            "mass": 0.1011
+          },
+          {
+            "hue": 36,
+            "mass": 0.135
+          }
+        ],
+        "ink_coverage_pct": null,
+        "subject_offset": {
+          "x": 0.2891,
+          "y": 0.0
+        },
+        "onsets_per_s": 0.2722,
+        "first_speech_onset_s": null,
+        "first3s_motion": 11.3453,
+        "face_present": true,
+        "luma_p50": 0.2614,
+        "contrast": 0.9536
+      },
+      "reasons": [
+        {
+          "axis": "palette",
+          "driver": "hue_mass_top3",
+          "value": 0.19,
+          "threshold": {
+            "p33": 0.1817,
+            "p67": 0.5012
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "massa dominante 0.1900 -> famiglia dual."
+        },
+        {
+          "axis": "grade",
+          "driver": "luma_p50",
+          "value": 0.2614,
+          "threshold": {
+            "p33": 0.2914,
+            "p67": 0.5028
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "confidenza 0.250 in [0.2, 0.8]: inazione, nessun nodo cromatico."
+        },
+        {
+          "axis": "animation",
+          "driver": "transient_ratio",
+          "value": null,
+          "threshold": {
+            "p33": 3.4758,
+            "p67": 4.9944
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "transient_ratio non misurata (nessuna parola): nessuna animazione.",
+          "direction_basis": "asserted"
+        },
+        {
+          "axis": "cut_density",
+          "driver": "onsets_per_s",
+          "value": 0.2722,
+          "threshold": {
+            "p33": 2.9887,
+            "p67": 4.9227
+          },
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "decision": "onsets_per_s 0.2722 < p33 2.9887: taglio largo 3.0 s."
+        },
+        {
+          "axis": "composition",
+          "driver": "subject_offset",
+          "value": null,
+          "threshold": 0.05,
+          "provenance": "declared:1/20_width",
+          "decision": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta."
+        },
+        {
+          "axis": "typography",
+          "driver": "ink_coverage_pct",
+          "value": null,
+          "threshold": {
+            "low": 0.45,
+            "high": 0.94
+          },
+          "provenance": "measured:delivery",
+          "decision": "ink_coverage_pct non misurata: corpo invariato, inazione."
+        }
+      ],
+      "executed": [
+        {
+          "axis": "palette",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 149,
+          "at": null
+        },
+        {
+          "axis": "grade",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 149,
+          "at": null
+        },
+        {
+          "axis": "animation",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 149,
+          "at": null
+        },
+        {
+          "axis": "cut_density",
+          "name": "snap",
+          "engine": "ffmpeg",
+          "filter": "concat=n=2:v=1:a=1",
+          "rc": 0,
+          "frames": 149,
+          "at": 0.0
+        },
+        {
+          "axis": "composition",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 149,
+          "at": null
+        },
+        {
+          "axis": "typography",
+          "name": "none",
+          "engine": "ffmpeg",
+          "filter": "null",
+          "rc": 0,
+          "frames": 149,
+          "at": null
+        }
+      ],
+      "skeleton": "deferred",
+      "distinct_surface": {
+        "ok": true,
+        "scope": "surface_only",
+        "families": [
+          "colour",
+          "rhythm",
+          "geometry"
+        ],
+        "geometry_available": true
+      },
+      "docs_match": {
+        "ok": false,
+        "doc_sha256": "1ea89aafe3645b3ef3adb56ccbaa2e309e6e188fd0d696dbe79baaf157c5a97d",
+        "ledger_sha256": "c09856048b2efd67daf40022ba4e2a32265a10b9c9588ed038474645bde4ea04"
+      },
+      "cast_normalised": false,
+      "_visual": {
+        "grade_node": {
+          "type": "none"
+        },
+        "animation": {
+          "name": "none",
+          "count": 0,
+          "driver": "transient_ratio",
+          "value": null,
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": "transient_ratio non misurata (nessuna parola): nessuna animazione.",
+          "confidence": 0.5,
+          "applied": false,
+          "direction_basis": "asserted",
+          "note": "transient_ratio p33/p67 misurate su n=3 di 9 clip (solo clip con parole): campione piccolo, direzione asserita."
+        },
+        "palette": {
+          "family": "dual",
+          "colors": {
+            "bg": "#1e222e",
+            "accent": "#2454f2",
+            "text": "#fafaf8",
+            "deco": "#725ccc"
+          },
+          "hues": {
+            "h0": 226,
+            "h1": 252,
+            "h2": 36
+          },
+          "contrast": {
+            "text_vs_bg": 15.1832,
+            "deco_vs_bg": 3.1117,
+            "text_correction": "passed",
+            "deco_correction": "passed"
+          },
+          "driver": "hue_mass_top3",
+          "value": 0.19,
+          "provenance": "corpus_hash:704caf9f394d92ae5603288e340fec81804bc01d34d66db5f5109a24f6b6b293",
+          "inaction": false,
+          "inaction_reason": "massa dominante 0.1900 -> famiglia dual.",
+          "confidence": 0.0692,
+          "applied": true,
+          "note": "masses 0.1900/0.1011/0.1350"
+        },
+        "composition": {
+          "name": "centre",
+          "crop": {
+            "crop_w": 540,
+            "crop_h": 720,
+            "x": 370,
+            "y": 0,
+            "face_found": false
+          },
+          "driver": "subject_offset",
+          "value": null,
+          "provenance": "declared:1/20_width",
+          "inaction": true,
+          "inaction_reason": "nessun volto al fotogramma: inquadratura al centro, nessuna scelta.",
+          "confidence": 0.5,
+          "applied": false
+        }
+      }
+    }
+  },
+  "gate_results": {
+    "distinct_surface": {
+      "ok": true,
+      "scope": "surface_only",
+      "families": {
+        "colour": true,
+        "rhythm": true,
+        "geometry": true,
+        "typography": false
+      },
+      "geometry_available": true,
+      "hue_l1": 0.4453,
+      "hook_types": {
+        "a": "visual",
+        "b": "title"
+      }
+    },
+    "hook_distinct": true,
+    "coverage": {
+      "real_interview_169": {
+        "ok": true,
+        "ink_pct": 0.4751,
+        "overlay_pct": 0.4751,
+        "n_frames": 12
+      },
+      "real_street_169": {
+        "ok": true,
+        "ink_pct": 0.7425,
+        "overlay_pct": 0.7425,
+        "n_frames": 12
+      }
+    }
+  },
+  "renders": {
+    "real_interview_169": {
+      "path": "C:\\Users\\motus\\.config\\opencode\\skill\\video-editor\\tests\\_out\\visual_corpus\\real_interview_169\\render\\final_proxy.mp4",
+      "frames": 150,
+      "expected_frames": 150,
+      "graph_sha256": "27261f0291f8d05f2b1d5466b33cb87d092d75a866a8e04c8bf189a89ab3739b"
+    },
+    "real_street_169": {
+      "path": "C:\\Users\\motus\\.config\\opencode\\skill\\video-editor\\tests\\_out\\visual_corpus\\real_street_169\\render\\final_proxy.mp4",
+      "frames": 149,
+      "expected_frames": 150,
+      "graph_sha256": "17c379f873299c1aaff1a182bcd2a67a363fff4f15b32c585b4c99916389233c"
+    }
+  }
+}
