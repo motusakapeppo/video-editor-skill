@@ -276,3 +276,19 @@ progetto e' scritto nel codice:
   altrimenti dalla piattaforma dedotta dalla richiesta.
 
 Se una costante di questo elenco ricompare nel codice, e' una regressione.
+
+### Come si pongono le domande
+
+Le domande di `board.prefight()` e quelle restituite dagli agenti NON si scrivono come
+testo nel messaggio: si pongono con lo **strumento `question` di opencode**, in caselle
+a scelta multipla, una voce per domanda, con le opzioni gia' pronte.
+
+Regole:
+- ogni domanda ha un `header` breve e 2-4 opzioni concrete, ognuna con la conseguenza
+  dichiarata (es. "massima -> 4 trattamenti, palette 4 colori");
+- la prima opzione e' quella consigliata, con "(Recommended)" nel testo;
+- niente "Altro" fra le opzioni: lo strumento aggiunge da solo la voce libera;
+- se le domande sono piu' di una, si pongono tutte nello stesso blocco;
+- la risposta dell'utente entra nel contesto degli agenti come punto di partenza.
+
+Una domanda posta come prosa e' una domanda che l'utente salta.
