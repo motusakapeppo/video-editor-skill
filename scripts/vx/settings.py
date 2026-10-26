@@ -61,6 +61,17 @@ RANGES: Dict[str, tuple[float, float]] = {
     "music_confidence": (0.0, 1.0),
     "detector_min_confidence": (0.0, 1.0),
     "nvenc_cq": (0.0, 51.0),
+    "triage_max_upscale": (1.0, 10.0),
+    "triage_max_broll": (0.0, 500.0),
+    "triage_max_music": (0.0, 100.0),
+    "triage_min_duration_sec": (0.0, 3600.0),
+    "triage_broll_sec": (0.1, 600.0),
+    "triage_image_duration_sec": (0.1, 600.0),
+    "triage_music_gain_db": (-60.0, 0.0),
+    "triage_music_ratio_low": (0.0, 1.0),
+    "triage_sharpness_low": (0.0, 1000.0),
+    "triage_confidence_low": (0.0, 1.0),
+    "triage_confidence_high": (0.0, 1.0),
 }
 
 DEFAULTS: Dict[str, Any] = {

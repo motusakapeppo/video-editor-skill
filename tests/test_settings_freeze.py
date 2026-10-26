@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from vx import analyze, contract, qc, settings  # noqa: E402
+from vx import analyze, asset_triage, contract, qc, settings  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -53,6 +53,28 @@ def main() -> int:
         "qc si riallinea all'override",
         qc.LIMITS["cue_cps_max"] == 18,
         qc.LIMITS["cue_cps_max"],
+    )
+
+    settings.apply(settings.build(overrides=["thresholds.triage_max_upscale=2.0"]))
+    check(
+        "override raggiunge la soglia effettiva del triage",
+        contract.THRESHOLDS["triage_max_upscale"] == 2.0
+        and asset_triage.triage_assets(
+            [
+                asset_triage.AssetInfo(
+                    asset_id="a.mp4",
+                    kind="video",
+                    path="a.mp4",
+                    width=100,
+                    height=100,
+                    duration_sec=5.0,
+                )
+            ],
+            (180, 180),
+            measure=lambda asset: {},
+        ).thresholds["triage_max_upscale"]
+        == 2.0,
+        contract.THRESHOLDS["triage_max_upscale"],
     )
 
     settings.reset()

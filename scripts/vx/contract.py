@@ -91,6 +91,18 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "hook_window": 4.0,
     "max_creative_treatments": 3,
     "cut_fade_ms": 12,
+    # asset triage (Fase 4)
+    "triage_max_upscale": 1.5,
+    "triage_max_broll": 3,
+    "triage_max_music": 1,
+    "triage_min_duration_sec": 1.0,
+    "triage_broll_sec": 3.0,
+    "triage_image_duration_sec": 3.0,
+    "triage_music_gain_db": -8.0,
+    "triage_music_ratio_low": 0.5,
+    "triage_sharpness_low": 50.0,
+    "triage_confidence_low": 0.2,
+    "triage_confidence_high": 0.8,
 }
 
 THRESHOLDS = MappingProxyType(_THRESHOLDS_DATA)
