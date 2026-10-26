@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence, Union
 
 from . import api, contract, jobs
 
@@ -192,6 +193,47 @@ class _Progress:
         percent = TAIL_FLOOR + TAIL_SPAN * min(1.0, seconds / duration)
         # Cap before the helper: the tail must never reach the 92/96/100 stages.
         self.write(min(percent, TAIL_CEILING), "render")
+
+
+def spawn(job_id: str, root: Optional[Union[str, Path]] = None) -> int:
+    """Start one detached worker for ``job_id`` and return its pid.
+
+    The child is ``python -m vx.worker <job_id> <base>`` with its cwd inside the
+    job directory, so a relative path in the record cannot be re-interpreted
+    against the caller's cwd. ``<repo>/scripts`` is prepended to ``PYTHONPATH``
+    because the test environment has no install. Detachment is per-platform and
+    mutually exclusive: ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` on
+    Windows, ``start_new_session`` elsewhere. Never ``shell``, never
+    ``preexec_fn``. A ``Popen`` failure propagates to the caller.
+    """
+    base = jobs.jobs_root(root)
+    workdir = base / job_id
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    scripts = str(Path(__file__).resolve().parents[1])
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = scripts + (os.pathsep + existing if existing else "")
+
+    flags: Dict[str, Any] = {}
+    if os.name == "nt":
+        flags["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        flags["start_new_session"] = True
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "vx.worker", job_id, str(base)],
+        cwd=str(workdir),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        **flags,
+    )
+    return proc.pid
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

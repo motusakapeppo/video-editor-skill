@@ -8,10 +8,12 @@ blocking on purpose: no asyncio, no anyio, no third-party SDK.
 from __future__ import annotations
 
 import json
+import re
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from . import api, contract
+from . import api, contract, jobs, worker
 
 PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
@@ -70,6 +72,18 @@ AUTO_SCHEMA: Dict[str, Any] = {
 }
 
 
+JOB_SUBMIT_SCHEMA: Dict[str, Any] = AUTO_SCHEMA
+
+JOB_STATUS_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "job_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    },
+    "required": ["job_id"],
+    "additionalProperties": False,
+}
+
+
 def _tool_doctor(arguments: Mapping[str, Any]) -> Dict[str, Any]:
     return api.doctor()
 
@@ -90,6 +104,40 @@ def _tool_edl_validate(arguments: Mapping[str, Any]) -> Dict[str, Any]:
 
 def _tool_auto(arguments: Mapping[str, Any]) -> Dict[str, Any]:
     return api.run_auto(api.AutoRequest(**arguments))
+
+
+def _tool_job_submit(arguments: Mapping[str, Any]) -> Dict[str, Any]:
+    params = dict(arguments)
+    params["assets"] = str(Path(params["assets"]).resolve())
+    params["out"] = str(Path(params["out"]).resolve())
+    if "workdir" in params:
+        params["workdir"] = str(Path(params["workdir"]).resolve())
+    if not Path(params["assets"]).is_dir():
+        raise contract.VxError(f"assets directory not found: {params['assets']}")
+
+    record = jobs.create_job(params)
+    job_id = record["job_id"]
+    try:
+        pid = worker.spawn(job_id)
+    except Exception as exc:  # noqa: BLE001 - any spawn failure is a job failure
+        jobs.update_job(job_id, {"status": "failed", "error": f"spawn failed: {exc}"})
+        raise contract.VxError(f"spawn failed: {exc}") from exc
+
+    root = jobs.jobs_root(None)
+    return {
+        "job_id": job_id,
+        "status": record["status"],
+        "state": str(root / job_id / jobs.JOB_FILE),
+        "pid": pid,
+    }
+
+
+def _tool_job_status(arguments: Mapping[str, Any]) -> Dict[str, Any]:
+    job_id = arguments["job_id"]
+    record = jobs.read_job(job_id)
+    if record is None:
+        raise contract.VxError(f"unknown job: {job_id}")
+    return record
 
 
 TOOLS: List[Dict[str, Any]] = [
@@ -131,6 +179,28 @@ TOOLS: List[Dict[str, Any]] = [
         ),
         "inputSchema": AUTO_SCHEMA,
         "handler": _tool_auto,
+    },
+    {
+        "name": "vx_job_submit",
+        "description": (
+            "Queue the whole pipeline as a detached job and return immediately "
+            "with its job_id, status, state path and pid. It writes nothing but "
+            "the job record: no render happens inside this call. Poll it with "
+            "vx_job_status. Keep vx_auto for short jobs."
+        ),
+        "inputSchema": JOB_SUBMIT_SCHEMA,
+        "handler": _tool_job_submit,
+    },
+    {
+        "name": "vx_job_status",
+        "description": (
+            "The polling verb for a submitted job: return its record unchanged, "
+            "with status, stage, progress_percent, result and error. A running "
+            "job whose worker died is reaped to failed. Keep vx_auto for short "
+            "jobs."
+        ),
+        "inputSchema": JOB_STATUS_SCHEMA,
+        "handler": _tool_job_status,
     },
 ]
 
@@ -212,6 +282,11 @@ def _validate(value: Any, schema: Mapping[str, Any], path: str) -> Optional[str]
         if not any(_is_type(value, name) for name in allowed):
             expected = " or ".join(str(name) for name in allowed)
             return f"{path}: expected {expected}, got {_type_name(value)}"
+
+    pattern = schema.get("pattern")
+    if isinstance(pattern, str) and isinstance(value, str):
+        if re.fullmatch(pattern, value) is None:
+            return f"{path}: does not match pattern {pattern}"
 
     if isinstance(value, dict):
         properties = schema.get("properties")

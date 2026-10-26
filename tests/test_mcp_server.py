@@ -126,6 +126,14 @@ def _build_requests(tmp: Path) -> tuple:
         _call("vx_auto", {"prompt": "p", "out": "o"}, 11),
         _call("vx_no_such_tool", {}, 12),
         _request("no/such/method", 13),
+        _call("vx_job_status", {"job_id": "not-a-job"}, 14),
+        _call("vx_job_status", {"job_id": "0" * 32}, 15),
+        _call("vx_job_submit", {"prompt": "p", "out": "o"}, 16),
+        _call(
+            "vx_job_submit",
+            {"prompt": "p", "assets": str(tmp / "no_such_assets"), "out": "o"},
+            17,
+        ),
     ]
     return requests, empty, ghost
 
@@ -261,8 +269,16 @@ def main() -> int:
         tools = listing.get("tools") or []
         names = [tool.get("name") for tool in tools]
         check(
-            "tools/list quattro nomi in ordine",
-            names == ["vx_doctor", "vx_triage", "vx_edl_validate", "vx_auto"],
+            "tools/list sei nomi in ordine",
+            names
+            == [
+                "vx_doctor",
+                "vx_triage",
+                "vx_edl_validate",
+                "vx_auto",
+                "vx_job_submit",
+                "vx_job_status",
+            ],
             names,
         )
         check(
@@ -272,6 +288,20 @@ def main() -> int:
                 for tool in tools
             ),
             [tool.get("inputSchema", {}).get("type") for tool in tools],
+        )
+        status_schema = next(
+            (
+                tool.get("inputSchema") or {}
+                for tool in tools
+                if tool.get("name") == "vx_job_status"
+            ),
+            {},
+        )
+        check(
+            "vx_job_status job_id pattern",
+            ((status_schema.get("properties") or {}).get("job_id") or {}).get("pattern")
+            == "^[0-9a-f]{32}$",
+            status_schema.get("properties"),
         )
 
         doctor = _result(by_id.get(6))
@@ -354,6 +384,26 @@ def main() -> int:
             _error_code(by_id.get(13)) == -32601,
             _error_code(by_id.get(13)),
         )
+        check(
+            "vx_job_status id malformato -> -32602",
+            _error_code(by_id.get(14)) == -32602,
+            _error_code(by_id.get(14)),
+        )
+        check(
+            "vx_job_status id ignoto isError true",
+            _result(by_id.get(15)).get("isError") is True,
+            _result(by_id.get(15)).get("isError"),
+        )
+        check(
+            "vx_job_submit senza assets -> -32602",
+            _error_code(by_id.get(16)) == -32602,
+            _error_code(by_id.get(16)),
+        )
+        check(
+            "vx_job_submit assets inesistente isError true",
+            _result(by_id.get(17)).get("isError") is True,
+            _result(by_id.get(17)).get("isError"),
+        )
 
     cli_requests = [
         _request("initialize", 1, {"protocolVersion": "2025-06-18"}),
@@ -412,8 +462,16 @@ def main() -> int:
         tool.get("name") for tool in (_result(cli_by_id.get(2)).get("tools") or [])
     ]
     check(
-        "vx mcp tools/list quattro nomi in ordine",
-        cli_names == ["vx_doctor", "vx_triage", "vx_edl_validate", "vx_auto"],
+        "vx mcp tools/list sei nomi in ordine",
+        cli_names
+        == [
+            "vx_doctor",
+            "vx_triage",
+            "vx_edl_validate",
+            "vx_auto",
+            "vx_job_submit",
+            "vx_job_status",
+        ],
         cli_names,
     )
 
