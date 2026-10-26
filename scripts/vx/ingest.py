@@ -54,6 +54,9 @@ class IngestResult:
     vfr_fraction: Optional[float] = None
     was_downscaled: bool = False
     downscale: Optional[Dict[str, int]] = None
+    # "video" | "image" | "audio". Appended last so positional construction
+    # keeps working; normalize_source always reports "video".
+    kind: str = "video"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -429,11 +432,190 @@ def normalize_source(
     )
 
 
+def _image_filtergraph(
+    *,
+    width: int,
+    height: int,
+    fps: float,
+    duration: float,
+    treatment: str,
+) -> Tuple[str, Tuple[str, ...]]:
+    parts = [
+        f"scale={width}:{height}:force_original_aspect_ratio=increase",
+        f"crop={width}:{height}",
+        "setsar=1",
+    ]
+    applied = [f"scale_fit_crop={width}x{height}"]
+    if treatment.startswith("ken_burns"):
+        frames = max(1, int(round(float(fps) * float(duration))))
+        span = max(1, frames - 1)
+        if treatment == "ken_burns_zoom_out":
+            zoom = f"max(1.10-0.10*on/{span},1.0)"
+        else:
+            zoom = f"min(1+0.10*on/{span},1.10)"
+        parts.append(
+            "zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            ":d=1:s={w}x{h}:fps={fps:g}".format(
+                z=zoom, w=width, h=height, fps=float(fps)
+            )
+        )
+        applied.append(treatment)
+    parts.append("format=yuv420p")
+    applied.append("format=yuv420p")
+    return "[0:v]" + ",".join(parts) + "[v]", tuple(applied)
+
+
+def normalize_image(
+    source_path: str | Path,
+    probe_info: Dict[str, Any],
+    stage_dir: str | Path,
+    *,
+    width: int,
+    height: int,
+    fps: float,
+    duration: float,
+    treatment: str = "ken_burns_zoom_in",
+    label: Optional[str] = None,
+) -> IngestResult:
+    src = Path(source_path)
+    if not src.exists():
+        raise FileNotFoundError(f"sorgente non trovata: {src}")
+    if int(width) <= 0 or int(height) <= 0:
+        raise IngestError(f"immagine {src.name}: width/height non validi")
+    if float(fps) <= 0 or float(duration) <= 0:
+        raise IngestError(f"immagine {src.name}: fps/duration non validi")
+
+    out_dir = Path(stage_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = _safe_label(label, src.stem)
+    staged = out_dir / f"stage_00_{stem}.mp4"
+    graph, applied = _image_filtergraph(
+        width=int(width),
+        height=int(height),
+        fps=float(fps),
+        duration=float(duration),
+        treatment=treatment,
+    )
+    script = out_dir / f"stage_00_{stem}.txt"
+    script.write_text(graph, encoding="utf-8")
+    proc = ff.run_ff(
+        [
+            "-loop",
+            "1",
+            "-framerate",
+            f"{float(fps):g}",
+            "-i",
+            str(src),
+            "-t",
+            f"{float(duration):g}",
+            "-filter_complex_script",
+            str(script),
+            "-map",
+            "[v]",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "17",
+            "-preset",
+            "fast",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(staged),
+        ],
+        loglevel="error",
+    )
+    if not proc.ok:
+        raise IngestError(f"staging immagine fallito: {proc.tail(12)}")
+    if not staged.is_file() or staged.stat().st_size == 0:
+        raise IngestError("staging immagine non ha prodotto un file")
+    probe_mod.probe_asset(str(staged))
+    return IngestResult(
+        source_path=str(src.resolve()),
+        staged_path=str(staged.resolve()),
+        is_staged=True,
+        was_vfr=False,
+        was_hdr=False,
+        was_sar=False,
+        rotation=0,
+        target_fps=float(fps),
+        filters_applied=applied,
+        vfr_fraction=None,
+        was_downscaled=False,
+        downscale=None,
+        kind="image",
+    )
+
+
+def normalize_audio(
+    source_path: str | Path,
+    probe_info: Dict[str, Any],
+    stage_dir: str | Path,
+    *,
+    sample_rate: int = 48000,
+    channels: int = 2,
+    label: Optional[str] = None,
+) -> IngestResult:
+    src = Path(source_path)
+    if not src.exists():
+        raise FileNotFoundError(f"sorgente non trovata: {src}")
+    if int(sample_rate) <= 0 or int(channels) <= 0:
+        raise IngestError(f"audio {src.name}: sample_rate/channels non validi")
+
+    out_dir = Path(stage_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = _safe_label(label, src.stem)
+    staged = out_dir / f"stage_00_{stem}.m4a"
+    proc = ff.run_ff(
+        [
+            "-i",
+            str(src),
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            str(int(sample_rate)),
+            "-ac",
+            str(int(channels)),
+            "-movflags",
+            "+faststart",
+            str(staged),
+        ],
+        loglevel="error",
+    )
+    if not proc.ok:
+        raise IngestError(f"staging audio fallito: {proc.tail(12)}")
+    if not staged.is_file() or staged.stat().st_size == 0:
+        raise IngestError("staging audio non ha prodotto un file")
+    probe_mod.probe_asset(str(staged))
+    return IngestResult(
+        source_path=str(src.resolve()),
+        staged_path=str(staged.resolve()),
+        is_staged=True,
+        was_vfr=False,
+        was_hdr=False,
+        was_sar=False,
+        rotation=0,
+        target_fps=0.0,
+        filters_applied=(f"audio_normalise={int(sample_rate)}Hz/{int(channels)}ch",),
+        vfr_fraction=None,
+        was_downscaled=False,
+        downscale=None,
+        kind="audio",
+    )
+
+
 def ingest_sources(
     sources_map: Mapping[str, str | Path],
     stage_dir: str | Path,
     *,
     progress=None,
+    specs: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Dict[str, IngestResult]:
     """Stage every declared source through stage 00, keyed by ``source_id``.
 
@@ -444,14 +626,55 @@ def ingest_sources(
     """
     if not sources_map:
         raise IngestError("sources_map is empty")
+    spec_map = specs or {}
     results: Dict[str, IngestResult] = {}
     for source_id, path in sources_map.items():
         if not isinstance(source_id, str) or not source_id:
             raise IngestError(f"source_id non valido: {source_id!r}")
-        info = probe_mod.probe(str(path)).to_dict()
+        info = probe_mod.probe_asset(str(path)).to_dict()
+        kind = str(info.get("kind") or "video")
+        spec = dict(spec_map.get(source_id) or {})
+        spec_kind = spec.get("kind")
+        if spec_kind is not None and str(spec_kind) != kind:
+            raise IngestError(
+                f"spec kind {spec_kind!r} contraddice il probe kind {kind!r} "
+                f"per {source_id!r}"
+            )
         if progress is not None:
             progress(source_id, str(path))
-        results[source_id] = normalize_source(
-            str(path), info, stage_dir, label=source_id
-        )
+        if kind == "image":
+            missing = [
+                name
+                for name in ("width", "height", "fps", "duration")
+                if spec.get(name) is None
+            ]
+            if missing:
+                raise IngestError(
+                    f"immagine {source_id!r}: specs richiedono " + ", ".join(missing)
+                )
+            results[source_id] = normalize_image(
+                str(path),
+                info,
+                stage_dir,
+                width=int(spec["width"]),
+                height=int(spec["height"]),
+                fps=float(spec["fps"]),
+                duration=float(spec["duration"]),
+                treatment=str(spec.get("treatment") or "ken_burns_zoom_in"),
+                label=source_id,
+            )
+        elif kind == "audio":
+            results[source_id] = normalize_audio(
+                str(path),
+                info,
+                stage_dir,
+                sample_rate=int(spec.get("sample_rate") or 48000),
+                channels=int(spec.get("channels") or 2),
+                label=source_id,
+            )
+        else:
+            video_info = probe_mod.probe(str(path)).to_dict()
+            results[source_id] = normalize_source(
+                str(path), video_info, stage_dir, label=source_id
+            )
     return results

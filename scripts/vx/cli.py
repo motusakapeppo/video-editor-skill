@@ -1814,13 +1814,17 @@ def cmd_edl(args: argparse.Namespace) -> int:
         source_id: result.staged_path for source_id, result in staged.items()
     }
     media_info = {
-        source_id: probe_mod.probe(path).to_dict()
+        source_id: probe_mod.probe_asset(path).to_dict()
         for source_id, path in staged_paths.items()
     }
     gates.validate_gate1_durations(plan, media_info)
-    if plan.audio_tracks and not all(
-        info.get("has_audio") for info in media_info.values()
-    ):
+    audio_source_ids = {
+        clip.source_id for track in plan.audio_tracks for clip in track.clips
+    }
+    has_audio = any(
+        media_info.get(source_id, {}).get("has_audio") for source_id in audio_source_ids
+    )
+    if plan.audio_tracks and not has_audio:
         _out(
             {
                 "ok": False,
