@@ -27,7 +27,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 __all__ = ["ROLES", "Proposal", "Verdict", "convene", "validate", "merge",
            "open_domains", "CLOSED_BY_PRINCIPLE", "OPEN_BY_TASTE",
-           "context_for", "verify_numbers", "METHODS"]
+           "context_for", "verify_numbers", "METHODS",
+           "ANIMATION_CAPABILITIES", "required_engine", "verify_animation"]
 
 ROLES: Dict[str, Dict[str, Any]] = {
     "tipografo": {
@@ -47,6 +48,14 @@ ROLES: Dict[str, Dict[str, Any]] = {
         "must_cite": "onset/s o varianza della fascia bassa",
         "ask": "Definisci il ritmo del testo e la posizione. Cita onset/s o la "
         "varianza della zona dove andra' il testo.",
+    },
+    "animatore": {
+        "owns": ["animation"],
+        "must_cite": "intervallo fra onset, durata delle cue, energia del materiale",
+        "ask": "Decidi COME si muove ogni cosa: testo, elementi grafici, transizioni fra "
+               "tagli. La decisione e' PER CUE e PER ELEMENTO: possono essere tutte "
+               "uguali, diverse, o assenti. Ogni scelta deve citare un intervallo o una "
+               "durata misurata.",
     },
     "direttore": {
         "owns": ["*"],
@@ -252,6 +261,26 @@ def _contrast_ink(background_luma: float) -> Tuple[Tuple[int, int, int], str]:
 # --------------------------------------------------------------------------- #
 
 METHODS: Dict[str, str] = {
+    "animatore": (
+        "METODO DELL'ANIMAZIONE.\n"
+        "DATI DA USARE: intervallo_onset = 1/onsets_per_second; durata di ogni cue; moto.\n"
+        "SCHEMA OBBLIGATORIO (una voce per cue, piu' una per elemento):\n"
+        "  animation = {\n"
+        "    \"per_cue\": [{\"cue\": 0, \"in\": \"pop|fade|slide_up|slide_left|typeon|none\",\n"
+        "                  \"ms\": <int>, \"easing\": \"ease_out_back|ease_out|linear\"},\n"
+        "                 ...],\n"
+        "    \"elements\": [{\"name\": \"label\", \"effect\": \"none|pulse|fade\",\n"
+        "                    \"amp\": <0..0.08>, \"ms\": <int>}],\n"
+        "    \"transitions\": {\"style\": \"hard|fade\", \"ms\": <int>}\n"
+        "  }\n"
+        "REGOLE: (a) ms + ms non puo' superare l'intervallo fra onset, se le animazioni\n"
+        "  insistono sulla stessa parola; (b) lo scale non deve MAI superare 1.0, altrimenti\n"
+        "  il Gate 4 perde validita'; (c) PUOI variare per cue: alternare pop e slide_up su\n"
+        "  cue consecutive e' legittimo; (d) ANTI-ARLECCHINO: al massimo 2 trattamenti\n"
+        "  distinti per video, salvo richiesta esplicita; (e) se il materiale e' lento e\n"
+        "  uniforme, 'none' e' una risposta corretta e va dichiarata come tale.\n"
+        "  (f) se la richiesta nomina un'animazione, deve comparire nell'output."
+    ),
     "colorista": (
         "METODO DEL CONTRASTO (WCAG), da applicare alla lettera:\n"
         "1. La luma misurata del materiale e' in spazio sRGB, non lineare.\n"
@@ -329,4 +358,78 @@ def verify_numbers(proposal: "Proposal", material: Dict[str, Any]) -> List[str]:
         px = int(v["font_px"])
         if px < 12:
             errs.append(f"corpo {px}px illeggibile")
+    return errs
+
+
+# --------------------------------------------------------------------------- #
+# vocabolario delle animazioni e motore che le sa eseguire
+# --------------------------------------------------------------------------- #
+
+# Ogni effetto dichiara il motore minimo che lo sa fare. Non e' una preferenza:
+# e' una capacita'. Se l'animatore chiede un effetto che Pillow non sa eseguire,
+# il motore sale a Chromium automaticamente.
+ANIMATION_CAPABILITIES: Dict[str, str] = {
+    "none": "pillow",
+    "fade": "pillow",
+    "pop": "pillow",
+    "slide_up": "pillow",
+    "slide_left": "pillow",
+    "slide_right": "pillow",
+    "typeon": "pillow",
+    "blur_in": "chromium",       # sfocatura animata del testo o dello sfondo
+    "glitch": "chromium",        # displacement / RGB split
+    "mask_wipe": "chromium",     # clip-path / gradient mask
+    "blend_difference": "chromium",  # mix-blend-mode contro il video vivo
+    "elastic_3d": "chromium",    # prospettiva / rotate3d con easing elastico
+}
+
+_ENGINE_RANK = {"pillow": 0, "chromium": 1}
+
+
+def required_engine(animation: Optional[Dict[str, Any]]) -> str:
+    """Il motore minimo che sa eseguire TUTTO cio' che l'animazione chiede."""
+    if not animation:
+        return "pillow"
+    need = "pillow"
+    effects: List[str] = []
+    for cue in animation.get("per_cue", []) or []:
+        effects.append(str(cue.get("in", "none")))
+    for el in animation.get("elements", []) or []:
+        effects.append(str(el.get("effect", "none")))
+    tr = animation.get("transitions") or {}
+    if tr.get("style") and tr.get("style") != "hard":
+        effects.append("fade")
+    for eff in effects:
+        engine = ANIMATION_CAPABILITIES.get(eff)
+        if engine is None:
+            raise ValueError(f"effetto non nel vocabolario: {eff!r}")
+        if _ENGINE_RANK[engine] > _ENGINE_RANK[need]:
+            need = engine
+    return need
+
+
+def verify_animation(animation: Dict[str, Any], cues: Sequence[Dict[str, float]],
+                     *, onset_interval_ms: float = 348.0) -> List[str]:
+    """Le tre regole non negoziabili, ricalcolate."""
+    errs: List[str] = []
+    if not animation:
+        return errs
+    for item in animation.get("per_cue", []) or []:
+        ms = float(item.get("ms", 0))
+        idx = int(item.get("cue", 0))
+        if ms > onset_interval_ms:
+            errs.append(f"cue {idx}: {ms:.0f}ms > intervallo fra onset {onset_interval_ms:.0f}ms")
+        if idx < len(cues):
+            available = (cues[idx]["end"] - cues[idx]["start"]) * 1000.0
+            if ms > available:
+                errs.append(f"cue {idx}: {ms:.0f}ms > durata cue {available:.0f}ms")
+        if str(item.get("in")) not in ANIMATION_CAPABILITIES:
+            errs.append(f"cue {idx}: effetto sconosciuto {item.get('in')!r}")
+    for el in animation.get("elements", []) or []:
+        amp = float(el.get("amp", 0))
+        if amp < 0 or amp > 0.08:
+            errs.append(f"elemento {el.get('name')}: ampiezza {amp} fuori da [0, 0.08]")
+    treatments = {str(c.get("in")) for c in animation.get("per_cue", []) or []}
+    if len(treatments) > 2:
+        errs.append(f"anti-arlecchino: {len(treatments)} trattamenti distinti (max 2)")
     return errs
