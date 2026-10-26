@@ -310,6 +310,18 @@ def main() -> int:
             (stale.get("status"), stale.get("error")),
         )
 
+        rec2 = jobs.create_job(_params(tmp), root=root)
+        path2 = root / rec2["job_id"] / "job.json"
+        data2 = json.loads(path2.read_text(encoding="utf-8"))
+        data2["updated_at"] = time.time() - (jobs.QUEUED_STALE_SEC + 1)
+        path2.write_text(json.dumps(data2), encoding="utf-8")
+        stale2 = jobs.read_job(rec2["job_id"], root=root)
+        check(
+            "queued stantio senza claim -> failed",
+            stale2["status"] == "failed" and stale2["error"] == "worker never started",
+            (stale2.get("status"), stale2.get("error")),
+        )
+
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
         root = tmp / "jobs"

@@ -211,7 +211,7 @@ def spawn(job_id: str, root: Optional[Union[str, Path]] = None) -> int:
     Windows, ``start_new_session`` elsewhere. Never ``shell``, never
     ``preexec_fn``. A ``Popen`` failure propagates to the caller.
     """
-    if not jobs.JOB_ID_RE.fullmatch(job_id):
+    if not isinstance(job_id, str) or not jobs.JOB_ID_RE.fullmatch(job_id):
         raise contract.VxError(f"invalid job id: {job_id!r}")
     base = jobs.jobs_root(root)
     workdir = base / job_id

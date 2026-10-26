@@ -57,9 +57,10 @@ più vivo il record viene marcato atomicamente `failed` con
 `error="worker died"` prima di essere restituito. La lettura con `reap=False`
 salta questo passaggio.
 
-Un job `queued` che ha già il claim ma non è mai partito viene marcato `failed`
+Un job `queued` che non è mai partito, con o senza claim, viene marcato `failed`
 con `error="worker never started"` quando il record ha più di quindici minuti
-(`QUEUED_STALE_SEC`): copre il crash fra il claim e la marcatura `running`.
+(`QUEUED_STALE_SEC`): copre il crash fra il claim e la marcatura `running`, e
+quello fra la creazione e lo spawn.
 
 Il reap è best-effort. Un pid riusato da un altro processo può ritardarlo; su
 Linux uno stato `Z` in `/proc/<pid>/stat` viene trattato come morto anche se

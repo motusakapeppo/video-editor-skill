@@ -342,9 +342,8 @@ def read_job(
                 base, job_id, record, {"status": "failed", "error": "worker died"}
             )
     if reap and record.get("status") == "queued":
-        claim = base / f"{job_id}{CLAIM_SUFFIX}"
         updated = float(record.get("updated_at") or 0.0)
-        if claim.exists() and (time.time() - updated) > QUEUED_STALE_SEC:
+        if (time.time() - updated) > QUEUED_STALE_SEC:
             record = _apply_update(
                 base,
                 job_id,
