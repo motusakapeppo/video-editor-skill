@@ -34,6 +34,7 @@ from . import ffmpeg as ff
 from . import fonts as fonts_mod
 from .contract import (
     LOUDNESS_TARGETS,
+    CropPlan,
     EditPlan,
     RenderFailure,
     even,
@@ -41,7 +42,7 @@ from .contract import (
     output_size,
     target_crop_size,
 )
-from .winpath import ass_filter_path, escape_expr
+from .winpath import ass_filter_path
 
 __all__ = [
     "build_filtergraph",
@@ -201,24 +202,13 @@ def _in_dir(path: Path):
 # --------------------------------------------------------------------------- #
 
 
-def _track_expr(boxes: Sequence[Dict[str, Any]], axis: str) -> Optional[str]:
-    """Step-hold expression over output time for a tracked crop axis."""
-    points = sorted(
-        (_num(b.get("t")), _num(b.get(axis))) for b in boxes if b.get(axis) is not None
-    )
-    if not points:
-        return None
-    expr = str(int(round(points[-1][1])))
-    for t, value in reversed(points[:-1]):
-        expr = f"if(lt(t,{t:.3f}),{int(round(value))},{expr})"
-    return escape_expr(expr)
-
-
 def _crop_scale(
     plan: EditPlan,
     media: Dict[str, Any],
     crop_plan: Optional[Dict[str, Any]],
     precision: str,
+    *,
+    segments: Optional[Sequence[Tuple[float, float]]] = None,
 ) -> str:
     """crop -> scale. Crop geometry is in *source* pixels, so it is identical
     for proxy and full; only the scale target changes."""
@@ -232,22 +222,32 @@ def _crop_scale(
         return f"scale={out_w}:{out_h}:flags=lanczos"
 
     if crop_plan:
+        cp = crop_plan if isinstance(crop_plan, dict) else crop_plan.to_dict()
         crop_w = (
-            int(_num(crop_plan.get("crop_w"), 0))
-            or target_crop_size(src_w, src_h, aspect)[0]
+            int(_num(cp.get("crop_w"), 0)) or target_crop_size(src_w, src_h, aspect)[0]
         )
         crop_h = (
-            int(_num(crop_plan.get("crop_h"), 0))
-            or target_crop_size(src_w, src_h, aspect)[1]
+            int(_num(cp.get("crop_h"), 0)) or target_crop_size(src_w, src_h, aspect)[1]
         )
         crop_w = min(even(crop_w), even(src_w))
         crop_h = min(even(crop_h), even(src_h))
         x_expr = y_expr = None
-        if crop_plan.get("boxes") and crop_plan.get("mode") == "track":
-            x_expr = _track_expr(crop_plan["boxes"], "x")
-            y_expr = _track_expr(crop_plan["boxes"], "y")
-        elif crop_plan.get("boxes") and crop_plan.get("mode") == "lock":
-            first = crop_plan["boxes"][0]
+        if cp.get("boxes") and cp.get("mode") == "track":
+            from . import autoframe  # noqa: PLC0415
+
+            normalized = CropPlan(**cp)
+            if normalized.src_w <= 0:
+                normalized.src_w = src_w
+            if normalized.src_h <= 0:
+                normalized.src_h = src_h
+            segs = segments if segments is not None else _segments(plan, media)
+            fps = _num(media.get("fps"), DEFAULT_FPS) or DEFAULT_FPS
+            remapped = autoframe.remap_to_timeline(normalized, segs, fps=fps)
+            expr = autoframe.crop_expression(remapped, offset_s=0.0)
+            x_expr = expr["x"]
+            y_expr = expr["y"]
+        elif cp.get("boxes") and cp.get("mode") == "lock":
+            first = cp["boxes"][0]
             x_expr = str(int(max(0, min(src_w - crop_w, _num(first.get("x"))))))
             y_expr = str(int(max(0, min(src_h - crop_h, _num(first.get("y"))))))
         x = x_expr if x_expr is not None else str(max(0, (src_w - crop_w) // 2))
@@ -536,7 +536,11 @@ def build_filtergraph(
         )
         parts.append(f"[vfit]{','.join(post + ['setsar=1', 'format=yuv420p'])}[vout]")
     else:
-        chain = pre + [_crop_scale(plan, media_eff, crop_plan, precision)] + post
+        chain = (
+            pre
+            + [_crop_scale(plan, media_eff, crop_plan, precision, segments=segments)]
+            + post
+        )
         chain += ["format=yuv420p", "setsar=1"]
         parts.append(f"{video_label}{','.join(chain)}[vout]")
 

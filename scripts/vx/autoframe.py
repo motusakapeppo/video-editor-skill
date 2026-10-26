@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -55,6 +56,12 @@ SAFE_LEFT_BIAS = 0.02  # extra left bias inside the safe box (right rail)
 MAX_KEYFRAMES = 48  # per segment, per axis
 DECIMATE_TOLERANCE_PX = 1.0  # drop a keyframe if it deviates less than this
 FIT_BLUR_SIGMA = 20
+
+# Printed times carry 4 decimals; 1 ms is 10x that and still shorter than one
+# frame at every supported fps (<= 120), so a hold keyframe this close to the
+# cut is invisible but stops the piecewise expression from interpolating
+# across a removed gap.
+HOLD_EPS_S = 1e-3
 
 # Reference canvases the frozen SAFE_ZONES were authored on. The zones are
 # pixel rects, so they must be normalised before they can be applied to a crop
@@ -541,6 +548,75 @@ def crop_expression(plan: CropPlan, *, offset_s: float = 0.0) -> Dict[str, str]:
         ]
         out[axis] = _axis_expr(axis_segments, offset_s)
     return out
+
+
+def remap_to_timeline(
+    plan: CropPlan,
+    segments: Sequence[Tuple[float, float]],
+    fps: Optional[float] = None,
+) -> CropPlan:
+    """Move source-time boxes onto the concatenated timeline.
+
+    ``segments`` are the source ``(start, end)`` pairs in concat order. A box at
+    source time ``t`` lands at ``offset_i + (t - start_i)``, where ``offset_i``
+    is the sum of the spans before segment ``i``. Boxes inside a removed gap are
+    dropped. A hold keyframe at ``span_end - HOLD_EPS_S`` keeps the last value
+    until the cut, so the piecewise expression never interpolates across a gap.
+    """
+    segs = [(float(a), float(b)) for a, b in segments if float(b) > float(a)]
+    offsets: List[float] = []
+    total = 0.0
+    for start, end in segs:
+        offsets.append(total)
+        total += end - start
+
+    per_seg: List[List[Dict[str, float]]] = [[] for _ in segs]
+    for box in plan.boxes or []:
+        t = float(box["t"])
+        for index, (start, end) in enumerate(segs):
+            last = index == len(segs) - 1
+            if start <= t < end or (last and t == end):
+                span = end - start
+                mapped = offsets[index] + (t - start)
+                mapped = min(max(mapped, offsets[index]), offsets[index] + span)
+                per_seg[index].append({"t": mapped, "x": box["x"], "y": box["y"]})
+                break
+
+    boxes: List[Dict[str, float]] = []
+    for index, points in enumerate(per_seg):
+        if not points:
+            continue
+        boxes.extend(points)
+        span_end = offsets[index] + (segs[index][1] - segs[index][0])
+        last_t = max(point["t"] for point in points)
+        hold_t = span_end - HOLD_EPS_S
+        if last_t < span_end and hold_t > last_t:
+            last_point = next(
+                point for point in reversed(points) if point["t"] == last_t
+            )
+            boxes.append({"t": hold_t, "x": last_point["x"], "y": last_point["y"]})
+
+    by_t: Dict[float, Dict[str, float]] = {}
+    for box in boxes:
+        by_t[round(float(box["t"]), 6)] = box
+    ordered = [by_t[key] for key in sorted(by_t)]
+
+    boundaries = [offsets[i] + (segs[i][1] - segs[i][0]) for i in range(len(segs) - 1)]
+    notes: List[str] = []
+    inserted = False
+    for note in plan.notes or []:
+        if note.startswith("seg="):
+            if not inserted:
+                notes.extend(f"seg={value:.4f}" for value in boundaries)
+                inserted = True
+            continue
+        notes.append(note)
+    if not inserted:
+        notes.extend(f"seg={value:.4f}" for value in boundaries)
+    if fps is not None and not any(note.startswith("fps=") for note in notes):
+        notes.insert(0, f"fps={fps}")
+
+    return replace(plan, boxes=ordered, notes=notes)
 
 
 def write_filter_script(
