@@ -629,8 +629,16 @@ def composite(
                 base = grade_mod.apply_pillow(base, grade_node)
             t = n / fps
             layer = render_layer(payload, base, t, font=font)
-            merged = base.convert("RGBA")
-            merged = Image.alpha_composite(merged, layer).convert("RGB")
+            # `alpha_composite` ricompone TUTTO il frame: il round-trip di
+            # premoltiplicazione sposta ogni pixel di ~1/255, e nel primo percentile
+            # (ombra profonda) quel singolo codice fa sfondare il Gate 5.
+            # Il paste con maschera tocca solo dove l'alpha e' attivo e lascia il
+            # fondo intatto per costruzione.
+            merged = base
+            if layer.getbbox() is not None:
+                canvas = base.convert("RGBA")
+                canvas.paste(layer, (0, 0), layer)
+                merged = canvas.convert("RGB")
             enc.stdin.write(merged.tobytes())
             n += 1
             if on_frame is not None and n % 25 == 0:
