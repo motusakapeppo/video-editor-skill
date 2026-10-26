@@ -1886,6 +1886,13 @@ def cmd_auto(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Run the stdio MCP server (debug convenience; no flags, the transport is the interface)."""
+    from . import mcp_server
+
+    return mcp_server.main()
+
+
 def _apply_settings(args: argparse.Namespace) -> None:
     """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
     from . import settings
@@ -2173,6 +2180,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--preset", default="fast")
     r.add_argument("--json", action="store_true")
     r.set_defaults(func=cmd_edl)
+
+    p = sub.add_parser("mcp", help="server MCP su stdio (JSON-RPC per agenti)")
+    p.set_defaults(func=cmd_mcp)
 
     return ap
 

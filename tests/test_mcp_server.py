@@ -355,6 +355,74 @@ def main() -> int:
             _error_code(by_id.get(13)),
         )
 
+    cli_requests = [
+        _request("initialize", 1, {"protocolVersion": "2025-06-18"}),
+        _request("notifications/initialized"),
+        _request("tools/list", 2),
+        _request("ping", 3),
+    ]
+    cli_payload = "".join(
+        json.dumps(item, ensure_ascii=False) + "\n" for item in cli_requests
+    )
+    cli_env = os.environ.copy()
+    cli_env["PYTHONPATH"] = str(ROOT / "scripts")
+    cli_env["PYTHONIOENCODING"] = "utf-8"
+    cli_env["PYTHONUTF8"] = "1"
+    cli_proc = subprocess.run(
+        [sys.executable, "-m", "vx.cli", "mcp"],
+        cwd=str(ROOT),
+        env=cli_env,
+        input=cli_payload,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=180,
+    )
+
+    check("vx mcp exit code 0", cli_proc.returncode == 0, cli_proc.returncode)
+
+    cli_raw = [line for line in cli_proc.stdout.splitlines() if line.strip()]
+    cli_responses = []
+    cli_parsed_all = True
+    for line in cli_raw:
+        try:
+            cli_responses.append(json.loads(line))
+        except json.JSONDecodeError:
+            cli_parsed_all = False
+    check(
+        "vx mcp stdout: ogni riga e' JSON",
+        cli_parsed_all and len(cli_raw) == len(cli_responses),
+        (len(cli_raw), len(cli_responses)),
+    )
+
+    cli_by_id = {}
+    for response in cli_responses:
+        if isinstance(response, dict) and "id" in response:
+            cli_by_id[response["id"]] = response
+
+    cli_init = _result(cli_by_id.get(1))
+    cli_info = cli_init.get("serverInfo") or {}
+    check(
+        "vx mcp serverInfo.name",
+        cli_info.get("name") == "vx-video-editor",
+        cli_info.get("name"),
+    )
+
+    cli_names = [
+        tool.get("name") for tool in (_result(cli_by_id.get(2)).get("tools") or [])
+    ]
+    check(
+        "vx mcp tools/list quattro nomi in ordine",
+        cli_names == ["vx_doctor", "vx_triage", "vx_edl_validate", "vx_auto"],
+        cli_names,
+    )
+
+    check(
+        "vx mcp ping -> {}",
+        _result(cli_by_id.get(3)) == {},
+        _result(cli_by_id.get(3)),
+    )
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 
