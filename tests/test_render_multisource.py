@@ -136,7 +136,16 @@ def main() -> int:
         "audio B usa [1:a]",
         "[1:a]atrim=start=4.000000:end=14.000000" in graph,
     )
-    check("concat A/V unico", "concat=n=2:v=1:a=1" in graph)
+    check("concat solo video", "concat=n=2:v=1:a=0" in graph)
+    check("nessun concat A/V", "concat=n=2:v=1:a=1" not in graph)
+    check(
+        "audio posizionato con adelay",
+        "adelay=0|0" in graph and "adelay=10000|10000" in graph,
+    )
+    check(
+        "audio miscelato con amix",
+        "amix=inputs=2:dropout_transition=0:normalize=0" in graph,
+    )
     check(
         "B-roll dallo stesso indice 1",
         "[1:v]trim=start=0.000000:end=2.000000" in graph,

@@ -916,9 +916,12 @@ def build_edl_filtergraph(
     *,
     has_audio: Optional[bool] = None,
 ) -> str:
-    """A-Roll and its dialogue are concatenated together; B-roll is overlaid at dst_in.
+    """A-Roll is concatenated; dialogue is delayed and mixed; B-roll is overlaid at dst_in.
 
     Pad indices come from ``source_to_index``, never from a hardcoded ``[0:v]``.
+    The audio graph is independent of the video concat: each clip is trimmed,
+    shifted to its absolute ``dst_in`` with adelay, then summed with amix, so
+    overlap and J/L cuts are expressible without duplicating a stream.
     """
     width, height = (int(value) for value in plan.resolution)
     video_clips = _edl_clips(plan, layers={0})
@@ -926,6 +929,8 @@ def build_edl_filtergraph(
     audio = bool(audio_clips) if has_audio is None else bool(has_audio)
     if not video_clips:
         raise RenderFailure("EDL has no layer-0 video clips")
+    if audio and not audio_clips:
+        raise RenderFailure("has_audio=True but the EDL has no audio clips")
 
     needed = {clip.source_id for clip in video_clips}
     needed |= {clip.source_id for clip in audio_clips}
@@ -933,46 +938,35 @@ def build_edl_filtergraph(
     if missing:
         raise RenderFailure("staged sources missing: " + ", ".join(missing))
 
-    if audio:
-        if len(audio_clips) != len(video_clips):
-            raise RenderFailure(
-                "EDL audio must mirror the A-Roll clips for the combined concat"
-            )
-        for video_clip, audio_clip in zip(video_clips, audio_clips):
-            if (
-                abs(float(video_clip.dst_in) - float(audio_clip.dst_in)) > 1e-6
-                or abs(float(video_clip.dst_out) - float(audio_clip.dst_out)) > 1e-6
-            ):
-                raise RenderFailure(
-                    "EDL audio must mirror the A-Roll timing for the combined concat"
-                )
-
     parts: List[str] = []
     for index, clip in enumerate(video_clips):
         index_in = source_to_index[clip.source_id]
         parts.append(_edl_normalise(clip, index_in, width, height) + f"[v{index}]")
-        if audio:
-            audio_clip = audio_clips[index]
-            audio_index = source_to_index[audio_clip.source_id]
+
+    if audio:
+        for index, clip in enumerate(audio_clips):
+            audio_index = source_to_index[clip.source_id]
+            delay_ms = int(round(float(clip.dst_in) * 1000.0))
             parts.append(
-                f"[{audio_index}:a]atrim=start={float(audio_clip.src_in):.6f}:"
-                f"end={float(audio_clip.src_out):.6f},"
-                f"asetpts=PTS-STARTPTS[a{index}]"
+                f"[{audio_index}:a]atrim=start={float(clip.src_in):.6f}:"
+                f"end={float(clip.src_out):.6f},asetpts=PTS-STARTPTS,"
+                f"adelay={delay_ms}|{delay_ms}[a{index}]"
+            )
+        if len(audio_clips) == 1:
+            parts.append("[a0]anull[aout]")
+        else:
+            inputs = "".join(f"[a{i}]" for i in range(len(audio_clips)))
+            parts.append(
+                f"{inputs}amix=inputs={len(audio_clips)}:"
+                f"dropout_transition=0:normalize=0[aout]"
             )
 
     if len(video_clips) == 1:
         base = "[v0]"
-        audio_out = "[a0]" if audio else ""
-    elif audio:
-        inputs = "".join(f"[v{i}][a{i}]" for i in range(len(video_clips)))
-        parts.append(f"{inputs}concat=n={len(video_clips)}:v=1:a=1[base][aout]")
-        base = "[base]"
-        audio_out = "[aout]"
     else:
         inputs = "".join(f"[v{i}]" for i in range(len(video_clips)))
         parts.append(f"{inputs}concat=n={len(video_clips)}:v=1:a=0[base]")
         base = "[base]"
-        audio_out = ""
 
     overlay_clips = _edl_clips(plan, layers=set(range(1, 64)))
     for index, clip in enumerate(overlay_clips):
@@ -997,8 +991,6 @@ def build_edl_filtergraph(
         base = f"[base{index}]"
 
     parts.append(f"{base}null[vout]")
-    if audio and audio_out != "[aout]":
-        parts.append(f"{audio_out}anull[aout]")
     return ";".join(parts)
 
 
