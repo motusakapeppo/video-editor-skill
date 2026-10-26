@@ -113,6 +113,97 @@ def inspect_cut(path: str | Path, at: float, *, radius: float = 0.25) -> Veto:
     )
 
 
+def measure_sharpness(path: str | Path, *, samples: int = 5) -> Dict[str, Any]:
+    """Raw variance of the Laplacian, for asset triage.
+
+    sharpness = var(Laplacian(gray)) = mean((L - mean(L))**2), where L is the
+    3x3 Laplacian response. Higher is sharper. The value is deliberately not
+    squashed into 0..1: a squash such as var/(1+var) destroys ordering at the
+    low end, so the caller compares this raw number to a threshold.
+
+    A still image yields one sample. A video yields at most `samples` frames at
+    ``linspace(0.05, 0.95, samples)`` of its duration; the reported value is the
+    median of the per-frame raw variances. Decode failures never raise: they
+    return ``method="unavailable: <reason>"``.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "sharpness": 0.0,
+            "samples": 0,
+            "method": f"unavailable: opencv: {exc}"[:120],
+        }
+
+    count = int(samples)
+    if count < 1:
+        return {
+            "sharpness": 0.0,
+            "samples": 0,
+            "method": "unavailable: samples must be >= 1",
+        }
+
+    try:
+        still = cv2.imread(str(path))
+        if still is not None:
+            gray = cv2.cvtColor(still, cv2.COLOR_BGR2GRAY)
+            value = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            return {
+                "sharpness": value,
+                "samples": 1,
+                "method": "laplacian_variance",
+            }
+
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            cap.release()
+            return {
+                "sharpness": 0.0,
+                "samples": 0,
+                "method": "unavailable: cannot open the file",
+            }
+
+        values: List[float] = []
+        try:
+            fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+            duration = (frames / fps) if (fps > 0.0 and frames > 0.0) else 0.0
+            if duration > 0.0:
+                for t in np.linspace(0.05, 0.95, count) * duration:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(t) * 1000.0)
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        continue
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    values.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
+            else:
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    values.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
+        finally:
+            cap.release()
+
+        if not values:
+            return {
+                "sharpness": 0.0,
+                "samples": 0,
+                "method": "unavailable: no decodable frames",
+            }
+        return {
+            "sharpness": float(np.median(values)),
+            "samples": len(values),
+            "method": "laplacian_variance",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "sharpness": 0.0,
+            "samples": 0,
+            "method": f"unavailable: {exc}"[:120],
+        }
+
+
 def veto_fn_for(paths: Dict[str, str], *, radius: float = 0.25):
     """Build a callable (label, time) -> bool for `edl.build`."""
     cache: Dict[tuple[str, float], Veto] = {}

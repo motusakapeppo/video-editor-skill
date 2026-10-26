@@ -338,11 +338,15 @@ def _static_run_max(per_second: Sequence[float]) -> float:
     return float(best)
 
 
-def _pixel_metrics(path: str | Path, sample_fps: float) -> Dict[str, Dict[str, Any]]:
+def _pixel_metrics(
+    path: str | Path, sample_fps: float, *, max_seconds: Optional[float] = None
+) -> Dict[str, Dict[str, Any]]:
     """Single decode pass at `sample_fps`, downscaled to 320 px wide.
 
     Produces the jitter, exposure, colour and motion blocks together so that
-    `analyze_video` never decodes the same file four times.
+    `analyze_video` never decodes the same file four times. When `max_seconds`
+    is set, the pass stops at the first sampled frame past that time instead of
+    reading the whole file.
     """
     if not _CV_OK:
         return _degraded(_CV_WHY)
@@ -375,6 +379,7 @@ def _pixel_metrics(path: str | Path, sample_fps: float) -> Dict[str, Dict[str, A
         last_t = 0.0
 
         idx = 0
+        limit = None if max_seconds is None else max(0.0, float(max_seconds))
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -384,6 +389,8 @@ def _pixel_metrics(path: str | Path, sample_fps: float) -> Dict[str, Dict[str, A
                 continue
             t = (idx / src_fps) if src_fps > 0 else float(frames)
             idx += 1
+            if limit is not None and t > limit:
+                break
 
             height, width = frame.shape[:2]
             if width <= 0 or height <= 0:
@@ -537,10 +544,18 @@ def measure_jitter(
 
 
 def measure_exposure(
-    path: str | Path, *, sample_fps: float = SAMPLE_FPS_VIDEO
+    path: str | Path,
+    *,
+    sample_fps: float = SAMPLE_FPS_VIDEO,
+    max_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Luma mean plus highlight/shadow clipping percentages."""
-    return dict(_pixel_metrics(path, sample_fps)["exposure"])
+    """Luma mean plus highlight/shadow clipping percentages.
+
+    `max_seconds` bounds the decode window: sampling stops at the first frame
+    past that time, so a long file is not read to the end. The return shape is
+    unchanged and omitting the argument keeps the previous behaviour.
+    """
+    return dict(_pixel_metrics(path, sample_fps, max_seconds=max_seconds)["exposure"])
 
 
 def measure_color(
