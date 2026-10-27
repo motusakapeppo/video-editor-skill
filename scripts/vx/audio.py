@@ -44,6 +44,7 @@ from .contract import (
     THRESHOLDS,
     AudioAnalysis,
     MissingDependency,
+    VxError,
     clamp,
 )
 from .probe import probe
@@ -352,16 +353,20 @@ def dead_air(
 # --------------------------------------------------------------------------- #
 
 
-def loudness(path: str | Path) -> Dict[str, float]:
-    """Two-pass loudnorm measurement (pass 1 only: measure, do not normalise)."""
-    info = _audio_info(path)
-    empty = {
+def _empty_loudness() -> Dict[str, float]:
+    return {
         "input_i": 0.0,
         "input_tp": 0.0,
         "input_lra": 0.0,
         "input_thresh": 0.0,
         "target_offset": 0.0,
     }
+
+
+def loudness(path: str | Path) -> Dict[str, float]:
+    """Two-pass loudnorm measurement (pass 1 only: measure, do not normalise)."""
+    info = _audio_info(path)
+    empty = _empty_loudness()
     if not info["has_audio"]:
         return empty
 
@@ -381,6 +386,71 @@ def loudness(path: str | Path) -> Dict[str, float]:
     data = _last_json(proc.stderr)
     if not data:
         return empty
+    return {
+        key: round(_num(data.get(key)), 3)
+        for key in (
+            "input_i",
+            "input_tp",
+            "input_lra",
+            "input_thresh",
+            "target_offset",
+        )
+    }
+
+
+def loudness_spans(
+    path: str | Path, spans: Sequence[Sequence[float]]
+) -> Dict[str, float]:
+    """Integrated loudness of the given source spans only, same shape as ``loudness``.
+
+    Each span becomes ``atrim`` + ``asetpts`` and the spans are concatenated
+    before a single ``loudnorm`` measure pass, so the result is the loudness of
+    exactly what the timeline plays: no silence that was cut, no audio that was
+    never used.
+    """
+    pairs: List[Tuple[float, float]] = []
+    for span in spans or ():
+        try:
+            start, end = float(span[0]), float(span[1])
+        except (TypeError, ValueError, IndexError, KeyError) as exc:
+            raise VxError(f"loudness_spans: invalid span {span!r}") from exc
+        if not (math.isfinite(start) and math.isfinite(end)) or end <= start:
+            raise VxError(f"loudness_spans: invalid span {span!r}")
+        pairs.append((max(0.0, start), end))
+    if not pairs:
+        raise VxError("loudness_spans: at least one span is required")
+
+    # An empty dict, not ``_empty_loudness()``: a failed measurement must leave
+    # ``input_i`` absent so the caller cannot mistake 0.0 for a real loudness.
+    if not _audio_info(path)["has_audio"]:
+        return {}
+
+    trims = [
+        f"[0:a]atrim=start={start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS[s{index}]"
+        for index, (start, end) in enumerate(pairs)
+    ]
+    labels = "".join(f"[s{index}]" for index in range(len(pairs)))
+    graph = (
+        ";".join(trims)
+        + f";{labels}concat=n={len(pairs)}:v=0:a=1,"
+        + "loudnorm=I=-14:TP=-1.0:LRA=11:print_format=json[out]"
+    )
+    proc = ff.run_ff(
+        [
+            "-i",
+            str(path),
+            "-filter_complex",
+            graph,
+            "-map",
+            "[out]",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    data = _last_json(proc.stderr)
+    if not data:
+        return {}
     return {
         key: round(_num(data.get(key)), 3)
         for key in (

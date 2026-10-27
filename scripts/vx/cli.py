@@ -2167,6 +2167,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="riempimento della tela: crop (copri e taglia), fit (bande, default), "
         "blur (sfondo sfocato, primo piano integro)",
     )
+    p.add_argument(
+        "--no-bridge",
+        action="store_true",
+        help="salta il ponte analisi->assemblaggio: nessun taglio sul silenzio, "
+        "nessun gain misurato sul segmento usato",
+    )
     p.add_argument("--crf", type=int, default=None)
     p.add_argument("--preset", default=None)
     p.add_argument("--json", action="store_true")

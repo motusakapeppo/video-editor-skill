@@ -323,6 +323,19 @@ def main() -> int:
         check("auto_report ok", on_disk.get("ok") is True, on_disk.get("ok"))
         check("report su disco == stdout", on_disk == report, "identici")
 
+        bridge_path = work / "bridge_report.json"
+        bridge_block = report.get("bridge") or {}
+        check("bridge_report.json esiste", bridge_path.is_file(), bridge_path)
+        check(
+            "report.bridge dichiara tagli, gain e referto",
+            bridge_block.get("enabled") is True
+            and isinstance(bridge_block.get("cuts"), int)
+            and isinstance(bridge_block.get("gained_clips"), int)
+            and isinstance(bridge_block.get("not_applied"), int)
+            and Path(str(bridge_block.get("report") or "")).is_file(),
+            bridge_block,
+        )
+
         rejected = report.get("rejected") or []
         reasons = {item.get("rejection_reason") for item in rejected}
         check("almeno 2 scarti", len(rejected) >= 2, len(rejected))

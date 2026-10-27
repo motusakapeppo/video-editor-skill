@@ -338,6 +338,38 @@ def _assert_sources_unchanged(
         )
 
 
+def _a_roll_sources(plan: Any) -> List[str]:
+    seen: List[str] = []
+    for track in getattr(plan, "video_tracks", ()):
+        for clip in getattr(track, "clips", ()):
+            if int(getattr(clip, "layer", 0)) != 0:
+                continue
+            source_id = getattr(clip, "source_id", None)
+            if isinstance(source_id, str) and source_id and source_id not in seen:
+                seen.append(source_id)
+    return seen
+
+
+def _bridge_plan(plan: Any) -> Any:
+    """Run the bridge: one audio analysis per a_roll source, failures declared, never fatal."""
+    from . import audio, bridge
+
+    analyses: Dict[str, Any] = {}
+    for source_id in _a_roll_sources(plan):
+        ref = plan.sources.get(source_id)
+        path = str(getattr(ref, "path", "") or "")
+        try:
+            analyses[source_id] = audio.analyze_audio(path)
+        except Exception as exc:  # noqa: BLE001 - the bridge turns it into a declaration
+            analyses[source_id] = exc
+    return bridge.build(
+        plan,
+        analyses,
+        target_lufs=TARGET_LUFS,
+        loudness_spans=audio.loudness_spans,
+    )
+
+
 def _run_locked(
     args: Any,
     workdir: Path,
@@ -391,6 +423,37 @@ def _run_locked(
     errors = plan.validate()
     if errors:
         raise contract.VxError("EDL non valido: " + "; ".join(errors))
+
+    bridge_summary: Dict[str, Any] = {
+        "enabled": False,
+        "cuts": 0,
+        "gained_clips": 0,
+        "not_applied": 0,
+        "report": None,
+    }
+    if not bool(getattr(args, "no_bridge", False)):
+        _notify(progress, 22.0, "bridge")
+        plan, bridge_report = _bridge_plan(plan)
+        bridged_errors = plan.validate()
+        if bridged_errors:
+            raise contract.VxError(
+                "EDL dopo il ponte non valido: " + "; ".join(bridged_errors)
+            )
+        report_path = (workdir / "bridge_report.json").resolve()
+        bridge_report.write(report_path)
+        bridge_summary = {
+            "enabled": True,
+            "cuts": len(bridge_report.cuts),
+            "gained_clips": len(bridge_report.audio),
+            "not_applied": len(bridge_report.not_applied),
+            "report": str(report_path),
+        }
+        _log(
+            f"[auto] bridge: {len(bridge_report.cuts)} tagli, "
+            f"{len(bridge_report.audio)} gain, "
+            f"{len(bridge_report.not_applied)} non applicati"
+        )
+
     (workdir / "plan.json").write_text(
         json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -461,6 +524,7 @@ def _run_locked(
             "a_roll_count": len(a_roll_indices),
         },
         "fill": _fill_declaration(plan, media_info_map, fill_mode),
+        "bridge": bridge_summary,
         "selected": [
             {
                 "asset_id": entry.get("asset_id"),

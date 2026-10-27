@@ -76,6 +76,7 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "silence_pad": 0.12,
     "silence_min": 0.35,
     "silence_dbfs": -70.0,
+    "bridge_min_fragment_ms": 700,
     "clip_pct": 0.01,
     "lra_wide": 12.0,
     # speech / subtitles

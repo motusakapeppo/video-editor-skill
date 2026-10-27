@@ -45,6 +45,7 @@ RANGES: Dict[str, tuple[float, float]] = {
     "silence_pad": (0.0, 5.0),
     "silence_min": (0.01, 600.0),
     "silence_dbfs": (-120.0, 0.0),
+    "bridge_min_fragment_ms": (50.0, 5000.0),
     "clip_pct": (0.0, 100.0),
     "lra_wide": (0.0, 60.0),
     "speech_wpm_fast": (10.0, 600.0),
