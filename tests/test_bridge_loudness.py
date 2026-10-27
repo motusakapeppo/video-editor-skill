@@ -135,37 +135,35 @@ def main() -> int:
     )
 
     dialogue = list(new_plan.audio_tracks[0].clips)
+    gains = [item for item in report.audio if "gain_db" in item]
     check("plan valido", new_plan.validate() == [], new_plan.validate())
     check(
         "gain = target - measured",
         all(abs(clip.gain_db - 10.85) <= 1e-9 for clip in dialogue)
-        and all(abs(item["gain_db"] - 10.85) <= 1e-9 for item in report.audio),
-        [item["gain_db"] for item in report.audio],
+        and all(abs(item["gain_db"] - 10.85) <= 1e-9 for item in gains),
+        [item["gain_db"] for item in gains],
     )
     check(
         "ogni clip dialogata dichiara la misura",
-        len(report.audio) == len(dialogue) == 3,
-        len(report.audio),
+        len(gains) == len(dialogue) == 3,
+        len(gains),
     )
     check(
         "gain scritto sul clip che porta l'audio",
         all(
             abs(clip.gain_db - item["gain_db"]) <= 1e-9
-            for clip, item in zip(dialogue, report.audio)
+            for clip, item in zip(dialogue, gains)
         )
-        and all(
-            clip.clip_id == item["clip_id"]
-            for clip, item in zip(dialogue, report.audio)
-        ),
+        and all(clip.clip_id == item["clip_id"] for clip, item in zip(dialogue, gains)),
         [clip.clip_id for clip in dialogue],
     )
     check(
         "nessuna carenza quando il gain e' nel limite",
-        all(item["shortfall_lu"] == 0.0 for item in report.audio)
+        all(item["shortfall_lu"] == 0.0 for item in gains)
         and not any(
             item.get("reason") == "gain_beyond_limit" for item in report.not_applied
         ),
-        report.audio,
+        gains,
     )
 
     measured = [span for _, spans in calls for span in spans]
@@ -212,19 +210,18 @@ def main() -> int:
         for item in clamped_report.not_applied
         if item.get("reason") == "gain_beyond_limit"
     ]
+    clamped_gains = [item for item in clamped_report.audio if "gain_db" in item]
     check(
         "gain oltre il tetto viene clampato a 24",
         all(abs(clip.gain_db - 24.0) <= 1e-9 for clip in clamped)
-        and all(abs(item["gain_db"] - 24.0) <= 1e-9 for item in clamped_report.audio),
+        and all(abs(item["gain_db"] - 24.0) <= 1e-9 for item in clamped_gains),
         [clip.gain_db for clip in clamped],
     )
     check(
         "carenza dichiarata: shortfall_lu = 32 - 24",
-        len(limited) == len(clamped_report.audio) == 3
+        len(limited) == len(clamped_gains) == 3
         and all(abs(item["shortfall_lu"] - 8.0) <= 1e-9 for item in limited)
-        and all(
-            abs(item["shortfall_lu"] - 8.0) <= 1e-9 for item in clamped_report.audio
-        ),
+        and all(abs(item["shortfall_lu"] - 8.0) <= 1e-9 for item in clamped_gains),
         limited,
     )
 
@@ -280,7 +277,7 @@ def main() -> int:
         "analisi fallita: clip intero, non guadagnato, dichiarato",
         len(broken_plan.video_tracks[0].clips) == 1
         and broken_plan.video_tracks[0].clips[0].gain_db == 0.0
-        and broken_report.audio == []
+        and [item for item in broken_report.audio if "gain_db" in item] == []
         and any(
             str(item.get("reason", "")).startswith("analysis_failed:")
             for item in broken_report.not_applied
@@ -303,7 +300,7 @@ def main() -> int:
         ]
         check(
             f"input_i {bad:g}: nessun gain applicato",
-            bad_report.audio == []
+            [item for item in bad_report.audio if "gain_db" in item] == []
             and all(clip.gain_db == 0.0 for clip in bad_dialogue),
             [item.get("gain_db") for item in bad_report.audio],
         )

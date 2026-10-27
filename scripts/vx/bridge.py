@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import edl_plan
-from .contract import THRESHOLDS, CropPlan, Cue, FaceTracks, VxError
+from .contract import THRESHOLDS, CropPlan, Cue, FaceTracks, VxError, plan_music_loop
 
 BRIDGE_SCHEMA = "vx.bridge_report/1.0"
 
@@ -467,6 +467,101 @@ def _anchor_ids_for(
         if any(end > dst_in + _EPS and start < dst_out - _EPS for start, end in spans):
             found.append(anchor_id)
     return found
+
+
+def _broll_score(
+    dst_in: float,
+    dst_out: float,
+    anchor_dst: Mapping[str, Sequence[Tuple[float, float]]],
+    anchors_by_id: Mapping[str, Anchor],
+) -> Tuple[Optional[float], float, Optional[float]]:
+    """Score a B-roll window against the word anchors it illustrates.
+
+    ``coverage`` is the union of the window's intersections with the remapped
+    word spans, over the window length; ``confidence`` is the mean word
+    confidence weighted by the seconds each anchor covers. Both are already
+    measured values (``Anchor.confidence`` and the remapped spans), both live in
+    ``[0, 1]``, so ``coverage * confidence`` is normalised with no rescaling.
+
+    The result is ``(None, coverage, None)`` when no word anchor — or no anchor
+    with a measured confidence — overlaps: silence anchors are not semantic
+    evidence, and an unmeasured score is declared, never invented.
+    """
+    window = float(dst_out) - float(dst_in)
+    if window <= _EPS:
+        return None, 0.0, None
+    intervals: List[Tuple[float, float]] = []
+    weighted = 0.0
+    measured = 0.0
+    for anchor_id, spans in anchor_dst.items():
+        anchor = anchors_by_id.get(anchor_id)
+        if anchor is None or anchor.kind != "word_span" or anchor.confidence is None:
+            continue
+        for start, end in spans:
+            first = max(float(dst_in), float(start))
+            last = min(float(dst_out), float(end))
+            if last - first <= _EPS:
+                continue
+            intervals.append((first, last))
+            weighted += float(anchor.confidence) * (last - first)
+            measured += last - first
+    if measured <= _EPS:
+        return None, 0.0, None
+    merged: List[Tuple[float, float]] = []
+    for first, last in sorted(intervals):
+        if merged and first <= merged[-1][1] + _EPS:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], last))
+        else:
+            merged.append((first, last))
+    covered = sum(last - first for first, last in merged)
+    coverage = _clamp(covered / window, 0.0, 1.0)
+    confidence = _clamp(weighted / measured, 0.0, 1.0)
+    return round(coverage * confidence, 4), round(coverage, 4), round(confidence, 4)
+
+
+@dataclass(frozen=True)
+class _BrollSlot:
+    """A placed B-roll candidate, before the overlap policy decides its fate."""
+
+    clip: Any
+    index: int
+    length: float
+    dst_in: float
+    anchor_ids: Tuple[str, ...]
+    score: Optional[float]
+    coverage: float
+    confidence: Optional[float]
+    fade: Any
+    fade_clamped: bool
+
+    def overlaps(self, other: "_BrollSlot") -> bool:
+        return (
+            self.dst_in < other.dst_in + other.length - 1e-6
+            and other.dst_in < self.dst_in + self.length - 1e-6
+        )
+
+
+def _broll_overlap_winner(candidate: _BrollSlot, kept: _BrollSlot) -> _BrollSlot:
+    """Higher score wins; a tie keeps the earlier window.
+
+    A comparison needs two numbers, so when either score is missing the pair is
+    treated as a tie: the earlier window survives and the drop is still
+    declared with both scores, one of them ``None``.
+    """
+    if candidate.score is not None and kept.score is not None:
+        if candidate.score > kept.score + _EPS:
+            return candidate
+        if kept.score > candidate.score + _EPS:
+            return kept
+    return (
+        candidate
+        if (candidate.dst_in, candidate.index)
+        < (
+            kept.dst_in,
+            kept.index,
+        )
+        else kept
+    )
 
 
 def _caption_style(overrides: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -1539,6 +1634,9 @@ def build(
             + ")"
         )
 
+    # -- A10: camera ops follow their footage, or are declared gone ---------- #
+    _retime_camera(plan, video_tracks, report)
+
     notes = tuple(plan.notes) + (
         f"bridge: {len(report.cuts)} tagli su silenzio, "
         f"{len(report.audio)} clip dialogati con gain dichiarato",
@@ -1650,9 +1748,12 @@ def _retime_music(
         return track
     clips: List[edl_plan.ClipSegment] = []
     for index, clip in enumerate(track.clips):
-        length = min(
-            _media_duration(plan, clip.source_id, float(clip.src_out)), duration
-        )
+        media = _media_duration(plan, clip.source_id, float(clip.src_out))
+        # The bed keeps its media duration: a track shorter than the timeline is
+        # looped by the render graph, never stretched or cut down to it. Only a
+        # media longer than the timeline is clamped, because `dst_out` cannot
+        # exceed `duration_sec` and `validate` keeps src and dst durations equal.
+        length = min(media, duration)
         if index > 0:
             report.not_applied.append(
                 {
@@ -1671,6 +1772,38 @@ def _retime_music(
                 }
             )
             continue
+        loop = plan_music_loop(
+            length,
+            float(duration),
+            float(THRESHOLDS["music_loop_crossfade_sec"]),
+        )
+        if loop.looped:
+            declared = (
+                f"musica in loop: {loop.copies} copie, {loop.copies - 1} giunzioni "
+                f"in acrossfade da {loop.crossfade_sec:.3f}s"
+            )
+        elif loop.refused:
+            declared = f"loop rifiutato ({loop.refused}), passata singola"
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "clip_id": clip.clip_id,
+                    "reason": "music_loop_refused",
+                    "detail": loop.refused,
+                }
+            )
+        else:
+            declared = f"musica singola: {length:.3f}s su {float(duration):.3f}s"
+        report.audio.append(
+            {
+                "clip_id": clip.clip_id,
+                "role": "music",
+                "looped": loop.looped,
+                "loops": loop.copies,
+                "crossfade_sec": loop.crossfade_sec,
+                "declared": declared,
+            }
+        )
         clips.append(
             edl_plan.ClipSegment(
                 clip_id=clip.clip_id,
@@ -1770,23 +1903,45 @@ def _rebuild_broll(
     *,
     anchor_dst: Optional[Mapping[str, Sequence[Tuple[float, float]]]] = None,
 ) -> List[edl_plan.ClipSegment]:
-    """Keep or re-place b_roll, declaring every drop and every mutated field.
+    """Keep or re-place b_roll, declaring every drop, every score and every mutation.
 
-    An existing ``dst_in`` that still fits after the cut is the anchor the
-    payload bridge already honoured, so it is kept; only a clip that no longer
-    fits falls back to the uniform placement of ``payload_to_edl_plan``.
+    Placement: an existing ``dst_in`` that still fits after the cut is the anchor
+    the payload bridge already honoured, so it is kept; only a clip that no
+    longer fits falls back to the uniform placement of ``payload_to_edl_plan``,
+    clamped to ``[0, duration - length]``.
+
+    Score (A8): every candidate is scored against the word anchors its
+    destination window covers, ``coverage * confidence`` from
+    :func:`_broll_score`. Below ``broll_min_score`` the clip is dropped as
+    ``broll_below_threshold`` carrying the score and the anchor ids. A window
+    with no word anchor to score is kept and declared
+    ``broll_score_unavailable``: a score is never invented.
+
+    Overlap (A11), deterministic: candidates are processed in
+    ``(dst_in, declaration index)`` order and each is compared against the whole
+    kept set, never against the last processed clip. When two windows overlap
+    the higher score survives; the other is dropped as
+    ``broll_overlap_after_cut`` naming both clip ids and both scores. Equal
+    scores — and unmeasurable pairs, where one score is ``None`` — keep the
+    earlier window. An evicted candidate leaves the kept set for good, so it
+    cannot reappear, and the survivor is checked again against what remains.
 
     Every entry carries ``anchor_ids``: the word and silence anchors whose
     destination span overlaps the clip window. An accepted clip that covers no
-    anchor is declared as ``broll_without_anchor``; a rejected one has no window
-    to cite and is already declared for the reason that dropped it.
+    anchor is declared as ``broll_without_anchor``.
     """
     spans = anchor_dst or {}
+    anchors_by_id: Dict[str, Anchor] = {
+        anchor.anchor_id: anchor
+        for anchor in report.anchors
+        if isinstance(anchor, Anchor)
+    }
+    min_score = float(THRESHOLDS["broll_min_score"])
     sources = [clip for clip in track.clips if int(getattr(clip, "layer", 0)) >= 1]
     if not sources:
         return []
     count = len(sources)
-    kept: List[edl_plan.ClipSegment] = []
+    slots: List[_BrollSlot] = []
     for index, clip in enumerate(sources):
         media = _media_duration(plan, clip.source_id, float(clip.src_out))
         length = min(float(clip.src_out) - float(clip.src_in), media, duration)
@@ -1808,84 +1963,277 @@ def _rebuild_broll(
         at = duration * (index + 1) / (count + 1)
         dst_in = float(clip.dst_in) if anchored else _clamp(at, 0.0, max_start)
         anchor_ids = _anchor_ids_for(dst_in, dst_in + length, spans)
+        score, coverage, confidence = _broll_score(
+            dst_in, dst_in + length, spans, anchors_by_id
+        )
         fade = clip.transition_in
         fade_cap = _transition_cap(length)
         fade_clamped = fade is not None and float(fade.duration_sec) > fade_cap + 1e-6
         if fade_clamped:
             fade = edl_plan.Transition(fade.type, fade_cap)
-        if kept and dst_in < kept[-1].dst_out - 1e-6:
-            report.broll.append(
+        slots.append(
+            _BrollSlot(
+                clip=clip,
+                index=index,
+                length=length,
+                dst_in=dst_in,
+                anchor_ids=tuple(anchor_ids),
+                score=score,
+                coverage=coverage,
+                confidence=confidence,
+                fade=fade,
+                fade_clamped=fade_clamped,
+            )
+        )
+
+    below = [
+        slot
+        for slot in slots
+        if slot.score is not None and slot.score < min_score - _EPS
+    ]
+    candidates = [
+        slot for slot in slots if slot.score is None or slot.score >= min_score - _EPS
+    ]
+    for slot in sorted(below, key=lambda item: (item.dst_in, item.index)):
+        report.broll.append(
+            {
+                "asset_id": slot.clip.source_id,
+                "at": round(slot.dst_in, 3),
+                "anchor_id": slot.anchor_ids[0] if slot.anchor_ids else None,
+                "anchor_ids": list(slot.anchor_ids),
+                "score": slot.score,
+                "accepted": False,
+            }
+        )
+        report.not_applied.append(
+            {
+                "anchor_id": slot.anchor_ids[0] if slot.anchor_ids else None,
+                "clip_id": slot.clip.clip_id,
+                "asset_id": slot.clip.source_id,
+                "reason": "broll_below_threshold",
+                "score": slot.score,
+                "threshold": min_score,
+                "anchor_ids": list(slot.anchor_ids),
+                "at": round(slot.dst_in, 3),
+            }
+        )
+
+    kept: List[_BrollSlot] = []
+    evicted: List[Tuple[_BrollSlot, _BrollSlot]] = []
+    for slot in sorted(candidates, key=lambda item: (item.dst_in, item.index)):
+        while True:
+            clash = next((other for other in kept if slot.overlaps(other)), None)
+            if clash is None:
+                kept.append(slot)
+                break
+            if _broll_overlap_winner(slot, clash) is slot:
+                kept.remove(clash)
+                evicted.append((clash, slot))
+                continue
+            evicted.append((slot, clash))
+            break
+    accepted_ids = {id(slot) for slot in kept}
+
+    for slot in sorted(candidates, key=lambda item: (item.dst_in, item.index)):
+        accepted = id(slot) in accepted_ids
+        entry: Dict[str, Any] = {
+            "asset_id": slot.clip.source_id,
+            "at": round(slot.dst_in, 3),
+            "anchor_id": slot.anchor_ids[0] if slot.anchor_ids else None,
+            "anchor_ids": list(slot.anchor_ids),
+            "score": slot.score,
+            "accepted": accepted,
+        }
+        if slot.score is not None:
+            entry["score_coverage"] = slot.coverage
+            entry["score_confidence"] = slot.confidence
+        report.broll.append(entry)
+        if not accepted:
+            continue
+        if slot.fade_clamped:
+            report.not_applied.append(
                 {
-                    "asset_id": clip.source_id,
-                    "at": round(dst_in, 3),
                     "anchor_id": None,
-                    "anchor_ids": anchor_ids,
-                    "accepted": False,
+                    "clip_id": slot.clip.clip_id,
+                    "asset_id": slot.clip.source_id,
+                    "reason": "broll_fade_clamped",
+                    "duration_sec": slot.clip.transition_in.duration_sec,
+                    "clamped_sec": round(_transition_cap(slot.length), 3),
                 }
             )
+        if slot.clip.transition_out is not None:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "clip_id": slot.clip.clip_id,
+                    "asset_id": slot.clip.source_id,
+                    "reason": "transition_out_dropped",
+                    "transition": slot.clip.transition_out.type,
+                    "duration_sec": slot.clip.transition_out.duration_sec,
+                }
+            )
+        if not slot.anchor_ids:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "clip_id": slot.clip.clip_id,
+                    "asset_id": slot.clip.source_id,
+                    "reason": "broll_without_anchor",
+                    "at": round(slot.dst_in, 3),
+                }
+            )
+        if slot.score is None:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "clip_id": slot.clip.clip_id,
+                    "asset_id": slot.clip.source_id,
+                    "reason": "broll_score_unavailable",
+                    "score": None,
+                    "anchor_ids": list(slot.anchor_ids),
+                    "at": round(slot.dst_in, 3),
+                }
+            )
+
+    for loser, winner in evicted:
+        report.not_applied.append(
+            {
+                "anchor_id": None,
+                "clip_id": loser.clip.clip_id,
+                "other_clip_id": winner.clip.clip_id,
+                "asset_id": loser.clip.source_id,
+                "other_asset_id": winner.clip.source_id,
+                "reason": "broll_overlap_after_cut",
+                "at": round(loser.dst_in, 3),
+                "other_at": round(winner.dst_in, 3),
+                "score": loser.score,
+                "other_score": winner.score,
+                "policy": "higher_score_then_earlier",
+            }
+        )
+
+    kept.sort(key=lambda item: item.dst_in)
+    return [
+        edl_plan.ClipSegment(
+            clip_id=slot.clip.clip_id,
+            source_id=slot.clip.source_id,
+            src_in=float(slot.clip.src_in),
+            src_out=float(slot.clip.src_in) + slot.length,
+            dst_in=slot.dst_in,
+            dst_out=slot.dst_in + slot.length,
+            layer=slot.clip.layer,
+            role=slot.clip.role,
+            transition_in=slot.fade,
+            gain_db=slot.clip.gain_db,
+        )
+        for slot in kept
+    ]
+
+
+def _camera_declared(ref: Any) -> bool:
+    """A ``CameraSpec`` counts as declared when at least one field is set."""
+    camera = getattr(ref, "camera", None)
+    if camera is None:
+        return False
+    return any(
+        getattr(camera, name, None) is not None
+        for name in ("angle_deg", "focal_length_mm")
+    )
+
+
+def _surviving_window(
+    clip_id: str, clips_by_id: Mapping[str, Any]
+) -> Optional[Tuple[float, float]]:
+    """The destination window a pre-bridge clip holds after the cut, if any.
+
+    A b-roll keeps its ``clip_id``; a layer-0 clip becomes ``{clip_id}_{n}``
+    fragments, so the window is the span from the first fragment's ``dst_in``
+    to the last fragment's ``dst_out``.
+    """
+    direct = clips_by_id.get(clip_id)
+    if direct is not None:
+        return (float(direct.dst_in), float(direct.dst_out))
+    prefix = clip_id + "_"
+    windows = [
+        (float(clip.dst_in), float(clip.dst_out))
+        for new_id, clip in clips_by_id.items()
+        if new_id.startswith(prefix) and new_id[len(prefix) :].isdigit()
+    ]
+    if not windows:
+        return None
+    return (min(start for start, _ in windows), max(end for _, end in windows))
+
+
+def _retime_camera(
+    plan: edl_plan.EDLPlan,
+    video_tracks: Sequence[edl_plan.Track],
+    report: BridgeReport,
+) -> None:
+    """Follow every declared camera onto the cut timeline, or declare it gone.
+
+    ``CameraSpec`` is declared on the source, so the operation it authorises is
+    the destination window of each video clip that references it: those windows
+    are what the 30/180 rules compare at the cuts. The bridge rebuilds them, so
+    an op is re-timed onto the surviving pieces of its clip. A window that
+    shrank is clamped and declared with both spans; a clip the bridge removed
+    takes its op with it and is declared ``camera_op_dropped`` at its original
+    time. A plan with no camera declared anywhere gets exactly one
+    ``camera_absent`` entry, not one per clip.
+    """
+    clips_by_id = {clip.clip_id: clip for track in video_tracks for clip in track.clips}
+    ops = [
+        clip
+        for track in plan.video_tracks
+        for clip in track.clips
+        if _camera_declared(plan.sources.get(clip.source_id))
+    ]
+    if not ops:
+        report.not_applied.append(
+            {
+                "anchor_id": None,
+                "reason": "camera_absent",
+                "sources": sorted(
+                    {
+                        clip.source_id
+                        for track in plan.video_tracks
+                        for clip in track.clips
+                    }
+                ),
+                "clips": sum(len(track.clips) for track in plan.video_tracks),
+            }
+        )
+        return
+    for clip in ops:
+        original_in = float(clip.dst_in)
+        original_out = float(clip.dst_out)
+        window = _surviving_window(clip.clip_id, clips_by_id)
+        if window is None:
             report.not_applied.append(
                 {
                     "anchor_id": None,
                     "clip_id": clip.clip_id,
-                    "asset_id": clip.source_id,
-                    "reason": "broll_overlap_after_cut",
-                    "at": round(dst_in, 3),
+                    "source_id": clip.source_id,
+                    "reason": "camera_op_dropped",
+                    "original_dst_in": round(original_in, 3),
+                    "original_dst_out": round(original_out, 3),
                 }
             )
             continue
-        if fade_clamped:
-            report.not_applied.append(
-                {
-                    "anchor_id": None,
-                    "clip_id": clip.clip_id,
-                    "asset_id": clip.source_id,
-                    "reason": "broll_fade_clamped",
-                    "duration_sec": clip.transition_in.duration_sec,
-                    "clamped_sec": round(fade_cap, 3),
-                }
-            )
-        if clip.transition_out is not None:
-            report.not_applied.append(
-                {
-                    "anchor_id": None,
-                    "clip_id": clip.clip_id,
-                    "asset_id": clip.source_id,
-                    "reason": "transition_out_dropped",
-                    "transition": clip.transition_out.type,
-                    "duration_sec": clip.transition_out.duration_sec,
-                }
-            )
-        kept.append(
-            edl_plan.ClipSegment(
-                clip_id=clip.clip_id,
-                source_id=clip.source_id,
-                src_in=float(clip.src_in),
-                src_out=float(clip.src_in) + length,
-                dst_in=dst_in,
-                dst_out=dst_in + length,
-                layer=clip.layer,
-                role=clip.role,
-                transition_in=fade,
-                gain_db=clip.gain_db,
-            )
-        )
-        report.broll.append(
+        if (
+            abs(window[0] - original_in) <= 1e-6
+            and abs(window[1] - original_out) <= 1e-6
+        ):
+            continue
+        shrank = (window[1] - window[0]) < (original_out - original_in) - 1e-6
+        report.not_applied.append(
             {
-                "asset_id": clip.source_id,
-                "at": round(dst_in, 3),
                 "anchor_id": None,
-                "anchor_ids": anchor_ids,
-                "accepted": True,
+                "clip_id": clip.clip_id,
+                "source_id": clip.source_id,
+                "reason": "camera_op_clamped" if shrank else "camera_op_retimed",
+                "original_dst_in": round(original_in, 3),
+                "original_dst_out": round(original_out, 3),
+                "dst_in": round(window[0], 3),
+                "dst_out": round(window[1], 3),
             }
         )
-        if not anchor_ids:
-            report.not_applied.append(
-                {
-                    "anchor_id": None,
-                    "clip_id": clip.clip_id,
-                    "asset_id": clip.source_id,
-                    "reason": "broll_without_anchor",
-                    "at": round(dst_in, 3),
-                }
-            )
-    return kept

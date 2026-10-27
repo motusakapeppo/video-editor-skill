@@ -101,6 +101,16 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     # multitrack EDL audio buses
     "dialogue_fade_ms": 12,
     "broll_fade_sec": 0.5,
+    # A12: music shorter than the timeline is looped in the graph; the seam is
+    # an `acrossfade` of this length, so no loop can click or drop.
+    "music_loop_crossfade_sec": 0.4,
+    # A8: the semantic score of a B-roll is the share of its destination window
+    # actually covered by transcribed word anchors, times the mean confidence of
+    # those anchors (time-weighted). Both factors live in [0, 1], so the score is
+    # already normalised: no rescaling is applied. 0.35 reads as "at least a third
+    # of the shot illustrates speech we recognised with confidence": lower than
+    # that the picture is decoration, not evidence.
+    "broll_min_score": 0.35,
     # asset triage (Fase 4)
     "triage_max_upscale": 1.5,
     "triage_max_broll": 3,
@@ -135,6 +145,70 @@ DEFAULT_THRESHOLDS = MappingProxyType(dict(_THRESHOLDS_DATA))
 def _set_thresholds(values: Dict[str, Any]) -> None:
     _THRESHOLDS_DATA.clear()
     _THRESHOLDS_DATA.update(values)
+
+
+# A12: the graph repeats the music bed instead of leaving a silent tail, so the
+# copy count is a branch count. 256 copies is ~10 minutes of bed from a 5 s
+# loop; beyond it the loop is refused and declared, never emitted as a graph
+# nobody can debug.
+MAX_MUSIC_LOOP_COPIES = 256
+
+
+@dataclass(frozen=True)
+class MusicLoopPlan:
+    """How many copies of the music bed cover the timeline, and with what seam."""
+
+    looped: bool
+    copies: int
+    crossfade_sec: float
+    refused: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "looped": self.looped,
+            "copies": self.copies,
+            "crossfade_sec": self.crossfade_sec,
+            "refused": self.refused,
+        }
+
+
+def plan_music_loop(
+    media_sec: float,
+    timeline_sec: float,
+    crossfade_sec: float,
+    *,
+    max_copies: int = MAX_MUSIC_LOOP_COPIES,
+) -> MusicLoopPlan:
+    """Smallest copy count whose crossfaded joints still reach the timeline.
+
+    Each joint costs one crossfade, so ``N`` copies yield
+    ``N * (M - c) + c`` seconds: ``N = ceil((T - c) / (M - c))``, which reduces
+    to ``ceil(T / M)`` when the crossfade is zero. ``c`` is capped at half the
+    track, so every ``acrossfade`` is strictly shorter than both its inputs, as
+    ffmpeg requires.
+    """
+    if not (math.isfinite(media_sec) and math.isfinite(timeline_sec)):
+        return MusicLoopPlan(False, 1, 0.0, "durata non finita")
+    if media_sec <= 0 or timeline_sec <= media_sec:
+        return MusicLoopPlan(False, 1, 0.0)
+    if crossfade_sec <= 0:
+        seam = 0.0
+    else:
+        seam = min(float(crossfade_sec), media_sec / 2.0)
+    step = media_sec - seam
+    if step <= 0:
+        return MusicLoopPlan(False, 1, 0.0, "traccia troppo corta per una giunzione")
+    copies = int(math.ceil((timeline_sec - seam) / step))
+    if copies < 2:
+        return MusicLoopPlan(False, 1, 0.0)
+    if copies > max_copies:
+        return MusicLoopPlan(
+            False,
+            1,
+            0.0,
+            f"{copies} copie oltre il limite di {max_copies}",
+        )
+    return MusicLoopPlan(True, copies, round(seam, 6))
 
 
 CREATIVE_TREATMENTS = ("autoframe", "zoom", "hook_overlay", "fit")

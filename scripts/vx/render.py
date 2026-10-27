@@ -956,6 +956,63 @@ def _edl_audio_clip_chain(
     return chain
 
 
+def _edl_music_chain(
+    clip: Any,
+    audio_index: int,
+    label: str,
+    *,
+    timeline: float,
+) -> List[str]:
+    """The music bed: one pass when it covers the timeline, a loop when it does not.
+
+    A track shorter than the window it must fill is split with ``asplit`` into
+    ``N`` copies of the trimmed bed, joined with ``acrossfade`` so every seam
+    overlaps instead of butting, then ``atrim``-med to the window. When the bed
+    already reaches the window the chain is the single ``atrim`` this engine
+    shipped, character for character.
+    """
+    src_in = float(clip.src_in)
+    src_out = float(clip.src_out)
+    remaining = max(0.0, float(timeline) - float(clip.dst_in))
+    loop = contract.plan_music_loop(
+        src_out - src_in,
+        remaining,
+        float(THRESHOLDS["music_loop_crossfade_sec"]),
+    )
+    if not loop.looped:
+        return [_edl_audio_clip_chain(clip, audio_index, label, fades=False)]
+
+    tail = f"atrim=start=0:end={remaining:.6f},asetpts=PTS-STARTPTS"
+    gain = float(getattr(clip, "gain_db", 0.0) or 0.0)
+    if gain != 0.0:
+        tail += f",volume={gain:.3f}dB"
+    delay_ms = int(round(float(clip.dst_in) * 1000.0))
+    tail += f",adelay={delay_ms}|{delay_ms}[{label}]"
+
+    copies = loop.copies
+    # The split happens after the trim, so every copy is already the bed length.
+    stems = [f"{label}loop{index}" for index in range(1, copies + 1)]
+    parts = [
+        f"[{audio_index}:a]atrim=start={src_in:.6f}:end={src_out:.6f},"
+        f"asetpts=PTS-STARTPTS,asplit={copies}" + "".join(f"[{stem}]" for stem in stems)
+    ]
+    if loop.crossfade_sec > 0:
+        previous = stems[0]
+        for index, stem in enumerate(stems[1:], start=1):
+            merged = f"{label}xfade{index}"
+            parts.append(
+                f"[{previous}][{stem}]acrossfade=d={loop.crossfade_sec:.6f}[{merged}]"
+            )
+            previous = merged
+        joined = previous
+    else:
+        inputs = "".join(f"[{stem}]" for stem in stems)
+        joined = f"{label}concat"
+        parts.append(f"{inputs}concat=n={copies}:v=0:a=1[{joined}]")
+    parts.append(f"[{joined}]{tail}")
+    return parts
+
+
 def _edl_bus(
     labels: List[str],
     bus: str,
@@ -1305,12 +1362,12 @@ def build_edl_filtergraph(
         for clip in music_clips:
             label = _edl_label("mu", clip, used)
             music_labels.append(label)
-            parts.append(
-                _edl_audio_clip_chain(
+            parts.extend(
+                _edl_music_chain(
                     clip,
                     source_to_index[clip.source_id],
                     label,
-                    fades=False,
+                    timeline=float(plan.duration_sec),
                 )
             )
 
