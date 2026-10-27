@@ -33,8 +33,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import contract
+from . import features
 from . import ffmpeg as ff
 from . import fonts as fonts_mod
+from . import stagecache
 from .contract import (
     LOUDNESS_TARGETS,
     THRESHOLDS,
@@ -66,6 +68,141 @@ FADE_MS = 12  # afade at joints: no duration change (acrossfade would cost 10 ms
 FIT_BLUR_SIGMA = 20.0
 AUDIO_RATE = 48000
 LIMITER_RATE = 192000  # 4x oversampling: alimiter sees inter-sample peaks
+
+
+# --------------------------------------------------------------------------- #
+# stage cache: identity, dependencies, counters
+# --------------------------------------------------------------------------- #
+
+# Bump when a *stage's code* changes. Every cached artifact of every stage is
+# keyed on this string, so a bump is a global invalidation: the only reason to
+# re-run a stage that the data alone does not prove stale.
+STAGE_VERSION = "1"
+
+# Which input slot each stage consumes. A stage naming another stage depends on
+# that stage's *key*, not on its file: the content address is the invalidation
+# edge. ``stagecache.dependents`` walks this map to answer "what re-runs when X
+# changes", so the rule below is executable and testable.
+STAGE_DEPENDS: Dict[str, Tuple[str, ...]] = {
+    "01_trim": ("source_sha256", "cuts", "fps", "precision", "encoder"),
+    "02_detect": ("01_trim", "stabilize"),
+    "03_graph": (
+        "02_detect",
+        "source_sha256",
+        "graph",
+        "subtitles",
+        "hook",
+        "precision",
+        "encoder",
+    ),
+    "04_loudness": ("03_graph", "loudness", "audio"),
+}
+
+
+def _stage_log(event: str, stage: str, digest: str, **fields: Any) -> None:
+    """One machine-readable line per cache decision, on stderr.
+
+    stdout belongs to the caller (``main`` prints graphs there), so the event
+    stream goes to stderr and a hit never looks like render output.
+    """
+    tail = "".join(f" {name}={value}" for name, value in sorted(fields.items()))
+    print(
+        f"[{event}] stage={stage} key={digest[:16]}{tail}", file=sys.stderr, flush=True
+    )
+
+
+class _StageCache:
+    """Stage cache counters and the hit/record protocol for one render run.
+
+    ``key_for`` refuses to key a stage whose declared inputs are incomplete: a
+    stage that forgets a dependency would otherwise cache bytes it cannot
+    justify, which is worse than no cache at all.
+    """
+
+    def __init__(self, workdir: Path) -> None:
+        self.workdir = Path(workdir)
+        self.hits: List[str] = []
+        self.misses: List[str] = []
+        self.keys: Dict[str, str] = {}
+
+    def key_for(
+        self,
+        stage: str,
+        inputs: Mapping[str, str],
+        params: Mapping[str, Any],
+    ) -> str:
+        wanted = STAGE_DEPENDS[stage]
+        missing = [name for name in wanted if name not in inputs]
+        if missing:
+            raise RenderFailure(
+                {
+                    "step": "stage_cache",
+                    "stage": stage,
+                    "missing_inputs": missing,
+                }
+            )
+        digest = stagecache.key(
+            stage,
+            {name: inputs[name] for name in wanted},
+            params,
+            STAGE_VERSION,
+        )
+        self.keys[stage] = digest
+        return digest
+
+    def hit(self, stage: str, digest: str) -> Optional[Dict[str, Any]]:
+        found = stagecache.lookup(self.workdir, digest)
+        if found is None:
+            return None
+        self.hits.append(stage)
+        _stage_log(
+            "stage_cache_hit",
+            stage,
+            digest,
+            artifact=Path(found["path"]).name,
+            size=found["size"],
+        )
+        return found
+
+    def miss(
+        self,
+        stage: str,
+        digest: str,
+        artifact: Path,
+        meta: Dict[str, Any],
+    ) -> None:
+        self.misses.append(stage)
+        entry = stagecache.record(self.workdir, digest, artifact, meta)
+        _stage_log(
+            "stage_cache_miss",
+            stage,
+            digest,
+            artifact=Path(artifact).name,
+            recorded=bool(entry),
+        )
+
+    def report(self) -> Dict[str, Any]:
+        return {
+            "version": STAGE_VERSION,
+            "hits": len(self.hits),
+            "misses": len(self.misses),
+            "executed": list(self.misses),
+            "reused": list(self.hits),
+            "keys": dict(self.keys),
+        }
+
+
+def _write_stage_cache_report(workdir: Path, cache: _StageCache) -> None:
+    """Persist the counters next to the artifacts. Never fatal."""
+    try:
+        target = Path(workdir) / "stage_cache_report.json"
+        target.write_text(
+            json.dumps(cache.report(), ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -1535,6 +1672,7 @@ def render_edl(
     reframe: Optional[Mapping[str, Any]] = None,
     restore: Optional[Mapping[str, Any]] = None,
     ceiling_dbtp: Optional[float] = None,
+    cache_report: Optional[Dict[str, Any]] = None,
 ) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -1548,11 +1686,12 @@ def render_edl(
     if ceiling_dbtp is not None and not audio:
         raise RenderFailure("true-peak ceiling requested but the EDL has no audio")
     mapping = edl_input_map(staged_sources)
+    policy = _fill_policy(fill)
     graph = build_edl_filtergraph(
         plan,
         mapping,
         has_audio=has_audio,
-        fill=_fill_policy(fill),
+        fill=policy,
         subtitles=subtitles,
         reframe=reframe,
         restore=restore,
@@ -1561,11 +1700,37 @@ def render_edl(
     script = write_script(graph, work / "edl_graph.txt")
     out = Path(output_path)
 
-    if loudness is None:
+    cache: Optional[_StageCache] = None
+    digest03 = ""
+    found = None
+    if features.enabled("stage_cache"):
+        cache = _StageCache(work)
+        digest03 = cache.key_for(
+            "03_graph",
+            {
+                "02_detect": "",
+                "source_sha256": json.dumps(
+                    {
+                        source_id: stagecache.file_sha256(path)
+                        for source_id, path in sorted(staged_sources.items())
+                    },
+                    sort_keys=True,
+                ),
+                "graph": graph,
+                "subtitles": stagecache.file_sha256(subtitles) if subtitles else "",
+                "hook": "",
+                "precision": f"{int(plan.resolution[0])}x{int(plan.resolution[1])}",
+                "encoder": f"crf={int(crf)},preset={preset}",
+            },
+            {"has_audio": audio, "fill": policy},
+        )
+        found = cache.hit("03_graph", digest03)
+    target03 = work / "final_pre_loudness.mp4" if loudness is not None else out
+    if found is None:
         args = build_edl_command(
             plan,
             staged_sources,
-            out,
+            target03,
             graph_path=script,
             has_audio=has_audio,
             crf=crf,
@@ -1574,64 +1739,90 @@ def render_edl(
         )
         proc = ff.run_ff(args)
         if not proc.ok:
-            raise RenderFailure(f"EDL render failed: {proc.tail(15)}")
-        if not out.is_file() or out.stat().st_size == 0:
+            label = "EDL pre-loudness render" if loudness is not None else "EDL render"
+            raise RenderFailure(f"{label} failed: {proc.tail(15)}")
+        if not target03.is_file() or target03.stat().st_size == 0:
             raise RenderFailure("EDL render produced no file")
+        if cache is not None:
+            cache.miss("03_graph", digest03, target03, {"target": target03.name})
+        stage03_path = target03
+    else:
+        stage03_path = Path(found["path"])
+    pre = stage03_path
+
+    if loudness is None:
+        if cache is not None:
+            _write_stage_cache_report(work, cache)
+            if cache_report is not None:
+                cache_report.update(cache.report())
         return out
 
-    pre = work / "final_pre_loudness.mp4"
-    args = build_edl_command(
-        plan,
-        staged_sources,
-        pre,
-        graph_path=script,
-        has_audio=has_audio,
-        crf=crf,
-        preset=preset,
-        progress_file=progress_file,
-    )
-    proc = ff.run_ff(args)
-    if not proc.ok:
-        raise RenderFailure(f"EDL pre-loudness render failed: {proc.tail(15)}")
-    if not pre.is_file() or pre.stat().st_size == 0:
-        raise RenderFailure("EDL pre-loudness render produced no file")
-
     target_i, target_tp = float(loudness[0]), float(loudness[1])
-    stats = _measure_loudness(pre)
-    af_args = loudnorm_two_pass(
-        stats, target_i=target_i, target_tp=target_tp, target_lra=11.0
-    )
-    graph04 = edl_loudness_graph(af_args[1], ceiling_dbtp=ceiling_dbtp)
-    script04 = write_script(graph04, work / "04_loudness.txt")
-    # Audio-only pass: the video stream is already final, so -c:v copy is legal
-    # here for the same reason as stage 04 of the EditPlan path: this pass does
-    # not cut.
-    args = [
-        "-i",
-        str(pre),
-        "-filter_complex_script",
-        script04,
-        "-map",
-        "0:v:0",
-        "-map",
-        "[aout]",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-ar",
-        "48000",
-        "-movflags",
-        "+faststart",
-        str(out),
-    ]
-    proc = ff.run_ff(args, loglevel="error")
-    if not proc.ok:
-        raise RenderFailure(f"EDL loudness pass failed: {proc.tail(12)}")
-    if not out.is_file() or out.stat().st_size == 0:
-        raise RenderFailure("EDL loudness pass produced no file")
+    digest04 = ""
+    found = None
+    if cache is not None:
+        digest04 = cache.key_for(
+            "04_loudness",
+            {
+                "03_graph": digest03,
+                "loudness": f"{target_i}|{target_tp}",
+                "audio": str(audio),
+            },
+            {"ceiling": "" if ceiling_dbtp is None else f"{float(ceiling_dbtp):.6f}"},
+        )
+        found = cache.hit("04_loudness", digest04)
+    if found is None:
+        stats = _measure_loudness(pre)
+        af_args = loudnorm_two_pass(
+            stats, target_i=target_i, target_tp=target_tp, target_lra=11.0
+        )
+        graph04 = edl_loudness_graph(af_args[1], ceiling_dbtp=ceiling_dbtp)
+        script04 = write_script(graph04, work / "04_loudness.txt")
+        # Audio-only pass: the video stream is already final, so -c:v copy is legal
+        # here for the same reason as stage 04 of the EditPlan path: this pass does
+        # not cut.
+        args = [
+            "-i",
+            str(pre),
+            "-filter_complex_script",
+            script04,
+            "-map",
+            "0:v:0",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
+            "-movflags",
+            "+faststart",
+            str(out),
+        ]
+        proc = ff.run_ff(args, loglevel="error")
+        if not proc.ok:
+            raise RenderFailure(f"EDL loudness pass failed: {proc.tail(12)}")
+        if not out.is_file() or out.stat().st_size == 0:
+            raise RenderFailure("EDL loudness pass produced no file")
+        if cache is not None:
+            cache.miss(
+                "04_loudness",
+                digest04,
+                out,
+                {"measured": stats, "target": {"i": target_i, "tp": target_tp}},
+            )
+    else:
+        stats = dict(found["meta"].get("measured") or {})
+        af_args = loudnorm_two_pass(
+            stats, target_i=target_i, target_tp=target_tp, target_lra=11.0
+        )
+        write_script(
+            edl_loudness_graph(af_args[1], ceiling_dbtp=ceiling_dbtp),
+            work / "04_loudness.txt",
+        )
 
     payload = {
         "pre": str(pre),
@@ -1644,6 +1835,10 @@ def render_edl(
     (work / "edl_render.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    if cache is not None:
+        _write_stage_cache_report(work, cache)
+        if cache_report is not None:
+            cache_report.update(cache.report())
     return out
 
 
@@ -1696,10 +1891,23 @@ def render(
     has_audio = bool(media.get("has_audio", True))
     stages: List[str] = []
     scripts: List[str] = []
+    # The cache is opt-in (``features.stage_cache``, default off): when the flag
+    # is off no cache object exists, so there is no lookup, no write and no file
+    # under the workdir, and the report carries no counter it did not measure.
+    cache: Optional[_StageCache] = None
+    source_sha = ""
+    encoder_fp = ""
+    cuts_fp = ""
+    if features.enabled("stage_cache"):
+        cache = _StageCache(work)
+        source_sha = stagecache.file_sha256(source_path)
+        encoder_fp = " ".join(str(part) for part in _encode_args(plan, precision))
+        cuts_fp = json.dumps(list(plan.cuts or []), sort_keys=True)
 
     def _record(path: str) -> None:
         scripts.append(Path(path).read_text(encoding="utf-8"))
 
+    trf_key = ""
     # -- stage 02: stabilization detect pass -------------------------------- #
     if _enabled(plan, "stabilize"):
         ff.require("vidstabdetect")
@@ -1708,44 +1916,80 @@ def render(
         trim_script = write_script(trim_graph, stage_dir / "01_trim.txt")
         _record(trim_script)
         trim_out = stage_dir / "01_trim.mp4"
-        proc = ff.run_ff(
-            [
-                "-i",
-                str(source_path),
-                "-filter_complex_script",
-                trim_script,
-                "-map",
-                "[vout]",
-                *_encode_args(plan, precision),
-                str(trim_out),
-            ]
-        )
-        if not proc.ok:
-            raise RenderFailure(f"stage 01 (trim) failed: {proc.tail(12)}")
+        trim_key = ""
+        found = None
+        if cache is not None:
+            trim_key = cache.key_for(
+                "01_trim",
+                {
+                    "source_sha256": source_sha,
+                    "cuts": cuts_fp,
+                    "fps": f"{fps:g}",
+                    "precision": precision,
+                    "encoder": encoder_fp,
+                },
+                {"with_audio": False, "fade_ms": 0},
+            )
+            found = cache.hit("01_trim", trim_key)
+        if found is None:
+            proc = ff.run_ff(
+                [
+                    "-i",
+                    str(source_path),
+                    "-filter_complex_script",
+                    trim_script,
+                    "-map",
+                    "[vout]",
+                    *_encode_args(plan, precision),
+                    str(trim_out),
+                ]
+            )
+            if not proc.ok:
+                raise RenderFailure(f"stage 01 (trim) failed: {proc.tail(12)}")
+            if cache is not None:
+                cache.miss("01_trim", trim_key, trim_out, {"source_sha256": source_sha})
+            trim_path = trim_out
+        else:
+            trim_path = Path(found["path"])
         stages.append("01_trim")
 
         detect_graph = _detect_graph(plan)
         detect_script = write_script(detect_graph, stage_dir / "02_detect.txt")
         _record(detect_script)
-        with _in_dir(work):
-            proc = ff.run_ff(
-                [
-                    "-i",
-                    str(trim_out),
-                    "-filter_complex_script",
-                    detect_script,
-                    "-map",
-                    "[vo]",
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                loglevel="info",
+        trf = work / TRF_NAME
+        found = None
+        if cache is not None:
+            trf_key = cache.key_for(
+                "02_detect",
+                {
+                    "01_trim": trim_key,
+                    "stabilize": json.dumps(_params(plan, "stabilize"), sort_keys=True),
+                },
+                {"trf": TRF_NAME},
             )
-        if not proc.ok:
-            raise RenderFailure(f"stage 02 (vidstabdetect) failed: {proc.tail(12)}")
-        if not (work / TRF_NAME).exists():
-            raise RenderFailure(f"vidstabdetect produced no {TRF_NAME} in {work}")
+            found = cache.hit("02_detect", trf_key)
+        if found is None:
+            with _in_dir(work):
+                proc = ff.run_ff(
+                    [
+                        "-i",
+                        str(trim_path),
+                        "-filter_complex_script",
+                        detect_script,
+                        "-map",
+                        "[vo]",
+                        "-f",
+                        "null",
+                        "-",
+                    ],
+                    loglevel="info",
+                )
+            if not proc.ok:
+                raise RenderFailure(f"stage 02 (vidstabdetect) failed: {proc.tail(12)}")
+            if not trf.exists():
+                raise RenderFailure(f"vidstabdetect produced no {TRF_NAME} in {work}")
+            if cache is not None:
+                cache.miss("02_detect", trf_key, trf, {"trf": TRF_NAME})
         stages.append("02_detect")
 
     # -- stage 03: the full graph ------------------------------------------- #
@@ -1766,85 +2010,144 @@ def render(
     script = write_script(graph, stage_dir / "03_graph.txt")
     _record(script)
     stage03 = stage_dir / "03_video.mp4"
+    digest03 = ""
+    found = None
+    if cache is not None:
+        digest03 = cache.key_for(
+            "03_graph",
+            {
+                "02_detect": trf_key,
+                "source_sha256": source_sha,
+                "graph": graph,
+                "subtitles": stagecache.file_sha256(subs_path) if subs_path else "",
+                "hook": stagecache.file_sha256(hook_path) if hook_path else "",
+                "precision": precision,
+                "encoder": encoder_fp,
+            },
+            {"has_audio": has_audio},
+        )
+        found = cache.hit("03_graph", digest03)
+    if found is None:
+        args: List[str] = [
+            "-i",
+            str(source_path),
+            "-filter_complex_script",
+            script,
+            "-map",
+            "[vout]",
+        ]
+        if has_audio:
+            args += ["-map", "[aout]"]
+        args += _encode_args(plan, precision)
+        if has_audio:
+            args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
+        args.append(str(stage03))
 
-    args: List[str] = [
-        "-i",
-        str(source_path),
-        "-filter_complex_script",
-        script,
-        "-map",
-        "[vout]",
-    ]
-    if has_audio:
-        args += ["-map", "[aout]"]
-    args += _encode_args(plan, precision)
-    if has_audio:
-        args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
-    args.append(str(stage03))
-
-    if _enabled(plan, "stabilize"):
-        with _in_dir(work):
+        if _enabled(plan, "stabilize"):
+            with _in_dir(work):
+                proc = ff.run_ff(args)
+        else:
             proc = ff.run_ff(args)
+        if not proc.ok:
+            raise RenderFailure(f"stage 03 (graph) failed: {proc.tail(15)}")
+        if cache is not None:
+            cache.miss("03_graph", digest03, stage03, {"has_audio": has_audio})
+        stage03_path = stage03
     else:
-        proc = ff.run_ff(args)
-    if not proc.ok:
-        raise RenderFailure(f"stage 03 (graph) failed: {proc.tail(15)}")
+        stage03_path = Path(found["path"])
     stages.append("03_graph")
 
     # -- stage 04: loudnorm second pass, or a plain remux ------------------- #
     final = work / f"final_{precision}.mp4"
     target_i, target_tp, target_lra = loudness_target(plan)
     stats: Dict[str, float] = {}
-    run_loudnorm = has_audio and _enabled(plan, "loudnorm")
-    if run_loudnorm:
-        stats = _measure_loudness(stage03)
-        run_loudnorm = not _silent_loudness(stats)
-    if run_loudnorm:
-        # Two passes: measure stage 03, then apply the measured values. The
-        # filter graph goes to a script file (the project's hard rule: never
-        # -af), so the executed declaration is the one on disk.
-        af_args = loudnorm_two_pass(
-            stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
+    want_loudnorm = has_audio and _enabled(plan, "loudnorm")
+    digest04 = ""
+    found = None
+    if cache is not None:
+        digest04 = cache.key_for(
+            "04_loudness",
+            {
+                "03_graph": digest03,
+                "loudness": (
+                    f"{target_i}|{target_tp}|{target_lra}" if want_loudnorm else ""
+                ),
+                "audio": str(has_audio),
+            },
+            {"encoder": encoder_fp, "ceiling": ""},
         )
-        graph04 = f"[0:a]{af_args[1]}[aout]"
-        script04 = write_script(graph04, work / "04_loudnorm.txt")
-        _record(script04)
-        args = [
-            "-i",
-            str(stage03),
-            "-filter_complex_script",
-            script04,
-            "-map",
-            "0:v:0",
-            "-map",
-            "[aout]",
-            "-c:v",
-            "copy",  # audio-only pass: the video stream is already final
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-ar",
-            "48000",
-            "-movflags",
-            "+faststart",
-            str(final),
-        ]
-        proc = ff.run_ff(args, loglevel="error")
-        if not proc.ok:
-            raise RenderFailure(f"stage 04 (loudnorm) failed: {proc.tail(12)}")
-        stages.append("04_loudnorm")
+        found = cache.hit("04_loudness", digest04)
+    if found is not None:
+        mode = str(
+            found["meta"].get("mode") or ("loudnorm" if want_loudnorm else "remux")
+        )
+        stats = dict(found["meta"].get("measured") or {})
+        final = Path(found["path"])
+        if mode == "loudnorm":
+            # The runtime gate reads the text that was executed, so a hit still
+            # has to leave the executed declaration on disk.
+            af_args = loudnorm_two_pass(
+                stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
+            )
+            script04 = write_script(
+                f"[0:a]{af_args[1]}[aout]", work / "04_loudnorm.txt"
+            )
+            _record(script04)
     else:
-        # No loudnorm finding: do not invent a normalization. Stream copy is
-        # allowed here because this stage does not cut.
-        args = ["-i", str(stage03), "-map", "0:v:0"]
-        if has_audio:
-            args += ["-map", "0:a:0"]
-        args += ["-c", "copy", "-movflags", "+faststart", str(final)]
-        proc = ff.run_ff(args, loglevel="error")
-        if not proc.ok:
-            raise RenderFailure(f"stage 04 (remux) failed: {proc.tail(12)}")
-        stages.append("04_remux")
+        mode = "loudnorm" if want_loudnorm else "remux"
+        if mode == "loudnorm":
+            stats = _measure_loudness(stage03_path)
+            if _silent_loudness(stats):
+                mode = "remux"
+        if mode == "loudnorm":
+            # Two passes: measure stage 03, then apply the measured values. The
+            # filter graph goes to a script file (the project's hard rule: never
+            # -af), so the executed declaration is the one on disk.
+            af_args = loudnorm_two_pass(
+                stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
+            )
+            graph04 = f"[0:a]{af_args[1]}[aout]"
+            script04 = write_script(graph04, work / "04_loudnorm.txt")
+            _record(script04)
+            args = [
+                "-i",
+                str(stage03_path),
+                "-filter_complex_script",
+                script04,
+                "-map",
+                "0:v:0",
+                "-map",
+                "[aout]",
+                "-c:v",
+                "copy",  # audio-only pass: the video stream is already final
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
+                "-movflags",
+                "+faststart",
+                str(final),
+            ]
+            proc = ff.run_ff(args, loglevel="error")
+            if not proc.ok:
+                raise RenderFailure(f"stage 04 (loudnorm) failed: {proc.tail(12)}")
+        else:
+            # No loudnorm finding: do not invent a normalization. Stream copy is
+            # allowed here because this stage does not cut.
+            args = ["-i", str(stage03_path), "-map", "0:v:0"]
+            if has_audio:
+                args += ["-map", "0:a:0"]
+            args += ["-c", "copy", "-movflags", "+faststart", str(final)]
+            proc = ff.run_ff(args, loglevel="error")
+            if not proc.ok:
+                raise RenderFailure(f"stage 04 (remux) failed: {proc.tail(12)}")
+        if cache is not None:
+            cache.miss(
+                "04_loudness", digest04, final, {"mode": mode, "measured": stats}
+            )
+    stages.append("04_loudnorm" if mode == "loudnorm" else "04_remux")
 
     if not final.exists():
         raise RenderFailure(f"stage 04 produced no output: {final}")
@@ -1854,7 +2157,7 @@ def render(
 
     frames = _frame_count(final)
     out_w, out_h = output_size(_aspect(plan), precision)
-    return {
+    result = {
         "path": str(final),
         "precision": precision,
         "size": [out_w, out_h],
@@ -1870,8 +2173,12 @@ def render(
         "stages": stages,
         "graph": graph,
         "script": script,
-        "stage03": str(stage03),
+        "stage03": str(stage03_path),
     }
+    if cache is not None:
+        _write_stage_cache_report(work, cache)
+        result["stage_cache"] = cache.report()
+    return result
 
 
 def _graph_with_crop(

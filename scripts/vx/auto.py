@@ -32,6 +32,7 @@ from . import (
     decide,
     deliverables,
     edl_plan,
+    estimate,
     gates,
     grammar,
     ingest,
@@ -51,13 +52,29 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+def _emit(log: Optional[Any], stage: str, status: str, detail: str = "") -> None:
+    """Write one boundary to the event log; a broken log never breaks a render."""
+    if log is None:
+        return
+    try:
+        log.emit(stage, f"auto.{stage}", status, detail=detail)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _notify(
     progress: Optional[Callable[[float, str], None]],
     percent: float,
     stage: str,
+    *,
+    log: Optional[Any] = None,
+    status: str = "done",
+    detail: str = "",
 ) -> None:
     """Call the observer, swallowing anything it raises: a broken observer must
-    never break a render."""
+    never break a render. The same boundary is written to the event log first, so
+    a crash during a stage still leaves that stage's ``start`` on disk."""
+    _emit(log, stage, status, detail)
     if progress is None:
         return
     try:
@@ -485,6 +502,13 @@ def _run_locked(
     montage: bool = False,
     fill: str = "fit",
 ) -> Dict[str, Any]:
+    from . import events as events_mod
+    from . import features as features_mod
+
+    log = events_mod.EventLog(workdir / "events.jsonl")
+    flags = features_mod.effective()
+    _emit(log, "run", "start", Path(args.out).name)
+
     assets = _discover(args)
     assets_by_id = {asset.asset_id: asset for asset in assets}
     source_sha = _source_hashes(assets)
@@ -506,7 +530,7 @@ def _run_locked(
         raise contract.VxError("payload senza asset_triage: triage non eseguito")
     selected = list(block.get("selected_assets") or [])
     rejected = list(block.get("rejected_assets") or [])
-    _notify(progress, 5.0, "triage")
+    _notify(progress, 5.0, "triage", log=log)
 
     fps = _fps(args, selected, assets_by_id)
     timeline_est = _timeline_est(selected, assets_by_id, rejected)
@@ -523,7 +547,7 @@ def _run_locked(
     _log(f"[auto] staging {len(sources_map)} sorgenti a {fps:g} fps")
     staged = _stage(sources_map, specs, workdir / "stage_00")
     source_refs, media_info_map = _source_refs(staged)
-    _notify(progress, 20.0, "ingest")
+    _notify(progress, 20.0, "ingest", log=log)
 
     plan = contract.payload_to_edl_plan(payload, source_refs, media_info_map, fps=fps)
     errors = plan.validate()
@@ -548,7 +572,7 @@ def _run_locked(
     captions_srt: Optional[str] = None
     bridge_gains_applied = False
     if not bool(getattr(args, "no_bridge", False)):
-        _notify(progress, 22.0, "bridge")
+        _notify(progress, 22.0, "bridge", log=log, status="start")
         subs_enabled = not bool(getattr(args, "no_subs", False))
         plan, bridge_report = _bridge_plan(
             plan, captions=subs_enabled, media=media_by_source
@@ -602,6 +626,12 @@ def _run_locked(
             f"{len(bridge_report.captions)} caption, "
             f"{len(bridge_report.not_applied)} non applicati"
         )
+    _emit(
+        log,
+        "bridge",
+        "done" if bridge_summary["enabled"] else "skip",
+        "eseguito" if bridge_summary["enabled"] else "--no-bridge",
+    )
 
     (workdir / "plan.json").write_text(
         json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
@@ -625,8 +655,17 @@ def _run_locked(
         key: str(getattr(ref, "path", "") or "") for key, ref in plan.sources.items()
     }
     _log(f"[auto] render {plan.duration_sec:.3f}s -> {out}")
-    _notify(progress, 25.0, "render")
+    render_estimate = estimate.begin(
+        plan,
+        workdir,
+        crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
+        preset=str(
+            getattr(args, "preset", None) or settings.get("render.preset", "medium")
+        ),
+    )
+    _notify(progress, 25.0, "render", log=log, status="start")
     ceiling_dbtp = qc.true_peak_ceiling(TARGET_TP) if bridge_gains_applied else None
+    render_cache: Dict[str, Any] = {}
     render.render_edl(
         plan,
         staged_paths,
@@ -643,11 +682,13 @@ def _run_locked(
         reframe=reframe_map,
         restore=restore_map,
         ceiling_dbtp=ceiling_dbtp,
+        cache_report=render_cache,
     )
-    _notify(progress, 92.0, "render_done")
+    estimate.finish(render_estimate)
+    _notify(progress, 92.0, "render_done", log=log, detail="master scritto")
 
     qc_result = qc.audit_master(out, target_lufs=TARGET_LUFS, target_tp=TARGET_TP)
-    _notify(progress, 96.0, "qc")
+    _notify(progress, 96.0, "qc", log=log)
 
     produced = deliverables.produce(
         plan,
@@ -656,7 +697,7 @@ def _run_locked(
         srt_source=Path(captions_srt) if captions_srt else None,
         workdir=workdir,
     )
-    _notify(progress, 100.0, "deliverables")
+    _notify(progress, 100.0, "deliverables", log=log)
 
     _assert_sources_unchanged(assets, source_sha)
 
@@ -685,6 +726,7 @@ def _run_locked(
         },
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "bridge": bridge_summary,
+        "render_estimate": render_estimate,
         "audio": {
             "ceiling_dbtp": ceiling_dbtp,
             "limiter": "alimiter" if ceiling_dbtp is not None else None,
@@ -717,12 +759,18 @@ def _run_locked(
         "deliverables": produced,
         "master": str(out.resolve()),
         "workdir": str(workdir.resolve()),
+        "events_path": str(log.path.resolve()),
+        "features": flags,
         "source_sha": source_sha,
         "sources_unchanged": True,
     }
+    if render_cache:
+        report["stage_cache"] = render_cache
+    _emit(log, "run", "done", f"{len(produced)} consegne")
     (workdir / "auto_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    log.close()
     return report
 
 
@@ -774,5 +822,12 @@ def run(
             montage=montage_mode,
             fill=fill_mode,
         )
+    except Exception as exc:  # noqa: BLE001 - re-raised unchanged, only logged
+        from . import events as events_mod
+
+        log = events_mod.EventLog(workdir / "events.jsonl")
+        _emit(log, "run", "fail", f"{type(exc).__name__}: {exc}")
+        log.close()
+        raise
     finally:
         lock.release(beat)
