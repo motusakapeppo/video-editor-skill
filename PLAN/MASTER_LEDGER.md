@@ -109,10 +109,22 @@ provvisorie (D010).
 | F2-T09 | W7 chiusura | suite golden per ogni effetto, documentazione, `SKILL.md` | ogni effetto ha un frame su disco; `SKILL.md` sotto 250 righe; suite verde | DONE `f028e1c` - 15 effetti, 34 frame, MAD 0.000 |
 
 ## F3 — Motion Studio (Chromium)
-Playwright headless, timeline sospesa, cattura deterministica, alpha, 40+
-template, authoring al volo con linter, cache, fallback Pillow.
-Accettazione: golden frame in tre istanti per template; budget 5 s 1080x1920;
-test che nessuna richiesta di rete parte; parametri invalidi respinti.
+
+Motore: Playwright guida il Chrome di sistema (`channel="chrome"`), nessun browser
+da scaricare, nessuna rete. Accettazione di fase: golden frame in tre istanti per
+template, budget dichiarato rispettato, zero richieste esterne, parametri invalidi
+respinti.
+
+| ID | Ondata | Contenuto | Accettazione binaria | Stato |
+|---|---|---|---|---|
+| F3-T01 | W0 fetta verticale | un solo template con animazione, cattura deterministica a tempo virtuale, PNG con alfa, conversione in video | due catture danno frame identici byte per byte; nessuna richiesta esterna; il tempo misurato sta nel budget dichiarato | WIP |
+| F3-T02 | W1 motore di cattura | viewport, fps, scala, seek virtuale, timeout, pulizia del contesto | un template che non risponde viene terminato al timeout con errore dichiarato, nessun processo orfano | TODO |
+| F3-T03 | W2 template | registro con 40+ template, parametri dichiarati e valori ammessi | ogni template dichiara parametri e rifiuta un valore fuori dominio con il nome del parametro | TODO |
+| F3-T04 | W3 linter di authoring | controllo offline di HTML/JS: nessuna rete, nessun API vietata, dipendenze locali | un template con un tag remoto viene respinto dal linter prima della cattura | TODO |
+| F3-T05 | W4 cache | chiave template + parametri + fps + risoluzione, riuso dei frame gia resi | secondo giro identico: zero catture; un parametro cambiato: solo quello | TODO |
+| F3-T06 | W5 ripiego Pillow | senza Chromium i template statici rendono comunque, e lo dichiarano | Chromium spento = ripiego dichiarato, stesso tempo di esecuzione misurato | TODO |
+| F3-T07 | W6 aggancio EDL 3 | backend chromium acceso da `chromium_available`, overlay con alfa | un documento con effetto che qualifica Chromium renderizza; prima era BACKEND_UNAVAILABLE | TODO |
+| F3-T08 | W7 chiusura | golden frame per ogni template, docs, SKILL.md | un frame per template su disco, SKILL.md sotto 250 righe, suite verde | TODO |
 
 ## F4 — Libreria effetti e transizioni
 60+ voci con innesco, parametri, tetto, implementazione, fallback, prova visiva;
