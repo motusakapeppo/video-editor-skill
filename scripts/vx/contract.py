@@ -81,6 +81,14 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     # A3: the per-clip gain is peak-aware. A quiet clip boosted to the loudness
     # target must not push its own true peak past this dialogue ceiling; when
     # the peak is what limits the gain, the missed loudness is declared in LU.
+    # FX: typographic classes are measured on the font binary, not guessed from
+    # the file name. Advance ratio = advance/H per em; stem ratio = stem/cap.
+    "font_advance_condensed_max": 0.45,
+    "font_advance_extended_min": 0.62,
+    "font_stem_light_max": 0.09,
+    "font_stem_regular_max": 0.13,
+    "font_stem_medium_max": 0.145,
+    "font_stem_bold_max": 0.21,
     "bridge_gain_tp_ceiling_dbtp": -1.5,
     # Delivery limiter headroom: alimiter's own tolerance at 4x oversampling
     # plus the measured AAC overshoot after the limiter. Their sum is the margin
