@@ -34,7 +34,8 @@ LEDGER = ROOT / "PLAN" / "MASTER_LEDGER.md"
 FIXTURES = ROOT / "tests" / "fixtures"
 SAMPLE = FIXTURES / "corpus_annotations.sample.json"
 REAL = FIXTURES / "corpus_annotations.json"
-MODULE = Path(os.environ.get("VX_T09_MODULE", str(importer.DEFAULT_MODULE)))
+_env_module = os.environ.get("VX_T09_MODULE")
+MODULE = Path(_env_module) if _env_module else importer.DEFAULT_MODULE
 
 T09_ROW = re.compile(r"^\|\s*F0-T09\s*\|")
 CLOSED_ON_EXAM = re.compile(
@@ -246,7 +247,7 @@ def check_sample_recomputation() -> None:
 
 def check_shipped_module() -> None:
     print("(e) shipped module is empty")
-    if not MODULE.is_file():
+    if MODULE is None or not MODULE.is_file():
         skip("shipped module", f"{MODULE} not found")
         return
     identifiers = importer.list_clip_ids(MODULE)

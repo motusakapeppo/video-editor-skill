@@ -41,9 +41,9 @@ except ImportError:
     openpyxl = None
 
 FIXTURES = ROOT / "tests" / "fixtures"
-DEFAULT_MODULE = Path(
-    os.environ.get("VX_T09_MODULE", r"D:\Downloads\T09_modulo_annotazioni.xlsx")
-)
+_ENV_MODULE = os.environ.get("VX_T09_MODULE")
+_TEMPLATE = FIXTURES / "T09_annotation_template.xlsx"
+DEFAULT_MODULE = Path(_ENV_MODULE) if _ENV_MODULE else (_TEMPLATE if _TEMPLATE.is_file() else None)
 DEFAULT_OUTPUT = FIXTURES / "corpus_annotations.json"
 
 TIME_RE = re.compile(r"^[0-9]{2}:[0-9]{2}$")
@@ -539,12 +539,16 @@ def write_corpus(data: Dict[str, Any], out_path: Path) -> Path:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Import the T09 annotation module")
-    parser.add_argument("module", nargs="?", default=str(DEFAULT_MODULE))
+    parser.add_argument(
+        "module", nargs="?", default=str(DEFAULT_MODULE) if DEFAULT_MODULE else None
+    )
     parser.add_argument("--out", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--sample", action="store_true")
     parser.add_argument("--allow-empty", action="store_true")
     parser.add_argument("--dump-levels", action="store_true")
     args = parser.parse_args(argv)
+    if args.module is None and not args.sample:
+        parser.error("serve il percorso del modulo T09 (argomento o VX_T09_MODULE)")
     if args.dump_levels:
         for axis, labels in level_table().items():
             print(axis, labels)
