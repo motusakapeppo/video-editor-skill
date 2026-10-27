@@ -1,0 +1,4 @@
+[0:v]setpts=PTS-STARTPTS,scale=320:568:force_original_aspect_ratio=decrease:flags=bicubic,pad=320:568:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p[c0];
+[1:v]setpts=PTS-STARTPTS,scale=320:568:force_original_aspect_ratio=decrease:flags=bicubic,pad=320:568:(ow-iw)/2:(oh-ih)/2,setsar=1,format=rgba[c1];
+[c1]setpts=PTS+0.000000/TB[ov0];
+[c0][ov0]overlay=enable='between(t,0.000000,2.000000)':eof_action=pass:format=auto[base0]

@@ -318,3 +318,49 @@ peggiore, zero dipendenze da Playwright nel modulo (verificato importando il mod
 in un interprete pulito). Il tempo e misurato con lo stesso campo del percorso
 principale, cosi i due numeri si possono confrontare.
 
+---
+
+## D015 - Il generatore e una terza specie di sorgente, e l'alfa si paga con `format=rgba` (2026-10-27)
+
+Un effetto che qualifica Chromium non poteva diventare un effetto ffmpeg: il
+motore non e un filtro, e un rasterizzatore di pagine. La conseguenza onesta e
+che il documento deve portare i pixel da qualche parte. La clip acquisisce
+`generator: {template, params, engine, alpha}`, che non e un effetto ma una
+**terza specie di sorgente**, esclusiva con `source` e con `sequence`: un effetto
+trasforma una sorgente, e le sorgenti non si fondono fra livelli di regolazione.
+
+Quattro conseguenze, tutte pagate con codice e non con prosa.
+
+1. **Il compilatore resta puro.** `compile_timeline` non avvia browser e non scrive
+   pixel. La cattura avviene in `render()`, dove gia viveva `_render_nested`, e
+   arriva al compilatore come `generator_paths`, esattamente come `nested_paths`.
+   Il compilatore non si fida del percorso: rilegge `capture.json` e pretende lo
+   stesso template, lo stesso digest del contenuto, gli stessi parametri risolti,
+   fps, dimensione e numero di frame. E piu severo di un `exists()`.
+2. **L'effetto qualificante diventa un marcatore.** Su una clip generatrice
+   l'effetto che richiede Chromium non viene applicato due volte: consuma la
+   dichiarazione e riporta `realized_by: generator`. Se porta parametri o
+   keyframe, il documento e rifiutato (`GENERATOR_EFFECT`): un marcatore non e un
+   effetto.
+3. **L'input e una sequenza, senza `-ss`.** Il generatore entra come
+   `-framerate <fps> -loop 1 -t <span> -i <dir>/frame_%05d.png` all'ordinale della
+   clip, cosi l'etichetta `[{i}:v]` esistente continua a risolvere. Non avendo
+   `-ss`, la clip deve partire dal frame zero del template: `src_in` diverso da 0
+   e rifiutato, lo span deve coincidere con la durata del template entro mezzo
+   frame, e speed/reverse/freeze sono rifiutati perche cambierebbero il clock del
+   template senza cambiare i frame catturati.
+4. **L'alfa si paga.** Ogni catena finiva in `format=yuv420p`: l'alfa veniva
+   distrutta prima dell'overlay e l'overlay sarebbe stato invisibile. Una clip
+   generatrice con `alpha: true` chiude la catena in `format=rgba`, e l'alfa su
+   `layer 0` e rifiutato perche non c'e nulla sotto su cui comporre.
+
+`chromium_available` non si gira a mano: `render()` sonda il motore e lo deriva,
+riportando `settings_source: probe` o `declared`. Il compilatore continua a
+ricevere una decisione esplicita.
+
+Le misure, sul documento di prova a 320x568 con fps 12: 33.437 byte di output,
+24 frame catturati, MAD 19,424 nella regione in basso a sinistra dove il template
+disegna e 0,000 in alto dove non disegna; 12 rifiuti, ognuno con il proprio codice;
+`compile_timeline` non lancia nessun processo (provato con `subprocess.run` e
+`Popen` sostituiti da una funzione che solleva).
+

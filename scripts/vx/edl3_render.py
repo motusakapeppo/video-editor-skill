@@ -52,6 +52,7 @@ script, runs ffmpeg with ``-filter_complex_script`` and returns the report.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -175,6 +176,13 @@ HARD_CODES = frozenset(
         "FREEZE_SHAPE",
         "COMPOSE_SHAPE",
         "AUDIO_POLICY",
+        "GENERATOR_SHAPE",
+        "GENERATOR_TEMPLATE",
+        "GENERATOR_PARAMS",
+        "GENERATOR_SPAN",
+        "GENERATOR_TIME_FX",
+        "GENERATOR_ALPHA_LAYER",
+        "GENERATOR_SOURCE_CONFLICT",
     }
 )
 
@@ -201,6 +209,9 @@ REFUSAL_CODES = frozenset(
         "FREEZE_SHAPE",
         "COMPOSE_SHAPE",
         "COMPOSE_FRAGMENT",
+        "CHROMIUM_NEEDS_GENERATOR",
+        "GENERATOR_EFFECT",
+        "GENERATOR_CAPTURE",
     }
 )
 
@@ -623,7 +634,10 @@ def _effective_effects(
         for position, effect in enumerate(layer.effects):
             merged.append((f"adjustments[{index}].effects[{position}]", effect))
     for position, effect in enumerate(clip.effects):
-        merged.append((f"{where}.effects[{position}]", effect))
+        scope = f"{where}.effects[{position}]"
+        if routed.get(scope, {}).get("realized_by") == "generator":
+            continue
+        merged.append((scope, effect))
 
     by_kind: Dict[str, List[Any]] = {}
     chosen: Dict[str, str] = {}
@@ -810,6 +824,17 @@ def _clip_plan(
     fps: int,
 ) -> Dict[str, Any]:
     duration = clip.timeline_duration
+    generator_alpha = bool(
+        isinstance(clip.generator, Mapping) and clip.generator.get("alpha") is True
+    )
+    if generator_alpha and clip.layer < 1:
+        raise CompileError(
+            "GENERATOR_ALPHA_LAYER",
+            "an alpha generator is composited over the layer below, so it needs "
+            f"layer >= 1; clip {clip.id!r} sits on layer {clip.layer}",
+            f"clips[{index}]",
+        )
+    final_format = "rgba" if generator_alpha else "yuv420p"
     transform = effects.get("transform")
     scale = 1.0
     opacity_track: Optional[KeyframeTrack] = None
@@ -876,7 +901,7 @@ def _clip_plan(
     chains: List[str] = []
     if transform is None:
         clip_blocks = blocks + [
-            {"kind": "filters", "filters": canvas + ["format=yuv420p"] + fades}
+            {"kind": "filters", "filters": canvas + [f"format={final_format}"] + fades}
         ]
         chains = _render_blocks(index, f"[{index}:v]", clip_blocks, f"c{index}")
     else:
@@ -888,7 +913,7 @@ def _clip_plan(
             f"[bg{index}][fg{index}]overlay="
             "x=(W-w)/2:y=(H-h)/2:format=auto:eof_action=pass:shortest=1"
         )
-        composited = [centred, "format=yuv420p"]
+        composited = [centred, f"format={final_format}"]
         composited.extend(fades)
         chains.append(",".join(composited) + f"[c{index}]")
 
@@ -928,6 +953,15 @@ def _clip_plan(
         "compose": compose_ops,
         "compose_op": compose_op,
         "compose_fragment": compose_fragment,
+        "generator": (
+            None
+            if not isinstance(clip.generator, Mapping)
+            else {
+                "template": clip.generator.get("template"),
+                "engine": clip.generator.get("engine"),
+                "alpha": generator_alpha,
+            }
+        ),
         "order": list(CLIP_ORDER),
         "chains": chains,
     }
@@ -1145,13 +1179,24 @@ def _refuse_unsupported(timeline: Timeline3, audio: str) -> None:
 def _route_effects(
     timeline: Timeline3, settings: Mapping[str, Any]
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]:
-    scopes: List[Tuple[str, Any]] = []
+    """Route every effect, and decide what a chromium qualifier is realized by.
+
+    A qualifying node is a *marker*: the property it names (layout, reflow, a
+    backdrop filter, an animated blend) is realized by the captured template of
+    the clip it sits on, not by a filter in this graph. So the rule is accepted
+    only when that clip carries a generator, and the marker must be empty --
+    parameters or keyframes on it would be silently discarded, and this compiler
+    never discards a declaration. With the engine available and no generator the
+    document is refused with CHROMIUM_NEEDS_GENERATOR; with the engine absent it
+    stays BACKEND_UNAVAILABLE.
+    """
+    scopes: List[Tuple[str, Any, Any]] = []
     for index, layer in enumerate(timeline.adjustments):
         for position, effect in enumerate(layer.effects):
-            scopes.append((f"adjustments[{index}].effects[{position}]", effect))
+            scopes.append((f"adjustments[{index}].effects[{position}]", effect, None))
     for index, clip in enumerate(timeline.clips):
         for position, effect in enumerate(clip.effects):
-            scopes.append((f"clips[{index}].effects[{position}]", effect))
+            scopes.append((f"clips[{index}].effects[{position}]", effect, clip))
 
     table: List[Dict[str, Any]] = []
     routed: Dict[str, Dict[str, Any]] = {}
@@ -1160,24 +1205,47 @@ def _route_effects(
         "qualified": 0,
         "redirected": 0,
         "refused": 0,
+        "realized_by_generator": 0,
     }
-    for where, effect in scopes:
+    for where, effect, clip in scopes:
         entry = select_backend(effect, settings=settings)
+        generator = None if clip is None else clip.generator
         if entry["rule"] == RULE_QUALIFIED:
+            if generator is None:
+                raise CompileError(
+                    "CHROMIUM_NEEDS_GENERATOR",
+                    f"{effect.kind!r} declares chromium with properties "
+                    f"{list(_declared_properties(effect))} and the engine is "
+                    "available, but this clip declares no generator: the property "
+                    "is realized by a captured template, and there is none",
+                    where,
+                )
+            if effect.params or effect.keyframes:
+                raise CompileError(
+                    "GENERATOR_EFFECT",
+                    f"{effect.kind!r} is a marker on a generator clip and must "
+                    "carry no params and no keyframes: the picture comes from the "
+                    f"captured template, so {effect.params or 'the keyframes'} "
+                    "would be discarded",
+                    where,
+                )
+            entry["realized_by"] = "generator"
             summary["qualified"] += 1
+            summary["realized_by_generator"] += 1
         elif entry["rule"] == RULE_REDIRECTED:
             summary["redirected"] += 1
         elif entry["rule"] == RULE_REFUSED:
             summary["refused"] += 1
         routed[where] = entry
-        table.append(
-            {
-                "effect": effect.kind,
-                "chosen": entry["chosen"],
-                "rule": entry["rule"],
-                "where": where,
-            }
-        )
+        row: Dict[str, Any] = {
+            "effect": effect.kind,
+            "chosen": entry["chosen"],
+            "rule": entry["rule"],
+            "where": where,
+        }
+        if "realized_by" in entry:
+            row["realized_by"] = entry["realized_by"]
+        table.append(row)
         if entry["rule"] == RULE_REFUSED:
             raise CompileError(
                 "BACKEND_REFUSED",
@@ -1186,13 +1254,13 @@ def _route_effects(
                 f"{sorted(CHROMIUM_QUALIFYING)}",
                 where,
             )
-        if entry["rule"] in {RULE_UNAVAILABLE, RULE_QUALIFIED}:
+        if entry["rule"] == RULE_UNAVAILABLE:
             raise CompileError(
                 "BACKEND_UNAVAILABLE",
                 f"{effect.kind!r} declares chromium with properties "
                 f"{list(_declared_properties(effect))}: the engine qualifies but "
-                f"is not built (settings.chromium_available="
-                f"{summary['available']}, F3); it is refused, never rendered with "
+                f"is not available (settings.chromium_available="
+                f"{summary['available']}); it is refused, never rendered with "
                 "the wrong mechanism",
                 where,
             )
@@ -1235,19 +1303,133 @@ def _refuse_layer_overlap(overlays: List[Tuple[int, Any]]) -> None:
                 )
 
 
+def _generator_table(
+    timeline: Timeline3, generator_paths: Optional[Mapping[str, Any]]
+) -> Dict[int, Dict[str, Any]]:
+    """Prove every generator clip against its ``capture.json``. Pure: reads only.
+
+    The proof is content-addressed and stricter than ``exists()``: the capture
+    must name the same template, carry the same template digest, resolve to the
+    same parameters, and match the timeline's fps, size and frame count. A
+    capture taken from an older template, at another size or for another clock is
+    not the picture the document declares, so it is refused instead of rendered.
+    """
+    from . import motion, motion_cache  # noqa: PLC0415 - compile stays light
+
+    table: Dict[int, Dict[str, Any]] = {}
+    for index, clip in enumerate(timeline.clips):
+        if clip.generator is None:
+            continue
+        where = f"clips[{index}].generator"
+        declaration = clip.generator
+        if not isinstance(declaration, Mapping):
+            raise CompileError(
+                "GENERATOR_SHAPE",
+                f"generator must be an object, got {type(declaration).__name__}",
+                where,
+            )
+        entry = None if generator_paths is None else generator_paths.get(clip.id)
+        if entry is None:
+            raise CompileError(
+                "GENERATOR_CAPTURE",
+                f"generator clip {clip.id!r} has no entry in generator_paths: "
+                "compile_timeline is pure and never launches an engine, so "
+                "render() materialises the frames first",
+                where,
+            )
+        directory = Path(entry)
+        capture_path = directory / "capture.json"
+        try:
+            capture = json.loads(capture_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise CompileError(
+                "GENERATOR_CAPTURE",
+                f"{capture_path.name} is missing or unreadable: {exc}",
+                where,
+            ) from exc
+        if not isinstance(capture, Mapping):
+            raise CompileError(
+                "GENERATOR_CAPTURE", "capture.json must be an object", where
+            )
+        try:
+            meta = motion.load_template(declaration.get("template"))
+        except Exception as exc:  # noqa: BLE001 - declared, with a stable code
+            raise CompileError(
+                "GENERATOR_TEMPLATE",
+                f"template {declaration.get('template')!r} cannot be loaded: {exc}",
+                where,
+            ) from exc
+        try:
+            resolved = motion.validate_params(meta, declaration.get("params") or {})
+        except Exception as exc:  # noqa: BLE001 - declared, with a stable code
+            raise CompileError(
+                "GENERATOR_PARAMS",
+                f"params do not resolve for {meta['name']!r}: {exc}",
+                where,
+            ) from exc
+        digest = motion_cache.template_digest(meta["dir"])
+        expected_frames = max(
+            1, int(round(float(meta["duration"]) * max(0, timeline.fps)))
+        )
+        mismatches: List[str] = []
+        if capture.get("template") != meta["name"]:
+            mismatches.append(
+                f"template {capture.get('template')!r} != {meta['name']!r}"
+            )
+        if capture.get("template_digest") != digest:
+            mismatches.append("template digest differs from the template's content")
+        if capture.get("params") != resolved:
+            mismatches.append(f"params {capture.get('params')!r} != {resolved!r}")
+        try:
+            captured_fps = float(capture.get("fps"))
+        except (TypeError, ValueError):
+            captured_fps = -1.0
+        if captured_fps != float(timeline.fps):
+            mismatches.append(f"fps {capture.get('fps')!r} != {timeline.fps}")
+        if list(capture.get("size") or []) != [timeline.width, timeline.height]:
+            mismatches.append(
+                f"size {capture.get('size')!r} != {[timeline.width, timeline.height]}"
+            )
+        if capture.get("frame_count") != expected_frames:
+            mismatches.append(
+                f"frame count {capture.get('frame_count')!r} != {expected_frames} "
+                f"for {meta['duration']}s at {timeline.fps} fps"
+            )
+        if not (directory / "frame_00000.png").is_file():
+            mismatches.append("frame_00000.png is absent from the capture directory")
+        if mismatches:
+            raise CompileError(
+                "GENERATOR_CAPTURE",
+                "the capture does not match the declaration: " + "; ".join(mismatches),
+                where,
+            )
+        table[index] = {
+            "directory": str(directory),
+            "capture": capture,
+            "frames": expected_frames,
+            "template": meta["name"],
+            "duration": float(meta["duration"]),
+        }
+    return table
+
+
 def compile_timeline(
     timeline: Timeline3,
     *,
     audio: str = "refuse",
     settings: Optional[Mapping[str, Any]] = None,
     nested_paths: Optional[Mapping[str, str]] = None,
+    generator_paths: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Validate, route every effect, and return a compile plan.
 
     Nested sequences are resolved by :mod:`vx.edl3_nested` and *rendered once*
     by :func:`render`; the resulting ``{virtual_source: path}`` map arrives as
-    ``nested_paths``. A document with nesting cannot be compiled without it,
-    because a compile never runs ffmpeg.
+    ``nested_paths``. Generator clips arrive the same way: ``generator_paths``
+    maps a clip id to the directory :func:`_materialize_generators` captured, and
+    each directory's ``capture.json`` is checked against the declaration. A
+    document with either cannot be compiled without that evidence, because a
+    compile never runs ffmpeg and never launches a browser.
     """
     if timeline.version != EDL3_VERSION:
         raise CompileError(
@@ -1287,6 +1469,8 @@ def compile_timeline(
             )
         sources[clip_index] = str(path)
 
+    generators = _generator_table(timeline, generator_paths)
+
     table, routed, chromium = _route_effects(timeline, resolved)
     _refuse_unsupported(timeline, audio)
 
@@ -1306,7 +1490,7 @@ def compile_timeline(
     for clip_index, clip in enumerate(timeline.clips):
         clip_where = f"clips[{clip_index}]"
         source = sources.get(clip_index, clip.source)
-        if not Path(source).exists():
+        if clip.generator is None and not Path(source).exists():
             raise CompileError(
                 "MISSING_SOURCE",
                 f"source file not found: {source}",
@@ -1427,6 +1611,23 @@ def compile_timeline(
 
     input_args: List[str] = []
     for clip_index, clip in enumerate(timeline.clips):
+        if clip.generator is not None:
+            # The capture directory is a numbered image sequence: same input
+            # ordinal as the clip index, no -ss, and the timeline's own clock.
+            entry = generators[clip_index]
+            input_args.extend(
+                [
+                    "-framerate",
+                    _num(float(timeline.fps)),
+                    "-loop",
+                    "1",
+                    "-t",
+                    _num(clip.timeline_duration),
+                    "-i",
+                    str(Path(entry["directory"]) / "frame_%05d.png"),
+                ]
+            )
+            continue
         input_args.extend(
             [
                 "-ss",
@@ -1481,6 +1682,19 @@ def compile_timeline(
         ],
         "backends": table,
         "chromium": chromium,
+        "generators": [
+            {
+                "clip": timeline.clips[index].id,
+                "index": index,
+                "template": entry["capture"].get("template"),
+                "engine": entry["capture"].get("engine"),
+                "fallback": bool(entry["capture"].get("fallback")),
+                "degraded": list(entry["capture"].get("degraded") or []),
+                "frames": entry["capture"].get("frame_count"),
+                "directory": entry["directory"],
+            }
+            for index, entry in sorted(generators.items())
+        ],
         "nested_sequences": list(nesting["order"]),
         "warnings": warnings,
     }
@@ -1594,6 +1808,82 @@ def _render_nested(
     return paths
 
 
+def _materialize_generators(
+    timeline: Timeline3,
+    script_dir: Path,
+    probe: Mapping[str, Any],
+) -> Dict[str, str]:
+    """Capture each generator clip once and write the record compile then verifies.
+
+    `compile_timeline` stays pure, so the pixels are produced here, before it runs,
+    the same way `_render_nested` produces inner sequences. The engine is chosen by
+    `motion_fallback.resolve_engine` from the declared engine and the real probe;
+    when it answers `unavailable` the document is refused with BACKEND_UNAVAILABLE
+    rather than rendered with a raster that cannot honour the effect.
+    """
+    from . import motion, motion_cache, motion_fallback  # noqa: PLC0415 - render only
+
+    clips = [clip for clip in timeline.clips if clip.generator is not None]
+    if not clips:
+        return {}
+    required: set = set()
+    for clip in clips:
+        for effect in clip.effects or ():
+            required.update(getattr(effect, "properties", ()) or ())
+    for layer in timeline.adjustments:
+        for effect in layer.effects or ():
+            required.update(getattr(effect, "properties", ()) or ())
+    root = script_dir / "generators"
+    root.mkdir(parents=True, exist_ok=True)
+    paths: Dict[str, str] = {}
+    for index, clip in enumerate(timeline.clips):
+        if clip.generator is None:
+            continue
+        declaration = clip.generator
+        where = f"clips[{index}].generator"
+        meta = motion.load_template(declaration.get("template"))
+        resolved = motion.validate_params(meta, declaration.get("params") or {})
+        decision = motion_fallback.resolve_engine(
+            declaration.get("engine") or "auto", probe, required
+        )
+        if decision["engine"] == "unavailable":
+            raise CompileError(
+                "BACKEND_UNAVAILABLE",
+                f"generator clip {clip.id!r} requires {sorted(required)} and "
+                f"{decision['reason']}",
+                where,
+            )
+        out_dir = root / str(clip.id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if decision["engine"] == "pillow":
+            capture = motion_fallback.capture
+        else:
+            capture = motion.capture
+        result = capture(
+            meta["dir"],
+            resolved,
+            out_dir,
+            fps=timeline.fps,
+            size=(timeline.width, timeline.height),
+        )
+        record = {
+            "template": result["template"],
+            "template_digest": motion_cache.template_digest(meta["dir"]),
+            "params": resolved,
+            "fps": result["fps"],
+            "size": [int(result["size"][0]), int(result["size"][1])],
+            "frame_count": result["frame_count"],
+            "engine": result["engine"],
+            "engine_version": result.get("engine_version", ""),
+        }
+        (out_dir / "capture.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        paths[str(clip.id)] = str(out_dir)
+    return paths
+
+
 def render(
     timeline: Timeline3,
     output: Any,
@@ -1608,9 +1898,22 @@ def render(
     destination.parent.mkdir(parents=True, exist_ok=True)
     script_dir = Path(workdir) if workdir is not None else destination.parent
     script_dir.mkdir(parents=True, exist_ok=True)
+    from . import motion  # noqa: PLC0415 - render only
+
+    probe = motion.available()
+    if settings is None:
+        settings = {"chromium_available": bool(probe.get("available"))}
+        settings_source = "probe"
+    else:
+        settings_source = "declared"
     nested = _render_nested(timeline, script_dir, timeout, audio, settings)
+    generators = _materialize_generators(timeline, script_dir, probe)
     plan = compile_timeline(
-        timeline, audio=audio, settings=settings, nested_paths=nested
+        timeline,
+        audio=audio,
+        settings=settings,
+        nested_paths=nested,
+        generator_paths=generators,
     )
     proc, script_path = _encode(plan, destination, script_dir, timeout)
 
@@ -1633,6 +1936,9 @@ def render(
         "chromium": plan["chromium"],
         "nested_sequences": plan["nested_sequences"],
         "nested_renders": len(nested),
+        "generators": plan["generators"],
+        "generator_renders": len(generators),
+        "settings_source": settings_source,
         "warnings": plan["warnings"],
         "command": proc.args,
         "stderr_tail": proc.tail(5),

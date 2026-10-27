@@ -376,9 +376,9 @@ def run_checks(work: Path, dark: Path, white: Path, speech: Path, bed: Path) -> 
         compile_code(unavailable_doc),
     )
     check(
-        "(a) the same node with the flag flipped still refuses (engine unbuilt)",
+        "(a) with the engine available but no generated layer, it names what it needs",
         compile_code(unavailable_doc, settings={"chromium_available": True})
-        == "BACKEND_UNAVAILABLE",
+        == "CHROMIUM_NEEDS_GENERATOR",
         compile_code(unavailable_doc, settings={"chromium_available": True}),
     )
     check(

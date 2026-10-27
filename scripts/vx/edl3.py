@@ -68,6 +68,11 @@ MAX_NESTING_DEPTH = 2
 
 INTERPOLATIONS = frozenset({"linear", "hold", "bezier"})
 TRANSITION_KINDS = frozenset({"fade_in", "fade_out", "crossfade"})
+#: Generators: the third source kind. ``generator`` names a Motion Studio
+#: template plus the parameters that instantiate it; the frames are captured
+#: once (Chromium, or the Pillow raster fallback) and consumed as an input.
+GENERATOR_ENGINES = frozenset({"chromium", "pillow", "auto"})
+GENERATOR_KEYS = frozenset({"template", "params", "engine", "alpha"})
 
 #: Audio time policies a speed ramp may declare. The vocabulary is the planning
 #: module's own (:class:`vx.edl3_time.AudioPolicy`), not a copy of it.
@@ -751,12 +756,27 @@ def _compose_value(raw: Any) -> Optional[Dict[str, Any]]:
     return dict(raw)
 
 
+def _generator_value(raw: Any) -> Any:
+    """The raw generator declaration, kept as given so ``validate`` can name it.
+
+    Coercing here would hide the shape problem behind a later, vaguer error, so a
+    non-object is carried through untouched and ``GENERATOR_SHAPE`` is raised by
+    ``validate()`` with the offending value in the detail.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        return raw
+    return dict(raw)
+
+
 @dataclass
 class Clip3:
     """One segment on the timeline.
 
-    Exactly one of ``source`` (a file) or ``sequence`` (a
-    :class:`NestedSequence` id) is meaningful. ``dst_in``/``dst_out`` are the
+    Exactly one of ``source`` (a file), ``sequence`` (a
+    :class:`NestedSequence` id) or ``generator`` (a captured Motion Studio
+    template) is meaningful. ``dst_in``/``dst_out`` are the
     placement on the timeline; when omitted the clip is concatenated after the
     previous one, which is what the slice renderer has always done.
 
@@ -788,6 +808,9 @@ class Clip3:
     #: Declared audio time policy for the ramp; ``None`` means the compiler's
     #: default (``segments``), reported as a default rather than as a choice.
     audio_policy: Optional[str] = None
+    #: ``{"template", "params", "engine", "alpha"}``: a captured Motion Studio
+    #: template as the clip's picture, instead of ``source`` or ``sequence``.
+    generator: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         self.id = str(self.id)
@@ -813,6 +836,7 @@ class Clip3:
         self.audio_policy = (
             None if self.audio_policy is None else str(self.audio_policy)
         )
+        self.generator = _generator_value(self.generator)
 
     @property
     def duration(self) -> float:
@@ -853,6 +877,11 @@ class Clip3:
             "freeze": dict(self.freeze) if self.freeze is not None else None,
             "compose": dict(self.compose) if self.compose is not None else None,
             "audio_policy": self.audio_policy,
+            "generator": (
+                dict(self.generator)
+                if isinstance(self.generator, Mapping)
+                else self.generator
+            ),
             "effects": [effect.to_dict() for effect in self.effects],
             "transition_in": (
                 self.transition_in.to_dict() if self.transition_in is not None else None
@@ -899,6 +928,7 @@ class Clip3:
             freeze=data.get("freeze"),
             compose=data.get("compose"),
             audio_policy=data.get("audio_policy"),
+            generator=data.get("generator"),
         )
 
 
@@ -1397,7 +1427,7 @@ class Timeline3:
                         f"{clip_where}.sequence",
                         f"no nested sequence {clip.sequence!r} on this timeline",
                     )
-            elif not clip.source:
+            elif clip.generator is None and not clip.source:
                 add("CLIP_RANGE", f"{clip_where}.source", "source is empty")
 
             if not math.isfinite(clip.src_in) or clip.src_in < 0.0:
@@ -1463,6 +1493,7 @@ class Timeline3:
                 )
 
             _validate_clip_time(clip, clip_where, add)
+            self._validate_generator(clip, clip_where, add)
 
             for slot, transition in (
                 ("transition_in", clip.transition_in),
@@ -1492,6 +1523,147 @@ class Timeline3:
                     )
 
         self._validate_sequences(add, depth, problems)
+
+    def _validate_generator(self, clip: Clip3, where: str, add) -> None:
+        """The generator declaration, its placement and its exclusivity.
+
+        A generator clip *is* the template: it starts at the template's frame 0,
+        keeps the template's timing, and its timeline span is the template's
+        duration within half a frame. Speed, reverse and freeze would reinterpret
+        frames that were rendered for another clock, so they are refused instead
+        of being applied twice.
+        """
+        raw = clip.generator
+        if raw is None:
+            return
+        field_where = f"{where}.generator"
+        if not isinstance(raw, Mapping):
+            add(
+                "GENERATOR_SHAPE",
+                field_where,
+                f"generator must be an object {{template, params, engine, alpha}}, "
+                f"got {type(raw).__name__}",
+            )
+            return
+        missing = sorted(GENERATOR_KEYS - set(raw))
+        unknown = sorted(set(raw) - GENERATOR_KEYS)
+        if missing:
+            add(
+                "GENERATOR_SHAPE",
+                field_where,
+                f"generator is missing {missing}",
+            )
+        if unknown:
+            add(
+                "GENERATOR_SHAPE",
+                field_where,
+                f"generator declares unknown key(s) {unknown} "
+                f"(declared: {sorted(GENERATOR_KEYS)})",
+            )
+
+        if clip.source or clip.sequence is not None:
+            add(
+                "GENERATOR_SOURCE_CONFLICT",
+                where,
+                "a generator clip renders a captured template: it cannot also "
+                "declare a source file or a nested sequence",
+            )
+        if clip.speed is not None:
+            add(
+                "GENERATOR_TIME_FX",
+                f"{where}.speed",
+                "a generator clip keeps the template's clock; speed would retime "
+                "frames rendered for another one",
+            )
+        if clip.reverse:
+            add(
+                "GENERATOR_TIME_FX",
+                f"{where}.reverse",
+                "a generator clip keeps the template's clock; reverse is refused",
+            )
+        if clip.freeze is not None:
+            add(
+                "GENERATOR_TIME_FX",
+                f"{where}.freeze",
+                "a generator clip keeps the template's clock; freeze is refused",
+            )
+        if abs(clip.src_in) > 1e-9:
+            add(
+                "GENERATOR_SPAN",
+                f"{where}.src_in",
+                f"a generator starts at its template's first frame, so src_in must "
+                f"be 0, got {clip.src_in}",
+            )
+
+        template = raw.get("template")
+        if not isinstance(template, str) or not template.strip():
+            add(
+                "GENERATOR_TEMPLATE",
+                f"{field_where}.template",
+                f"template must be a non-empty name or directory, got {template!r}",
+            )
+            return
+        engine = raw.get("engine")
+        if engine not in GENERATOR_ENGINES:
+            add(
+                "GENERATOR_SHAPE",
+                f"{field_where}.engine",
+                f"engine {engine!r} not in {sorted(GENERATOR_ENGINES)}",
+            )
+        alpha = raw.get("alpha")
+        if not isinstance(alpha, bool):
+            add(
+                "GENERATOR_SHAPE",
+                f"{field_where}.alpha",
+                f"alpha must be a boolean, got {alpha!r}",
+            )
+        if alpha is True and clip.layer < 1:
+            add(
+                "GENERATOR_ALPHA_LAYER",
+                f"{where}.layer",
+                "an alpha generator is composited over the layer below, so it "
+                f"needs layer >= 1; this clip sits on layer {clip.layer}",
+            )
+        params = raw.get("params")
+        if params is not None and not isinstance(params, Mapping):
+            add(
+                "GENERATOR_PARAMS",
+                f"{field_where}.params",
+                f"params must be an object, got {type(params).__name__}",
+            )
+
+        from . import motion  # noqa: PLC0415 - validation stays cheap without it
+
+        try:
+            meta = motion.load_template(template)
+        except Exception as exc:  # noqa: BLE001 - every failure is a named finding
+            add(
+                "GENERATOR_TEMPLATE",
+                f"{field_where}.template",
+                f"template {template!r} cannot be loaded: {exc}",
+            )
+            return
+        try:
+            motion.validate_params(
+                meta, params if isinstance(params, Mapping) else None
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure is a named finding
+            add(
+                "GENERATOR_PARAMS",
+                f"{field_where}.params",
+                f"params do not resolve for {meta['name']!r}: {exc}",
+            )
+        span = clip.timeline_duration
+        expected = float(meta["duration"])
+        tolerance = 0.5 / self.fps + 1e-9 if self.fps > 0 else 1e-9
+        if abs(span - expected) > tolerance:
+            add(
+                "GENERATOR_SPAN",
+                where,
+                f"timeline span {span:.6f}s differs from the template duration "
+                f"{expected:.6f}s by more than half a frame "
+                f"({0.5 / self.fps if self.fps > 0 else 0.0:.6f}s)",
+            )
 
     def _validate_placement(self, add) -> None:
         """Layer 0 must tile the timeline: no gap, no overlap.

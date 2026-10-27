@@ -1,0 +1,50 @@
+{
+  "version": "vx.edl3/1",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "clips": [
+    {
+      "id": "base",
+      "source": "<base>/base.mp4",
+      "src_in": 0.0,
+      "src_out": 2.0,
+      "dst_in": 0.0,
+      "dst_out": 2.0,
+      "layer": 0,
+      "track": 0
+    },
+    {
+      "id": "gen",
+      "source": "",
+      "src_in": 0.0,
+      "src_out": 2.0,
+      "dst_in": 0.0,
+      "dst_out": 2.0,
+      "layer": 1,
+      "track": 0,
+      "generator": {
+        "template": "vx-title-lower-third",
+        "params": {
+          "title": "Ciao Mondo",
+          "subtitle": "prova T07",
+          "accent": "#FFD400",
+          "position": "bottom-left"
+        },
+        "engine": "chromium",
+        "alpha": true
+      },
+      "effects": [
+        {
+          "kind": "transform",
+          "backend": "chromium",
+          "properties": [
+            "layout"
+          ]
+        }
+      ]
+    }
+  ]
+}
