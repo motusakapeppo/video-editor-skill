@@ -442,8 +442,11 @@ audio che supera i cancelli del triage diventa un `a_roll`, nell'ordine di
 scoperta degli asset; i video muti restano `b_roll` e un ruolo dichiarato nel
 manifest vince sull'euristica. Il percorso predefinito resta governato dalla
 regola del singolo `a_roll`. Il comportamento e in `auto.py`, che costruisce la
-sequenza e la dichiara in `auto_report.json`: su otto clip in ingresso il referto
-elenca otto `a_roll` e la timeline li monta in sequenza.
+sequenza e la dichiara in `auto_report.json`: su otto clip in ingresso che
+superano i cancelli il referto elenca otto `a_roll` e la timeline li monta in
+sequenza. Una clip che non li supera resta fuori con il suo motivo e il suo
+numero: nel caso studio un video richiedeva un upscale di 4.14 contro un limite
+di 4.0 e il referto ha scritto esattamente quello.
 
 **A2. Politica di riempimento (`--fill crop|fit|blur`).** `fit` resta il valore
 predefinito ed e byte-identico al comportamento precedente; `crop` e `blur`
@@ -458,7 +461,22 @@ originali coprivano 8 LU (da -16.8 a -24.9 LUFS) e ora risultano allineati. Un
 gain richiesto oltre l'intervallo [-60, +24] viene limitato al bordo e la carenza
 e dichiarata come `shortfall_lu`. Una misura non valida (`input_i` a 0.0 o fuori
 intervallo) non produce alcun gain e viene dichiarata come `measurement_invalid`.
+Il gain e anche consapevole dei picchi: una clip quieta ma con il picco gia alto
+non riceve tutto il guadagno che la loudness chiederebbe, perche il suo true peak
+non deve superare il tetto di dialogo dichiarato; la loudness che si perde in quel
+caso e scritta in LU come `gain_limited_by_peak`. Se il picco misurato manca, il
+gain non viene limitato e la lacuna e dichiarata come `peak_headroom_unknown`.
 Il calcolo vive in `audio.py` e il ponte lo consuma in `bridge.py`.
+
+Il master ha poi una garanzia di consegna: dopo `loudnorm` entra un limitatore di
+true peak a quattro volte la frequenza di campionamento, con il tetto preso dalla
+stessa funzione che usa il collaudo (`qc.true_peak_ceiling`), meno il margine
+dichiarato per la tolleranza del limitatore e per l'overshoot misurato della
+codifica AAC. Il limitatore e compensato in ritardo. Sul caso studio il mix
+arrivava a `+5,04 dBFS` prima di `loudnorm`; dopo il gain consapevole dei picchi
+scende a `-0,55 dBFS`, quindi il limiter lavora meno di mezzo decibel invece di
+doverne recuperare cinque: un limitatore che toglie cinque decibel si sente, e
+pompare non e montare.
 
 **A5. Taglio dei silenzi dal VAD.** I tagli nascono dagli span VAD e `dead_air`.
 Un intervallo rimosso fuori dall'unione dei silenzi misurati e un errore duro, non
