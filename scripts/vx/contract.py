@@ -7,9 +7,10 @@ Changing anything here is a version bump (see SKILL.md "contratto").
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass, field
 from types import MappingProxyType
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 SCHEMA = "vx.report/1.0"
 TRIAGE_SCHEMA = "vx.triage/1.0"
@@ -856,6 +857,43 @@ def validate_qc(qc: Dict[str, Any]) -> List[str]:
     return errors
 
 
+_SOURCE_KEY_RUN = re.compile(r"[^A-Za-z0-9_.-]+")
+_SOURCE_KEY_REPEAT = re.compile(r"_+")
+
+
+def source_key(asset_id: str, taken: Optional[Set[str]] = None) -> str:
+    """Project a human-readable asset id onto a legal EDL ``source_id``.
+
+    The EDL key is an internal identifier: it only has to match
+    ``edl_plan._SOURCE_KEY`` (``[A-Za-z0-9_.-]+``) and to be unique inside one
+    document. Real-world names ("WhatsApp Video 2026-10-26 at 22.59.10.mp4",
+    "clip (1).mp4", "perché è così.mp4") are not, so the EDL carries the slug
+    while the triage report and ``payload.asset_triage`` keep the original
+    asset id the user can point at.
+
+    Every run of characters outside ``[A-Za-z0-9_.-]`` collapses to one ``_``;
+    repeated ``_`` are collapsed and leading/trailing ``_``/``.`` are stripped.
+    An empty result becomes ``"asset"``. When ``taken`` already holds the slug
+    the suffix ``_2``, ``_3``, ... is appended until free: the caller owns
+    ``taken`` and feeds the assets in document order, so the result is
+    deterministic and never depends on dict or set ordering.
+    """
+    if not isinstance(asset_id, str) or not asset_id:
+        raise VxError("source_key: asset_id must be a non-empty string")
+    slug = _SOURCE_KEY_REPEAT.sub("_", _SOURCE_KEY_RUN.sub("_", asset_id))
+    slug = slug.strip("_.")
+    if not slug:
+        slug = "asset"
+    if taken is None:
+        return slug
+    candidate = slug
+    suffix = 2
+    while candidate in taken:
+        candidate = f"{slug}_{suffix}"
+        suffix += 1
+    return candidate
+
+
 def payload_to_edit_plan(
     payload: Dict[str, Any], media_info: Dict[str, Any]
 ) -> "EditPlan":
@@ -967,6 +1005,25 @@ def payload_to_edl_plan(
     if not a_entries:
         raise VxError("payload.asset_triage has no a_roll: cannot build a timeline")
 
+    # ONE projection asset_id -> EDL key, in the payload's own order. The asset
+    # id is never rewritten: the report, the triage block and dedup keep the
+    # human-readable name, only the EDL carries a slug.
+    source_ids: Dict[str, str] = {}
+    taken_keys: Set[str] = set()
+    for entry in selected:
+        asset_id = entry.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id or asset_id in source_ids:
+            continue
+        key = source_key(asset_id, taken_keys)
+        source_ids[asset_id] = key
+        taken_keys.add(key)
+
+    def _source_id(asset_id: str) -> str:
+        key = source_ids.get(asset_id)
+        if key is None:
+            raise VxError(f"asset {asset_id!r} has no EDL source_id")
+        return key
+
     referenced: Dict[str, Any] = {}
     a_clips: List[Any] = []
     dialogue_clips: List[Any] = []
@@ -980,11 +1037,11 @@ def payload_to_edl_plan(
         length = min(_target(entry, asset_id), media_duration)
         if length <= 0:
             raise VxError(f"asset {asset_id!r} has no usable duration")
-        referenced[asset_id] = ref
+        referenced[_source_id(asset_id)] = ref
         a_clips.append(
             edl_plan.ClipSegment(
                 clip_id=f"v0_{index}",
-                source_id=asset_id,
+                source_id=_source_id(asset_id),
                 src_in=0.0,
                 src_out=length,
                 dst_in=cursor,
@@ -996,7 +1053,7 @@ def payload_to_edl_plan(
         dialogue_clips.append(
             edl_plan.ClipSegment(
                 clip_id=f"a0_{index}",
-                source_id=asset_id,
+                source_id=_source_id(asset_id),
                 src_in=0.0,
                 src_out=length,
                 dst_in=cursor,
@@ -1047,11 +1104,11 @@ def payload_to_edl_plan(
         fade = float(THRESHOLDS["broll_fade_sec"])
         if fade > length:
             fade = length
-        referenced[asset_id] = ref
+        referenced[_source_id(asset_id)] = ref
         b_clips.append(
             edl_plan.ClipSegment(
                 clip_id=f"v1_{index}",
-                source_id=asset_id,
+                source_id=_source_id(asset_id),
                 src_in=0.0,
                 src_out=length,
                 dst_in=dst_in,
@@ -1087,10 +1144,10 @@ def payload_to_edl_plan(
             gain = float(entry.get("ducking_db", 0.0))
         except (TypeError, ValueError) as exc:
             raise VxError(f"asset {asset_id!r} has a non-numeric ducking_db") from exc
-        referenced[asset_id] = ref
+        referenced[_source_id(asset_id)] = ref
         music_clip = edl_plan.ClipSegment(
             clip_id="a1_0",
-            source_id=asset_id,
+            source_id=_source_id(asset_id),
             src_in=0.0,
             src_out=music_length,
             dst_in=0.0,

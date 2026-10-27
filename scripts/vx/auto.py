@@ -306,6 +306,37 @@ def _source_refs(
     return refs, media
 
 
+def _media_by_source_key(
+    plan: Any,
+    staged: Mapping[str, ingest.IngestResult],
+    media_info_map: Mapping[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Re-key the probe results by the EDL ``source_id`` the plan cites.
+
+    The triage report and ``selected[]`` keep the human-readable asset id; the
+    EDL carries the slugged key ``contract.source_key`` builds. Gate 1, the fill
+    declaration and the face geometry look their media up by ``clip.source_id``,
+    so the map has to follow the plan: ``SourceRef.path`` is the staged file the
+    asset produced.
+    """
+    owner = {str(_staged_path(result)): asset_id for asset_id, result in staged.items()}
+    media: Dict[str, Dict[str, Any]] = {}
+    for key, ref in plan.sources.items():
+        path = str(getattr(ref, "path", "") or "")
+        asset_id = owner.get(path)
+        if asset_id is None:
+            raise contract.VxError(
+                f"source {key!r}: nessun file in staging per {path!r}"
+            )
+        info = media_info_map.get(asset_id)
+        if info is None:
+            raise contract.VxError(
+                f"source {key!r}: nessun media_info per {asset_id!r}"
+            )
+        media[key] = dict(info)
+    return media
+
+
 def _source_hashes(assets: List[asset_triage.AssetInfo]) -> Dict[str, str]:
     return {asset.asset_id: _sha256(Path(asset.path)) for asset in assets}
 
@@ -498,6 +529,7 @@ def _run_locked(
     errors = plan.validate()
     if errors:
         raise contract.VxError("EDL non valido: " + "; ".join(errors))
+    media_by_source = _media_by_source_key(plan, staged, media_info_map)
 
     bridge_summary: Dict[str, Any] = {
         "enabled": False,
@@ -517,7 +549,7 @@ def _run_locked(
         _notify(progress, 22.0, "bridge")
         subs_enabled = not bool(getattr(args, "no_subs", False))
         plan, bridge_report = _bridge_plan(
-            plan, captions=subs_enabled, media=media_info_map
+            plan, captions=subs_enabled, media=media_by_source
         )
         reframe_map, restore_map = _render_effects(bridge_report)
         bridged_errors = plan.validate()
@@ -576,12 +608,12 @@ def _run_locked(
         exc.camera_exemptions = exemptions  # type: ignore[attr-defined]
         raise
 
-    gate1 = gates.validate_gate1_durations(plan, media_info_map, fps=fps)
+    gate1 = gates.validate_gate1_durations(plan, media_by_source, fps=fps)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     staged_paths = {
-        asset_id: str(_staged_path(result)) for asset_id, result in staged.items()
+        key: str(getattr(ref, "path", "") or "") for key, ref in plan.sources.items()
     }
     _log(f"[auto] render {plan.duration_sec:.3f}s -> {out}")
     _notify(progress, 25.0, "render")
@@ -634,7 +666,7 @@ def _run_locked(
             "mode": "montage" if montage_mode else "single",
             "a_roll_count": len(a_roll_indices),
         },
-        "fill": _fill_declaration(plan, media_info_map, fill_mode),
+        "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "bridge": bridge_summary,
         "selected": [
             {
