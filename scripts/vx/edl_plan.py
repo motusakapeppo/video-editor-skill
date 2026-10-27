@@ -25,7 +25,14 @@ _SOURCE_KEY = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ASPECT = re.compile(r"^(\d+):(\d+)$")
 
-_TOP_KEYS = {"contract_version", "timeline", "sources", "tracks", "ducking"}
+_TOP_KEYS = {
+    "contract_version",
+    "timeline",
+    "sources",
+    "tracks",
+    "ducking",
+    "ducking_tracks",
+}
 _TIMELINE_KEYS = {"fps", "duration_sec", "aspect_ratio", "resolution"}
 _SOURCE_KEYS = {"path", "sha256", "duration", "camera"}
 _CAMERA_KEYS = {"angle_deg", "focal_length_mm"}
@@ -251,12 +258,14 @@ class EDLPlan:
     audio_tracks: Tuple[Track, ...] = ()
     notes: Tuple[str, ...] = ()
     ducking: Optional[DuckingSpec] = None
+    ducking_tracks: Tuple[DuckingSpec, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sources", _FrozenMap(self.sources))
         object.__setattr__(self, "video_tracks", tuple(self.video_tracks))
         object.__setattr__(self, "audio_tracks", tuple(self.audio_tracks))
         object.__setattr__(self, "notes", tuple(self.notes))
+        object.__setattr__(self, "ducking_tracks", tuple(self.ducking_tracks))
         if isinstance(self.resolution, (list, tuple)):
             object.__setattr__(self, "resolution", tuple(self.resolution))
 
@@ -565,44 +574,63 @@ class EDLPlan:
                         )
 
     def _validate_ducking(self, errors: List[str]) -> None:
-        spec = self.ducking
-        if spec is None:
-            return
-        if not isinstance(spec, DuckingSpec):
-            errors.append("ducking must be a DuckingSpec")
-            return
-
-        for name in ("sidechain_role", "target_role"):
-            value = getattr(spec, name)
-            if not isinstance(value, str) or not value:
-                errors.append(f"ducking.{name} must be non-empty")
-        if (
-            isinstance(spec.sidechain_role, str)
-            and isinstance(spec.target_role, str)
-            and spec.sidechain_role
-            and spec.target_role
-            and spec.sidechain_role == spec.target_role
-        ):
-            errors.append("ducking.sidechain_role and ducking.target_role must differ")
-
-        for name, low, high in (
-            ("threshold", 0.000976563, 1.0),
-            ("ratio", 1.0, 20.0),
-            ("attack_ms", 0.01, 2000.0),
-            ("release_ms", 0.01, 9000.0),
-            ("makeup_db", 0.0, 36.0),
-        ):
-            value = getattr(spec, name)
-            if not _is_num(value):
-                errors.append(f"ducking.{name} must be finite")
-            elif not (low <= float(value) <= high):
-                errors.append(f"ducking.{name} must be in [{low}, {high}]")
-
+        specs: List[Tuple[str, Any]] = [("ducking", self.ducking)]
+        specs.extend(
+            (f"ducking_tracks[{index}]", spec)
+            for index, spec in enumerate(self.ducking_tracks)
+        )
         roles = {track.role for track in self.audio_tracks if isinstance(track, Track)}
-        for name in ("sidechain_role", "target_role"):
-            value = getattr(spec, name)
-            if isinstance(value, str) and value and value not in roles:
-                errors.append(f"ducking.{name} {value!r} is not an audio track role")
+        targets: set = set()
+        for prefix, spec in specs:
+            if spec is None:
+                continue
+            if not isinstance(spec, DuckingSpec):
+                errors.append(f"{prefix} must be a DuckingSpec")
+                continue
+
+            for name in ("sidechain_role", "target_role"):
+                value = getattr(spec, name)
+                if not isinstance(value, str) or not value:
+                    errors.append(f"{prefix}.{name} must be non-empty")
+            if (
+                isinstance(spec.sidechain_role, str)
+                and isinstance(spec.target_role, str)
+                and spec.sidechain_role
+                and spec.target_role
+                and spec.sidechain_role == spec.target_role
+            ):
+                errors.append(
+                    f"{prefix}.sidechain_role and {prefix}.target_role must differ"
+                )
+
+            for name, low, high in (
+                ("threshold", 0.000976563, 1.0),
+                ("ratio", 1.0, 20.0),
+                ("attack_ms", 0.01, 2000.0),
+                ("release_ms", 0.01, 9000.0),
+                ("makeup_db", 0.0, 36.0),
+            ):
+                value = getattr(spec, name)
+                if not _is_num(value):
+                    errors.append(f"{prefix}.{name} must be finite")
+                elif not (low <= float(value) <= high):
+                    errors.append(f"{prefix}.{name} must be in [{low}, {high}]")
+
+            for name in ("sidechain_role", "target_role"):
+                value = getattr(spec, name)
+                if isinstance(value, str) and value and value not in roles:
+                    errors.append(
+                        f"{prefix}.{name} {value!r} is not an audio track role"
+                    )
+
+            if prefix != "ducking":
+                target = getattr(spec, "target_role", "")
+                if isinstance(target, str) and target:
+                    if target in targets:
+                        errors.append(
+                            f"{prefix}.target_role {target!r} duplicates another bed"
+                        )
+                    targets.add(target)
 
     # -- serialization ----------------------------------------------------- #
 
@@ -627,6 +655,8 @@ class EDLPlan:
         }
         if self.ducking is not None:
             data["ducking"] = self.ducking.to_dict()
+        if self.ducking_tracks:
+            data["ducking_tracks"] = [spec.to_dict() for spec in self.ducking_tracks]
         return data
 
     @classmethod
@@ -693,6 +723,27 @@ class EDLPlan:
                 except (TypeError, ValueError) as exc:
                     errors.append(f"ducking: {exc}")
 
+        ducking_tracks: List[DuckingSpec] = []
+        raw_ducking_tracks = data.get("ducking_tracks")
+        if raw_ducking_tracks is not None:
+            if not isinstance(raw_ducking_tracks, list):
+                errors.append("ducking_tracks: must be a list")
+            else:
+                for index, raw_spec in enumerate(raw_ducking_tracks):
+                    if not isinstance(raw_spec, dict):
+                        errors.append(f"ducking_tracks[{index}]: must be an object")
+                        continue
+                    _reject_unknown(
+                        raw_spec,
+                        _DUCKING_KEYS,
+                        f"ducking_tracks[{index}]",
+                        errors,
+                    )
+                    try:
+                        ducking_tracks.append(DuckingSpec.from_dict(raw_spec))
+                    except (TypeError, ValueError) as exc:
+                        errors.append(f"ducking_tracks[{index}]: {exc}")
+
         plan = cls(
             contract_version=data.get("contract_version", EDL_CONTRACT_VERSION),
             fps=timeline.get("fps"),
@@ -703,6 +754,7 @@ class EDLPlan:
             video_tracks=video_tracks,
             audio_tracks=audio_tracks,
             ducking=ducking,
+            ducking_tracks=ducking_tracks,
         )
         errors.extend(plan.validate())
         if errors:

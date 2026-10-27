@@ -1042,16 +1042,29 @@ def _edl_audio_clips(plan: Any) -> List[Any]:
     return sorted(clips, key=lambda clip: float(clip.dst_in))
 
 
-def _edl_audio_buses(plan: Any) -> Tuple[List[Any], List[Any]]:
-    """Split audio clips by track role: ``music`` to the music bus, all else to dialogue."""
+def _bus_name(role: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in str(role))
+    return safe or "audio"
+
+
+def _edl_audio_buses(
+    plan: Any,
+) -> Tuple[List[Any], List[Tuple[str, List[Any]]]]:
+    """Split audio clips: every music bed keeps its own role, all else is dialogue."""
     dialogue: List[Any] = []
-    music: List[Any] = []
+    beds: List[Tuple[str, List[Any]]] = []
     for track in getattr(plan, "audio_tracks", ()):
         role = str(getattr(track, "role", "") or "")
-        target = music if role == "music" else dialogue
-        target.extend(getattr(track, "clips", ()))
+        clips = list(getattr(track, "clips", ()))
+        if role == "music" or role.startswith("music_"):
+            beds.append((role, clips))
+        else:
+            dialogue.extend(clips)
     key = lambda clip: float(clip.dst_in)  # noqa: E731
-    return sorted(dialogue, key=key), sorted(music, key=key)
+    return (
+        sorted(dialogue, key=key),
+        [(role, sorted(clips, key=key)) for role, clips in beds],
+    )
 
 
 def _edl_label(prefix: str, clip: Any, used: set) -> str:
@@ -1527,11 +1540,11 @@ def build_edl_filtergraph(
         )
 
     if audio:
-        dialogue_clips, music_clips = _edl_audio_buses(plan)
+        dialogue_clips, beds = _edl_audio_buses(plan)
         windows = _restore_windows(plan, restore)
         used: set = set()
         dialogue_labels: List[str] = []
-        music_labels: List[str] = []
+        bed_labels: List[Tuple[str, List[str]]] = []
         for clip in dialogue_clips:
             label = _edl_label("ad", clip, used)
             dialogue_labels.append(label)
@@ -1544,43 +1557,80 @@ def build_edl_filtergraph(
                     denoise=_restore_denoise(_restore_for(restore, windows, clip)),
                 )
             )
-        for clip in music_clips:
-            label = _edl_label("mu", clip, used)
-            music_labels.append(label)
-            parts.extend(
-                _edl_music_chain(
-                    clip,
-                    source_to_index[clip.source_id],
-                    label,
-                    timeline=float(plan.duration_sec),
+        for role, bed_clips in beds:
+            labels: List[str] = []
+            for clip in bed_clips:
+                label = _edl_label("mu", clip, used)
+                labels.append(label)
+                parts.extend(
+                    _edl_music_chain(
+                        clip,
+                        source_to_index[clip.source_id],
+                        label,
+                        timeline=float(plan.duration_sec),
+                    )
                 )
-            )
+            bed_labels.append((role, labels))
 
         duration = float(plan.duration_sec)
         parts.extend(_edl_bus(dialogue_labels, "dialog", duration))
-        parts.extend(_edl_bus(music_labels, "music", duration))
+        for role, labels in bed_labels:
+            parts.extend(_edl_bus(labels, _bus_name(role), duration))
 
-        ducking = getattr(plan, "ducking", None)
-        if ducking is not None and dialogue_labels and music_labels:
-            linear = max(1.0, 10.0 ** (float(ducking.makeup_db) / 20.0))
-            parts.append("[dialog]asplit=2[dialog_mix][dialog_sc]")
-            parts.append(
-                f"[music][dialog_sc]sidechaincompress="
-                f"threshold={float(ducking.threshold):.3f}:"
-                f"ratio={float(ducking.ratio):.3f}:"
-                f"attack={float(ducking.attack_ms):.3f}:"
-                f"release={float(ducking.release_ms):.3f}:"
-                f"makeup={linear:.3f}[music_duck]"
-            )
-            bus = (
-                "[dialog_mix][music_duck]amix=inputs=2:dropout_transition=0:normalize=0"
-            )
-        elif dialogue_labels and music_labels:
-            bus = "[dialog][music]amix=inputs=2:dropout_transition=0:normalize=0"
+        specs = {
+            str(getattr(spec, "target_role", "")): spec
+            for spec in getattr(plan, "ducking_tracks", ()) or ()
+        }
+        default_spec = getattr(plan, "ducking", None)
+        if dialogue_labels and bed_labels:
+            scoped = [(role, specs.get(role, default_spec)) for role, _ in bed_labels]
+            active = [(role, spec) for role, spec in scoped if spec is not None]
+            if active:
+                if len(active) == 1:
+                    parts.append("[dialog]asplit=2[dialog_mix][dialog_sc]")
+                    sc_labels = ["[dialog_sc]"]
+                else:
+                    outs = "".join(
+                        f"[dialog_sc{index}]" for index in range(len(active))
+                    )
+                    parts.append(f"[dialog]asplit={len(active) + 1}[dialog_mix]{outs}")
+                    sc_labels = [f"[dialog_sc{index}]" for index in range(len(active))]
+                ducked: List[str] = []
+                for (role, spec), sc in zip(active, sc_labels):
+                    name = _bus_name(role)
+                    linear = max(1.0, 10.0 ** (float(spec.makeup_db) / 20.0))
+                    parts.append(
+                        f"[{name}]{sc}sidechaincompress="
+                        f"threshold={float(spec.threshold):.3f}:"
+                        f"ratio={float(spec.ratio):.3f}:"
+                        f"attack={float(spec.attack_ms):.3f}:"
+                        f"release={float(spec.release_ms):.3f}:"
+                        f"makeup={linear:.3f}[{name}_duck]"
+                    )
+                    ducked.append(f"[{name}_duck]")
+                inputs = "".join(["[dialog_mix]"] + ducked)
+                bus = (
+                    f"{inputs}amix=inputs={1 + len(ducked)}:"
+                    "dropout_transition=0:normalize=0"
+                )
+            else:
+                inputs = "".join(
+                    ["[dialog]"] + [f"[{_bus_name(role)}]" for role, _ in bed_labels]
+                )
+                bus = (
+                    f"{inputs}amix=inputs={1 + len(bed_labels)}:"
+                    "dropout_transition=0:normalize=0"
+                )
         elif dialogue_labels:
             bus = "[dialog]anull"
+        elif len(bed_labels) == 1:
+            bus = f"[{_bus_name(bed_labels[0][0])}]anull"
         else:
-            bus = "[music]anull"
+            inputs = "".join(f"[{_bus_name(role)}]" for role, _ in bed_labels)
+            bus = (
+                f"{inputs}amix=inputs={len(bed_labels)}:"
+                "dropout_transition=0:normalize=0"
+            )
         if ceiling_dbtp is not None:
             bus += "," + _true_peak_limiter(ceiling_dbtp)
         parts.append(f"{bus}[aout]")
