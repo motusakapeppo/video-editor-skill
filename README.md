@@ -134,7 +134,7 @@ Exit code: `0` ok · `2` uso errato · `3` serve l'utente · `4` dipendenza manc
 | `qc` | gate binari sul file renderizzato |
 | `ingest` | protocollo completo di analisi + triage |
 | `run` | pipeline end-to-end |
-| `auto` | prompt + cartella asset → triage, piano, render, QC; scrive `plan.json`, `auto_report.json` e `out/`; exit 0/2/5/6 |
+| `auto` | prompt + cartella asset → triage, piano, render, QC; `--montage` monta più A-roll, `--fill crop\|fit\|blur` sceglie il riempimento; scrive `plan.json`, `auto_report.json` e `out/`; exit 0/2/5/6 |
 | `deliverables` | matrice di consegna |
 | `vx-mcp` | server MCP su stdio: quattro tool, JSON-RPC 2.0 per riga |
 
@@ -155,6 +155,31 @@ sessione nuova può leggere un job che non ha creato. Non c'è cancellazione: un
 job avviato arriva a `completed` o `failed`. `vx_auto` resta per i job brevi.
 Dettagli e limiti in `references/25-job-engine.md`.
 
+## Ponte analisi-montaggio
+
+La Fase A collega le misure al montaggio. `vx auto --montage` monta ogni video con
+audio che supera i cancelli come `a_roll`, in ordine di scoperta; `--fill crop|fit|blur`
+sceglie il riempimento, con `fit` ancora predefinito e byte-identico al
+comportamento precedente. Il fattore di upscale è dichiarato per clip in
+`auto_report.json` sotto `fill[]`; il riempimento resta un parametro di render, non
+un campo dell'EDL, che rimane 2.2.0.
+
+Il ponte misura il gain per clip sui soli tratti conservati (`audio.loudness_spans`),
+limita il gain a [-60,+24] e dichiara `shortfall_lu` o `measurement_invalid` quando
+il numero non è affidabile. I tagli nascono dagli span VAD e `dead_air`, e un
+intervallo rimosso fuori dall'unione dei silenzi misurati è un errore duro. I
+sottotitoli vengono rimappati sulla timeline tagliata, spezzati sui tagli e bruciati
+sulla tela con `margin_v = round(out_h*0.08)` clampato a [24, out_h/4]. Il reframe
+usa `autoframe.build_crop_plan` e fa pan, non zoom. Denoise `afftdn` e
+stabilizzazione `deshake` in una passata si attivano solo col proprio finding,
+mentre il percorso EditPlan usa vidstab in due passate. Lo score dei B-roll è la
+quota della finestra coperta dalle parole trascritte per la loro confidenza media
+pesata sul tempo coperto: è un proxy di copertura temporale, non una similarità
+semantica. La deduplica è un
+dHash a 192 bit su tre frame con soglia 0.06; il loop della musica usa `acrossfade`
+con copie limitate a 256. Limiti dichiarati: su alcune clip del caso studio il VAD
+non era disponibile, quindi non c'è silenzio misurato e nulla viene tagliato.
+
 ## Cosa misura
 
 Stabilità (optical flow), esposizione (istogrammi luma, clipping), dominante colore
@@ -169,7 +194,7 @@ SKILL.md                  ruolo, protocollo, trigger di auto-invocazione
 references/01..26.md      playbook: ambiente, metriche, matrice, social, framing, subs, render, QC,
                           accelerazione, grammatica, retention, lezioni, direzione visiva, R&D esterna, EDL,
                           render multi-sorgente, regia semantica, grammatica e mixer audio, triage e auto, API e MCP,
-                          motore di job asincrono, specifica EDL 3 e ponte
+                          motore di job asincrono, EDL 3 e ponte con la Fase A implementata
 scripts/vx.py             launcher
 scripts/vx/
   contract.py             interfaccia congelata: schemi, soglie, validatori

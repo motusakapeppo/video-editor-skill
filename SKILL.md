@@ -99,7 +99,7 @@ deliverables in un colpo. Per una corsa manuale restano i comandi singoli:
 & $PY $VX deliverables --plan "<WORK_DIR>\clip-a1b2c3d4\plan.json"
 ```
 
-**Auto.** `vx auto --prompt ... --assets ... --out ...` esegue triage, piano, render e QC in un colpo; scrive `plan.json`, `auto_report.json` e `<workdir>/out`; exit 0/2/5/6.
+**Auto.** `vx auto --prompt ... --assets ... --out ...` esegue triage, piano, render e QC in un colpo; `--montage` monta ogni video che passa i gate come `a_roll` in ordine, `--fill crop|fit|blur` sceglie il riempimento (`fit` predefinito, upscale per clip in `auto_report.json`); scrive `plan.json`, `auto_report.json` e `<workdir>/out`; exit 0/2/5/6.
 
 ### Exit codes
 
@@ -144,18 +144,18 @@ WPM. Le soglie vivono in `scripts/vx/contract.py`; la tabella è read-only e
 ## Trattamenti: cosa fa il codice
 
 - **Sottotitoli verticali.** `BorderStyle=1`, `Outline=7`, `Shadow=4` a 1920 di
-  altezza, scalati su `out_h`; orizzontali `4/2` a 1080 (`subs.py`).
+  altezza, scalati su `out_h`; orizzontali `4/2` a 1080 (`subs.py`). Il ponte brucia i sottotitoli sulla tela con `margin_v = round(out_h*0.08)` clampato a [24, out_h/4] (`bridge.py`), non nella safe zone di piattaforma.
 - **Font.** Antonio è incluso in `assets/fonts/` con `OFL.txt`; libass riceve
   `fontsdir`. Una sostituzione è un fallimento duro (`QCFailure`), non un warning.
 - **Fade audio.** `afade` di 12 ms a ogni giunto interno nel grafo finale, non
   solo nel passaggio di rilevamento dello stadio 01 (`render.py`).
 - **Compress e denoise.** `compress` diventa `acompressor`; il fallback del
   denoise è `highpass`; la stabilizzazione legge `shakiness`, `smoothing` e `zoom`
-  dal piano.
+  dal piano. Il ponte usa `afftdn` col noise floor misurato e `deshake` in una passata; l'EditPlan usa vidstab in due passate.
 - **Loudness.** `output.loudness` usa le chiavi minuscole `i/tp/lra`; `apple` e
-  `broadcast` sono rispettati. Lo stadio 04 esegue `loudnorm` solo se il
-  trattamento è attivo, altrimenti è un `04_remux`. Il QC emette
-  `status:"skipped"` quando non c'è un trattamento loudnorm.
+  `broadcast` sono rispettati. Il ponte misura il gain per clip sui tratti tenuti
+  (`audio.loudness_spans`), limita a [-60,+24] con `shortfall_lu`. Lo stadio 04
+  esegue `loudnorm` solo se attivo, altrimenti `04_remux`; il QC dichiara skip.
 - **Hook.** Il testo viene da `brief.hook_text` o dalle prime parole della
   trascrizione; senza testo il trattamento è disattivato e dichiarato.
 - **Guardia trascrizione.** `subs.transcript_quality` richiede almeno 12 parole e
@@ -197,4 +197,4 @@ Si caricano su richiesta, non si incollano qui.
 - `references/09-accelerazione-e-vad.md` hardware e VAD; `references/10-grammatica-del-montaggio.md` grammatica e ritmo
 - `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
 - `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap; `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo
-- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.1, A/B-Roll, source_id; `references/20-render-multisorgente.md` render N sorgenti, Gate 1 per fonte, `vx edl`; `references/21-regia-semantica-keyword.md` B-roll dalle keyword; `references/22-grammatica-e-mixer-audio.md` 30°/180° e mixer A/B; `references/23-triage-e-auto.md` triage, EDL 2.2, master e `vx auto`; `references/24-api-e-mcp.md` API stabile, install editable e server MCP; `references/25-job-engine.md` motore di job asincrono, store su file, claim, reaping, container non costruito; `references/26-edl3-e-ponte.md` specifica EDL 3, ponte analisi-assemblaggio, ciclo critico e backlog
+- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.1, A/B-Roll, source_id; `references/20-render-multisorgente.md` render N sorgenti, Gate 1 per fonte, `vx edl`; `references/21-regia-semantica-keyword.md` B-roll dalle keyword; `references/22-grammatica-e-mixer-audio.md` 30°/180° e mixer A/B; `references/23-triage-e-auto.md` triage, EDL 2.2, master e `vx auto`; `references/24-api-e-mcp.md` API stabile, install editable e server MCP; `references/25-job-engine.md` motore di job asincrono, store su file, claim, reaping, container non costruito; `references/26-edl3-e-ponte.md` specifica EDL 3, ponte analisi-assemblaggio con la Fase A implementata, ciclo critico e backlog

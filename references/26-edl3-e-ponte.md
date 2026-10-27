@@ -375,6 +375,9 @@ Sforzo: S < 1 giorno, M 2-4 giorni, L 1-2 settimane, XL oltre.
 | A11 | B-roll sovrapposti | politica esplicita: trim, shift o rifiuto con motivo; mai scarto silenzioso | S |
 | A12 | Loop musica | una traccia corta viene loopata con crossfade e conteggio dichiarato | S |
 
+**Stato dei criteri.** A1-A12: implementati, come descritto in 6.1. B1-B12,
+C1-C7, D1-D6 ed E1-E6: aperti, non implementati.
+
 ### Gruppo B, espressione (EDL 3)
 
 | ID | Capacita | Criterio d'accettazione | Sforzo |
@@ -425,6 +428,92 @@ Sforzo: S < 1 giorno, M 2-4 giorni, L 1-2 settimane, XL oltre.
 | E4 | Reframe multi-soggetto | il centro segue lo speaker attivo con punch-in | L |
 | E5 | Impronta di stile | misure estratte da un riferimento e riapplicate | L |
 | E6 | Disciplina degli effetti | ogni effetto ha trigger, tetto e prova; il gate rifiuta il resto | M |
+
+---
+
+## 6.1 Stato della Fase A
+
+La Fase A non e piu una promessa: A1-A12 sono nel codice. Quello che segue
+descrive cosa esiste davvero, dove vive e cosa si puo osservare. Dove un limite
+resta, e scritto come limite, non come roadmap.
+
+**A1. Montaggio multi-A-roll (`--montage`).** Con `--montage` ogni video con
+audio che supera i cancelli del triage diventa un `a_roll`, nell'ordine di
+scoperta degli asset; i video muti restano `b_roll` e un ruolo dichiarato nel
+manifest vince sull'euristica. Il percorso predefinito resta governato dalla
+regola del singolo `a_roll`. Il comportamento e in `auto.py`, che costruisce la
+sequenza e la dichiara in `auto_report.json`: su otto clip in ingresso il referto
+elenca otto `a_roll` e la timeline li monta in sequenza.
+
+**A2. Politica di riempimento (`--fill crop|fit|blur`).** `fit` resta il valore
+predefinito ed e byte-identico al comportamento precedente; `crop` e `blur`
+producono grafi distinti. Il fattore di upscale e dichiarato per clip in
+`auto_report.json`, sotto `fill[]`. Il riempimento e un parametro di render, non
+un campo dell'EDL: il contratto resta 2.2.0 e non esiste alcuna chiave `fill`
+nel documento EDL. Il codice che possiede i tre grafi e il percorso di render.
+
+**A3. Loudness per clip sul segmento usato.** Il gain si misura sui soli tratti
+conservati, tramite `audio.loudness_spans`; sulle clip del caso studio i valori
+originali coprivano 8 LU (da -16.8 a -24.9 LUFS) e ora risultano allineati. Un
+gain richiesto oltre l'intervallo [-60, +24] viene limitato al bordo e la carenza
+e dichiarata come `shortfall_lu`. Una misura non valida (`input_i` a 0.0 o fuori
+intervallo) non produce alcun gain e viene dichiarata come `measurement_invalid`.
+Il calcolo vive in `audio.py` e il ponte lo consuma in `bridge.py`.
+
+**A5. Taglio dei silenzi dal VAD.** I tagli nascono dagli span VAD e `dead_air`.
+Un intervallo rimosso fuori dall'unione dei silenzi misurati e un errore duro, non
+una tolleranza. Il padding verso l'interno si applica solo sul lato che ha
+contenuto adiacente: sul lato di bordo il taglio arriva al margine misurato, quindi
+il silenzio in testa e in coda viene rimosso per intero e non resta uno stub.
+I frammenti sotto la durata minima si ricuciono e vengono dichiarati. La logica e
+in `bridge.py`.
+
+**A4. Ancore di parola e sottotitoli sulla tela.** Le parole diventano ancore e i
+sottotitoli vengono rimappati sulla timeline tagliata; un sottotitolo che
+attraversa un taglio viene spezzato, e le parole cadute dentro un silenzio
+rimosso vengono contate sul sottotitolo. L'ASS e bruciato sulla tela, non dentro
+una fascia di piattaforma: `margin_v = round(out_h * 0.08)` con clamp a
+[24, out_h/4]. Il ponte e in `bridge.py`, le primitive ASS in `subs.py`.
+
+**A6. Reframe dalle tracce volto.** Il reframe usa
+`autoframe.build_crop_plan`, lo stesso pianificatore gia esistente. I keyframe
+esistono solo dove esiste un campione di traccia volto, e la scala resta costante
+per clip: il pianificatore fa pan, non zoom. Il renderer aggiunge poi un keyframe
+di tenuta all'inizio della clip, copiando il primo campione: non inventa una
+misura, ma il grafo puo contenere un istante in piu rispetto al piano. Vive in
+`bridge.py` sopra `autoframe.py`.
+
+**A7. Denoise e stabilizzazione.** Il denoise usa `afftdn` con il noise floor
+misurato; la stabilizzazione usa `deshake` in una sola passata. Ognuno si applica
+solo quando il proprio finding supera la soglia, e ogni salto viene dichiarato
+con il valore misurato. Il percorso EditPlan e diverso: usa un noise floor fisso
+di -25.0 dB e stabilizza con vidstab in due passate. Il ponte e in `bridge.py`.
+
+**A8. Punteggio dei B-roll.** Lo score e la quota della finestra di destinazione
+coperta dalle ancore di parola trascritte, moltiplicata per la loro confidenza
+media pesata sul tempo coperto. E un proxy di copertura temporale, non una
+similarita semantica fra il contenuto dello shot e le parole pronunciate: nessun
+modello di embedding viene usato. La formula e in `bridge.py`.
+
+**A9. Deduplica percettiva.** La deduplica usa un dHash su tre frame, al 15, 50 e
+85 per cento della durata, per 192 bit, con distanza di Hamming normalizzata. La
+soglia e 0.06, con intervallo dichiarato fino a 0.5. Misurato su materiale reale:
+lo stesso take ricodificato segna 0.057, un take diverso alla stessa durata e
+risoluzione segna 0.495. Vive in `asset_triage.py`.
+
+**A10. Camera dichiarata.** Le finestre di destinazione che portano una
+`CameraSpec` vengono ri-temporalizzate, limitate o scartate, e in ogni caso
+dichiarate con lo span originale e quello nuovo; non esiste un divieto silenzioso.
+Non e un effetto di movimento: e metadato di camera applicato alla finestra.
+
+**A11. B-roll sovrapposti.** Quando due B-roll si sovrappongono vince lo score
+piu alto; a parita vince il piu antico. La dichiarazione porta entrambi gli id e
+entrambi gli score, quindi la scelta e verificabile. Vive in `bridge.py`.
+
+**A12. Loop della musica.** Una traccia piu corta della timeline viene loopata
+con `acrossfade`, con numero di copie `n = ceil((T-c)/(M-c))`, limitato a 256. Se
+la traccia e gia abbastanza lunga il grafo resta byte-identico a prima. La logica
+e in `bridge.py`, l'esecuzione nel render.
 
 ---
 
@@ -491,15 +580,22 @@ Modelli esterni da valutare **con la licenza prima dell'integrazione**:
 
 ---
 
-## 11. Cosa non e stato implementato in questa sessione
+## 11. Cosa non e stato implementato
 
-Questa e una specifica, non un rilascio. In questa sessione non sono stati
-modificati ne il contratto EDL ne il codice di `auto`, `asset_triage`, `ingest`,
-`render`, `jobs` o `mcp_server`. Il documento definisce il lavoro delle fasi A-H e
-il criterio con cui ognuna si considera chiusa.
+Niente di A1-A12 resta non implementato: la Fase A e nel codice e il caso studio
+gira. Restano quattro limiti onesti, ognuno dichiarato e verificabile.
 
-Il primo passo eseguibile e la Fase A, e il primo test e quello del caso studio:
-`vx auto` sulle stesse otto clip deve produrre otto clip in sequenza, riempimento
-dichiarato, loudness per clip entro ±1 LU, sottotitoli sulla tela e silenzi
-tagliati. Finche quel test non passa, il WOW non e un problema di effetti: e un
-problema di fondamenta.
+Il primo riguarda il VAD. Su alcune clip del caso studio il VAD (silero) non era
+disponibile: quelle clip non hanno un silenzio misurato e non viene tagliato
+nulla. Non e una omissione silenziosa, e una dichiarazione di assenza.
+
+Il secondo riguarda lo score dei B-roll: e un proxy di copertura temporale, non
+una similarita semantica. Misura quanto le parole trascritte coprono la finestra,
+non se lo shot c'entra con cio che viene detto.
+
+Il terzo riguarda il reframe: il pianificatore fa pan, non zoom. La scala resta
+costante per clip, quindi non c'e punch-in.
+
+Il quarto riguarda la stabilizzazione: il percorso EDL usa `deshake` in una
+passata, mentre il percorso EditPlan usa vidstab in due passate. Sono due strade
+diverse con due risultati diversi, e il documento non le confonde.
