@@ -545,6 +545,7 @@ def _run_locked(
     reframe_map: Dict[str, Any] = {}
     restore_map: Dict[str, Any] = {}
     captions_ass: Optional[str] = None
+    captions_srt: Optional[str] = None
     bridge_gains_applied = False
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge")
@@ -570,6 +571,11 @@ def _run_locked(
                 out_h=int(plan.resolution[1]),
             )
             captions_ass = str(written) if written is not None else None
+            sidecar = bridge_mod.caption_srt(
+                bridge_report.captions,
+                workdir / "captions.srt",
+            )
+            captions_srt = str(sidecar) if sidecar is not None else None
         report_path = (workdir / "bridge_report.json").resolve()
         bridge_report.write(report_path)
         bridge_summary = {
@@ -587,6 +593,7 @@ def _run_locked(
                 if item.get("denoise") or item.get("stabilize")
             ),
             "subtitles": captions_ass,
+            "subtitles_srt": captions_srt,
             "report": str(report_path),
         }
         _log(
@@ -642,7 +649,13 @@ def _run_locked(
     qc_result = qc.audit_master(out, target_lufs=TARGET_LUFS, target_tp=TARGET_TP)
     _notify(progress, 96.0, "qc")
 
-    produced = deliverables.produce(plan, out, workdir / "out", workdir=workdir)
+    produced = deliverables.produce(
+        plan,
+        out,
+        workdir / "out",
+        srt_source=Path(captions_srt) if captions_srt else None,
+        workdir=workdir,
+    )
     _notify(progress, 100.0, "deliverables")
 
     _assert_sources_unchanged(assets, source_sha)

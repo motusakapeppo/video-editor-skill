@@ -789,6 +789,30 @@ def caption_ass(
     from . import subs
 
     style = _caption_style(caption_style)
+    cues = _caption_cues(captions, style)
+    if not cues:
+        return None
+    margin_v = min(
+        int(out_h) // 4,
+        max(24, int(round(float(out_h) * float(style["bottom_inset_ratio"])))),
+    )
+    path = subs.write_ass(
+        cues,
+        dst,
+        aspect=aspect,
+        style=str(style["style"]),
+        out_w=int(out_w),
+        out_h=int(out_h),
+        margin_v=margin_v,
+    )
+    return Path(path)
+
+
+def _caption_cues(
+    captions: Sequence[Mapping[str, Any]],
+    style: Mapping[str, Any],
+) -> List[Cue]:
+    """Cues from the bridge captions: the one place that decides what is a cue."""
     cues: List[Cue] = []
     for item in captions or ():
         text = " ".join(str(item.get("text") or "").split())
@@ -807,22 +831,28 @@ def caption_ass(
                 line_count=1,
             )
         )
+    return cues
+
+
+def caption_srt(
+    captions: Sequence[Mapping[str, Any]],
+    dst: str | Path,
+    *,
+    caption_style: Optional[Mapping[str, Any]] = None,
+) -> Optional[Path]:
+    """Write the sidecar SRT from the same cues the master burns.
+
+    The burned ASS and the delivered SRT must say the same words at the same
+    times, so both come from :func:`_caption_cues` and cannot drift. Without
+    that, a master with captions on screen ships next to an SRT that claims
+    there was no speech.
+    """
+    from . import subs
+
+    cues = _caption_cues(captions, _caption_style(caption_style))
     if not cues:
         return None
-    margin_v = min(
-        int(out_h) // 4,
-        max(24, int(round(float(out_h) * float(style["bottom_inset_ratio"])))),
-    )
-    path = subs.write_ass(
-        cues,
-        dst,
-        aspect=aspect,
-        style=str(style["style"]),
-        out_w=int(out_w),
-        out_h=int(out_h),
-        margin_v=margin_v,
-    )
-    return Path(path)
+    return Path(subs.write_srt(cues, dst))
 
 
 # --------------------------------------------------------------------------- #
