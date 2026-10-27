@@ -35,6 +35,14 @@ FEATURES: Dict[str, Feature] = {
         owner="f0-stagecache",
         description="riusa gli stage di render identici fra due giri (F0-T04/T05)",
     ),
+    "font_search": Feature(
+        default=False,
+        owner="f1-fontlib",
+        description=(
+            "abilita la ricerca di font online (Dafont) e ogni download; "
+            "spento, il catalogo locale resta l'unica sorgente"
+        ),
+    ),
 }
 
 _TRUE = ("1", "true", "yes", "on")
