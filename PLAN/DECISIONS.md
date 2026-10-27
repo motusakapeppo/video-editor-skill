@@ -128,6 +128,27 @@ commerciale esplicito è **meglio** di Dafont per un lavoro di committenza, perc
 la licenza è verificabile e non c'è da interpretare «free for personal use».
 Dafont resta utile per il gusto, dove il passo umano costa dieci secondi.
 
+### Aggiornamento D008 — le porte aperte, al posto del muro (2026-10-27)
+
+Indicazione dell'utente, verificata come principio: il blocco robot di Dafont e i
+suoi filtri anti-bot esistono proprio per impedire l'automazione sul loro server;
+simulare un browser con Selenium o Playwright è tecnicamente possibile, fragile e
+in violazione dei termini. Quindi si cambia sorgente, non comportamento.
+
+Chi ha un'API ufficiale o un canale pensato per il codice:
+
+| Sorgente | Serve una chiave | Licenza tipica | Stato |
+|---|---|---|---|
+| GitHub REST (ricerca repo/file `.ttf`/`.otf`, download da `raw`) | no (limite orario) | dipende dal repo: si legge il LICENSE | da implementare |
+| registry npm / Fontsource (`@fontsource/<nome>`) | no | OFL/Apache | da implementare |
+| Google Fonts Developer API | sì (`GOOGLE_FONTS_API_KEY`) | OFL/Apache | da implementare, con degrado dichiarato se la chiave manca |
+| FontSpace API | sì (account sviluppatore) | mista | **dichiarato non configurato**: nessun endpoint inventato finché l'utente non fornisce base URL e chiave |
+
+Regola che non cambia: la licenza si legge e si registra per ogni font. Un font da
+GitHub senza LICENSE leggibile è `unknown` e non entra. Le due sorgenti senza
+chiave — GitHub e npm/Fontsource — sono quelle che danno autonomia **subito**,
+senza che l'utente debba aprire un account.
+
 ## D009 — F17 prima di EDL 3 (2026-10-27)
 
 Scelta di ordine, richiesta dall'utente («la migliore per sicurezza e
