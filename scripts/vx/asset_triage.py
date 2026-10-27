@@ -82,6 +82,8 @@ _TRIAGE_KEYS = (
     "triage_sharpness_low",
     "triage_confidence_low",
     "triage_confidence_high",
+    "triage_phash_max_distance",
+    "triage_phash_duration_tolerance_sec",
 )
 
 
@@ -238,6 +240,172 @@ def _kind_from_suffix(path: Path) -> Optional[str]:
     if suffix in AUDIO_SUFFIXES:
         return "audio"
     return None
+
+
+# --------------------------------------------------------------------------- #
+# perceptual fingerprint (A9)
+# --------------------------------------------------------------------------- #
+
+# Relative positions of the sampled frames. Relative, not absolute: an encode
+# that starts a frame earlier still lands on the same content.
+PHASH_POSITIONS: Tuple[float, ...] = (0.15, 0.50, 0.85)
+PHASH_SIDE = 8
+PHASH_BITS_PER_FRAME = PHASH_SIDE * PHASH_SIDE
+
+
+class FingerprintError(RuntimeError):
+    """The clip could not be decoded far enough to be fingerprinted."""
+
+
+def perceptual_fingerprint(
+    path: str | Path, *, positions: Sequence[float] = PHASH_POSITIONS
+) -> str:
+    """Sample frames at fixed relative positions and return their dHashes.
+
+    Each frame is reduced to a 9x8 thumbnail and turned into ``PHASH_SIDE**2``
+    bits, one per horizontal neighbour pair (``left > right``), so a change in
+    brightness or codec noise that preserves structure does not move the hash.
+    The blocks of all samples are concatenated as hex, one fixed-width block per
+    sample, which makes the normalised Hamming distance between two fingerprints
+    a straight bit comparison.
+
+    Raising ``FingerprintError`` is deliberate: the caller declares the absent
+    measurement instead of reading a decode failure as a difference.
+    """
+    try:
+        import cv2
+    except Exception as exc:  # noqa: BLE001 - absent dependency is declared upstream
+        raise FingerprintError(f"opencv unavailable: {exc}") from exc
+
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        capture.release()
+        raise FingerprintError("cannot open the file")
+    try:
+        frames = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        duration = (frames / fps) if (fps > 0.0 and frames > 0.0) else 0.0
+        if duration <= 0.0:
+            raise FingerprintError("unknown duration")
+        blocks: List[str] = []
+        for ratio in positions:
+            capture.set(cv2.CAP_PROP_POS_MSEC, float(ratio) * duration * 1000.0)
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                raise FingerprintError(f"no decodable frame at {float(ratio):.2f}")
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            thumb = cv2.resize(gray, (PHASH_SIDE + 1, PHASH_SIDE))
+            bits = thumb[:, 1:] > thumb[:, :-1]
+            value = int("".join("1" if bit else "0" for bit in bits.flatten()), 2)
+            blocks.append(f"{value:0{PHASH_BITS_PER_FRAME // 4}x}")
+    finally:
+        capture.release()
+    return "".join(blocks)
+
+
+def fingerprint_distance(left: str, right: str) -> Optional[float]:
+    """Normalised Hamming distance in 0..1, or ``None`` when incomparable."""
+    if not left or not right or len(left) != len(right):
+        return None
+    try:
+        differing = sum(
+            bin(int(a, 16) ^ int(b, 16)).count("1") for a, b in zip(left, right)
+        )
+    except ValueError:
+        return None
+    return differing / float(len(left) * 4)
+
+
+def perceptual_asset_fingerprint(asset: AssetInfo) -> str:
+    return perceptual_fingerprint(asset.path)
+
+
+def _perceptual_duplicates(
+    assets: Sequence[AssetInfo],
+    *,
+    fingerprint: Callable[[AssetInfo], str],
+    thresholds: Mapping[str, Any],
+    not_evaluated: set[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Map each near-duplicate asset to the survivor it duplicates.
+
+    ``assets`` arrives in the deterministic triage order, so the survivor of a
+    cluster is its first member in that order and the verdict cannot depend on
+    the caller's ordering. A fingerprint is computed only when an earlier video
+    with the same resolution and a duration inside the tolerance exists, which
+    bounds the decode cost to the pairs that can actually match. A decode failure
+    is declared in ``not_evaluated`` and never removes the asset from the pool.
+    """
+    max_distance = float(thresholds["triage_phash_max_distance"])
+    tolerance = float(thresholds["triage_phash_duration_tolerance_sec"])
+    matches: Dict[str, Dict[str, Any]] = {}
+    digests: Dict[str, str] = {}
+    failed: set[str] = set()
+
+    bands: Dict[Tuple[int, int], List[AssetInfo]] = {}
+    for asset in assets:
+        if asset.kind != "video" or asset.width <= 0 or asset.height <= 0:
+            continue
+        if asset.duration_sec <= 0.0:
+            continue
+        bands.setdefault((int(asset.width), int(asset.height)), []).append(asset)
+
+    def _digest(asset: AssetInfo) -> Optional[str]:
+        if asset.asset_id in digests:
+            return digests[asset.asset_id]
+        if asset.asset_id in failed:
+            return None
+        try:
+            digests[asset.asset_id] = str(fingerprint(asset))
+        except Exception as exc:  # noqa: BLE001 - absence is declared, not guessed
+            failed.add(asset.asset_id)
+            not_evaluated.add(f"visual_fingerprint: {type(exc).__name__}: {exc}")
+            return None
+        return digests[asset.asset_id]
+
+    for band in bands.values():
+        if len(band) < 2:
+            continue
+        survivors: List[AssetInfo] = []
+        for asset in band:
+            comparable = [
+                other
+                for other in survivors
+                if abs(asset.duration_sec - other.duration_sec) <= tolerance
+            ]
+            if not comparable:
+                survivors.append(asset)
+                continue
+            digest = _digest(asset)
+            if digest is None:
+                survivors.append(asset)
+                continue
+            survivor: Optional[AssetInfo] = None
+            distance: Optional[float] = None
+            for other in comparable:
+                other_digest = _digest(other)
+                if other_digest is None:
+                    continue
+                measured = fingerprint_distance(digest, other_digest)
+                if measured is None or measured > max_distance:
+                    continue
+                survivor = other
+                distance = measured
+                break
+            if survivor is None or distance is None:
+                survivors.append(asset)
+                continue
+            matches[asset.asset_id] = {
+                "duplicate_of": survivor.asset_id,
+                "method": "phash",
+                "distance": round(distance, 4),
+                "similarity": round(1.0 - distance, 4),
+                "max_distance": max_distance,
+                "duration_sec": round(float(asset.duration_sec), 3),
+                "duration_tolerance_sec": tolerance,
+                "samples": len(PHASH_POSITIONS),
+            }
+    return matches
 
 
 # --------------------------------------------------------------------------- #
@@ -612,6 +780,7 @@ def triage_assets(
     measure: Optional[Callable[[AssetInfo], Mapping[str, Any]]] = measure_asset,
     role_source: Optional[str] = None,
     montage: bool = False,
+    fingerprint: Callable[[AssetInfo], str] = perceptual_asset_fingerprint,
 ) -> TriageResult:
     thresholds = _effective_thresholds()
     target_w, target_h = _target_size(target_resolution)
@@ -688,6 +857,7 @@ def triage_assets(
         for later in group[1:]:
             duplicate_of[later.asset_id] = first.asset_id
 
+    not_evaluated: set[str] = set()
     deduped: List[AssetInfo] = []
     for asset in alive:
         if asset.asset_id in duplicate_of:
@@ -709,10 +879,33 @@ def triage_assets(
         deduped.append(asset)
     alive = deduped
 
+    near_duplicates = _perceptual_duplicates(
+        alive,
+        fingerprint=fingerprint,
+        thresholds=thresholds,
+        not_evaluated=not_evaluated,
+    )
+    if near_duplicates:
+        kept: List[AssetInfo] = []
+        for asset in alive:
+            match = near_duplicates.get(asset.asset_id)
+            if match is None:
+                kept.append(asset)
+                continue
+            rejected.append(
+                _decision(
+                    asset,
+                    role="",
+                    selected=False,
+                    reason="DUPLICATE_ASSET",
+                    details={**match, "confidence": 1.0},
+                )
+            )
+        alive = kept
+
     roles = _assign_roles(
         alive, from_manifest=role_source == "manifest", montage=montage
     )
-    not_evaluated: set[str] = set()
     candidates: List[TriageDecision] = []
 
     for asset in alive:

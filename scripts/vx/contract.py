@@ -113,6 +113,15 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "triage_sharpness_low": 50.0,
     "triage_confidence_low": 0.2,
     "triage_confidence_high": 0.8,
+    # A9: perceptual duplicate detection. Two encodes of the same take decode to
+    # near-identical frames, so their sampled dHash agrees; a different take on
+    # the same set does not. The distance is a normalised Hamming distance over
+    # the concatenated sampled hashes (3 frames x 64 bits = 192 bits), so 0.06
+    # allows ~11 differing bits and nothing more.
+    "triage_phash_max_distance": 0.06,
+    # Two encodes of one take may differ by a few frames of container duration;
+    # a different take almost never lands inside half a second of the same length.
+    "triage_phash_duration_tolerance_sec": 0.5,
 }
 
 THRESHOLDS = MappingProxyType(_THRESHOLDS_DATA)

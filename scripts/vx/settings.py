@@ -81,6 +81,10 @@ RANGES: Dict[str, tuple[float, float]] = {
     "triage_sharpness_low": (0.0, 1000.0),
     "triage_confidence_low": (0.0, 1.0),
     "triage_confidence_high": (0.0, 1.0),
+    # Above 0.5 two unrelated dHashes are statistically indistinguishable from
+    # copies, so the range stops there: a wider window would collapse real takes.
+    "triage_phash_max_distance": (0.0, 0.5),
+    "triage_phash_duration_tolerance_sec": (0.0, 10.0),
 }
 
 DEFAULTS: Dict[str, Any] = {
