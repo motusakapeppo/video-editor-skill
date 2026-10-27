@@ -1,0 +1,34 @@
+{
+  "template": "vx-intro-countdown",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "2c49fa4b9ecec4ca283430e07d26a322b36ccc2619b57021612316990aef7df0",
+      "bytes": 12565
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "54a7edd9d03aa365d3539d36708b086bb8b9fc530177a2ebd0ea6b7f4c2fc2f7",
+      "bytes": 77085
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "aa2adbc3c5ebe959b4d340c57a93f703744edac30520e8ffd817ec3944b5549f",
+      "bytes": 59317
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "template": "vx-background-waves",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 8,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "202a60def96e0c53fb39abdb082e67a5b79c301eebbc64fec05c9bedb43a2fd8",
+      "bytes": 53485
+    },
+    {
+      "index": 4,
+      "t": 1.333333,
+      "file": "instant-01.png",
+      "sha256": "54fba95608bb266a96197da0ee28ae6f1dd455a879dc938d915a96650d28aa95",
+      "bytes": 168282
+    },
+    {
+      "index": 7,
+      "t": 2.333333,
+      "file": "instant-02.png",
+      "sha256": "7a86b221d40476e1bccb8e30142e8a24df0965d473a4290b4be83bd2f4da663d",
+      "bytes": 168520
+    }
+  ]
+}

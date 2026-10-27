@@ -40,6 +40,10 @@ CLOCK_MISSING   no assignment to `window.__vxSeek` was found, so the page is not
                 `"function"`; the static check is mandatory, the runtime check
                 is confirmation only.
 DANGEROUS_JS    `eval(`, `new Function(` or `document.write(`.
+NONDETERMINISTIC_JS  `Math.random`, `Date.now`, `new Date(` or `performance.now`:
+                the page reads entropy or the wall clock, so one `t` no longer
+                implies one picture. `requestAnimationFrame` only waits for a
+                paint and stays legal.
 DEP_MISSING     a local dependency (font, image, sprite, `.js`, `.css`,
                 `@font-face src`) named by the template does not exist on disk.
 DEP_ABSOLUTE    a dependency with a drive letter, a leading `/` or `\\`, or a
@@ -117,6 +121,7 @@ CODES = (
     "DEP_ABSOLUTE",
     "MANIFEST_INVALID",
     "NO_ENTRY",
+    "NONDETERMINISTIC_JS",
 )
 
 _ALLOWED_KEYS = frozenset({"name", "fps", "duration", "size", "params"})
@@ -746,6 +751,7 @@ def _scan_js_tokens(
     has_seek = False
     for position, (kind, value, offset) in enumerate(tokens):
         following = tokens[position + 1] if position + 1 < len(tokens) else None
+        second = tokens[position + 2] if position + 2 < len(tokens) else None
         if kind == "id" and value == "__vxSeek":
             if (
                 following is not None
@@ -798,6 +804,62 @@ def _scan_js_tokens(
         ):
             hits.append(
                 (offset, "DANGEROUS_JS", "document.write( rewrites the document")
+            )
+        elif (
+            value == "Math"
+            and following is not None
+            and following[0] == "punct"
+            and following[1] == "."
+            and second is not None
+            and second[0] == "id"
+            and second[1] == "random"
+        ):
+            hits.append(
+                (
+                    offset,
+                    "NONDETERMINISTIC_JS",
+                    "Math.random is not a function of t",
+                )
+            )
+        elif (
+            value == "Date"
+            and following is not None
+            and following[0] == "punct"
+            and following[1] == "."
+            and second is not None
+            and second[0] == "id"
+            and second[1] == "now"
+        ):
+            hits.append(
+                (offset, "NONDETERMINISTIC_JS", "Date.now reads the wall clock")
+            )
+        elif (
+            value == "performance"
+            and following is not None
+            and following[0] == "punct"
+            and following[1] == "."
+            and second is not None
+            and second[0] == "id"
+            and second[1] == "now"
+        ):
+            hits.append(
+                (
+                    offset,
+                    "NONDETERMINISTIC_JS",
+                    "performance.now reads the wall clock",
+                )
+            )
+        elif (
+            value == "new"
+            and following is not None
+            and following[0] == "id"
+            and following[1] == "Date"
+            and second is not None
+            and second[0] == "punct"
+            and second[1] == "("
+        ):
+            hits.append(
+                (offset, "NONDETERMINISTIC_JS", "new Date( reads the wall clock")
             )
     return hits, has_seek
 

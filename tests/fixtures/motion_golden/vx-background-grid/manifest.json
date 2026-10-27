@@ -1,0 +1,34 @@
+{
+  "template": "vx-background-grid",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "e0f39048fdd5bf52618b8d390e6ba0c6fe04347a5586a873f7461410c6dfb871",
+      "bytes": 230274
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "1143024dce2cafef7490c8eb618de11833d3c72ca9780e1c9581b51c01f1c1f8",
+      "bytes": 234261
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "4b49693942b8c818456feeb1f717ee14edb08857de2438862e8a167c3d862af0",
+      "bytes": 234647
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "template": "vx-transition-luma",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 6,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "efae2ee9f112630b492b79988e33222c403b631983e0c6c2b3079e1493fbe13b",
+      "bytes": 300812
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "e88b86221007010fd97abf94e0ba0216376d9ea46a5063d64d534f8d0708b361",
+      "bytes": 518443
+    },
+    {
+      "index": 5,
+      "t": 1.666667,
+      "file": "instant-02.png",
+      "sha256": "9ebf751da9f464f47f0419f982dbed3c7f52fbd807c74556f76c2effc40b551d",
+      "bytes": 518418
+    }
+  ]
+}

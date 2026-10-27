@@ -1,0 +1,34 @@
+{
+  "template": "vx-kinetic-word-pop",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "b84da1e0283d754f8f441a8acad1634317df0662c889034cef418713914aaeae",
+      "bytes": 113130
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "ec0455bdfa9e7774e41705e604050d1cf8ee0eaa3997e91d32706199c49dc9a4",
+      "bytes": 112527
+    }
+  ]
+}

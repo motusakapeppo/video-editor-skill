@@ -166,7 +166,7 @@ WPM. Le soglie vivono in `scripts/vx/contract.py`; la tabella è read-only e
 Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
 `out/master.mp4` sempre; `out/subtitles.srt` solo se esiste parlato;
 `out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. L'export multi-aspect non è
-implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`.
+implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`; `python tests/test_motion_golden.py` ricattura i 54 template della Motion Studio a tre istanti e li confronta byte per byte con `tests/fixtures/motion_golden/`.
 
 ## Percorsi e sicurezza
 
@@ -181,10 +181,10 @@ liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
 
 ## Superficie opzionale, non normativa, non raggiungibile dalla CLI
 
-`board.py`, `pipeline.py`, `decide.py`, `creative.py` e `motion_browser.py`
-restano come motore sperimentale di giuria e compositing. `pipeline.run` rifiuta
-un brief non firmato, ma `cli.py` non lo importa: nessun comando del protocollo
-lo raggiunge. Non è un secondo protocollo e non va usato per una consegna.
+`board.py`, `pipeline.py`, `decide.py`, `creative.py` e `motion_browser.py` restano
+motore sperimentale di giuria. La Motion Studio (`motion.py`, 54 template in
+`assets/templates/`) non è più un'anteprima: un documento EDL 3 dichiara una clip
+`generator` e il render la compone con l'alfa. Nessun comando la raggiunge: si usa dall'API.
 
 ## Riferimenti
 

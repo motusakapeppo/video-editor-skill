@@ -1,0 +1,34 @@
+{
+  "template": "vx-subtitle-bold",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "2b1b28c3f42fd74450fa1e4aaa92d41eb0417a676999110d55bc4bad5b10ece8",
+      "bytes": 61326
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "801ccf0737f00b47616eb032edee2c1784c9e54393ba6c88c88f00956c80a844",
+      "bytes": 50177
+    }
+  ]
+}

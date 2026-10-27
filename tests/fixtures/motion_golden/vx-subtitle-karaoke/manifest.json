@@ -1,0 +1,34 @@
+{
+  "template": "vx-subtitle-karaoke",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 8,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "bb631f4c072c7b9c584ea1c05746fdbb25e9a8cc756ff8d163dfc154fee31fe1",
+      "bytes": 93976
+    },
+    {
+      "index": 4,
+      "t": 1.333333,
+      "file": "instant-01.png",
+      "sha256": "877754bef12b87a32dbf50a39ec2b54eac59ac2b48ab1904586a40fcfaa19fa2",
+      "bytes": 80150
+    },
+    {
+      "index": 7,
+      "t": 2.333333,
+      "file": "instant-02.png",
+      "sha256": "2af53a86e1db8c013dd950e0abc0e6c3c0f98fd1003cb131304cdc30236c66a5",
+      "bytes": 68309
+    }
+  ]
+}

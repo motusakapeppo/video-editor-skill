@@ -364,3 +364,41 @@ disegna e 0,000 in alto dove non disegna; 12 rifiuti, ognuno con il proprio codi
 `compile_timeline` non lancia nessun processo (provato con `subprocess.run` e
 `Popen` sostituiti da una funzione che solleva).
 
+---
+
+## D016 - Il sigillo e un ri-render, non un confronto con se stesso (2026-10-27)
+
+La prima versione di `tests/test_motion_golden.py` confrontava i PNG dei fixture
+con il manifest che li aveva generati. Girava su 54 template in **0,9 secondi**.
+Quel numero era la confessione: nessun browser era stato avviato. Con quella
+versione si potevano svuotare tutti i template e il test sarebbe rimasto verde,
+perche stava solo verificando che i file non fossero stati modificati a mano.
+
+Il sigillo vero chiede al browser gli stessi istanti **oggi** e confronta i byte.
+Costa 96 secondi e 54 avvii di browser, e per questo vale: un cambio di
+antialiasing, un template modificato, un font diverso o un motore aggiornato
+producono un hash diverso e il test fallisce dicendo template e istante.
+
+Quattro regole rendono il sigillo non aggirabile.
+
+1. **Il test non scrive.** La rigenerazione e un comando separato,
+   `python tests/motion_golden.py --write`. Una variabile d'ambiente letta dal test
+   sarebbe una porta aperta: basta che qualcuno la imposti per riscrivere il
+   sigillo durante una suite.
+2. **Tre istanti, non uno.** Inizio, meta e fine (`0`, `count//2`, `count-1`) a
+   `fps 3`: un template che ignora `t` produce tre frame uguali e il confronto con
+   se stesso non lo direbbe, ma la distinzione fra template e la lettura dei tre
+   campioni si.
+3. **La versione del motore e nel manifest.** `engine_version` viene registrata e
+   confrontata: un browser aggiornato non passa in silenzio, e il messaggio dice
+   come rigenerare. Un frame prodotto dal ripiego Pillow non soddisfa mai il
+   sigillo, perche il test pretende un motore vero.
+4. **La determinismo si impone a monte.** Il linter ha un decimo codice,
+   `NONDETERMINISTIC_JS`, che rifiuta `Math.random`, `Date.now`, `new Date(` e
+   `performance.now`. Un template che legge l'orologio non entra nella libreria,
+   quindi non puo far oscillare il sigillo domani.
+
+Costo dichiarato: 162 PNG, 13,2 MB, 96 secondi per giro, 118 assert. E il prezzo di
+un controllo che non si puo aggirare; un golden che non ri-renderizza e un
+documento, non un test.
+

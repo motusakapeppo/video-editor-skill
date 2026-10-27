@@ -1,0 +1,34 @@
+{
+  "template": "vx-kinetic-mask-reveal",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 8,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 4,
+      "t": 1.333333,
+      "file": "instant-01.png",
+      "sha256": "f51d10e20ea7f529776132b573cfbc4ad4fee24f1459e8e1aa0ebb46a88db24c",
+      "bytes": 91770
+    },
+    {
+      "index": 7,
+      "t": 2.333333,
+      "file": "instant-02.png",
+      "sha256": "c699083b51457d02c0fd85e0ae821489c9e7808fda27a2030e224ce2368251d9",
+      "bytes": 58369
+    }
+  ]
+}

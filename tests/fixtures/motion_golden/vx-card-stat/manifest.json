@@ -1,0 +1,34 @@
+{
+  "template": "vx-card-stat",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "81e6afb937363dc484535061c96f605543aa29a1ffa56e5817480d41f709507b",
+      "bytes": 115650
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "03f6cb9b00b4486f5fa8fd6ee7ab6cdf0c9602bd7662cceb1137ca5652ac8219",
+      "bytes": 111075
+    }
+  ]
+}

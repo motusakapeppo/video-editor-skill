@@ -10,8 +10,9 @@ uses before it decides to start an engine.
 What it proves:
 
 a. the shipped `vx-title-lower-third` template passes with no findings;
-b. ten hostile templates, each with exactly one violation, each reported with
-   the expected code;
+b. eleven hostile templates, each with exactly one violation, each reported with
+   the expected code; the eleventh carries all four clock/entropy reads and is
+   reported as four NONDETERMINISTIC_JS findings;
 c. three violations in one template are all reported in a deterministic order,
    and two runs produce byte-identical JSON;
 d. `capture` refuses a hostile template through the declared error and never
@@ -119,6 +120,11 @@ def run(work: Path) -> None:
         str(good["stats"]),
     )
     note("runtime", "static-only here; runtime_probe() is opt-in")
+    check(
+        "a. CODES declares the ten lint codes",
+        len(motion_lint.CODES) == 10,
+        f"{len(motion_lint.CODES)}: {', '.join(motion_lint.CODES)}",
+    )
 
     remote_script = expect_one(
         "remote <script src>",
@@ -206,6 +212,52 @@ def run(work: Path) -> None:
             manifest="{ this is not json",
         ),
         "MANIFEST_INVALID",
+    )
+
+    nondeterministic = write_template(
+        work / "nondeterministic",
+        page(
+            script=(
+                f"{SEEK}\n"
+                "var a = Math.random();\n"
+                "var b = Date.now();\n"
+                "var c = new Date(2020, 1, 1);\n"
+                "var d = performance.now();\n"
+            )
+        ),
+    )
+    detected = motion_lint.lint(nondeterministic, runtime_check=False)
+    reported = codes_of(detected)
+    check(
+        "b. four clock/entropy reads -> four NONDETERMINISTIC_JS",
+        detected["ok"] is False and reported == ["NONDETERMINISTIC_JS"] * 4,
+        f"codes={reported}",
+    )
+    details = " | ".join(
+        item["detail"]
+        for item in detected["findings"]
+        if item["code"] == "NONDETERMINISTIC_JS"
+    )
+    check(
+        "b. each nondeterministic finding names its construct",
+        all(
+            token in details
+            for token in ("Math.random", "Date.now", "new Date(", "performance.now")
+        ),
+        details,
+    )
+
+    legal_wait = motion_lint.lint(
+        write_template(
+            work / "raf-legal",
+            page(script=f"{SEEK} requestAnimationFrame(function () {{}});"),
+        ),
+        runtime_check=False,
+    )
+    check(
+        "b. requestAnimationFrame stays legal",
+        legal_wait["ok"] is True and legal_wait["findings"] == [],
+        f"codes={codes_of(legal_wait)}",
     )
 
     triple_html = (

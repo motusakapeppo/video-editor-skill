@@ -1,0 +1,34 @@
+{
+  "template": "vx-transition-iris",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 6,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "3d716cbf2f9e1d45ea9293e704f0a41a86b8af2129c6ae6b917307305cf73b3e",
+      "bytes": 14895
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "03f7f650c99121f76bae902d4f8655a2b0b90d23ae1a3f0f59523e1219d80a5b",
+      "bytes": 116668
+    },
+    {
+      "index": 5,
+      "t": 1.666667,
+      "file": "instant-02.png",
+      "sha256": "6660630d5f59fca9ca21f5a5b35e5c380c44b59e2ff7763602d9f3d53b3d7166",
+      "bytes": 78214
+    }
+  ]
+}

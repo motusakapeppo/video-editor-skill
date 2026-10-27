@@ -1,0 +1,34 @@
+{
+  "template": "vx-card-quote",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "3a87ed98f9fda599c3890bf734cf6ea7f8c5b04b53ab2b4cc4a25e25d4684d94",
+      "bytes": 73879
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "85e9e06609f7780eae8cae639188c57f9eec03a2913f721d426e400768a2cf4c",
+      "bytes": 73898
+    }
+  ]
+}

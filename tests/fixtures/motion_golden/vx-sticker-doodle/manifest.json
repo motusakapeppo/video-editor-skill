@@ -1,0 +1,34 @@
+{
+  "template": "vx-sticker-doodle",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "297e782695e49f38728f25f741ae0f283fd2e6a1f9d32be8a7e5c07cb9f72fa4",
+      "bytes": 90360
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "919b8ad41865d6d3a79d8ac0897aa3d62a42acd7e06b5e0d1ddbdaf83629a38e",
+      "bytes": 98979
+    }
+  ]
+}

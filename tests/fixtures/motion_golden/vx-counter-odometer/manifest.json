@@ -1,0 +1,34 @@
+{
+  "template": "vx-counter-odometer",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "babd61e6cf83cbcf96fc49ca04237c6338aa4d822e45d48701ad767fa314a81e",
+      "bytes": 19238
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "6bf04fbab4b272fe9c03f25b10a889c0e6652d3dae0d1c05fcbaa5cf77bc3a65",
+      "bytes": 33872
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "6bf04fbab4b272fe9c03f25b10a889c0e6652d3dae0d1c05fcbaa5cf77bc3a65",
+      "bytes": 33872
+    }
+  ]
+}

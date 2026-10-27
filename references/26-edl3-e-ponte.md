@@ -621,3 +621,65 @@ costante per clip, quindi non c'e punch-in.
 Il quarto riguarda la stabilizzazione: il percorso EDL usa `deshake` in una
 passata, mentre il percorso EditPlan usa vidstab in due passate. Sono due strade
 diverse con due risultati diversi, e il documento non le confonde.
+
+---
+
+## 12. La Motion Studio nel documento (F3)
+
+Un effetto che qualifica Chromium (`layout`, `backdrop_filter`, `blend_animated`,
+`reflow`) non e un filtro ffmpeg: e una pagina che va rasterizzata. Il documento lo
+dichiara come **terza specie di sorgente**, esclusiva con `source` e `sequence`:
+
+```json
+"generator": {
+  "template": "vx-title-lower-third",
+  "params": {"title": "Nome", "accent": "#FFD400"},
+  "engine": "chromium",          // chromium | pillow | auto
+  "alpha": true
+}
+```
+
+La clip generatrice parte dal frame zero del template: `src_in` deve essere 0, lo
+span deve coincidere con la durata del template entro mezzo frame, e speed,
+reverse e freeze sono rifiutati. Un effetto qualificante sulla stessa clip diventa
+un **marcatore** (parametri e keyframe vuoti) e viene riportato come
+`realized_by: generator`, mai applicato due volte.
+
+**Chi produce i pixel.** `compile_timeline` resta puro: non avvia browser, non
+scrive frame, non lancia processi. La cattura vive in `render()`, accanto a
+`_render_nested`, e arriva al compilatore come `generator_paths`. Il compilatore
+non si fida del percorso: rilegge `capture.json` e pretende template, digest del
+contenuto, parametri risolti, fps, dimensione e numero di frame. Un `capture.json`
+di ieri, di un altro template o di un'altra dimensione e un rifiuto
+(`GENERATOR_CAPTURE`), non un frame sbagliato.
+
+**Come entra nel grafo.** `-framerate <fps> -loop 1 -t <span> -i
+<dir>/frame_%05d.png` all'ordinale della clip, senza `-ss`. La catena chiude in
+`format=rgba` quando la clip ha `alpha: true` e sta su `layer >= 1`: ogni altra
+catena chiude in `format=yuv420p`, che distruggerebbe l'alfa prima dell'overlay.
+
+**Senza Chromium.** `motion_fallback.resolve_engine` decide fra `chromium`,
+`pillow` e `unavailable`. Il ripiego rasterizza i parametri risolti in una card,
+dichiara `engine: pillow`, `fallback: true` e
+`degraded: [html, layout, effects]`, e non finge mai le tre proprieta che solo il
+motore sa fare: quelle sono `unavailable`, non un frame plausibile e sbagliato.
+
+**La libreria.** 54 template su 12 famiglie (quattro layout per undici famiglie,
+dieci stili di sottotitoli), ognuno con almeno tre parametri e almeno un dominio
+chiuso; `validate_call` rifiuta un valore fuori dominio nominando il parametro. La
+famiglia e il primo segmento del nome (`vx-title-*`), perche il manifest ammette
+solo cinque chiavi.
+
+**Il sigillo.** `tests/test_motion_golden.py` ricattura ogni template a `fps 3` e
+confronta byte per byte i tre istanti registrati in `tests/fixtures/motion_golden/`
+(inizio, meta, fine): 162 PNG, 13,2 MB, 96 secondi per giro. Il manifest porta
+`engine_version`, quindi un aggiornamento del browser si vede subito; la
+rigenerazione e un atto esplicito (`python tests/motion_golden.py --write`), non una
+variabile d'ambiente letta dal test. Un frame prodotto dal ripiego non soddisfa
+mai il sigillo.
+
+Codici di rifiuto del generatore: `GENERATOR_SHAPE`, `GENERATOR_SOURCE_CONFLICT`,
+`GENERATOR_TIME_FX`, `GENERATOR_SPAN`, `GENERATOR_ALPHA_LAYER`,
+`GENERATOR_TEMPLATE`, `GENERATOR_PARAMS`, `GENERATOR_CAPTURE`,
+`GENERATOR_EFFECT`, `CHROMIUM_NEEDS_GENERATOR`, `BACKEND_UNAVAILABLE`.
+

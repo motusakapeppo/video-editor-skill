@@ -1,0 +1,34 @@
+{
+  "template": "vx-intro-glitch",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "799bf92216d220573a0b047001ebf63df5c97c2771b7faa1cfc9f49a1d082d00",
+      "bytes": 48794
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "1118a2f89208e8597945e2d580c361c3694cc0cb5533880c993c3a9a43bfdeb2",
+      "bytes": 28835
+    }
+  ]
+}

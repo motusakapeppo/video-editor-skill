@@ -1,0 +1,34 @@
+{
+  "template": "vx-background-bokeh",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 8,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "29ad6e10d48af396251a4cba703dfed2a908f64d9636d28b1501b91a0ffee428",
+      "bytes": 466271
+    },
+    {
+      "index": 4,
+      "t": 1.333333,
+      "file": "instant-01.png",
+      "sha256": "cfe32e6a323dfc940e29d78491c1eba6c39789a94a8c5e38a1fc6c0204df24cd",
+      "bytes": 591908
+    },
+    {
+      "index": 7,
+      "t": 2.333333,
+      "file": "instant-02.png",
+      "sha256": "d991ba1e649e313251886054a63004adf2640321edae89ee49b2c73457baa1fb",
+      "bytes": 591677
+    }
+  ]
+}

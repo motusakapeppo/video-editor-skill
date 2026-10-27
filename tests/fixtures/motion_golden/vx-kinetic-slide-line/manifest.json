@@ -1,0 +1,34 @@
+{
+  "template": "vx-kinetic-slide-line",
+  "engine": "chromium",
+  "engine_version": "156.0.8078.48",
+  "fps": 3.0,
+  "frame_count": 7,
+  "size": [
+    1080,
+    1920
+  ],
+  "instants": [
+    {
+      "index": 0,
+      "t": 0.0,
+      "file": "instant-00.png",
+      "sha256": "b163a0aad98a71aa447db7a809f06266205b25369ace5f2f2146f5c3b1f8e66c",
+      "bytes": 12378
+    },
+    {
+      "index": 3,
+      "t": 1.0,
+      "file": "instant-01.png",
+      "sha256": "8b60cc330ec5116eab4a0461c63a97221b566bbcc8f75a49f3dafe463fd4611e",
+      "bytes": 105650
+    },
+    {
+      "index": 6,
+      "t": 2.0,
+      "file": "instant-02.png",
+      "sha256": "3dbf7fbc7234fd3e4be8628a6859a845b95fdb1f1e09d59f3173dea30494123a",
+      "bytes": 57486
+    }
+  ]
+}
