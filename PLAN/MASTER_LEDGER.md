@@ -220,9 +220,9 @@ all'utente e saper scegliere da sola quando nessuno risponde.
 
 | ID | Task | Accettazione binaria | Stato |
 |---|---|---|---|
-| FX-T01 | Provider font con sonda di disponibilità e licenza registrata per ogni font | senza rete: provider `unavailable` dichiarato, il lavoro prosegue con i font inclusi | TODO |
-| FX-T02 | Ricerca per criteri (genere, tono, peso, licenza commerciale) con cache locale | la stessa ricerca due volte non fa due chiamate; il risultato cita la pagina del font e la licenza | TODO |
+| FX-T01 | Provider font con sonda di disponibilità e licenza registrata per ogni font | senza rete: provider `unavailable` dichiarato, il lavoro prosegue con i font inclusi | DONE `1a92ad4` — catalogo con licenza e robots rispettato, 62+79 controlli |
+| FX-T02 | Ricerca per criteri (genere, tono, peso, licenza commerciale) con cache locale | la stessa ricerca due volte non fa due chiamate; il risultato cita la pagina del font e la licenza | DONE `a67d03d` + `fe702a1` — scelta misurata e provider API, 98+106 controlli |
 | FX-T03 | Proposta all'utente con anteprima renderizzata | la proposta mostra il testo reale del progetto sul font, con licenza e alternativa | TODO |
-| FX-T04 | Scelta autonoma: regola deterministica quando l'utente non risponde | brief aperto + nessuna risposta = font scelto dal profilo con motivazione dichiarata; licenza non commerciale mai scelta in autonomia | TODO |
+| FX-T04 | Scelta autonoma: regola deterministica quando l'utente non risponde | brief aperto + nessuna risposta = font scelto dal profilo con motivazione dichiarata; licenza non commerciale mai scelta in autonomia | DONE `a67d03d` — decide() deterministico, solo commerciali, None con motivo |
 | FX-T05 | Integrazione nel Creative Brief e nel render ASS | il font scelto arriva a `fontsdir` e al `Fontname` senza sostituzioni; sostituzione = `QCFailure` | TODO |
 | FX-T06 | Licenze: matrice e attribuzione | ogni font usato ha licenza, fonte e data in `LICENSES_MATRIX.md`; un font senza licenza commerciale non entra in un lavoro di committenza | TODO |
