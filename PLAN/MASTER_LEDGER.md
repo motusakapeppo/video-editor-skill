@@ -39,6 +39,27 @@ stage dipendenti (il test conta gli stage eseguiti); suite verde.
 | F0-T08 | Stimatore dei tempi prima del render | su un set di prova l'errore mediano sta sotto la soglia dichiarata; il valore compare nel referto | TODO |
 | F0-T09 | Corpus annotato per calibrare le soglie | il corpus esiste con annotazioni e un test verifica che le soglie dichiarate siano derivate da esso | TODO |
 
+### Note di realtà su F0 (verificate sul codice, 2026-10-27)
+
+- **F0-T04 non è greenfield.** Esiste già una cache a contenuto reale per i chunk
+  di analisi del parlato: `checkpoint.py` (`identity`, `Store.load_chunk`,
+  `write_chunk`) con chiave `source_sha256 + analysis_sha256 + parametri + versione
+  del motore`, e la prova che salta il lavoro sta in
+  `tests/test_chunk_checkpoints.py` (8 cached / 1 computed). Il task estende quel
+  pattern agli stage di render, non ne inventa un altro.
+- **F0-T09 è in gran parte fatto.** `tests/measure_corpus.py` misura 9 clip in
+  `corpus_stats.json` con `corpus_hash`; `registry._load_thresholds()` deriva i
+  p33/p67 per asse e li espone con provenienza; i test di palette, grade, animazione
+  e densità consumano quei valori. Manca solo l'annotazione umana e un test che
+  ricalcoli i percentili dalle annotazioni e li confronti con il registro.
+- **Attenzione ai falsi amici.** `checkpoint.py` non è un checkpoint dell'EDL (è
+  la cache dei chunk); `gates.calibrate()` è la calibrazione colore di un grado,
+  non delle soglie; `GOLDEN_SHA256` in `test_edl_ceiling.py` è l'hash di una stringa
+  di filtro, non di un fotogramma.
+- **Assenti confermati**: event log (T02), feature flag (T03), re-render parziale
+  (T05), storia/undo dell'EDL (T06), harness a frame di riferimento (T07),
+  stimatore dei tempi (T08).
+
 ## F1 — Ponte analisi-assemblaggio e fondamentali
 
 A1-A12 sono già chiusi (commit `5238b2f`..`a0d1045`, reference 26, sezione 6.1).
