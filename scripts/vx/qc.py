@@ -53,6 +53,7 @@ __all__ = [
     "frame_count",
     "check_source_unchanged",
     "lufs_of",
+    "true_peak_ceiling",
 ]
 
 QC_DEFAULTS = {
@@ -72,6 +73,11 @@ LIMITS["cue_lines_max"] = int(THRESHOLDS["sub_max_lines"])
 LIMITS["cue_dur_min"] = float(THRESHOLDS["cue_dur_min"])
 LIMITS["cue_dur_max"] = float(THRESHOLDS["cue_dur_max"])
 LIMITS["upscale_warn"] = float(THRESHOLDS["upscale_warn"])
+
+
+def true_peak_ceiling(target_tp: float) -> float:
+    """The delivered true-peak ceiling: the target plus the gate's own margin."""
+    return float(target_tp) + float(QC_DEFAULTS["true_peak_margin"])
 
 
 def refresh_from_settings(settings=None) -> None:
@@ -565,7 +571,6 @@ def audit_master(
 
     want_i = float(target_lufs)
     want_tp = float(target_tp)
-    margin = float(QC_DEFAULTS["true_peak_margin"])
     target = Path(path)
 
     checks: List[Dict[str, Any]] = []
@@ -636,7 +641,7 @@ def audit_master(
     if measured_tp is None:
         add("master_true_peak", "fail", "no loudnorm measurement (input_tp missing)")
     else:
-        ceiling = want_tp + margin
+        ceiling = true_peak_ceiling(want_tp)
         add(
             "master_true_peak",
             "pass" if measured_tp <= ceiling else "fail",

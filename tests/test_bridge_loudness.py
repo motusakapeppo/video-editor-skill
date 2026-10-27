@@ -93,12 +93,15 @@ def plan() -> edl_plan.EDLPlan:
     )
 
 
-def recorder(input_i: float):
+def recorder(input_i: float, input_tp: float | None = -20.0):
     calls = []
 
     def measure(path, spans):
         calls.append((path, [tuple(span) for span in spans]))
-        return {"input_i": input_i, "input_tp": -1.0, "input_lra": 5.0}
+        measured = {"input_i": input_i, "input_lra": 5.0}
+        if input_tp is not None:
+            measured["input_tp"] = input_tp
+        return measured
 
     return measure, calls
 
@@ -200,7 +203,7 @@ def main() -> int:
         (music.gain_db, music.src_out, music.dst_out),
     )
 
-    loud_measure, _ = recorder(-46.0)
+    loud_measure, _ = recorder(-46.0, input_tp=-60.0)
     clamped_plan, clamped_report = bridge.build(
         plan(), {"c01": analysis()}, target_lufs=-14.0, loudness_spans=loud_measure
     )
@@ -223,6 +226,76 @@ def main() -> int:
         and all(abs(item["shortfall_lu"] - 8.0) <= 1e-9 for item in limited)
         and all(abs(item["shortfall_lu"] - 8.0) <= 1e-9 for item in clamped_gains),
         limited,
+    )
+
+    peak_measure, _ = recorder(-24.85, input_tp=-10.0)
+    peak_plan, peak_report = bridge.build(
+        plan(), {"c01": analysis()}, target_lufs=-14.0, loudness_spans=peak_measure
+    )
+    peak_clips = list(peak_plan.audio_tracks[0].clips)
+    peak_entries = [item for item in peak_report.audio if "gain_db" in item]
+    peak_declared = [
+        item
+        for item in peak_report.not_applied
+        if item.get("reason") == "gain_limited_by_peak"
+    ]
+    ceiling = bridge.THRESHOLDS["bridge_gain_tp_ceiling_dbtp"]
+    peak_gain = round(ceiling - (-10.0), 2)
+    peak_shortfall = round(-14.0 - (-24.85 + peak_gain), 2)
+    check(
+        "picco che limita: gain = tetto - input_tp",
+        all(abs(clip.gain_db - peak_gain) <= 1e-9 for clip in peak_clips)
+        and all(abs(item["gain_db"] - peak_gain) <= 1e-9 for item in peak_entries),
+        (peak_gain, [item["gain_db"] for item in peak_entries]),
+    )
+    check(
+        "picco che limita: peak_limited, input_tp e loudness_shortfall_lu",
+        len(peak_entries) == 3
+        and all(item.get("peak_limited") is True for item in peak_entries)
+        and all(item.get("input_tp") == -10.0 for item in peak_entries)
+        and all(
+            abs(item.get("loudness_shortfall_lu", 0.0) - peak_shortfall) <= 1e-9
+            for item in peak_entries
+        ),
+        [item.get("loudness_shortfall_lu") for item in peak_entries],
+    )
+    check(
+        "picco che limita: not_applied dichiara i due numeri",
+        len(peak_declared) == 3
+        and all(
+            abs(item["required_gain_db"] - 10.85) <= 1e-9
+            and abs(item["gain_db"] - peak_gain) <= 1e-9
+            and abs(item["loudness_shortfall_lu"] - peak_shortfall) <= 1e-9
+            for item in peak_declared
+        ),
+        peak_declared,
+    )
+
+    unknown_measure, _ = recorder(-24.85, input_tp=None)
+    unknown_plan, unknown_report = bridge.build(
+        plan(), {"c01": analysis()}, target_lufs=-14.0, loudness_spans=unknown_measure
+    )
+    unknown_gains = [item for item in unknown_report.audio if "gain_db" in item]
+    check(
+        "input_tp assente: il picco non clampa il gain",
+        all(
+            abs(clip.gain_db - 10.85) <= 1e-9
+            for clip in unknown_plan.audio_tracks[0].clips
+        )
+        and all(abs(item["gain_db"] - 10.85) <= 1e-9 for item in unknown_gains),
+        [item["gain_db"] for item in unknown_gains],
+    )
+    check(
+        "input_tp assente: peak_headroom_unknown dichiarato per ogni clip",
+        len(
+            [
+                item
+                for item in unknown_report.not_applied
+                if item.get("reason") == "peak_headroom_unknown"
+            ]
+        )
+        == 3,
+        [item.get("reason") for item in unknown_report.not_applied],
     )
 
     def with_gain(value: float) -> edl_plan.EDLPlan:

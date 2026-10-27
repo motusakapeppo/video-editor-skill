@@ -78,6 +78,15 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "silence_min": 0.35,
     "silence_dbfs": -70.0,
     "bridge_min_fragment_ms": 700,
+    # A3: the per-clip gain is peak-aware. A quiet clip boosted to the loudness
+    # target must not push its own true peak past this dialogue ceiling; when
+    # the peak is what limits the gain, the missed loudness is declared in LU.
+    "bridge_gain_tp_ceiling_dbtp": -1.5,
+    # Delivery limiter headroom: alimiter's own tolerance at 4x oversampling
+    # plus the measured AAC overshoot after the limiter. Their sum is the margin
+    # the limiter keeps below the QC true-peak ceiling.
+    "limiter_tolerance_db": 0.1,
+    "limiter_encode_overshoot_db": 0.2,
     # A4: word anchors -> captions. A word below the confidence floor never
     # becomes an anchor; it is counted and declared, not dropped silently.
     "bridge_caption_min_confidence": 0.45,

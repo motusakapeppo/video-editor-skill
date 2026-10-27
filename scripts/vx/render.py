@@ -57,12 +57,15 @@ __all__ = [
     "build_trim_graph",
     "loudness_target",
     "verify_treatments",
+    "edl_loudness_graph",
 ]
 
 TRF_NAME = "transforms.trf"
 DEFAULT_FPS = 30.0
 FADE_MS = 12  # afade at joints: no duration change (acrossfade would cost 10 ms)
 FIT_BLUR_SIGMA = 20.0
+AUDIO_RATE = 48000
+LIMITER_RATE = 192000  # 4x oversampling: alimiter sees inter-sample peaks
 
 
 # --------------------------------------------------------------------------- #
@@ -1285,6 +1288,38 @@ def _edl_normalise(
     )
 
 
+def _true_peak_limiter(ceiling_dbtp: float) -> str:
+    """Limiter chain whose output stays under the delivery ceiling after encoding.
+
+    ``alimiter`` limits sample peaks; at 192 kHz those approximate true peaks.
+    The AAC encode that follows adds overshoot the limiter cannot see, so the
+    limit sits below the ceiling by the declared tolerance plus the measured
+    encoder overshoot, and the final resample returns to the project rate.
+    ``latency=true`` compensates the limiter's own look-ahead delay: left
+    uncompensated, the 5 ms shift misaligns the AAC frames and the encoder
+    overshoots by ~0.8 dB on the measured material.
+    """
+    headroom = float(THRESHOLDS["limiter_tolerance_db"]) + float(
+        THRESHOLDS["limiter_encode_overshoot_db"]
+    )
+    linear = 10.0 ** ((float(ceiling_dbtp) - headroom) / 20.0)
+    return (
+        f"aresample={LIMITER_RATE},"
+        f"alimiter=limit={linear:.6f}:level=false:latency=true,"
+        f"aresample={AUDIO_RATE}"
+    )
+
+
+def edl_loudness_graph(
+    loudnorm_filter: str, *, ceiling_dbtp: Optional[float] = None
+) -> str:
+    """Stage-04 graph: loudnorm, then the true-peak limiter before ``[aout]``."""
+    chain = str(loudnorm_filter)
+    if ceiling_dbtp is not None:
+        chain += "," + _true_peak_limiter(ceiling_dbtp)
+    return f"[0:a]{chain}[aout]"
+
+
 def build_edl_filtergraph(
     plan: Any,
     source_to_index: Mapping[str, int],
@@ -1294,6 +1329,7 @@ def build_edl_filtergraph(
     subtitles: Optional[str] = None,
     reframe: Optional[Mapping[str, Any]] = None,
     restore: Optional[Mapping[str, Any]] = None,
+    ceiling_dbtp: Optional[float] = None,
 ) -> str:
     """A-Roll is concatenated; audio is split into dialogue and music buses; B-roll is overlaid.
 
@@ -1308,6 +1344,8 @@ def build_edl_filtergraph(
     for it (``{dst_t, x, y, scale}``); ``restore`` keys a ``clip_id`` to the
     resolved effects (``{denoise: <filter>|None, stabilize: bool}``). Both
     ``None`` — the default — emits the graph this engine shipped, unchanged.
+    ``ceiling_dbtp`` appends the true-peak limiter to the mixed audio bus, for
+    the single-pass delivery path; ``None`` leaves the graph byte-identical.
     """
     width, height = (int(value) for value in plan.resolution)
     policy = _fill_policy(fill)
@@ -1387,18 +1425,18 @@ def build_edl_filtergraph(
                 f"release={float(ducking.release_ms):.3f}:"
                 f"makeup={linear:.3f}[music_duck]"
             )
-            parts.append(
-                "[dialog_mix][music_duck]amix=inputs=2:"
-                "dropout_transition=0:normalize=0[aout]"
+            bus = (
+                "[dialog_mix][music_duck]amix=inputs=2:dropout_transition=0:normalize=0"
             )
         elif dialogue_labels and music_labels:
-            parts.append(
-                "[dialog][music]amix=inputs=2:dropout_transition=0:normalize=0[aout]"
-            )
+            bus = "[dialog][music]amix=inputs=2:dropout_transition=0:normalize=0"
         elif dialogue_labels:
-            parts.append("[dialog]anull[aout]")
+            bus = "[dialog]anull"
         else:
-            parts.append("[music]anull[aout]")
+            bus = "[music]anull"
+        if ceiling_dbtp is not None:
+            bus += "," + _true_peak_limiter(ceiling_dbtp)
+        parts.append(f"{bus}[aout]")
 
     if len(video_clips) == 1:
         base = "[v0]"
@@ -1496,6 +1534,7 @@ def render_edl(
     subtitles: Optional[str] = None,
     reframe: Optional[Mapping[str, Any]] = None,
     restore: Optional[Mapping[str, Any]] = None,
+    ceiling_dbtp: Optional[float] = None,
 ) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -1506,6 +1545,8 @@ def render_edl(
     )
     if loudness is not None and not audio:
         raise RenderFailure("loudness requested but the EDL has no audio")
+    if ceiling_dbtp is not None and not audio:
+        raise RenderFailure("true-peak ceiling requested but the EDL has no audio")
     mapping = edl_input_map(staged_sources)
     graph = build_edl_filtergraph(
         plan,
@@ -1515,6 +1556,7 @@ def render_edl(
         subtitles=subtitles,
         reframe=reframe,
         restore=restore,
+        ceiling_dbtp=ceiling_dbtp if loudness is None else None,
     )
     script = write_script(graph, work / "edl_graph.txt")
     out = Path(output_path)
@@ -1559,7 +1601,7 @@ def render_edl(
     af_args = loudnorm_two_pass(
         stats, target_i=target_i, target_tp=target_tp, target_lra=11.0
     )
-    graph04 = f"[0:a]{af_args[1]}[aout]"
+    graph04 = edl_loudness_graph(af_args[1], ceiling_dbtp=ceiling_dbtp)
     script04 = write_script(graph04, work / "04_loudness.txt")
     # Audio-only pass: the video stream is already final, so -c:v copy is legal
     # here for the same reason as stage 04 of the EditPlan path: this pass does

@@ -545,6 +545,7 @@ def _run_locked(
     reframe_map: Dict[str, Any] = {}
     restore_map: Dict[str, Any] = {}
     captions_ass: Optional[str] = None
+    bridge_gains_applied = False
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge")
         subs_enabled = not bool(getattr(args, "no_subs", False))
@@ -552,6 +553,7 @@ def _run_locked(
             plan, captions=subs_enabled, media=media_by_source
         )
         reframe_map, restore_map = _render_effects(bridge_report)
+        bridge_gains_applied = any("gain_db" in item for item in bridge_report.audio)
         bridged_errors = plan.validate()
         if bridged_errors:
             raise contract.VxError(
@@ -617,6 +619,7 @@ def _run_locked(
     }
     _log(f"[auto] render {plan.duration_sec:.3f}s -> {out}")
     _notify(progress, 25.0, "render")
+    ceiling_dbtp = qc.true_peak_ceiling(TARGET_TP) if bridge_gains_applied else None
     render.render_edl(
         plan,
         staged_paths,
@@ -632,6 +635,7 @@ def _run_locked(
         subtitles=captions_ass,
         reframe=reframe_map,
         restore=restore_map,
+        ceiling_dbtp=ceiling_dbtp,
     )
     _notify(progress, 92.0, "render_done")
 
@@ -668,6 +672,10 @@ def _run_locked(
         },
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "bridge": bridge_summary,
+        "audio": {
+            "ceiling_dbtp": ceiling_dbtp,
+            "limiter": "alimiter" if ceiling_dbtp is not None else None,
+        },
         "selected": [
             {
                 "asset_id": entry.get("asset_id"),

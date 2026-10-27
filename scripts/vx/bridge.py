@@ -16,7 +16,11 @@ Five blocks live here:
   measured on the kept span it actually plays, not on the whole source file. The
   gain is ``target_lufs - measured_i``; when that gain falls outside
   ``[-60, 24]`` it is clamped and the shortfall is declared (``shortfall_lu``),
-  never absorbed.
+  never absorbed. The gain is also peak-aware: a clip whose own true peak would
+  cross ``bridge_gain_tp_ceiling_dbtp`` is clamped to the headroom it has, and
+  the loudness it loses is declared (``loudness_shortfall_lu``). Without a
+  usable ``input_tp`` the clamp is skipped and declared
+  (``peak_headroom_unknown``), never guessed.
 * **A4, transcript anchors.** Words above the confidence floor become
   ``word_span`` anchors with source time; consecutive anchors are grouped into
   captions, and each caption is remapped from source time to destination time
@@ -1659,7 +1663,7 @@ def _gain_dialogue(
     report: BridgeReport,
     failed_sources: Any,
 ) -> edl_plan.ClipSegment:
-    """Measure the used span only, then apply the clamped gain or declare it."""
+    """Measure the used span only, then apply the loudness gain within its peak headroom."""
     if clip.source_id in failed_sources:
         return clip
     ref = plan.sources.get(clip.source_id)
@@ -1690,25 +1694,63 @@ def _gain_dialogue(
         )
         return clip
     gain_unclamped = round(float(target_lufs) - float(input_i), 2)
-    gain_db = round(_clamp(gain_unclamped, GAIN_LIMITS_DB[0], GAIN_LIMITS_DB[1]), 2)
-    shortfall = round(abs(gain_unclamped - gain_db), 2)
-    report.audio.append(
-        {
-            "clip_id": clip.clip_id,
-            "measured_i": round(float(input_i), 3),
-            "gain_db": gain_db,
-            "target_i": float(target_lufs),
-            "declared": f"target {float(target_lufs):g}",
-            "shortfall_lu": shortfall,
-        }
-    )
+    input_tp_raw = measured.get("input_tp") if isinstance(measured, Mapping) else None
+    input_tp = float(input_tp_raw) if _finite(input_tp_raw) else None
+    ceiling_tp = float(THRESHOLDS["bridge_gain_tp_ceiling_dbtp"])
+    peak_limited = False
+    gain_max_by_peak: Optional[float] = None
+    gain_pre_clamp = gain_unclamped
+    if input_tp is None:
+        report.not_applied.append(
+            {
+                "anchor_id": None,
+                "clip_id": clip.clip_id,
+                "reason": "peak_headroom_unknown",
+            }
+        )
+    else:
+        gain_max_by_peak = round(ceiling_tp - input_tp, 2)
+        if gain_max_by_peak < gain_unclamped:
+            peak_limited = True
+            gain_pre_clamp = gain_max_by_peak
+    gain_db = round(_clamp(gain_pre_clamp, GAIN_LIMITS_DB[0], GAIN_LIMITS_DB[1]), 2)
+    shortfall = round(abs(gain_pre_clamp - gain_db), 2)
+    entry: Dict[str, Any] = {
+        "clip_id": clip.clip_id,
+        "measured_i": round(float(input_i), 3),
+        "gain_db": gain_db,
+        "target_i": float(target_lufs),
+        "declared": f"target {float(target_lufs):g}",
+        "shortfall_lu": shortfall,
+    }
+    loudness_shortfall = 0.0
+    if peak_limited:
+        loudness_shortfall = round(float(target_lufs) - (float(input_i) + gain_db), 2)
+        entry["peak_limited"] = True
+        entry["input_tp"] = round(float(input_tp), 3)
+        entry["loudness_shortfall_lu"] = loudness_shortfall
+    report.audio.append(entry)
+    if peak_limited:
+        report.not_applied.append(
+            {
+                "anchor_id": None,
+                "clip_id": clip.clip_id,
+                "reason": "gain_limited_by_peak",
+                "required_gain_db": gain_unclamped,
+                "gain_db": gain_db,
+                "gain_max_by_peak_db": gain_max_by_peak,
+                "input_tp": round(float(input_tp), 3),
+                "ceiling_dbtp": ceiling_tp,
+                "loudness_shortfall_lu": loudness_shortfall,
+            }
+        )
     if shortfall > 1e-9:
         report.not_applied.append(
             {
                 "anchor_id": None,
                 "clip_id": clip.clip_id,
                 "reason": "gain_beyond_limit",
-                "required_gain_db": gain_unclamped,
+                "required_gain_db": gain_pre_clamp,
                 "gain_db": gain_db,
                 "shortfall_lu": shortfall,
             }
