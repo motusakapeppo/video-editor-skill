@@ -166,7 +166,7 @@ WPM. Le soglie vivono in `scripts/vx/contract.py`; la tabella è read-only e
 Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
 `out/master.mp4` sempre; `out/subtitles.srt` solo se esiste parlato;
 `out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. L'export multi-aspect non è
-implementato: non esistono varianti per piattaforma.
+implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`.
 
 ## Percorsi e sicurezza
 

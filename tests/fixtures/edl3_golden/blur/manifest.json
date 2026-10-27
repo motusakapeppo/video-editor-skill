@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "video_sha256": "7077c82bd0e80bf40efc970cd029b8fcfcc87a7b02535fd1fc0a7e15993d977f",
+  "times": [
+    0.3,
+    0.9
+  ],
+  "size": [
+    320,
+    568
+  ],
+  "frame_sha256": {
+    "0.300000": "7b9758865e93964dba4fe7992aed1d4e9a3ca668d749eaaa36583ec2be0dcfa5",
+    "0.900000": "92ec100c20b11f46dbd63a9bb7af05c2a32c8e6e3bfecd87f55d0d9dff8eae70"
+  },
+  "frames": [
+    {
+      "time": 0.3,
+      "file": "0.300.png",
+      "sha256": "7b9758865e93964dba4fe7992aed1d4e9a3ca668d749eaaa36583ec2be0dcfa5",
+      "size_bytes": 63359
+    },
+    {
+      "time": 0.9,
+      "file": "0.900.png",
+      "sha256": "92ec100c20b11f46dbd63a9bb7af05c2a32c8e6e3bfecd87f55d0d9dff8eae70",
+      "size_bytes": 60915
+    }
+  ]
+}

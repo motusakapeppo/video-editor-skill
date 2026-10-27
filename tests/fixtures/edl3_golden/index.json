@@ -1,0 +1,243 @@
+{
+  "ffmpeg_version": "ffmpeg version 8.1-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers",
+  "encoder_settings": "libx264 -preset ultrafast -crf 18 -pix_fmt yuv420p; fps=12; size=320x568",
+  "effects": [
+    {
+      "name": "fade_in",
+      "times": [
+        0.2,
+        0.5,
+        1.0
+      ],
+      "frame_sha256": [
+        "3a57582f8906397046ae985dbca6d127ba7a4b97cf2d0e6842dc34cf2dfa3d3c",
+        "858d0afa6a69aa905be9fc504f216d32b4f85d8418c5590b3c9cb5c00e8d3017",
+        "35b263509a0aebf99be559efedfbde9c9e3cb2ba48db0b0851f12023f24192d0"
+      ],
+      "mean_luma": [
+        60.546,
+        105.673,
+        124.047
+      ]
+    },
+    {
+      "name": "opacity",
+      "times": [
+        0.3,
+        0.9
+      ],
+      "frame_sha256": [
+        "d7b5cccb54c627e2d58eed4440691c937d4d0f9f024ff3c64d9f519d85f5b871",
+        "c21ada4565b7372e9a9b61dfca782920c6be4e4c72ad5444f7c74fb5a5be37bf"
+      ],
+      "mean_luma": [
+        69.543,
+        69.549
+      ]
+    },
+    {
+      "name": "crop",
+      "times": [
+        0.3,
+        0.9
+      ],
+      "frame_sha256": [
+        "e4154e619a59a3161521d899b2e277601e7a37df2e43bae3fdd88fbb311db93c",
+        "8b0a02d240ca580bc18a820f027828187a98504513cc05d3194b5de6ddb63c01"
+      ],
+      "mean_luma": [
+        106.182,
+        106.641
+      ]
+    },
+    {
+      "name": "colour",
+      "times": [
+        0.3,
+        0.9
+      ],
+      "frame_sha256": [
+        "3ea71dc95cd3197e12ea53f3e118eb45b14a8a3a57ea875d1238cdd261526db6",
+        "2c063564d2b4909b7f4da9aabac71d92395a01491c21ec547b5873cdc895b6cc"
+      ],
+      "mean_luma": [
+        139.216,
+        139.174
+      ]
+    },
+    {
+      "name": "blur",
+      "times": [
+        0.3,
+        0.9
+      ],
+      "frame_sha256": [
+        "7b9758865e93964dba4fe7992aed1d4e9a3ca668d749eaaa36583ec2be0dcfa5",
+        "92ec100c20b11f46dbd63a9bb7af05c2a32c8e6e3bfecd87f55d0d9dff8eae70"
+      ],
+      "mean_luma": [
+        123.504,
+        123.549
+      ]
+    },
+    {
+      "name": "reverse",
+      "times": [
+        0.3,
+        1.5
+      ],
+      "frame_sha256": [
+        "bde3d799fffdf13dcd787439c586db13783ff7b8d92c5c1bbba5f14e0849a84d",
+        "fbce6031d598356ce9a98dc6fbc80f9038c7c749bcdc63debcc6472b5673e141"
+      ],
+      "mean_luma": [
+        235.0,
+        16.0
+      ]
+    },
+    {
+      "name": "freeze",
+      "times": [
+        0.2,
+        0.8,
+        1.8
+      ],
+      "frame_sha256": [
+        "22e4bffaec98ab93733222244a8f9cc05b9d03bcf461e6074ca21242aa6d178a",
+        "c4ff6322bb921e616283eaee401cd84d525e9ffb80c70b1abe254576537a099f",
+        "2bf39b1b0f559996f4049bc664c2321a6a77298aa549846c2683657f72660a46"
+      ],
+      "mean_luma": [
+        124.036,
+        123.943,
+        123.879
+      ]
+    },
+    {
+      "name": "speed_2x",
+      "times": [
+        0.2,
+        0.8
+      ],
+      "frame_sha256": [
+        "3e3b5bc8d5aa7dcb4299b3c7bb0651320c6cfde8f93e7a07a909222f91ee215a",
+        "16995053f2bf1a69066104a7beeab0dd36eb0a97e7655f10685570ed5caf6f7e"
+      ],
+      "mean_luma": [
+        123.949,
+        123.848
+      ]
+    },
+    {
+      "name": "pip",
+      "times": [
+        0.3,
+        1.5
+      ],
+      "frame_sha256": [
+        "8a5edcaf15834aa629d22fe2f9e1d5fb23eb591ba2e2e135fba00f6d83a77060",
+        "0d87a986dc4f9a139aed579575376dbdea31c70206ceb5d6735b088587619260"
+      ],
+      "mean_luma": [
+        47.422,
+        41.0
+      ]
+    },
+    {
+      "name": "mask",
+      "times": [
+        0.3,
+        1.5
+      ],
+      "frame_sha256": [
+        "65636168b0001a7ed62c6c411548c2f9f43f4a099293fe75cdcbbe647c248fd0",
+        "bae5d62d3bccc54514f73489085d8a1b8d7a31f461aed861cd2cee8084bd7f78"
+      ],
+      "mean_luma": [
+        61.156,
+        41.0
+      ]
+    },
+    {
+      "name": "blend_screen",
+      "times": [
+        0.3,
+        1.0,
+        1.8
+      ],
+      "frame_sha256": [
+        "1394631462ef95a8c29226d31e530f0b4d6e41acf5cd95f54c527032951daf28",
+        "b603b15c86b8eec7f356e25140ed08c96666d3d8065ad90d2da4d4f6c0232f61",
+        "1394631462ef95a8c29226d31e530f0b4d6e41acf5cd95f54c527032951daf28"
+      ],
+      "mean_luma": [
+        71.0,
+        152.0,
+        71.0
+      ]
+    },
+    {
+      "name": "chroma_green",
+      "times": [
+        0.3,
+        1.5
+      ],
+      "frame_sha256": [
+        "b8257dee87551454de96abff68b1fe278ce9b0eff16b85c69cedbfc63f48fd9b",
+        "b8257dee87551454de96abff68b1fe278ce9b0eff16b85c69cedbfc63f48fd9b"
+      ],
+      "mean_luma": [
+        41.0,
+        41.0
+      ]
+    },
+    {
+      "name": "overlay_multi",
+      "times": [
+        0.1,
+        0.5,
+        1.3
+      ],
+      "frame_sha256": [
+        "9f16225a0b5074e5e8e687eb9d265c9898e55695f7ab33a9b190277e5a59c3f2",
+        "74355cf77484a1d490e4918e29af1666e7a553c02c87015cadf434b4428fb30d",
+        "c919ddc829c709e26dca00095a2b5c1cbbf644ea9811a9e195b7100387f3157f"
+      ],
+      "mean_luma": [
+        41.0,
+        81.0,
+        144.0
+      ]
+    },
+    {
+      "name": "audio_ducking",
+      "times": [
+        0.3,
+        1.5
+      ],
+      "frame_sha256": [
+        "1394631462ef95a8c29226d31e530f0b4d6e41acf5cd95f54c527032951daf28",
+        "1394631462ef95a8c29226d31e530f0b4d6e41acf5cd95f54c527032951daf28"
+      ],
+      "mean_luma": [
+        71.0,
+        71.0
+      ]
+    },
+    {
+      "name": "nested",
+      "times": [
+        0.3,
+        1.3
+      ],
+      "frame_sha256": [
+        "74355cf77484a1d490e4918e29af1666e7a553c02c87015cadf434b4428fb30d",
+        "74355cf77484a1d490e4918e29af1666e7a553c02c87015cadf434b4428fb30d"
+      ],
+      "mean_luma": [
+        81.0,
+        81.0
+      ]
+    }
+  ]
+}
