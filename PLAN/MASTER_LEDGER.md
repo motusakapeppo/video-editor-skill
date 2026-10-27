@@ -118,9 +118,9 @@ respinti.
 | ID | Ondata | Contenuto | Accettazione binaria | Stato |
 |---|---|---|---|---|
 | F3-T01 | W0 fetta verticale | un solo template con animazione, cattura deterministica a tempo virtuale, PNG con alfa, conversione in video | due catture danno frame identici byte per byte; nessuna richiesta esterna; il tempo misurato sta nel budget dichiarato | WIP |
-| F3-T02 | W1 motore di cattura | viewport, fps, scala, seek virtuale, timeout, pulizia del contesto | un template che non risponde viene terminato al timeout con errore dichiarato, nessun processo orfano | TODO |
+| F3-T02 | W1 motore di cattura | viewport, fps, scala, seek virtuale, timeout, pulizia del contesto | un template che non risponde viene terminato al timeout con errore dichiarato, nessun processo orfano | DONE `958eabb` - timeout dichiarato su seek che non risolve, zero processi orfani (slice i) |
 | F3-T03 | W2 template | registro con 40+ template, parametri dichiarati e valori ammessi | ogni template dichiara parametri e rifiuta un valore fuori dominio con il nome del parametro | TODO |
-| F3-T04 | W3 linter di authoring | controllo offline di HTML/JS: nessuna rete, nessun API vietata, dipendenze locali | un template con un tag remoto viene respinto dal linter prima della cattura | TODO |
+| F3-T04 | W3 linter di authoring | controllo offline di HTML/JS: nessuna rete, nessun API vietata, dipendenze locali | un template con un tag remoto viene respinto dal linter prima della cattura | DONE `d779921` - 21 controlli, nove codici, browser mai avviato su template ostile |
 | F3-T05 | W4 cache | chiave template + parametri + fps + risoluzione, riuso dei frame gia resi | secondo giro identico: zero catture; un parametro cambiato: solo quello | TODO |
 | F3-T06 | W5 ripiego Pillow | senza Chromium i template statici rendono comunque, e lo dichiarano | Chromium spento = ripiego dichiarato, stesso tempo di esecuzione misurato | TODO |
 | F3-T07 | W6 aggancio EDL 3 | backend chromium acceso da `chromium_available`, overlay con alfa | un documento con effetto che qualifica Chromium renderizza; prima era BACKEND_UNAVAILABLE | TODO |
