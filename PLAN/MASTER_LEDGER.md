@@ -29,15 +29,31 @@ stage dipendenti (il test conta gli stage eseguiti); suite verde.
 
 | ID | Task | Accettazione binaria | Stato |
 |---|---|---|---|
-| F0-T01 | Ledger e DECISIONS nel repo; piano copiato in `PLAN/MASTER_PLAN.md` | i tre file esistono, `git log` mostra il commit `[F0-T01]` | DONE |
-| F0-T02 | Registro degli eventi: append JSONL per job, senza telemetria | un job scrive `events.jsonl` con inizio/fine/stadio; test legge il file e conta gli eventi | TODO |
-| F0-T03 | Interruttori di funzione: tabella `features` in settings, override da CLI, valore effettivo nel referto | flag spento = codice non eseguito (test con contatore di chiamate); flag ignoto = errore | TODO |
-| F0-T04 | Cache incrementale degli stage: chiave = hash di input + parametri + versione dello stadio | secondo giro con input identico: 0 esecuzioni; un parametro cambiato: solo gli stadi dipendenti girano | TODO |
-| F0-T05 | Re-render parziale: cambiare una clip o un sottotitolo riesegue solo gli stadi dipendenti | il test conta gli stadi eseguiti prima/dopo e asserisce l'insieme atteso | TODO |
-| F0-T06 | Storia e undo dell'EDL: journal append-only con checkpoint e ripristino | dopo N modifiche, `undo` torna allo stato precedente e l'hash del documento coincide | TODO |
-| F0-T07 | Harness a frame di riferimento (golden frame) | un test fallisce se un frame cambia oltre la tolleranza dichiarata; due render identici danno lo stesso hash | TODO |
-| F0-T08 | Stimatore dei tempi prima del render | su un set di prova l'errore mediano sta sotto la soglia dichiarata; il valore compare nel referto | TODO |
-| F0-T09 | Corpus annotato per calibrare le soglie | il corpus esiste con annotazioni e un test verifica che le soglie dichiarate siano derivate da esso | TODO |
+| F0-T01 | Ledger e DECISIONS nel repo; piano copiato in `PLAN/MASTER_PLAN.md` | i tre file esistono, `git log` mostra il commit `[F0-T01]` | DONE `ca375d8` |
+| F0-T02 | Registro degli eventi: append JSONL per job, senza telemetria | un job scrive `events.jsonl` con inizio/fine/stadio; test legge il file e conta gli eventi | DONE `4670932` — 22 controlli, `events.py` |
+| F0-T03 | Interruttori di funzione: tabella `features` in settings, override da CLI, valore effettivo nel referto | flag spento = codice non eseguito (test con contatore di chiamate); flag ignoto = errore | DONE `4670932` — 32 controlli, `features.py` |
+| F0-T04 | Cache incrementale degli stage: chiave = hash di input + parametri + versione dello stadio | secondo giro con input identico: 0 esecuzioni; un parametro cambiato: solo gli stadi dipendenti girano | DONE `dcb4f15` — `stagecache.py`, 61 controlli |
+| F0-T05 | Re-render parziale: cambiare una clip o un sottotitolo riesegue solo gli stadi dipendenti | il test conta gli stadi eseguiti prima/dopo e asserisce l'insieme atteso | DONE `dcb4f15` — sottotitolo → {03,04}; smoothing → {02,03,04}; loudness → {04} |
+| F0-T06 | Storia e undo dell'EDL: journal append-only con checkpoint e ripristino | dopo N modifiche, `undo` torna allo stato precedente e l'hash del documento coincide | WIP |
+| F0-T07 | Harness a frame di riferimento (golden frame) | un test fallisce se un frame cambia oltre la tolleranza dichiarata; due render identici danno lo stesso hash | DONE `1fea22a` — 21 controlli, provato anche su master reale (4 frame, hash identici) |
+| F0-T08 | Stimatore dei tempi prima del render | su un set di prova l'errore mediano sta sotto la soglia dichiarata; il valore compare nel referto | DONE `1fea22a` — 20 controlli, erede mediano 0% sul punto tenuto fuori |
+| F0-T09 | Corpus annotato per calibrare le soglie | il corpus esiste con annotazioni e un test verifica che le soglie dichiarate siano derivate da esso | BLOCKED — vedi sotto |
+
+### F0-T09 BLOCKED: servono annotazioni umane
+
+Il corpus esiste e la derivazione funziona: `tests/measure_corpus.py` misura 9 clip in
+`tests/fixtures/corpus_stats.json` con `corpus_hash`, e `registry._load_thresholds()`
+ne ricava i percentili per asse con provenienza. Quello che manca non è codice: è il
+giudizio umano. Un'annotazione inventata dall'agente sarebbe una soglia che si
+autogiustifica, cioè esattamente ciò che la regola dell'evidenza vieta.
+
+Per chiudere T09 serve, per ciascuna delle 9 clip del corpus, una direzione dichiarata
+da una persona su almeno questi assi: palette (caldo/freddo/neutro), grade
+(flat/normale/contrasto), animazione (statica/mossa), densità di taglio
+(rada/normale/fitta). Formato proposto: `tests/fixtures/corpus_annotations.json`,
+`{"clip": {"palette": "...", "grade": "...", "animation": "...", "cut_density": "..."}}`.
+Il test che chiude il task ricalcola i percentili dalle annotazioni e li confronta con
+`registry.THRESHOLDS`, fallendo se divergono.
 
 ### Note di realtà su F0 (verificate sul codice, 2026-10-27)
 
