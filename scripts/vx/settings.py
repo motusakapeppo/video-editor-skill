@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import config
 from . import contract
+from . import features
 
 SETTINGS_SCHEMA = "vx.settings/1.0"
 
@@ -135,6 +136,10 @@ DEFAULTS: Dict[str, Any] = {
         "black_frames_edges": 2,
         "font_fallback_count": 0,
     },
+    # Declared flags only (vx.features is the registry): the table exists so
+    # `--override features.<name>=on` has a bool to coerce, and so an unknown
+    # name is a usage error instead of a silently inert key.
+    "features": features.defaults(),
 }
 
 
@@ -328,4 +333,5 @@ def describe() -> Dict[str, Any]:
         "audio": settings.get("audio"),
         "accel": settings.get("accel"),
         "lock": settings.get("lock"),
+        "features": features.effective(settings),
     }

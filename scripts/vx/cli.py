@@ -1895,14 +1895,15 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 
 def _apply_settings(args: argparse.Namespace) -> None:
     """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
-    from . import settings
+    from . import features, settings
 
-    settings.apply(
-        settings.build(
-            settings_file=getattr(args, "settings", None),
-            overrides=getattr(args, "override", None) or [],
-        )
+    effective = settings.build(
+        settings_file=getattr(args, "settings", None),
+        overrides=getattr(args, "override", None) or [],
     )
+    features.validate_table(effective)
+    features.apply_disables(effective, getattr(args, "no_feature", None) or [])
+    settings.apply(effective)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2099,6 +2100,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--keep-proxy", action="store_true")
     p.add_argument(
+        "--no-feature",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="disattiva una feature dichiarata in vx.features (ripetibile)",
+    )
+    p.add_argument(
         "--visual-brief",
         default=None,
         help="brief vx.visual/1.0: inserisce le catene grade+animazione nel grafo",
@@ -2177,6 +2185,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-subs",
         action="store_true",
         help="nessun sottotitolo: salta la trascrizione e non brucia le caption",
+    )
+    p.add_argument(
+        "--no-feature",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="disattiva una feature dichiarata in vx.features (ripetibile)",
     )
     p.add_argument("--crf", type=int, default=None)
     p.add_argument("--preset", default=None)
