@@ -204,11 +204,27 @@ def main() -> int:
         ]
     )
     check(
-        "due musiche, cap uno",
-        len([i for i in music.selected if i.role == "music"]) == 1
-        and music.rejected
-        and music.rejected[0].rejection_reason == "REDUNDANT_MUSIC",
-        music.rejected[0].details if music.rejected else [],
+        "due musiche: il cap due le ammette entrambe",
+        len([i for i in music.selected if i.role == "music"]) == 2
+        and not any(
+            item.rejection_reason == "REDUNDANT_MUSIC" for item in music.rejected
+        ),
+        [item.rejection_reason for item in music.rejected],
+    )
+    three_music = _triage(
+        [
+            _asset("m1.mp3", kind="audio", width=0, height=0),
+            _asset("m2.mp3", kind="audio", width=0, height=0),
+            _asset("m3.mp3", kind="audio", width=0, height=0),
+        ]
+    )
+    check(
+        "tre musiche: la terza e' REDUNDANT_MUSIC",
+        len([i for i in three_music.selected if i.role == "music"]) == 2
+        and any(
+            item.rejection_reason == "REDUNDANT_MUSIC" for item in three_music.rejected
+        ),
+        [item.rejection_reason for item in three_music.rejected],
     )
 
     # -- partition and determinism ---------------------------------------- #

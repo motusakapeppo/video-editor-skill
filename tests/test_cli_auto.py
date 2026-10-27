@@ -140,7 +140,11 @@ def _build_pool(pool: Path) -> bool:
         pool / "music.m4a",
         ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac"],
     )
-    if not (ok_clip and ok_still and ok_music):
+    ok_music2 = _make(
+        pool / "music2.m4a",
+        ["-f", "lavfi", "-i", "sine=frequency=660:duration=1", "-c:a", "aac"],
+    )
+    if not (ok_clip and ok_still and ok_music and ok_music2):
         return False
     shutil.copy2(clip, pool / "copy.mp4")
     (pool / "broken.mp4").write_text("this is not a video\n", encoding="utf-8")
@@ -356,6 +360,16 @@ def main() -> int:
                 or isinstance(audio_block.get("music_ratio"), (int, float))
             ),
             audio_block,
+        )
+
+        beds = report.get("music") or []
+        check(
+            "F1-T04: due letti musicali, ognuno con la sua soglia di ducking",
+            len(beds) == 2
+            and [bed.get("role") for bed in beds] == ["music_a", "music_b"]
+            and len({bed.get("ducking_threshold") for bed in beds}) == 2
+            and all(bed.get("sha256") for bed in beds),
+            [(bed.get("role"), bed.get("ducking_threshold")) for bed in beds],
         )
 
         rejected = report.get("rejected") or []

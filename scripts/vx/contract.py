@@ -132,7 +132,7 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     # asset triage (Fase 4)
     "triage_max_upscale": 1.5,
     "triage_max_broll": 3,
-    "triage_max_music": 1,
+    "triage_max_music": 2,
     "triage_min_duration_sec": 1.0,
     "triage_broll_sec": 3.0,
     "triage_image_duration_sec": 3.0,
@@ -1146,11 +1146,13 @@ def payload_to_edl_plan(
                 f"{previous.source_id!r} and {current.source_id!r}"
             )
 
-    if len(music_entries) > 1:
-        raise VxError("payload.asset_triage selected more than one music asset")
-    music_clip = None
-    if music_entries:
-        entry = music_entries[0]
+    max_music = int(THRESHOLDS["triage_max_music"])
+    if len(music_entries) > max_music:
+        raise VxError(
+            f"payload.asset_triage selected more than {max_music} music assets"
+        )
+    music_clips: List[edl_plan.ClipSegment] = []
+    for index, entry in enumerate(music_entries):
         asset_id = entry.get("asset_id")
         if not isinstance(asset_id, str) or not asset_id:
             raise VxError("selected music has no asset_id")
@@ -1162,16 +1164,19 @@ def payload_to_edl_plan(
         except (TypeError, ValueError) as exc:
             raise VxError(f"asset {asset_id!r} has a non-numeric ducking_db") from exc
         referenced[_source_id(asset_id)] = ref
-        music_clip = edl_plan.ClipSegment(
-            clip_id="a1_0",
-            source_id=_source_id(asset_id),
-            src_in=0.0,
-            src_out=music_length,
-            dst_in=0.0,
-            dst_out=music_length,
-            layer=0,
-            role="music",
-            gain_db=gain,
+        role = "music" if len(music_entries) == 1 else f"music_{chr(97 + index)}"
+        music_clips.append(
+            edl_plan.ClipSegment(
+                clip_id=f"a{index + 1}_0",
+                source_id=_source_id(asset_id),
+                src_in=0.0,
+                src_out=music_length,
+                dst_in=0.0,
+                dst_out=music_length,
+                layer=0,
+                role=role,
+                gain_db=gain,
+            )
         )
 
     video_tracks = [edl_plan.Track(track_id=0, clips=tuple(a_clips), role="a_roll")]
@@ -1182,9 +1187,9 @@ def payload_to_edl_plan(
     audio_tracks = [
         edl_plan.Track(track_id=0, clips=tuple(dialogue_clips), role="dialogue")
     ]
-    if music_clip is not None:
+    for index, clip in enumerate(music_clips):
         audio_tracks.append(
-            edl_plan.Track(track_id=1, clips=(music_clip,), role="music")
+            edl_plan.Track(track_id=index + 1, clips=(clip,), role=clip.role)
         )
 
     notes: List[str] = []
@@ -1192,19 +1197,58 @@ def payload_to_edl_plan(
     notes.append(f"payload v{payload_version} -> EDL v{edl_plan.EDL_CONTRACT_VERSION}")
     if b_clips and not any_anchor:
         notes.append("b-roll distribuiti uniformemente: nessun ancoraggio dichiarato")
-    if music_clip is None:
+    if not music_clips:
         notes.append("nessuna traccia musicale")
-    elif music_length < duration - 1e-9:
-        notes.append(
-            f"musica più corta della timeline: {music_length:.3f}s su {duration:.3f}s"
-        )
+    else:
+        for index, clip in enumerate(music_clips):
+            length = float(clip.src_out)
+            if length < duration - 1e-9:
+                notes.append(
+                    f"musica {index + 1}/{len(music_clips)} più corta della timeline: "
+                    f"{length:.3f}s su {duration:.3f}s"
+                )
     if not dialogue_clips:
         notes.append("nessun bus dialogo: ducking non dichiarato")
     notes.append(f"asset scartati ignorati: {rejected_count}")
 
-    ducking = (
-        edl_plan.DuckingSpec() if music_clip is not None and dialogue_clips else None
-    )
+    if music_clips and dialogue_clips and len(music_clips) == 1:
+        ducking = edl_plan.DuckingSpec()
+        ducking_tracks: tuple = ()
+    elif music_clips and dialogue_clips:
+        ducking = None
+        primary = edl_plan.DuckingSpec()
+        beds = []
+        for index, clip in enumerate(music_clips):
+            if index == 0:
+                beds.append(
+                    edl_plan.DuckingSpec(
+                        target_role=clip.role,
+                        threshold=primary.threshold,
+                        ratio=primary.ratio,
+                        attack_ms=primary.attack_ms,
+                        release_ms=primary.release_ms,
+                        makeup_db=primary.makeup_db,
+                    )
+                )
+            else:
+                # The secondary bed steps back further than the lead bed: it
+                # triggers earlier and ducks deeper, so two beds never fight for
+                # the same pocket. A policy, not a measurement, and it is declared
+                # per track in the report.
+                beds.append(
+                    edl_plan.DuckingSpec(
+                        target_role=clip.role,
+                        threshold=min(1.0, primary.threshold * 1.6),
+                        ratio=min(20.0, primary.ratio * 1.5),
+                        attack_ms=primary.attack_ms,
+                        release_ms=primary.release_ms,
+                        makeup_db=primary.makeup_db,
+                    )
+                )
+        ducking_tracks = tuple(beds)
+    else:
+        ducking = None
+        ducking_tracks = ()
 
     return edl_plan.EDLPlan(
         contract_version=edl_plan.EDL_CONTRACT_VERSION,
@@ -1216,5 +1260,6 @@ def payload_to_edl_plan(
         video_tracks=tuple(video_tracks),
         audio_tracks=tuple(audio_tracks),
         ducking=ducking,
+        ducking_tracks=ducking_tracks,
         notes=tuple(notes),
     )

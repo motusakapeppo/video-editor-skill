@@ -1624,10 +1624,22 @@ def build(
         )
 
     # -- music re-timed, other audio clamped: nothing keeps a stale dst ------ #
+    music_specs = {
+        str(getattr(spec, "target_role", "")): spec
+        for spec in getattr(plan, "ducking_tracks", ()) or ()
+    }
+    default_spec = getattr(plan, "ducking", None)
     retimed_tracks: List[edl_plan.Track] = []
     for track in audio_tracks:
-        if track.role == "music":
-            rebuilt = _retime_music(plan, track, duration, report)
+        is_music = track.role == "music" or str(track.role).startswith("music_")
+        if is_music:
+            rebuilt = _retime_music(
+                plan,
+                track,
+                duration,
+                report,
+                music_specs.get(track.role, default_spec),
+            )
         elif track.role == "dialogue":
             rebuilt = track
         else:
@@ -1843,6 +1855,7 @@ def _replace_plan(
         audio_tracks=tuple(audio_tracks),
         notes=tuple(notes if notes is not None else plan.notes),
         ducking=plan.ducking,
+        ducking_tracks=plan.ducking_tracks,
     )
 
 
@@ -1851,8 +1864,10 @@ def _retime_music(
     track: edl_plan.Track,
     duration: float,
     report: BridgeReport,
+    spec: Any = None,
 ) -> Optional[edl_plan.Track]:
-    if track.role != "music" or not track.clips:
+    is_music = track.role == "music" or str(track.role).startswith("music_")
+    if not is_music or not track.clips:
         return track
     clips: List[edl_plan.ClipSegment] = []
     for index, clip in enumerate(track.clips):
@@ -1905,11 +1920,16 @@ def _retime_music(
         report.audio.append(
             {
                 "clip_id": clip.clip_id,
-                "role": "music",
+                "track_id": track.track_id,
+                "role": track.role,
                 "looped": loop.looped,
                 "loops": loop.copies,
                 "crossfade_sec": loop.crossfade_sec,
                 "declared": declared,
+                "ducking_threshold": (
+                    float(spec.threshold) if spec is not None else None
+                ),
+                "ducking_ratio": float(spec.ratio) if spec is not None else None,
             }
         )
         clips.append(

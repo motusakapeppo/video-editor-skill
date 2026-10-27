@@ -284,3 +284,35 @@ Perché. La disciplina si paga in secondi. Se il prezzo diventa intollerabile, l
 disciplina sparisce per prima.
 
 Emenda: F12 e l'ordine di F16. Revocabile con una voce che la sostituisce.
+
+---
+
+## D027 — Il secondo letto musicale si abbassa di più (2026-10-27)
+
+**Stato: attuata in F1-T04.**
+
+Contesto. Il ducking era un `DuckingSpec` unico, indicizzato per ruolo: con due
+letti musicali non esisteva modo di darne uno diverso a ciascuno. La scelta di
+rappresentazione doveva restare additiva: `edl_plan.py` è il contratto 2.2.0 e
+D004 lo dichiara congelato.
+
+Si decide:
+
+1. `EDLPlan.ducking_tracks` è una tupla opzionale di `DuckingSpec`, ognuna con il
+   proprio `target_role`. Additiva: un documento senza la chiave è identico a
+   prima, e un piano a un letto produce **lo stesso grafo** di prima, character
+   for character.
+2. Il letto principale usa la politica di default (soglia 0.05, rapporto 8). Un
+   secondo letto si abbassa di più: soglia ×1.6 e rapporto ×1.5, con i due valori
+   dichiarati per traccia nel referto. È una politica, non una misura calibrata, e
+   come tale si registra: non ha provenienza di corpus e non deve fingerla.
+3. Il cap di triage passa da 1 a 2. La terza traccia resta `REDUNDANT_MUSIC`: il
+   limite è una politica, non un numero magico.
+
+Perché. Due letti con lo stesso ducking si contendono lo stesso spazio e il
+dialogo diventa il campo di battaglia. Il secondo deve cedere prima e più in
+profondità; dirlo nel referto, per traccia, rende la scelta verificabile invece
+che sotterranea.
+
+Emenda: nessuna. Estende D004 senza riscriverlo. Revocabile con una voce che la
+sostituisce.

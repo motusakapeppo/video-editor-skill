@@ -513,6 +513,55 @@ def audio_summary(
     }
 
 
+def music_summary(plan: Any, report: Any) -> List[Dict[str, Any]]:
+    """One entry per music bed: what the bridge measured and the ducking it applied.
+
+    The block is a list because a bed is a track, not a slot: two beds can carry
+    different gain, different loop decisions and, above all, different ducking.
+    A report that flattens them to one number cannot be audited.
+    """
+    specs = {
+        str(getattr(spec, "target_role", "")): spec
+        for spec in getattr(plan, "ducking_tracks", ()) or ()
+    }
+    default_spec = getattr(plan, "ducking", None)
+    measured = {
+        item.get("clip_id"): item
+        for item in (getattr(report, "audio", ()) or ())
+        if str(item.get("role", "")).startswith("music")
+    }
+    beds: List[Dict[str, Any]] = []
+    for track in getattr(plan, "audio_tracks", ()):
+        role = str(getattr(track, "role", "") or "")
+        if not (role == "music" or role.startswith("music_")):
+            continue
+        spec = specs.get(role, default_spec)
+        for clip in getattr(track, "clips", ()):
+            item = measured.get(clip.clip_id) or {}
+            ref = getattr(plan, "sources", {}).get(clip.source_id)
+            beds.append(
+                {
+                    "role": role,
+                    "track_id": int(track.track_id),
+                    "clip_id": clip.clip_id,
+                    "source_id": clip.source_id,
+                    "sha256": str(getattr(ref, "sha256", "") or ""),
+                    "gain_db": float(clip.gain_db),
+                    "looped": item.get("looped"),
+                    "loops": item.get("loops"),
+                    "crossfade_sec": item.get("crossfade_sec"),
+                    "ducking_threshold": (
+                        round(float(spec.threshold), 6) if spec is not None else None
+                    ),
+                    "ducking_ratio": (
+                        round(float(spec.ratio), 6) if spec is not None else None
+                    ),
+                    "ducking_ratio": (float(spec.ratio) if spec is not None else None),
+                }
+            )
+    return beds
+
+
 def _render_effects(report: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """The render parameters the report declared: keyframes and resolved filters.
 
@@ -614,6 +663,7 @@ def _run_locked(
     captions_srt: Optional[str] = None
     bridge_gains_applied = False
     analyses: Dict[str, Any] = {}
+    bridge_report: Any = None
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge", log=log, status="start")
         subs_enabled = not bool(getattr(args, "no_subs", False))
@@ -771,6 +821,7 @@ def _run_locked(
         "bridge": bridge_summary,
         "render_estimate": render_estimate,
         "audio": audio_summary(analyses, ceiling_dbtp),
+        "music": music_summary(plan, bridge_report),
         "selected": [
             {
                 "asset_id": entry.get("asset_id"),
