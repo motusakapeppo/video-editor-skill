@@ -38,7 +38,7 @@ stage dipendenti (il test conta gli stage eseguiti); suite verde.
 | F0-T07 | Harness a frame di riferimento (golden frame) | un test fallisce se un frame cambia oltre la tolleranza dichiarata; due render identici danno lo stesso hash | DONE `1fea22a` — 21 controlli, provato anche su master reale (4 frame, hash identici) |
 | F0-T08 | Stimatore dei tempi prima del render | su un set di prova l'errore mediano sta sotto la soglia dichiarata; il valore compare nel referto | DONE `1fea22a` — 20 controlli, erede mediano 0% sul punto tenuto fuori |
 | F0-T09 | Corpus annotato per calibrare le soglie | il corpus esiste con annotazioni e un test verifica che le soglie dichiarate siano derivate da esso | BLOCKED — vedi sotto |
-| F0-T10 | Marcatura delle soglie provvisorie e cancello d'esame (D010) | finche T09 non e DONE il registro marca le soglie come provvisorie e un test fallisce se una fase risulta chiusa sull'esame | TODO |
+| F0-T10 | Marcatura delle soglie provvisorie e cancello d'esame (D010) | finche T09 non e DONE il registro marca le soglie come provvisorie e un test fallisce se una fase risulta chiusa sull'esame | DONE gia in `1fea22a` come meccanismo, riga allineata il 27/10: `tests/test_threshold_provenance.py` verifica (a) lo stato di T09 letto dal ledger, (b) che ogni soglia di corpus sia `provisional` mentre T09 e aperto, (c) che nessuna fase risulti chiusa sull'esame in quello stato; 22 assert, 1 skip dichiarato per il corpus reale assente |
 
 ### F0-T09 BLOCKED: servono annotazioni umane
 
