@@ -22,6 +22,10 @@ h. seconds per frame at 1080x1920, stated against the 5 s per-template budget
    even when it does not fit.
 i. a template whose `__vxSeek` never resolves dies at the declared timeout with
    a Frame error naming the index, and leaves no browser process behind.
+j. a template painted edge to edge still writes a four-channel frame: opacity is
+   not an excuse to change the on-disk shape.
+k. the same template, named by a relative path and by an absolute one, renders the
+   same frames: the working directory must not change the picture.
 """
 
 from __future__ import annotations
@@ -147,6 +151,25 @@ def write_stuck_template(root: Path) -> Path:
     )
     (root / "template.json").write_text(
         '{"name": "never-paints", "fps": 10, "duration": 1.0,'
+        ' "size": [320, 320], "params": {}}',
+        encoding="utf-8",
+    )
+    return root
+
+
+def write_opaque_template(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "index.html").write_text(
+        "<!doctype html><html><body style='margin:0;background:#123456'>"
+        "<div id='dot' style='position:absolute;left:0;top:0;width:32px;"
+        "height:32px;background:#ffd400'></div>"
+        "<script>window.__vxSeek = function (t) {"
+        " document.getElementById('dot').style.left = (t * 20) + 'px';"
+        " return Promise.resolve(); };</script></body></html>",
+        encoding="utf-8",
+    )
+    (root / "template.json").write_text(
+        '{"name": "fully-opaque", "fps": 10, "duration": 0.4,'
         ' "size": [320, 320], "params": {}}',
         encoding="utf-8",
     )
@@ -369,6 +392,40 @@ def run(work: Path) -> Optional[float]:
         "i. no browser process is left behind",
         not orphans,
         f"orphans={sorted(orphans)}" if orphans else "process list back to baseline",
+    )
+
+    opaque = motion.capture(
+        write_opaque_template(work / "opaque"),
+        {},
+        work / "opaque_out",
+        fps=10,
+        frame_timeout_s=30.0,
+        capture_timeout_s=60.0,
+    )
+    with Image.open(opaque["frames"][0]) as shot:
+        shot_mode = shot.mode
+        shot_alpha = shot.convert("RGBA").getchannel("A").histogram()
+    check(
+        "j. an opaque template still writes an RGBA frame",
+        shot_mode == "RGBA" and shot_alpha[0] == 0,
+        f"{shot_mode}, pixels with alpha 0: {shot_alpha[0]}",
+    )
+
+    absolute = motion.capture(
+        TEMPLATE, params, work / "abs10", fps=10, frame_timeout_s=30.0
+    )
+    relative = motion.capture(
+        os.path.relpath(TEMPLATE, Path.cwd()),
+        params,
+        work / "rel10",
+        fps=10,
+        frame_timeout_s=30.0,
+    )
+    check(
+        "k. a relative template path renders the same frames",
+        relative["template"] == absolute["template"]
+        and relative["frame_sha256"] == absolute["frame_sha256"],
+        f"{relative['frame_count']} frames, cwd={Path.cwd().name}",
     )
     return full["elapsed_s"]
 

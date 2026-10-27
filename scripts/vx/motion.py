@@ -25,6 +25,7 @@ Tre invarianti, ognuna con la sua verifica:
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -997,10 +998,10 @@ def available() -> Dict[str, Any]:
 def _resolve_template_dir(template_dir: str | Path) -> Path:
     given = Path(template_dir)
     if given.is_dir():
-        return given
+        return given.resolve()
     named = templates_root() / str(template_dir)
     if named.is_dir():
-        return named
+        return named.resolve()
     raise MotionError(
         "TEMPLATE_MISSING",
         f"no template directory at {given} nor under {templates_root()}",
@@ -1341,6 +1342,23 @@ def _close_quietly(page: Any, context: Any, browser: Any, pw: Any) -> None:
             pass
 
 
+def _as_rgba_png(png: bytes) -> bytes:
+    """One frame shape on disk, whatever Chromium decided to encode.
+
+    A template painted edge to edge has no transparent pixel, and Chromium then
+    writes a three-channel PNG. The frame contract cannot depend on whether a
+    picture happens to be opaque: the cache, `format=rgba` and the golden
+    manifests all assume RGBA. An RGBA input is returned untouched, so frames
+    that already carried alpha keep exactly the bytes they had.
+    """
+    with Image.open(io.BytesIO(png)) as image:
+        if image.mode == "RGBA":
+            return png
+        buffer = io.BytesIO()
+        image.convert("RGBA").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def capture(
     template_dir: str | Path,
     params: Optional[Dict[str, Any]],
@@ -1426,8 +1444,16 @@ def capture(
     started = time.perf_counter()
     deadline = started + capture_limit
     engine = ""
+    engine_version = ""
     try:
         pw, browser, engine = _launch(probe["candidates"])
+        # `engine` names the launch channel; this names the Chromium build behind
+        # it, so the golden gate catches a silent browser upgrade. Best effort:
+        # an unreadable property leaves the key empty rather than failing capture.
+        try:
+            engine_version = str(getattr(browser, "version", "") or "")
+        except Exception:  # noqa: BLE001 - diagnostic only, never fatal
+            engine_version = ""
         context = browser.new_context(
             viewport={"width": width, "height": height}, device_scale_factor=1
         )
@@ -1534,6 +1560,7 @@ def capture(
                         degraded.append(f"frame {index}: {exc}")
                     except (OSError, VxError) as exc:
                         degraded.append(f"frame {index}: cache write failed: {exc}")
+            png = _as_rgba_png(png)
             path = destination / f"frame_{index:05d}.png"
             path.write_bytes(png)
             paths.append(str(path))
@@ -1552,6 +1579,7 @@ def capture(
     return {
         "template": template["name"],
         "engine": engine,
+        "engine_version": engine_version,
         "frames": paths,
         "frame_count": len(paths),
         "fps": rate,
