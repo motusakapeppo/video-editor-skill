@@ -20,6 +20,14 @@ contract.
   ``os.replace``), carrying the artifact path, its size, its sha256, the stage
   metadata and the moment it was recorded.
 
+Both halves are journal-aware when, and only when, ``<workdir>/.vx-writes.jsonl``
+exists (see :mod:`vx.artifacts`).  ``record`` then brackets the artifact write
+with a plan and a completion and places the bytes through
+:func:`vx.artifacts.write_bytes_atomic`; ``lookup`` refuses a hit whose path
+carries an unfinished intent, which is how a crash between "the bytes are on
+disk" and "the entry is trustworthy" becomes a miss instead of a false hit.
+Without a journal, neither function changes what it did before.
+
 The dependency map itself lives with the stages (``render.STAGE_DEPENDS``);
 :func:`dependents` turns that map into the transitive set of stages an input
 change invalidates, so the invalidation rule is executable, not prose.
@@ -38,6 +46,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Set
+
+from . import artifacts
 
 STAGE_CACHE_SCHEMA = "vx.stagecache/1"
 CACHE_DIR = "stage_cache"
@@ -125,7 +135,12 @@ def _atomic_write(path: Path, data: Dict[str, Any]) -> None:
         raise
 
 
-def lookup(workdir: str | Path, digest: str) -> Optional[Dict[str, Any]]:
+def lookup(
+    workdir: str | Path,
+    digest: str,
+    *,
+    pending: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     """The recorded entry for ``digest``, or ``None`` for any kind of miss.
 
     A hit must satisfy all four: the entry parses and belongs to this key and
@@ -133,6 +148,14 @@ def lookup(workdir: str | Path, digest: str) -> Optional[Dict[str, Any]]:
     when the stage finished, and its bytes hash to the recorded hash.  The size
     check rejects the cheap cases without reading; the hash check is what makes
     a shared artifact path safe.  Nothing here raises.
+
+    One extra miss: when the workdir carries a write-ahead journal and the
+    artifact's path has an intent with no completion, a crash may have left a
+    half-written file whose bytes still look plausible, so the entry is not
+    trusted.  The miss is still a miss — nothing is deleted — and the caller may
+    pass a dict as ``pending`` to receive ``pending_write: True`` plus the
+    artifact meta and the intent id, ready to log.  Without a journal this
+    parameter is never touched.
     """
     data = _read_json(entry_path(workdir, digest))
     if data is None:
@@ -144,13 +167,32 @@ def lookup(workdir: str | Path, digest: str) -> Optional[Dict[str, Any]]:
     artifact = data.get("artifact")
     if not isinstance(artifact, str) or not artifact:
         return None
+    path = Path(artifact)
     size = data.get("size")
     if not isinstance(size, int) or isinstance(size, bool) or size < 0:
         return None
     expected = data.get("sha256")
     if not isinstance(expected, str) or not expected:
         return None
-    path = Path(artifact)
+    unfinished = artifacts.pending_for(workdir, path)
+    if unfinished is not None:
+        if pending is not None:
+            meta = data.get("meta")
+            pending.clear()
+            pending.update(
+                {
+                    "key": str(digest),
+                    "path": str(path),
+                    "pending_write": True,
+                    "intent_id": unfinished.get("id"),
+                    "expected_sha256": unfinished.get("expected_sha256"),
+                    "meta": {
+                        **(meta if isinstance(meta, dict) else {}),
+                        "pending_write": True,
+                    },
+                }
+            )
+        return None
     try:
         if not path.is_file():
             return None
@@ -183,6 +225,14 @@ def record(
     ``None`` means "nothing was recorded" — the artifact does not exist, or the
     cache directory is not writable.  Neither is fatal: the stage already ran,
     the next run simply recomputes it.
+
+    When ``workdir`` carries a write-ahead journal and the artifact lives under
+    it, the artifact's bytes are re-placed through
+    :func:`vx.artifacts.write_bytes_atomic` between a plan and a completion.
+    That is the only write this module owns, and it is journaled *before* it
+    starts: a crash between the two records leaves an intent with no completion,
+    which :func:`lookup` turns into a miss on the next run.  No journal, no
+    difference from the previous behaviour.
     """
     artifact = Path(path)
     try:
@@ -194,6 +244,22 @@ def record(
     checksum = file_sha256(artifact)
     if not checksum:
         return None
+    workroot = Path(workdir)
+    if artifacts.journal_path(workroot).is_file() and artifacts.inside(
+        workroot, artifact
+    ):
+        intent = artifacts.plan(
+            workroot,
+            artifact,
+            expected_sha256=checksum,
+            kind="stage_artifact",
+        )
+        try:
+            payload = artifact.read_bytes()
+            artifacts.write_bytes_atomic(artifact, payload, root=workroot)
+        except (OSError, ValueError):
+            return None
+        artifacts.complete(workroot, intent, artifact, sha256=checksum)
     target = entry_path(workdir, digest)
     payload = {
         "schema": STAGE_CACHE_SCHEMA,
