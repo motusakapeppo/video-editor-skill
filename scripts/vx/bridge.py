@@ -5,7 +5,7 @@ pipeline: it takes a validated ``EDLPlan`` plus the audio analyses of its
 sources and returns a **new** plan (the input is never mutated) and a
 ``BridgeReport`` that declares what was applied and what was not.
 
-Three blocks live here:
+Five blocks live here:
 
 * **A5, silence cuts.** Every layer-0 clip is cut against the non-speech spans
   of its own source. The spans come from the VAD ``speech_regions`` complement
@@ -24,6 +24,14 @@ Three blocks live here:
   into one entry per surviving piece. Every b-roll entry cites the anchors its
   destination window covers, and :func:`caption_ass` turns the captions into the
   ASS the renderer burns.
+* **A6, reframe.** The face track of a source goes through
+  ``autoframe.build_crop_plan`` unchanged, then each box is matched to the kept
+  fragment that owns its source instant and shifted to destination time. A box
+  that only exists inside a removed silence produces no keyframe: the track is
+  the source of truth, the cut is not negotiable.
+* **A7, restore.** Denoise and stabilisation are gated on the same findings the
+  EditPlan path uses (``snr_db`` below ``noise_snr_low``, ``jitter.score`` at or
+  above ``jitter_shaky``) and declared per clip with the measured value.
 
 ``not_applied`` is always present in the report, even when empty: a report with
 nothing declared means the bridge did not look, not that nothing happened.
@@ -38,7 +46,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import edl_plan
-from .contract import THRESHOLDS, Cue, VxError
+from .contract import THRESHOLDS, CropPlan, Cue, FaceTracks, VxError
 
 BRIDGE_SCHEMA = "vx.bridge_report/1.0"
 
@@ -115,13 +123,14 @@ class Anchor:
 
 @dataclass
 class BridgeReport:
-    """The bridge's referto: seven lists, ``not_applied`` always present."""
+    """The bridge's referto: eight lists, ``not_applied`` always present."""
 
     anchors: List[Anchor] = field(default_factory=list)
     cuts: List[Dict[str, Any]] = field(default_factory=list)
     captions: List[Dict[str, Any]] = field(default_factory=list)
     broll: List[Dict[str, Any]] = field(default_factory=list)
     reframe: List[Dict[str, Any]] = field(default_factory=list)
+    restore: List[Dict[str, Any]] = field(default_factory=list)
     audio: List[Dict[str, Any]] = field(default_factory=list)
     not_applied: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -136,6 +145,7 @@ class BridgeReport:
             "captions": [dict(item) for item in self.captions],
             "broll": [dict(item) for item in self.broll],
             "reframe": [dict(item) for item in self.reframe],
+            "restore": [dict(item) for item in self.restore],
             "audio": [dict(item) for item in self.audio],
             "not_applied": [dict(item) for item in self.not_applied],
         }
@@ -717,6 +727,421 @@ def caption_ass(
 
 
 # --------------------------------------------------------------------------- #
+# A6: reframe driven by the face tracks
+# --------------------------------------------------------------------------- #
+
+# ``afftdn`` accepts its noise floor in this window; outside it the filter is
+# not an expression of the measurement any more and plan.py's passa-alto stands
+# in. These are ffmpeg's own bounds, not a tunable: nothing to calibrate.
+AFFTDN_NF_LIMITS_DB = (-80.0, -20.0)
+
+
+@dataclass(frozen=True)
+class _FaceSource:
+    """One source's crop plan, or the reason there is none."""
+
+    crop: Optional[CropPlan] = None
+    samples: Tuple[float, ...] = ()
+    reason: str = ""
+    detail: str = ""
+
+
+def _face_entry(item: Any) -> Tuple[Optional[Dict[str, Any]], str, str]:
+    """Normalise one ``faces`` value into ``(payload, reason, detail)``.
+
+    A ``FaceTracks`` carries the boxes but not the frame size, and the boxes are
+    pixels: without ``width``/``height`` no crop can be placed in the normalised
+    coordinates the renderer animates, so that case is declared instead of
+    guessed. A mapping may carry both (``tracks`` + ``width``/``height``) plus
+    the scene cuts of the source.
+    """
+    if isinstance(item, BaseException):
+        return None, "reframe_face_analysis_failed", str(item)
+    if item is None:
+        return None, "reframe_no_face_track", "nessuna analisi volti per la sorgente"
+    if isinstance(item, Mapping):
+        tracks = item.get("tracks")
+        width, height = item.get("width"), item.get("height")
+        framing, span, cuts = (
+            item.get("framing"),
+            item.get("span_x_ratio"),
+            item.get("scene_cuts"),
+        )
+    else:
+        tracks = getattr(item, "tracks", None)
+        width, height = getattr(item, "width", None), getattr(item, "height", None)
+        framing = getattr(item, "framing", None)
+        span = getattr(item, "span_x_ratio", None)
+        cuts = getattr(item, "scene_cuts", None)
+    rows = [dict(row) for row in (tracks or ()) if isinstance(row, Mapping)]
+    if not rows:
+        return None, "reframe_no_face_track", "l'analisi volti non ha tracce"
+    if not (_finite(width) and _finite(height)) or (
+        float(width) <= 0.0 or float(height) <= 0.0
+    ):
+        return None, "reframe_no_source_geometry", "traccia volti senza geometria"
+    return (
+        {
+            "tracks": rows,
+            "framing": str(framing or "center"),
+            "span_x_ratio": float(span) if _finite(span) else 0.0,
+            "scene_cuts": [float(c) for c in (cuts or ()) if _finite(c)],
+            "width": int(round(float(width))),
+            "height": int(round(float(height))),
+        },
+        "",
+        "",
+    )
+
+
+def _source_crop(
+    payload: Mapping[str, Any],
+    *,
+    aspect: str,
+    extra_cuts: Sequence[float] = (),
+) -> Tuple[Optional[CropPlan], str, str]:
+    """Reuse ``autoframe.build_crop_plan``: no second keyframe engine here."""
+    from . import autoframe  # noqa: PLC0415
+
+    cuts = sorted(
+        {
+            round(float(c), 4)
+            for c in list(payload.get("scene_cuts") or ()) + list(extra_cuts)
+            if _finite(c) and float(c) > 0.0
+        }
+    )
+    tracks = FaceTracks(
+        tracks=list(payload["tracks"]),
+        framing=str(payload["framing"]),
+        span_x_ratio=float(payload["span_x_ratio"]),
+    )
+    crop = autoframe.build_crop_plan(
+        tracks,
+        int(payload["width"]),
+        int(payload["height"]),
+        aspect=aspect,
+        scene_cuts=cuts,
+    )
+    if crop.mode == "fit":
+        return None, "reframe_framing_fit", "framing fit: il crop taglierebbe un volto"
+    if crop.mode not in ("track", "lock"):
+        return None, "reframe_static_subject", f"crop mode {crop.mode}"
+    return crop, "", ""
+
+
+def _source_faces(item: Any, *, aspect: str, scene_cuts: Any = None) -> _FaceSource:
+    payload, reason, detail = _face_entry(item)
+    if payload is None:
+        return _FaceSource(reason=reason, detail=detail)
+    extra = [float(c) for c in (scene_cuts or ()) if _finite(c)]
+    crop, reason, detail = _source_crop(payload, aspect=aspect, extra_cuts=extra)
+    if crop is None:
+        return _FaceSource(reason=reason, detail=detail)
+    stamps = sorted(
+        {
+            round(float(row["t"]), 4)
+            for track in payload["tracks"]
+            for row in (track.get("samples") or ())
+            if isinstance(row, Mapping) and _finite(row.get("t"))
+        }
+    )
+    return _FaceSource(crop=crop, samples=tuple(stamps))
+
+
+def _keyframe_scale(crop: CropPlan, out_w: int, out_h: int) -> float:
+    """Crop width as a fraction of the output canvas after the cover scale.
+
+    ``build_crop_plan`` keeps ``crop_w`` fixed for the whole clip (ffmpeg
+    evaluates a ``crop`` size once), so one scale per clip is the whole truth
+    and the renderer animates the centre only.
+    """
+    src_w, src_h = float(crop.src_w), float(crop.src_h)
+    if src_w <= 0.0 or src_h <= 0.0 or out_w <= 0 or out_h <= 0:
+        return 0.0
+    cover = max(float(out_w) / src_w, float(out_h) / src_h)
+    return _clamp(float(crop.crop_w) * cover / float(out_w), 0.0, 1.0)
+
+
+def _box_owner(t: float, fragments: Sequence[Tuple[float, float]]) -> int:
+    """The kept fragment that owns a source instant, or -1 for a removed gap."""
+    for index, (src0, src1) in enumerate(fragments):
+        if src0 - _EPS <= t <= src1 + _EPS:
+            return index
+    return -1
+
+
+def _fragment_keyframes(
+    crop: CropPlan,
+    fragment: Tuple[float, float, float, float],
+    scale: float,
+) -> List[Dict[str, float]]:
+    """Source-time boxes of one fragment, shifted to destination time.
+
+    A box outside the fragment produces nothing: the destination instants are
+    the remapped ones, never the source ones, and a sample in a removed silence
+    has no destination at all.
+    """
+    src0, src1, dst0, dst1 = fragment
+    src_w, src_h = float(crop.src_w), float(crop.src_h)
+    half_w, half_h = float(crop.crop_w) / 2.0, float(crop.crop_h) / 2.0
+    by_t: Dict[float, Dict[str, float]] = {}
+    for box in crop.boxes or ():
+        t = float(box["t"])
+        if t < src0 - _EPS or t > src1 + _EPS:
+            continue
+        dst_t = round(_clamp(dst0 + (t - src0), dst0, dst1), 3)
+        by_t[dst_t] = {
+            "dst_t": dst_t,
+            "x": round(_clamp((float(box["x"]) + half_w) / src_w, 0.0, 1.0), 4),
+            "y": round(_clamp((float(box["y"]) + half_h) / src_h, 0.0, 1.0), 4),
+            "scale": round(scale, 4),
+        }
+    return [by_t[key] for key in sorted(by_t)]
+
+
+def _declare_reframe(
+    report: BridgeReport,
+    clip: Any,
+    created: Sequence[Any],
+    state: _FaceSource,
+    fragments: Sequence[Tuple[float, float]],
+    *,
+    out_w: int,
+    out_h: int,
+) -> None:
+    """One ``reframe`` entry per kept fragment, plus every skip declared."""
+    crop = state.crop
+    if crop is None:
+        for new_clip in created:
+            report.reframe.append(
+                {
+                    "clip_id": new_clip.clip_id,
+                    "source_id": clip.source_id,
+                    "frames": 0,
+                    "keyframes": [],
+                    "declared": f"reframe non applicato: {state.reason}",
+                }
+            )
+            entry: Dict[str, Any] = {
+                "anchor_id": None,
+                "clip_id": new_clip.clip_id,
+                "source_id": clip.source_id,
+                "reason": state.reason,
+            }
+            if state.detail:
+                entry["detail"] = state.detail
+            report.not_applied.append(entry)
+        return
+
+    scale = _keyframe_scale(crop, out_w, out_h)
+    owners: Dict[int, int] = {}
+    orphans = 0
+    for box in crop.boxes or ():
+        owner = _box_owner(float(box["t"]), fragments)
+        if owner >= 0:
+            owners[owner] = owners.get(owner, 0) + 1
+    clip_in, clip_out = float(clip.src_in), float(clip.src_out)
+    for stamp in state.samples:
+        if not (clip_in - _EPS <= stamp <= clip_out + _EPS):
+            continue
+        if _box_owner(stamp, fragments) < 0:
+            orphans += 1
+    if orphans:
+        report.not_applied.append(
+            {
+                "anchor_id": None,
+                "clip_id": clip.clip_id,
+                "source_id": clip.source_id,
+                "reason": "reframe_keyframes_in_silence",
+                "count": orphans,
+                "declared": "campioni dentro un silenzio tagliato: nessun keyframe",
+            }
+        )
+
+    for index, new_clip in enumerate(created):
+        fragment = (
+            float(new_clip.src_in),
+            float(new_clip.src_out),
+            float(new_clip.dst_in),
+            float(new_clip.dst_out),
+        )
+        keyframes = _fragment_keyframes(crop, fragment, scale)
+        reason, detail = "", ""
+        if scale <= 0.0:
+            reason, detail = "reframe_degenerate_keyframes", "scala nulla"
+        elif len(keyframes) < 2:
+            reason = "reframe_degenerate_keyframes"
+            detail = f"{len(keyframes)} keyframe: serve una animazione, non un fermo"
+        elif all(
+            abs(item["x"] - keyframes[0]["x"]) < 1e-6
+            and abs(item["y"] - keyframes[0]["y"]) < 1e-6
+            for item in keyframes
+        ):
+            reason = "reframe_degenerate_keyframes"
+            detail = "centro identico su ogni keyframe"
+        if reason:
+            keyframes = []
+        frames = owners.get(index, 0)
+        report.reframe.append(
+            {
+                "clip_id": new_clip.clip_id,
+                "source_id": clip.source_id,
+                "frames": frames,
+                "keyframes": keyframes,
+                "declared": (
+                    f"reframe: {len(keyframes)} keyframe da {frames} campioni, "
+                    f"scala {scale:.3f}, crop {int(crop.crop_w)}x{int(crop.crop_h)}"
+                    if keyframes
+                    else f"reframe non applicato: {detail}"
+                ),
+            }
+        )
+        if reason:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "clip_id": new_clip.clip_id,
+                    "source_id": clip.source_id,
+                    "reason": reason,
+                    "keyframes": len(keyframes),
+                    "detail": detail,
+                }
+            )
+
+
+# --------------------------------------------------------------------------- #
+# A7: denoise and stabilisation, single pass, only on a finding
+# --------------------------------------------------------------------------- #
+
+
+def _motion_field(item: Any, *names: str) -> Any:
+    """Read a nested field from a ``VideoAnalysis`` or from its ``to_dict()``."""
+    if item is None or isinstance(item, BaseException):
+        return None
+    value: Any = item
+    for name in names:
+        if value is None:
+            return None
+        if isinstance(value, Mapping):
+            value = value.get(name)
+        else:
+            value = getattr(value, name, None)
+    return value
+
+
+def _denoise_filter(noise_dbfs: Optional[float]) -> str:
+    """The single-pass denoise of the EDL path, driven by the measurement."""
+    low, high = AFFTDN_NF_LIMITS_DB
+    if noise_dbfs is not None and low <= noise_dbfs <= high:
+        return f"afftdn=nf={noise_dbfs:.1f}"
+    return "highpass=f=80"
+
+
+def _restore_sentence(
+    denoise: bool,
+    stabilize: bool,
+    snr: Optional[float],
+    floor: Optional[float],
+    jitter: Optional[float],
+    snr_thr: float,
+    jitter_thr: float,
+) -> str:
+    parts: List[str] = []
+    if denoise:
+        parts.append(
+            f"denoise afftdn nf={floor:.1f} (snr {snr:.1f} < {snr_thr:.1f} dB)"
+        )
+    else:
+        parts.append(
+            f"denoise assente (snr {snr:.1f} >= {snr_thr:.1f} dB)"
+            if snr is not None
+            else "denoise assente (snr non misurato)"
+        )
+    if stabilize:
+        parts.append(f"stabilize deshake (jitter {jitter:.2f} >= {jitter_thr:.2f})")
+    else:
+        parts.append(
+            f"stabilize assente (jitter {jitter:.2f} < {jitter_thr:.2f})"
+            if jitter is not None
+            else "stabilize assente (jitter non misurato)"
+        )
+    return "; ".join(parts)
+
+
+def _declare_restore(
+    report: BridgeReport,
+    clip: Any,
+    created: Sequence[Any],
+    *,
+    analysis: Any,
+    motion: Any,
+) -> None:
+    """Gate denoise on ``snr_db`` and stabilisation on ``jitter.score``.
+
+    Both are the same thresholds ``plan.py`` uses for the EditPlan path:
+    ``noise_snr_low`` (apply below) and ``jitter_shaky`` (apply at or above).
+    A missing measurement is a declared skip with the value it should have had,
+    never a silent filter.
+    """
+    snr_raw = _analysis_field(analysis, "snr_db")
+    floor_raw = _analysis_field(analysis, "noise_floor_dbfs")
+    jitter_raw = _motion_field(motion, "jitter", "score")
+    snr = float(snr_raw) if _finite(snr_raw) else None
+    floor = float(floor_raw) if _finite(floor_raw) else None
+    jitter = float(jitter_raw) if _finite(jitter_raw) else None
+    snr_thr = float(THRESHOLDS["noise_snr_low"])
+    jitter_thr = float(THRESHOLDS["jitter_shaky"])
+    denoise = snr is not None and snr < snr_thr
+    stabilize = jitter is not None and jitter >= jitter_thr
+    filter_text = _denoise_filter(floor) if denoise else None
+    declared = _restore_sentence(
+        denoise, stabilize, snr, floor, jitter, snr_thr, jitter_thr
+    )
+
+    for new_clip in created:
+        report.restore.append(
+            {
+                "clip_id": new_clip.clip_id,
+                "source_id": clip.source_id,
+                "denoise": denoise,
+                "stabilize": stabilize,
+                "noise_dbfs": round(floor, 2) if floor is not None else None,
+                "jitter": round(jitter, 3) if jitter is not None else None,
+                "snr_db": round(snr, 2) if snr is not None else None,
+                "noise_threshold_db": snr_thr,
+                "jitter_threshold": jitter_thr,
+                "denoise_filter": filter_text,
+                "declared": declared,
+            }
+        )
+        if not denoise:
+            entry: Dict[str, Any] = {
+                "anchor_id": None,
+                "clip_id": new_clip.clip_id,
+                "source_id": clip.source_id,
+                "reason": "denoise_not_justified",
+                "snr_db": round(snr, 2) if snr is not None else None,
+                "noise_dbfs": round(floor, 2) if floor is not None else None,
+                "threshold_db": snr_thr,
+            }
+            if isinstance(analysis, BaseException):
+                entry["detail"] = f"analysis_failed: {analysis}"
+            report.not_applied.append(entry)
+        if not stabilize:
+            entry = {
+                "anchor_id": None,
+                "clip_id": new_clip.clip_id,
+                "source_id": clip.source_id,
+                "reason": "stabilize_not_justified",
+                "jitter": round(jitter, 3) if jitter is not None else None,
+                "threshold": jitter_thr,
+            }
+            if isinstance(motion, BaseException):
+                entry["detail"] = f"analysis_failed: {motion}"
+            report.not_applied.append(entry)
+
+
+# --------------------------------------------------------------------------- #
 # build
 # --------------------------------------------------------------------------- #
 
@@ -729,6 +1154,8 @@ def build(
     loudness_spans: Callable[[str, Sequence[Sequence[float]]], Mapping[str, Any]],
     transcripts: Optional[Mapping[str, Any]] = None,
     caption_style: Optional[Mapping[str, Any]] = None,
+    faces: Optional[Mapping[str, Any]] = None,
+    motion: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[edl_plan.EDLPlan, BridgeReport]:
     """Cut the a_roll chain on measured silence and gain it per used segment.
 
@@ -741,6 +1168,18 @@ def build(
     exception that prevented the transcription; ``None`` means captions are off
     and the report says so. ``caption_style`` overrides the live
     ``bridge_caption_*`` thresholds for this run only.
+
+    ``faces`` maps ``source_id`` to a ``FaceTracks`` (or its ``to_dict()`` form,
+    or a mapping that adds ``width``/``height``/``scene_cuts``) or to the
+    exception that prevented detection; ``None`` means reframe is off. Every
+    a_roll fragment gets a ``reframe`` entry: keyframes only where a kept
+    fragment carries a track sample, a declared ``not_applied`` when it does not.
+
+    ``motion`` maps ``source_id`` to a ``VideoAnalysis`` (or its ``to_dict()``
+    form) or to the exception; ``None`` means the restore gate is off. With it,
+    every a_roll fragment declares ``denoise`` and ``stabilize`` and the finding
+    that justified them. Both default off so a caller that knows nothing about
+    faces or motion gets exactly the plan and the report it got before.
     """
     if not isinstance(plan, edl_plan.EDLPlan):
         raise VxError("bridge.build expects an EDLPlan")
@@ -754,6 +1193,8 @@ def build(
     silence_min = float(THRESHOLDS["silence_min"])
 
     report = BridgeReport()
+    out_w, out_h = (int(value) for value in plan.resolution)
+    face_cache: Dict[str, _FaceSource] = {}
     layer0_tracks = [
         index
         for index, track in enumerate(plan.video_tracks)
@@ -894,6 +1335,7 @@ def build(
                 raise VxError(f"bridge: clip {clip.clip_id!r} lost every frame")
 
         records: List[Dict[str, Any]] = []
+        created: List[edl_plan.ClipSegment] = []
         clip_fragments: List[Tuple[float, float, float, float]] = []
         for index, (first, last) in enumerate(fragments):
             length = last - first
@@ -922,6 +1364,7 @@ def build(
                 gain_db=0.0,
             )
             layer0_by_track.setdefault(track_index, []).append(new_clip)
+            created.append(new_clip)
             clip_fragments.append(
                 (
                     float(first),
@@ -959,6 +1402,35 @@ def build(
                         removal["t0"], removal["t1"], clip_fragments
                     )
                 ]
+            )
+
+        # -- A6/A7: this source's measurements, declared per kept fragment --- #
+        if faces is not None:
+            if clip.source_id not in face_cache:
+                face_cache[clip.source_id] = _source_faces(
+                    faces.get(clip.source_id),
+                    aspect=str(plan.aspect_ratio),
+                    scene_cuts=_motion_field(
+                        motion.get(clip.source_id) if motion else None,
+                        "scene_cuts",
+                    ),
+                )
+            _declare_reframe(
+                report,
+                clip,
+                created,
+                face_cache[clip.source_id],
+                fragments,
+                out_w=out_w,
+                out_h=out_h,
+            )
+        if motion is not None:
+            _declare_restore(
+                report,
+                clip,
+                created,
+                analysis=analysis,
+                motion=motion.get(clip.source_id),
             )
 
     duration = cursor

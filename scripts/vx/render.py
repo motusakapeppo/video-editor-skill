@@ -30,7 +30,7 @@ import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import contract
 from . import ffmpeg as ff
@@ -933,6 +933,7 @@ def _edl_audio_clip_chain(
     label: str,
     *,
     fades: bool,
+    denoise: Optional[str] = None,
 ) -> str:
     src_in = float(clip.src_in)
     src_out = float(clip.src_out)
@@ -941,6 +942,8 @@ def _edl_audio_clip_chain(
         f"[{audio_index}:a]atrim=start={src_in:.6f}:end={src_out:.6f},"
         f"asetpts=PTS-STARTPTS"
     )
+    if denoise:
+        chain += f",{denoise}"
     gain = float(getattr(clip, "gain_db", 0.0) or 0.0)
     if gain != 0.0:
         chain += f",volume={gain:.3f}dB"
@@ -993,8 +996,186 @@ def _label_safe(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z_]", "_", str(value)) or "clip"
 
 
+DENOISE_PREFIXES = ("afftdn=", "highpass=")
+
+
+def _reframe_points(raw: Any) -> List[Tuple[float, float, float, float]]:
+    """Usable ``(dst_t, x, y, scale)`` keyframes, ascending, one per instant.
+
+    ``x``/``y`` are the normalised centre of the crop window, ``scale`` its size
+    as a fraction of the output canvas. A malformed entry is dropped: the bridge
+    declares every skip it derives, so the renderer never invents one.
+    """
+    points: List[Tuple[float, float, float, float]] = []
+    for item in raw or ():
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            t = float(item["dst_t"])
+            x = float(item["x"])
+            y = float(item["y"])
+            scale = float(item.get("scale", 1.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(value) for value in (t, x, y, scale)):
+            continue
+        if scale <= 0.0:
+            continue
+        points.append(
+            (
+                t,
+                min(1.0, max(0.0, x)),
+                min(1.0, max(0.0, y)),
+                min(1.0, scale),
+            )
+        )
+    by_t: Dict[float, Tuple[float, float, float, float]] = {}
+    for point in sorted(points, key=lambda item: item[0]):
+        by_t[round(point[0], 4)] = point
+    return [by_t[key] for key in sorted(by_t)]
+
+
+def _crop_expr(
+    points: Sequence[Tuple[float, float, float, float]],
+    axis: int,
+    offset_s: float,
+    symbol: str,
+    size: int,
+) -> str:
+    """Piecewise-linear centre as a ``crop`` offset, clamped to the slack.
+
+    Times are destination times, so the clip-local expression is ``t - dst_in``.
+    Commas are escaped as ``\\,`` for the same reason ``vx.autoframe`` escapes
+    them: the filtergraph parser unescapes before the expression parser runs.
+    """
+    tv = "t" if abs(offset_s) < 1e-9 else f"(t-{offset_s:.6f})"
+    expr = f"{points[-1][axis]:.6f}*{symbol}"
+    for index in range(len(points) - 2, -1, -1):
+        t0, t1 = points[index][0], points[index + 1][0]
+        v0, v1 = points[index][axis], points[index + 1][axis]
+        span = t1 - t0
+        slope = 0.0 if span <= 1e-9 else (v1 - v0) / span
+        if abs(slope) < 1e-9:
+            expr = f"if(lt({tv},{t1:.6f}),{v0:.6f}*{symbol},{expr})"
+        else:
+            expr = (
+                f"if(lt({tv},{t1:.6f}),"
+                f"{v0:.6f}*{symbol}{slope:+.6f}*({tv}-{t0:.6f}),{expr})"
+            )
+    expr = f"clip({expr}-{size / 2.0:.4f},0,{symbol}-{size})"
+    return expr.replace(",", "\\,")
+
+
+def _reframe_geometry(clip: Any, raw: Any, width: int, height: int) -> Optional[str]:
+    """Cover-scale, keyframed crop, scale back. ``None`` when nothing animates.
+
+    ``crop`` evaluates its width and height once, so a list whose scales differ
+    cannot be expressed and fails loudly instead of silently holding one of
+    them. Fewer than two usable instants, or a centre that never moves, is not
+    an animation: the clip keeps its fill policy and the bridge has already
+    declared why.
+    """
+    points = _reframe_points(raw)
+    if len(points) < 2:
+        return None
+    scale = points[0][3]
+    if any(abs(point[3] - scale) > 1e-3 for point in points):
+        raise RenderFailure(
+            f"reframe: clip {clip.clip_id!r} carries more than one crop scale"
+        )
+    if all(
+        abs(point[1] - points[0][1]) < 1e-6 and abs(point[2] - points[0][2]) < 1e-6
+        for point in points
+    ):
+        return None
+    offset_s = float(clip.dst_in)
+    if points[0][0] > offset_s + 1e-9:
+        first = points[0]
+        points.insert(0, (offset_s, first[1], first[2], first[3]))
+    crop_w = max(2, even(float(width) * scale))
+    crop_h = max(2, even(float(height) * scale))
+    x_expr = _crop_expr(points, 1, offset_s, "iw", crop_w)
+    y_expr = _crop_expr(points, 2, offset_s, "ih", crop_h)
+    return (
+        f"scale={int(width)}:{int(height)}:force_original_aspect_ratio=increase,"
+        f"crop={crop_w}:{crop_h}:{x_expr}:{y_expr},"
+        f"scale={int(width)}:{int(height)}:flags=bicubic,setsar=1,format=yuv420p"
+    )
+
+
+def _restore_denoise(item: Any) -> Optional[str]:
+    """The resolved denoise filter of one clip, or ``None``. Never a guess."""
+    if not item:
+        return None
+    value = item.get("denoise")
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        if not text.startswith(DENOISE_PREFIXES):
+            raise RenderFailure(f"restore: denoise filter {text!r} not allowed")
+        return text
+    if value:
+        raise RenderFailure("restore: denoise declared without a filter")
+    return None
+
+
+def _restore_stabilize(item: Any) -> bool:
+    return bool(item and item.get("stabilize"))
+
+
+def _restore_windows(
+    plan: Any, restore: Optional[Mapping[str, Any]]
+) -> Dict[Tuple[str, float, float], Any]:
+    """The restore entry of every keyed layer-0 clip, by its destination window.
+
+    A dialogue clip is the 1:1 mirror of an a_roll fragment and carries a
+    different ``clip_id`` (``a0_0_0`` against ``v0_0_0``), so the audio chain
+    finds its denoise through the geometry the two share. Destination windows
+    are unique per plan, so the key cannot collide.
+    """
+    if not restore:
+        return {}
+    windows: Dict[Tuple[str, float, float], Any] = {}
+    for clip in _edl_clips(plan, layers={0}):
+        entry = restore.get(clip.clip_id)
+        if entry is not None:
+            windows[
+                (
+                    clip.source_id,
+                    round(float(clip.dst_in), 6),
+                    round(float(clip.dst_out), 6),
+                )
+            ] = entry
+    return windows
+
+
+def _restore_for(
+    restore: Optional[Mapping[str, Any]],
+    windows: Mapping[Tuple[str, float, float], Any],
+    clip: Any,
+) -> Any:
+    if not restore:
+        return None
+    entry = restore.get(clip.clip_id)
+    if entry is not None:
+        return entry
+    return windows.get(
+        (
+            clip.source_id,
+            round(float(clip.dst_in), 6),
+            round(float(clip.dst_out), 6),
+        )
+    )
+
+
 def _edl_normalise(
-    clip: Any, index: int, width: int, height: int, *, fill: str = "fit"
+    clip: Any,
+    index: int,
+    width: int,
+    height: int,
+    *,
+    fill: str = "fit",
+    reframe: Any = None,
+    restore: Any = None,
 ) -> str:
     """Trim, normalise geometry and hand back an *unlabelled* chain.
 
@@ -1004,12 +1185,21 @@ def _edl_normalise(
     * ``fit`` (default) — letterbox/pillarbox: scale to fit, pad the rest;
     * ``crop`` — cover and centre-crop, no bands, source pixels thrown away;
     * ``blur`` — blurred cover background under the whole fitted foreground.
+
+    ``restore`` splices the single-pass stabiliser in before any geometry, and
+    ``reframe`` replaces the geometry with the keyframed crop of that clip. Both
+    absent leaves the chain byte-identical to the one this engine shipped.
     """
     policy = _fill_policy(fill)
     head = (
         f"[{index}:v]trim=start={float(clip.src_in):.6f}:"
         f"end={float(clip.src_out):.6f},setpts=PTS-STARTPTS,"
     )
+    if _restore_stabilize(restore):
+        head += "deshake,"
+    geometry = _reframe_geometry(clip, reframe, width, height)
+    if geometry:
+        return head + geometry
     if policy == "fit":
         return (
             head + f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
@@ -1045,6 +1235,8 @@ def build_edl_filtergraph(
     has_audio: Optional[bool] = None,
     fill: str = "fit",
     subtitles: Optional[str] = None,
+    reframe: Optional[Mapping[str, Any]] = None,
+    restore: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """A-Roll is concatenated; audio is split into dialogue and music buses; B-roll is overlaid.
 
@@ -1054,6 +1246,11 @@ def build_edl_filtergraph(
     amix, so overlap and J/L cuts are expressible without duplicating a stream.
     Every audio track whose role is not ``music`` feeds the dialogue bus, which
     keeps older plans working unchanged.
+
+    ``reframe`` keys a layer-0 ``clip_id`` to the keyframes the bridge declared
+    for it (``{dst_t, x, y, scale}``); ``restore`` keys a ``clip_id`` to the
+    resolved effects (``{denoise: <filter>|None, stabilize: bool}``). Both
+    ``None`` — the default — emits the graph this engine shipped, unchanged.
     """
     width, height = (int(value) for value in plan.resolution)
     policy = _fill_policy(fill)
@@ -1075,11 +1272,21 @@ def build_edl_filtergraph(
     for index, clip in enumerate(video_clips):
         index_in = source_to_index[clip.source_id]
         parts.append(
-            _edl_normalise(clip, index_in, width, height, fill=policy) + f"[v{index}]"
+            _edl_normalise(
+                clip,
+                index_in,
+                width,
+                height,
+                fill=policy,
+                reframe=reframe.get(clip.clip_id) if reframe else None,
+                restore=restore.get(clip.clip_id) if restore else None,
+            )
+            + f"[v{index}]"
         )
 
     if audio:
         dialogue_clips, music_clips = _edl_audio_buses(plan)
+        windows = _restore_windows(plan, restore)
         used: set = set()
         dialogue_labels: List[str] = []
         music_labels: List[str] = []
@@ -1092,6 +1299,7 @@ def build_edl_filtergraph(
                     source_to_index[clip.source_id],
                     label,
                     fades=True,
+                    denoise=_restore_denoise(_restore_for(restore, windows, clip)),
                 )
             )
         for clip in music_clips:
@@ -1229,6 +1437,8 @@ def render_edl(
     progress_file: Optional[str] = None,
     fill: str = "fit",
     subtitles: Optional[str] = None,
+    reframe: Optional[Mapping[str, Any]] = None,
+    restore: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -1246,6 +1456,8 @@ def render_edl(
         has_audio=has_audio,
         fill=_fill_policy(fill),
         subtitles=subtitles,
+        reframe=reframe,
+        restore=restore,
     )
     script = write_script(graph, work / "edl_graph.txt")
     out = Path(output_path)

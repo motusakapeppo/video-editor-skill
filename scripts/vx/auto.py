@@ -350,18 +350,32 @@ def _a_roll_sources(plan: Any) -> List[str]:
     return seen
 
 
-def _bridge_plan(plan: Any, *, captions: bool = True) -> Any:
-    """Run the bridge: analyses and transcripts per a_roll source, failures declared.
+def _bridge_plan(
+    plan: Any,
+    *,
+    captions: bool = True,
+    media: Optional[Mapping[str, Any]] = None,
+) -> Any:
+    """Run the bridge: analyses, transcripts, faces and motion per a_roll source.
 
     A transcription is attempted only when ``captions`` is on. ``subs.transcribe``
     never raises, but it reports a skip as ``skipped_reason``; both that and any
     exception are handed to ``bridge.build`` as a value, which turns them into a
     ``transcript_failed`` declaration instead of a dead run.
+
+    Face detection and the silent video analysis feed A6 and A7 the same way: a
+    detector without OpenCV, a missing model or a clip the analyser cannot decode
+    travels as the exception it raised and becomes a declared skip, never a crash
+    and never a filter applied without a finding. ``media`` supplies the frame
+    size of each staged source, because face boxes are pixels and the crop the
+    renderer animates is normalised.
     """
-    from . import audio, bridge, subs
+    from . import analyze, audio, bridge, faces, subs
 
     analyses: Dict[str, Any] = {}
     transcripts: Dict[str, Any] = {}
+    face_tracks: Dict[str, Any] = {}
+    motion: Dict[str, Any] = {}
     sources = _a_roll_sources(plan)
     for source_id in sources:
         ref = plan.sources.get(source_id)
@@ -370,6 +384,24 @@ def _bridge_plan(plan: Any, *, captions: bool = True) -> Any:
             analyses[source_id] = audio.analyze_audio(path)
         except Exception as exc:  # noqa: BLE001 - the bridge turns it into a declaration
             analyses[source_id] = exc
+        try:
+            motion[source_id] = analyze.analyze_video(path)
+        except Exception as exc:  # noqa: BLE001 - declared per clip
+            motion[source_id] = exc
+        try:
+            info = (media or {}).get(source_id) or {}
+            tracked = faces.detect_faces_tracked(
+                path, sample_fps=contract.SAMPLE_FPS_FACE
+            )
+            payload: Dict[str, Any] = dict(tracked.to_dict())
+            payload["width"] = info.get("width")
+            payload["height"] = info.get("height")
+            cuts = getattr(motion[source_id], "scene_cuts", None)
+            if cuts:
+                payload["scene_cuts"] = list(cuts)
+            face_tracks[source_id] = payload
+        except Exception as exc:  # noqa: BLE001 - declared per clip
+            face_tracks[source_id] = exc
         if not captions:
             continue
         try:
@@ -386,7 +418,31 @@ def _bridge_plan(plan: Any, *, captions: bool = True) -> Any:
         target_lufs=TARGET_LUFS,
         loudness_spans=audio.loudness_spans,
         transcripts=transcripts if captions else None,
+        faces=face_tracks,
+        motion=motion,
     )
+
+
+def _render_effects(report: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """The render parameters the report declared: keyframes and resolved filters.
+
+    Only what the bridge measured reaches the graph: a clip without keyframes is
+    absent from ``reframe`` and keeps its fill policy, and a clip without a
+    justified finding is absent from ``restore``.
+    """
+    reframe: Dict[str, Any] = {
+        item["clip_id"]: item["keyframes"]
+        for item in getattr(report, "reframe", ())
+        if item.get("keyframes")
+    }
+    restore: Dict[str, Any] = {
+        item["clip_id"]: {
+            "denoise": item.get("denoise_filter") if item.get("denoise") else None,
+            "stabilize": bool(item.get("stabilize")),
+        }
+        for item in getattr(report, "restore", ())
+    }
+    return reframe, restore
 
 
 def _run_locked(
@@ -449,14 +505,21 @@ def _run_locked(
         "gained_clips": 0,
         "not_applied": 0,
         "captions": 0,
+        "reframe": 0,
+        "restore": 0,
         "subtitles": None,
         "report": None,
     }
+    reframe_map: Dict[str, Any] = {}
+    restore_map: Dict[str, Any] = {}
     captions_ass: Optional[str] = None
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge")
         subs_enabled = not bool(getattr(args, "no_subs", False))
-        plan, bridge_report = _bridge_plan(plan, captions=subs_enabled)
+        plan, bridge_report = _bridge_plan(
+            plan, captions=subs_enabled, media=media_info_map
+        )
+        reframe_map, restore_map = _render_effects(bridge_report)
         bridged_errors = plan.validate()
         if bridged_errors:
             raise contract.VxError(
@@ -481,6 +544,14 @@ def _run_locked(
             "gained_clips": len(bridge_report.audio),
             "not_applied": len(bridge_report.not_applied),
             "captions": len(bridge_report.captions),
+            "reframe": sum(
+                1 for item in bridge_report.reframe if item.get("keyframes")
+            ),
+            "restore": sum(
+                1
+                for item in bridge_report.restore
+                if item.get("denoise") or item.get("stabilize")
+            ),
             "subtitles": captions_ass,
             "report": str(report_path),
         }
@@ -527,6 +598,8 @@ def _run_locked(
         progress_file=progress_file,
         fill=fill_mode,
         subtitles=captions_ass,
+        reframe=reframe_map,
+        restore=restore_map,
     )
     _notify(progress, 92.0, "render_done")
 
