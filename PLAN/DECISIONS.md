@@ -157,3 +157,50 @@ Quattro regole non negoziabili che F17 impone da qui in avanti:
 
 Limiti ai sottoprocessi: ogni chiamata a ffmpeg ha un tempo massimo e viene
 terminata se lo supera, con errore dichiarato e non con un'attesa infinita.
+
+## D010 — Soglie provvisorie: nessuna fase si chiude con numeri scelti a occhio (2026-10-27)
+
+Regola proposta dall'utente, e ha ragione: T09 blocca molto più di sé stesso. Le
+soglie che aspettano il corpus compaiono nell'accettazione di F5 (beat), F6
+(segmentazione e momenti migliori), F9 (critico) e F18 (torneo). Chiudere una fase
+con soglie provvisorie significa propagare un errore per quattro fasi prima di
+vederlo.
+
+Quindi, da adesso:
+
+1. Finché T09 è aperto, `registry` marchetta le soglie derivate dal corpus come
+   **provvisorie**, con la provenienza dichiarata nel referto.
+2. `tests/test_threshold_provenance.py` legge lo stato di T09 in
+   `PLAN/MASTER_LEDGER.md`: se T09 non è `DONE`, il test verifica che la marcatura
+   provvisoria ci sia; se qualche fase risulta chiusa sull'esame mentre T09 è
+   aperto, il test **fallisce**. La regola non è una promessa in un documento, è un
+   cancello che si apre solo quando i dati ci sono.
+3. Il modulo di annotazione non si interpreta a occhio: si importa con
+   `tests/import_annotations.py`, che valida formato `mm:ss`, livelli ammessi,
+   tre momenti non sovrapposti fra 3 e 30 secondi, e produce
+   `tests/fixtures/corpus_annotations.json` con l'hash del modulo di partenza.
+
+## D011 — F2 a fetta verticale, con l'elenco delle ondate già nel ledger (2026-10-27)
+
+F2 è la fase più grande del piano e l'unica con un rischio architetturale vero:
+se il modello degli effetti è sbagliato, si scopre venti funzioni dopo. Quindi:
+
+1. **Prima una fetta verticale completa**: un solo effetto con keyframe e una sola
+   transizione, dall'EDL 3 fino al render e a un frame di riferimento. Se
+   l'architettura ha un difetto, lo si paga su una funzione.
+2. **Tutte le ondate stanno nel ledger da subito**, altrimenti «a ondate» diventa
+   «e il resto dopo», che è il modo gentile di non finirlo.
+
+Tre trappole decise prima di scrivere il compilatore, non scoperte dentro:
+
+- **Backend per effetto.** Ogni voce del registro dichiara come si realizza —
+  espressione ffmpeg, `sendcmd`, overlay Chromium, o frame per frame — con una
+  regola esplicita: oltre un certo numero di keyframe l'espressione diventa
+  illeggibile e si passa a `sendcmd`; se l'effetto non è esprimibile in ffmpeg si
+  passa a Chromium o al processore di frame.
+- **Speed ramp e audio.** `atempo` non varia nel tempo. Il contratto dichiara la
+  politica: audio a segmenti con `atempo` per tratto (preferita), oppure
+  mantenimento del pitch, oppure silenzio. Una politica dichiarata nel documento,
+  non una sorpresa nel renderer.
+- **Reverse e freeze** hanno un tetto di durata dichiarato, perché decodificano
+  l'intera clip in memoria.

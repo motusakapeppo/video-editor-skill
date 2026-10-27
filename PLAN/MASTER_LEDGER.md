@@ -38,6 +38,7 @@ stage dipendenti (il test conta gli stage eseguiti); suite verde.
 | F0-T07 | Harness a frame di riferimento (golden frame) | un test fallisce se un frame cambia oltre la tolleranza dichiarata; due render identici danno lo stesso hash | DONE `1fea22a` — 21 controlli, provato anche su master reale (4 frame, hash identici) |
 | F0-T08 | Stimatore dei tempi prima del render | su un set di prova l'errore mediano sta sotto la soglia dichiarata; il valore compare nel referto | DONE `1fea22a` — 20 controlli, erede mediano 0% sul punto tenuto fuori |
 | F0-T09 | Corpus annotato per calibrare le soglie | il corpus esiste con annotazioni e un test verifica che le soglie dichiarate siano derivate da esso | BLOCKED — vedi sotto |
+| F0-T10 | Marcatura delle soglie provvisorie e cancello d'esame (D010) | finche T09 non e DONE il registro marca le soglie come provvisorie e un test fallisce se una fase risulta chiusa sull'esame | TODO |
 
 ### F0-T09 BLOCKED: servono annotazioni umane
 
@@ -89,12 +90,23 @@ Restano della fase: compress in auto, SNR e music ratio misurati, più musiche.
 | F1-T04 | Più musiche con più tracce | due tracce musicali mixate con ducking distinto e dichiarate | TODO |
 
 ## F2 — EDL 3 e renderer
-Effect + keyframe (linear/bezier/hold), adjustment layer, text layer e caption
-track, sequenze annidate, transizioni, speed ramp, time remap, reverse, freeze,
-PiP, maschere, blend, chroma key; validatore; migratore 2.2→3.0; compilatore
-EDL 3 → ffmpeg + overlay Chromium.
-Accettazione: un documento EDL per ogni funzione, tutti renderizzano; round trip
-senza perdite; golden frame. → decomporre all'ingresso F2.
+
+Accettazione di fase: un documento EDL per ogni funzione, tutti renderizzano; un
+documento 2.2 migrato produce lo stesso render dell'originale a parità di frame;
+ogni effetto ha un frame di riferimento. Nessuna fase si chiude con soglie
+provvisorie (D010).
+
+| ID | Ondata | Contenuto | Accettazione binaria | Stato |
+|---|---|---|---|---|
+| F2-T01 | W0 fetta verticale | UN effetto con keyframe e UNA transizione, dall'EDL 3 al render e al frame di riferimento | lo stesso documento renderizza due volte con hash identico; il frame mostra l'effetto; la transizione si vede al tempo dichiarato | WIP |
+| F2-T02 | W1 contratto | `Effect`, `Keyframe` (linear/bezier/hold), `AdjustmentLayer`, `TextLayer`, `CaptionTrack`, `NestedSequence`, `Transition` in un modulo EDL 3 separato | valida un documento con tutte le entità; rifiuta keyframe fuori ordine e valori fuori dominio con codice dichiarato | TODO |
+| F2-T03 | W1 migratore | 2.2 -> 3.0 su documenti reali | i documenti 2.2 del caso studio migrano; il render del migrato ha gli stessi frame hash dell'originale; round trip 3.0->2.2->3.0 senza perdite | TODO |
+| F2-T04 | W2 compilatore | scelta del backend per effetto: espressione ffmpeg / `sendcmd` / Chromium / frame per frame | ogni voce dichiara il backend e la regola di soglia; oltre soglia un effetto passa a `sendcmd` e il test lo prova contando i comandi | TODO |
+| F2-T05 | W3 tempo | speed ramp e time remap con politica audio dichiarata nel contratto (segmenti `atempo` / pitch mantenuto / silenzio) | un ramp da 1x a 2x ha la durata attesa al frame e audio senza buchi ne click; la politica sta nel documento | TODO |
+| F2-T06 | W4 estremi | reverse e freeze con tetto di durata dichiarato | oltre il tetto il documento e rifiutato con il numero; sotto il tetto il frame e identico al sorgente invertito | TODO |
+| F2-T07 | W5 composizione | PiP, maschere, blend, chroma key | per ognuno un documento, un frame di riferimento e un test sul canale alfa | TODO |
+| F2-T08 | W6 annidamento | sequenze annidate con parametri e tempi propri | una sequenza dentro una sequenza renderizza; i tempi interni non dipendono da quelli esterni | TODO |
+| F2-T09 | W7 chiusura | suite golden per ogni effetto, documentazione, `SKILL.md` | ogni effetto ha un frame su disco; `SKILL.md` sotto 250 righe; suite verde | TODO |
 
 ## F3 — Motion Studio (Chromium)
 Playwright headless, timeline sospesa, cattura deterministica, alpha, 40+
