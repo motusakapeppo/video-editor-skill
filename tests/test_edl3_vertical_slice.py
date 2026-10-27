@@ -253,9 +253,12 @@ def run_checks(work: Path, source: Path) -> None:
     )
 
     # --- (d) unsupported effect is refused, not skipped ------------------
+    # F2-T02 made ``blur`` a renderable registry kind (static gblur); the
+    # declared placeholder is now ``chroma_key``, which the compiler must still
+    # refuse rather than drop.
     blur_doc = make_doc(
         source,
-        effects=[edl3.Effect(kind="blur", params={}, keyframes={})],
+        effects=[edl3.Effect(kind="chroma_key", params={}, keyframes={})],
     )
     blur_code = ""
     blur_output = work / "blur.mp4"
@@ -266,7 +269,7 @@ def run_checks(work: Path, source: Path) -> None:
     except Exception as exc:  # noqa: BLE001 - wrong type is a failure
         blur_code = f"__WRONG_TYPE__{type(exc).__name__}: {exc}"
     check(
-        "(d) kind='blur' is refused with UNSUPPORTED_EFFECT",
+        "(d) kind='chroma_key' is refused with UNSUPPORTED_EFFECT",
         blur_code == "UNSUPPORTED_EFFECT",
         blur_code,
     )

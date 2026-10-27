@@ -1,76 +1,194 @@
-"""vx.edl3 — minimal, forward-compatible edit document (schema ``vx.edl3/1``).
+"""vx.edl3 — the edit document (schema ``vx.edl3/1``), full F2-T02 contract.
 
-This is the vertical slice of the next-generation document model: one effect
-(``transform``) with keyframes, one transition (``fade_in``), and nothing else.
-It exists to prove the model end to end before the full phase integrates it.
+The vertical slice proved the sampling model end to end. This module is the
+whole contract: every entity validates, every entity round-trips through
+``to_dict``/``from_dict``, and every refusal has a stable code.
 
-Model
------
-``Keyframe(t, value, interp)`` is one control point. ``interp`` describes the
-curve from *this* keyframe to the next one:
+What is modelled
+----------------
+``Effect`` is a *registry-backed* entry. :data:`EFFECT_REGISTRY` declares, for
+every kind, the parameter names it accepts, whether it animates at all, which
+of its parameters animate, the backend that implements the animation, and a
+note recording the measured constraint behind that choice. An effect kind that
+cannot declare its own mechanism does not enter the registry (D012).
+
+``AdjustmentLayer(track, effects)`` applies its effects to everything *below*
+it on the same segment: on a flat timeline every clip, in registry order before
+the clip's own effects.
+
+``TextLayer`` and ``CaptionTrack`` validate and serialise but are **not**
+rendered here: the compiler refuses them with ``UNSUPPORTED_EFFECT`` until
+F2-T07 wires the Chromium/ASS backend. Refusing loudly is the contract.
+
+``NestedSequence(id, timeline)`` is referenced by ``Clip3.sequence`` (instead
+of ``Clip3.source``). The inner timeline must itself be valid and the nesting
+depth may not exceed :data:`MAX_NESTING_DEPTH`.
+
+``Transition`` kinds are ``fade_in``, ``fade_out`` and ``crossfade``. The
+compiler implements the first two and refuses ``crossfade`` with
+``UNSUPPORTED_TRANSITION``.
+
+``AudioTrack3`` / ``Ducking3`` are carried so that an EDL 2.2 document can be
+migrated without dropping its music bed or its ducking declaration. The slice
+renderer does not mix audio; it refuses it loudly.
+
+Keyframes
+---------
+``Keyframe(t, value, interp)`` is one scalar control point; ``interp`` governs
+the segment that follows it:
 
 * ``linear`` — straight line.
-* ``hold``   — the value stays here until the next keyframe (step function).
-* ``bezier`` — cubic ease-in-out, implemented as the smoothstep Hermite
-  ``3x^2 - 2x^3`` with zero tangents at both ends. It is documented here so the
-  renderer and the tests agree on what "bezier" means.
+* ``hold``   — step function.
+* ``bezier`` — cubic ease-in-out, the smoothstep Hermite ``3x^2 - 2x^3`` with
+  zero tangents at both ends.
 
-A property is animated by a :class:`KeyframeTrack`. Tracks are the sampling
-surface: ``track.sample(t)`` returns the interpolated value and enforces a
-strictly increasing time axis (``KEYFRAME_ORDER``) rather than sorting a broken
-track behind the caller's back. Before the first keyframe and after the last one
-the track holds the boundary value.
+A two-dimensional property (``text_layers[].keyframes.position``) is expressed
+as two scalar tracks, ``position_x`` and ``position_y``: ``Keyframe.value`` is
+scalar and pretending otherwise would lose precision.
 
-``Effect(kind, params, keyframes)`` — for this slice ``kind`` is only
-``"transform"`` with the params ``scale`` and ``opacity``; either can be
-keyframed by putting a :class:`KeyframeTrack` under ``keyframes["scale"]`` or
-``keyframes["opacity"]``. Params are the fallback when there is no track.
-
-``Transition(kind, duration)`` — ``crossfade`` or ``fade_in`` are the declared
-kinds; only ``fade_in`` is implemented by the slice renderer, which refuses the
-other with ``UNSUPPORTED_TRANSITION`` instead of skipping it.
-
-``Clip3`` / ``Timeline3`` hold the graph. ``validate()`` returns a list of
-``{"code", "where", "detail"}`` dicts with stable string codes, never raising:
-the compiler decides which codes are fatal and which it can translate into a
-more specific refusal.
-
-``to_dict`` / ``from_dict`` round trip, including every keyframe.
+Validation
+----------
+``validate()`` never raises and returns ``[{"code", "where", "detail"}]`` with
+stable string codes. The compiler decides which codes are fatal.
 """
 
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 EDL3_VERSION = "vx.edl3/1"
 
-INTERPOLATIONS = frozenset({"linear", "hold", "bezier"})
-EFFECT_KINDS = frozenset({"transform"})
-TRANSITION_KINDS = frozenset({"crossfade", "fade_in"})
-TRANSFORM_PARAMS = frozenset({"scale", "opacity"})
+#: Deeper nesting is rejected with ``NESTING_TOO_DEEP``.
+MAX_NESTING_DEPTH = 2
 
-#: Effect kinds the slice renderer implements. Anything else is refused.
-RENDERABLE_EFFECTS = frozenset({"transform"})
-#: Transition kinds the slice renderer implements. Anything else is refused.
-RENDERABLE_TRANSITIONS = frozenset({"fade_in"})
+INTERPOLATIONS = frozenset({"linear", "hold", "bezier"})
+TRANSITION_KINDS = frozenset({"fade_in", "fade_out", "crossfade"})
+
+#: Animation mechanisms an effect kind may declare (D012).
+BACKENDS = frozenset({"expr", "sendcmd", "zoompan", "chromium", "frames"})
+
+_TEXT_ALIGNS = frozenset({"left", "center", "right"})
+_TEXT_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+MAX_TEXT_SIZE = 512.0
+MAX_TEXT_STROKE = 64.0
+TEXT_KEYFRAME_PARAMS = frozenset({"opacity", "position_x", "position_y"})
+
+
+@dataclass(frozen=True)
+class EffectSpec:
+    """One registry entry: what a kind accepts and how it animates."""
+
+    kind: str
+    params: Tuple[str, ...]
+    animatable: bool
+    animated_params: Tuple[str, ...]
+    backend: str
+    notes: str
+
+
+#: The effect registry. ``backend`` is the mechanism used *when a parameter is
+#: animated*; a static value is a plain filter argument. ``notes`` records the
+#: measured constraint that fixed the choice.
+EFFECT_REGISTRY: Dict[str, EffectSpec] = {
+    "transform": EffectSpec(
+        kind="transform",
+        params=("scale", "opacity"),
+        animatable=True,
+        animated_params=("opacity",),
+        backend="expr",
+        notes=(
+            "opacity is baked into a geq alpha expression (<=3 keyframes) or "
+            "flattened into sendcmd (D012 #1: sendcmd precedes its target); "
+            "scale is NOT animatable (D012 #2: scale has no time variable, it "
+            "would need zoompan/scale2ref)"
+        ),
+    ),
+    "crop": EffectSpec(
+        kind="crop",
+        params=("x", "y", "width", "height"),
+        animatable=True,
+        animated_params=("x", "y", "width", "height"),
+        backend="expr",
+        notes=(
+            "normalised rect; this ffmpeg marks crop w/h/x/y as time-variable, "
+            "so the rect animates per frame as expressions of T; a downstream "
+            "fixed-scale fit absorbs the changing crop size"
+        ),
+    ),
+    "color": EffectSpec(
+        kind="color",
+        params=("brightness", "contrast", "saturation"),
+        animatable=True,
+        animated_params=("brightness", "contrast", "saturation"),
+        backend="sendcmd",
+        notes=(
+            "eq rejects a time variable in its options; animated values are "
+            "flattened to one command per frame, emitted before the eq "
+            "instance it targets (D012 #1)"
+        ),
+    ),
+    "blur": EffectSpec(
+        kind="blur",
+        params=("sigma",),
+        animatable=False,
+        animated_params=(),
+        backend="expr",
+        notes="static gblur=sigma; not animatable in this contract",
+    ),
+    "chroma_key": EffectSpec(
+        kind="chroma_key",
+        params=("similarity", "blend"),
+        animatable=False,
+        animated_params=(),
+        backend="frames",
+        notes=(
+            "DECLARED PLACEHOLDER: validate + serialise only; the compiler "
+            "refuses it with UNSUPPORTED_EFFECT until the frame backend lands"
+        ),
+    ),
+}
+
+EFFECT_KINDS = frozenset(EFFECT_REGISTRY)
+TRANSFORM_PARAMS = frozenset(EFFECT_REGISTRY["transform"].params)
+
+#: Effect kinds the compiler implements. Everything else is refused loudly.
+RENDERABLE_EFFECTS = frozenset({"transform", "crop", "color", "blur"})
+#: Transition kinds the compiler implements.
+RENDERABLE_TRANSITIONS = frozenset({"fade_in", "fade_out"})
 
 __all__ = [
     "EDL3_VERSION",
+    "MAX_NESTING_DEPTH",
     "INTERPOLATIONS",
-    "EFFECT_KINDS",
     "TRANSITION_KINDS",
+    "BACKENDS",
+    "EFFECT_REGISTRY",
+    "EFFECT_KINDS",
     "TRANSFORM_PARAMS",
     "RENDERABLE_EFFECTS",
     "RENDERABLE_TRANSITIONS",
+    "TEXT_KEYFRAME_PARAMS",
     "EDLError",
+    "EffectSpec",
     "Keyframe",
     "KeyframeTrack",
     "Effect",
     "Transition",
     "Clip3",
+    "AdjustmentLayer",
+    "TextStyle",
+    "TextLayer",
+    "CaptionCue",
+    "CaptionTrack",
+    "AudioClip3",
+    "AudioTrack3",
+    "Ducking3",
+    "NestedSequence",
     "Timeline3",
+    "param_domain_problem",
     "sample",
 ]
 
@@ -111,10 +229,17 @@ class Keyframe:
         if not isinstance(data, Mapping):
             raise EDLError("KEYFRAME_SHAPE", f"keyframe is not an object: {data!r}")
         return cls(
-            t=float(data.get("t", 0.0)),
-            value=float(data.get("value", 0.0)),
+            t=_float(data.get("t", 0.0)),
+            value=_float(data.get("value", 0.0)),
             interp=str(data.get("interp", "linear")),
         )
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _ease_in_out(x: float) -> float:
@@ -124,7 +249,7 @@ def _ease_in_out(x: float) -> float:
 
 @dataclass
 class KeyframeTrack:
-    """An ordered list of keyframes for one property.
+    """An ordered list of keyframes for one scalar property.
 
     ``sample`` is the only interpolation surface and it refuses a broken time
     axis. Construction stays permissive so that ``validate()`` can report the
@@ -214,7 +339,53 @@ def sample(track: KeyframeTrack, t: float) -> float:
     return track.sample(t)
 
 
+def _coerce_tracks(raw: Any) -> Dict[str, KeyframeTrack]:
+    tracks: Dict[str, KeyframeTrack] = {}
+    if isinstance(raw, Mapping):
+        for name, value in raw.items():
+            tracks[str(name)] = KeyframeTrack.from_list(value)
+    return tracks
+
+
 # ----------------------------------------------------------------- effects
+
+
+def param_domain_problem(kind: str, name: str, value: float) -> Optional[str]:
+    """Return a human detail when ``value`` is outside the parameter domain."""
+    if not math.isfinite(value):
+        return f"{kind}.{name} is not finite ({value!r})"
+
+    def between(low: float, high: float) -> Optional[str]:
+        if low <= value <= high:
+            return None
+        return f"{kind}.{name}={value} outside [{low}, {high}]"
+
+    if kind == "transform":
+        if name == "opacity":
+            return between(0.0, 1.0)
+        if name == "scale":
+            if 0.0 < value <= 16.0:
+                return None
+            return f"transform.scale={value} outside (0, 16]"
+    elif kind == "crop":
+        if name in ("x", "y", "width", "height"):
+            return between(0.0, 1.0)
+    elif kind == "color":
+        if name == "brightness":
+            return between(-1.0, 1.0)
+        if name == "contrast":
+            return between(0.0, 4.0)
+        if name == "saturation":
+            return between(0.0, 3.0)
+    elif kind == "blur":
+        if name == "sigma":
+            if 0.0 < value <= 100.0:
+                return None
+            return f"blur.sigma={value} outside (0, 100]"
+    elif kind == "chroma_key":
+        if name in ("similarity", "blend"):
+            return between(0.0, 1.0)
+    return None
 
 
 @dataclass
@@ -229,12 +400,13 @@ class Effect:
         self.kind = str(self.kind)
         coerced_params: Dict[str, float] = {}
         for name, value in (self.params or {}).items():
-            coerced_params[str(name)] = float(value)
+            coerced_params[str(name)] = _float(value)
         self.params = coerced_params
-        coerced_tracks: Dict[str, KeyframeTrack] = {}
-        for name, raw in (self.keyframes or {}).items():
-            coerced_tracks[str(name)] = KeyframeTrack.from_list(raw)
-        self.keyframes = coerced_tracks
+        self.keyframes = _coerce_tracks(self.keyframes or {})
+
+    @property
+    def spec(self) -> Optional[EffectSpec]:
+        return EFFECT_REGISTRY.get(self.kind)
 
     def sample(self, name: str, t: float) -> Optional[float]:
         """Animated value when a track exists, otherwise the static param."""
@@ -260,16 +432,94 @@ class Effect:
     def from_dict(cls, data: Mapping[str, Any]) -> "Effect":
         if not isinstance(data, Mapping):
             raise EDLError("EFFECT_SHAPE", f"effect is not an object: {data!r}")
-        raw_kf = data.get("keyframes") or {}
-        tracks: Dict[str, KeyframeTrack] = {}
-        if isinstance(raw_kf, Mapping):
-            for name, raw in raw_kf.items():
-                tracks[str(name)] = KeyframeTrack.from_list(raw)
         return cls(
             kind=str(data.get("kind", "")),
             params=dict(data.get("params") or {}),
-            keyframes=tracks,
+            keyframes=_coerce_tracks(data.get("keyframes") or {}),
         )
+
+
+def _coerce_effects(raw: Any) -> List[Effect]:
+    return [
+        item if isinstance(item, Effect) else Effect.from_dict(item)
+        for item in (raw or [])
+    ]
+
+
+def _validate_effect(
+    effect: Effect,
+    where: str,
+    duration: float,
+    add,
+) -> None:
+    """Validate one effect in place, including every keyframe track."""
+    spec = EFFECT_REGISTRY.get(effect.kind)
+    if spec is None:
+        add("EFFECT_UNKNOWN", f"{where}.kind", f"unknown effect kind {effect.kind!r}")
+        return
+
+    for name, value in effect.params.items():
+        if name not in spec.params:
+            add(
+                "EFFECT_PARAM",
+                f"{where}.params.{name}",
+                f"unknown {effect.kind} param {name!r} (declared: {list(spec.params)})",
+            )
+            continue
+        problem = param_domain_problem(effect.kind, name, value)
+        if problem is not None:
+            add("EFFECT_RANGE", f"{where}.params.{name}", problem)
+
+    if effect.kind == "crop":
+        for axis in ("x", "y"):
+            start = effect.params.get(axis)
+            size = effect.params.get("width" if axis == "x" else "height")
+            if start is not None and size is not None and start + size > 1.0 + 1e-9:
+                add(
+                    "EFFECT_RANGE",
+                    f"{where}.params.{axis}",
+                    f"crop {axis}={start} + size={size} exceeds the source (1.0)",
+                )
+
+    for name, track in effect.keyframes.items():
+        track_where = f"{where}.keyframes.{name}"
+        if name not in spec.params:
+            add(
+                "KEYFRAME_PARAM",
+                track_where,
+                f"unknown keyframable {effect.kind} param {name!r}",
+            )
+            continue
+        if not track.keys:
+            add("KEYFRAME_EMPTY", track_where, "a keyframe track needs one key")
+        if not spec.animatable or name not in spec.animated_params:
+            add(
+                "EFFECT_NOT_ANIMATABLE",
+                track_where,
+                f"{effect.kind}.{name} is not animatable "
+                f"(animated: {list(spec.animated_params) or 'none'})",
+            )
+        order = track.order_problem()
+        if order is not None:
+            add("KEYFRAME_ORDER", track_where, order)
+            continue
+        for position, key in enumerate(track.keys):
+            key_where = f"{track_where}[{position}]"
+            if key.interp not in INTERPOLATIONS:
+                add(
+                    "KEYFRAME_INTERP",
+                    key_where,
+                    f"unknown interpolation {key.interp!r}",
+                )
+            if key.t < 0.0 or key.t > duration + 1e-9:
+                add(
+                    "KEYFRAME_RANGE",
+                    key_where,
+                    f"t={key.t} outside the clip [0, {duration}]",
+                )
+            problem = param_domain_problem(effect.kind, name, key.value)
+            if problem is not None:
+                add("KEYFRAME_RANGE", key_where, problem)
 
 
 # ------------------------------------------------------------- transitions
@@ -284,7 +534,7 @@ class Transition:
 
     def __post_init__(self) -> None:
         self.kind = str(self.kind)
-        self.duration = float(self.duration)
+        self.duration = _float(self.duration)
 
     def to_dict(self) -> Dict[str, Any]:
         return {"kind": self.kind, "duration": self.duration}
@@ -295,7 +545,7 @@ class Transition:
             raise EDLError("TRANSITION_SHAPE", f"transition is not an object: {data!r}")
         return cls(
             kind=str(data.get("kind", "fade_in")),
-            duration=float(data.get("duration", 0.0)),
+            duration=_float(data.get("duration", 0.0)),
         )
 
 
@@ -304,30 +554,50 @@ class Transition:
 
 @dataclass
 class Clip3:
-    """One source segment on the timeline."""
+    """One segment on the timeline.
+
+    Exactly one of ``source`` (a file) or ``sequence`` (a
+    :class:`NestedSequence` id) is meaningful. ``dst_in``/``dst_out`` are the
+    placement on the timeline; when omitted the clip is concatenated after the
+    previous one, which is what the slice renderer has always done.
+    """
 
     id: str
-    source: str
-    src_in: float
-    src_out: float
+    source: str = ""
+    src_in: float = 0.0
+    src_out: float = 0.0
     effects: List[Effect] = field(default_factory=list)
     transition_in: Optional[Transition] = None
+    transition_out: Optional[Transition] = None
+    sequence: Optional[str] = None
+    dst_in: Optional[float] = None
+    dst_out: Optional[float] = None
 
     def __post_init__(self) -> None:
         self.id = str(self.id)
         self.source = str(self.source)
-        self.src_in = float(self.src_in)
-        self.src_out = float(self.src_out)
-        self.effects = [
-            effect if isinstance(effect, Effect) else Effect.from_dict(effect)
-            for effect in (self.effects or [])
-        ]
+        self.src_in = _float(self.src_in)
+        self.src_out = _float(self.src_out)
+        self.effects = _coerce_effects(self.effects)
         if isinstance(self.transition_in, Mapping):
             self.transition_in = Transition.from_dict(self.transition_in)
+        if isinstance(self.transition_out, Mapping):
+            self.transition_out = Transition.from_dict(self.transition_out)
+        self.sequence = None if self.sequence is None else str(self.sequence)
+        self.dst_in = None if self.dst_in is None else _float(self.dst_in)
+        self.dst_out = None if self.dst_out is None else _float(self.dst_out)
 
     @property
     def duration(self) -> float:
+        """Source duration: ``src_out - src_in``."""
         return self.src_out - self.src_in
+
+    @property
+    def timeline_duration(self) -> float:
+        """Duration on the timeline when declared, otherwise the source one."""
+        if self.dst_in is not None and self.dst_out is not None:
+            return self.dst_out - self.dst_in
+        return self.duration
 
     def transform(self) -> Optional[Effect]:
         for effect in self.effects:
@@ -335,15 +605,29 @@ class Clip3:
                 return effect
         return None
 
+    def effect(self, kind: str) -> Optional[Effect]:
+        for item in self.effects:
+            if item.kind == kind:
+                return item
+        return None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
             "source": self.source,
+            "sequence": self.sequence,
             "src_in": self.src_in,
             "src_out": self.src_out,
+            "dst_in": self.dst_in,
+            "dst_out": self.dst_out,
             "effects": [effect.to_dict() for effect in self.effects],
             "transition_in": (
                 self.transition_in.to_dict() if self.transition_in is not None else None
+            ),
+            "transition_out": (
+                self.transition_out.to_dict()
+                if self.transition_out is not None
+                else None
             ),
         }
 
@@ -352,18 +636,357 @@ class Clip3:
         if not isinstance(data, Mapping):
             raise EDLError("CLIP_SHAPE", f"clip is not an object: {data!r}")
         raw_transition = data.get("transition_in")
+        raw_transition_out = data.get("transition_out")
         return cls(
             id=str(data.get("id", "")),
-            source=str(data.get("source", "")),
-            src_in=float(data.get("src_in", 0.0)),
-            src_out=float(data.get("src_out", 0.0)),
-            effects=[Effect.from_dict(raw) for raw in (data.get("effects") or [])],
+            source=str(data.get("source") or ""),
+            src_in=_float(data.get("src_in", 0.0)),
+            src_out=_float(data.get("src_out", 0.0)),
+            effects=_coerce_effects(data.get("effects")),
             transition_in=(
                 Transition.from_dict(raw_transition)
                 if isinstance(raw_transition, Mapping)
                 else None
             ),
+            transition_out=(
+                Transition.from_dict(raw_transition_out)
+                if isinstance(raw_transition_out, Mapping)
+                else None
+            ),
+            sequence=(
+                None if data.get("sequence") is None else str(data.get("sequence"))
+            ),
+            dst_in=None if data.get("dst_in") is None else _float(data.get("dst_in")),
+            dst_out=None
+            if data.get("dst_out") is None
+            else _float(data.get("dst_out")),
         )
+
+
+# -------------------------------------------------------- adjustment layers
+
+
+@dataclass
+class AdjustmentLayer:
+    """Effects applied to every clip below ``track`` on the same segment."""
+
+    track: int = 1
+    effects: List[Effect] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        try:
+            self.track = int(self.track)
+        except (TypeError, ValueError):
+            self.track = -1
+        self.effects = _coerce_effects(self.effects)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "track": self.track,
+            "effects": [effect.to_dict() for effect in self.effects],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "AdjustmentLayer":
+        if not isinstance(data, Mapping):
+            raise EDLError(
+                "ADJUSTMENT_SHAPE", f"adjustment layer is not an object: {data!r}"
+            )
+        return cls(
+            track=data.get("track", 1), effects=_coerce_effects(data.get("effects"))
+        )
+
+
+# -------------------------------------------------------------------- text
+
+
+@dataclass
+class TextStyle:
+    """Declared text style. Colour is ``#rrggbb``; position is normalised."""
+
+    family: str = "Antonio"
+    size: float = 48.0
+    color: str = "#ffffff"
+    stroke: float = 0.0
+    position: Tuple[float, float] = (0.5, 0.85)
+    align: str = "center"
+
+    def __post_init__(self) -> None:
+        self.family = str(self.family)
+        self.size = _float(self.size)
+        self.color = str(self.color)
+        self.stroke = _float(self.stroke)
+        position = self.position
+        if isinstance(position, Mapping):
+            position = (position.get("x", 0.5), position.get("y", 0.85))
+        if isinstance(position, Sequence) and not isinstance(position, (str, bytes)):
+            values = list(position)
+        else:
+            values = []
+        if len(values) != 2:
+            values = [0.5, 0.85]
+        self.position = (_float(values[0]), _float(values[1]))
+        self.align = str(self.align)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "family": self.family,
+            "size": self.size,
+            "color": self.color,
+            "stroke": self.stroke,
+            "position": [self.position[0], self.position[1]],
+            "align": self.align,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "TextStyle":
+        if not isinstance(data, Mapping):
+            return cls()
+        return cls(
+            family=data.get("family", "Antonio"),
+            size=data.get("size", 48.0),
+            color=data.get("color", "#ffffff"),
+            stroke=data.get("stroke", 0.0),
+            position=data.get("position", (0.5, 0.85)),
+            align=data.get("align", "center"),
+        )
+
+
+@dataclass
+class TextLayer:
+    """A text overlay. Validated and serialised; not rendered until F2-T07."""
+
+    text: str = ""
+    style: TextStyle = field(default_factory=TextStyle)
+    time_in: float = 0.0
+    time_out: float = 0.0
+    keyframes: Dict[str, KeyframeTrack] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.text = str(self.text)
+        if not isinstance(self.style, TextStyle):
+            self.style = TextStyle.from_dict(self.style)
+        self.time_in = _float(self.time_in)
+        self.time_out = _float(self.time_out)
+        self.keyframes = _coerce_tracks(self.keyframes or {})
+
+    @property
+    def duration(self) -> float:
+        return self.time_out - self.time_in
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "text": self.text,
+            "style": self.style.to_dict(),
+            "in": self.time_in,
+            "out": self.time_out,
+            "keyframes": {
+                name: track.to_dict() for name, track in self.keyframes.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "TextLayer":
+        if not isinstance(data, Mapping):
+            raise EDLError("TEXT_SHAPE", f"text layer is not an object: {data!r}")
+        return cls(
+            text=data.get("text", ""),
+            style=TextStyle.from_dict(data.get("style")),
+            time_in=_float(data.get("in", 0.0)),
+            time_out=_float(data.get("out", 0.0)),
+            keyframes=_coerce_tracks(data.get("keyframes") or {}),
+        )
+
+
+# ---------------------------------------------------------------- captions
+
+
+@dataclass
+class CaptionCue:
+    """One caption: spoken text with an in/out window."""
+
+    text: str = ""
+    time_in: float = 0.0
+    time_out: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.text = str(self.text)
+        self.time_in = _float(self.time_in)
+        self.time_out = _float(self.time_out)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"text": self.text, "in": self.time_in, "out": self.time_out}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "CaptionCue":
+        if not isinstance(data, Mapping):
+            raise EDLError("CAPTION_SHAPE", f"caption cue is not an object: {data!r}")
+        return cls(
+            text=data.get("text", ""),
+            time_in=_float(data.get("in", 0.0)),
+            time_out=_float(data.get("out", 0.0)),
+        )
+
+
+@dataclass
+class CaptionTrack:
+    """A cue list. Validated and serialised; the compiler refuses it loudly."""
+
+    clips: List[CaptionCue] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.clips = [
+            cue if isinstance(cue, CaptionCue) else CaptionCue.from_dict(cue)
+            for cue in (self.clips or [])
+        ]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"clips": [cue.to_dict() for cue in self.clips]}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "CaptionTrack":
+        if not isinstance(data, Mapping):
+            raise EDLError("CAPTION_SHAPE", f"caption track is not an object: {data!r}")
+        return cls(clips=data.get("clips") or [])
+
+
+# ------------------------------------------------------------------- audio
+
+
+@dataclass
+class AudioClip3:
+    """A music/dialogue segment carried through migration (not mixed here)."""
+
+    source: str = ""
+    src_in: float = 0.0
+    src_out: float = 0.0
+    dst_in: float = 0.0
+    dst_out: float = 0.0
+    gain_db: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.source = str(self.source)
+        self.src_in = _float(self.src_in)
+        self.src_out = _float(self.src_out)
+        self.dst_in = _float(self.dst_in)
+        self.dst_out = _float(self.dst_out)
+        self.gain_db = _float(self.gain_db)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "source": self.source,
+            "src_in": self.src_in,
+            "src_out": self.src_out,
+            "dst_in": self.dst_in,
+            "dst_out": self.dst_out,
+            "gain_db": self.gain_db,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "AudioClip3":
+        if not isinstance(data, Mapping):
+            raise EDLError("AUDIO_SHAPE", f"audio clip is not an object: {data!r}")
+        return cls(
+            source=data.get("source", ""),
+            src_in=_float(data.get("src_in", 0.0)),
+            src_out=_float(data.get("src_out", 0.0)),
+            dst_in=_float(data.get("dst_in", 0.0)),
+            dst_out=_float(data.get("dst_out", 0.0)),
+            gain_db=_float(data.get("gain_db", 0.0)),
+        )
+
+
+@dataclass
+class AudioTrack3:
+    """An audio bus: ``music`` feeds the music bed, anything else dialogue."""
+
+    role: str = ""
+    clips: List[AudioClip3] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.role = str(self.role)
+        self.clips = [
+            clip if isinstance(clip, AudioClip3) else AudioClip3.from_dict(clip)
+            for clip in (self.clips or [])
+        ]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"role": self.role, "clips": [clip.to_dict() for clip in self.clips]}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "AudioTrack3":
+        if not isinstance(data, Mapping):
+            raise EDLError("AUDIO_SHAPE", f"audio track is not an object: {data!r}")
+        return cls(role=data.get("role", ""), clips=data.get("clips") or [])
+
+
+@dataclass
+class Ducking3:
+    """Declared sidechain ducking, mirroring EDL 2.2 ``DuckingSpec``."""
+
+    sidechain_role: str = "dialogue"
+    target_role: str = "music"
+    threshold: float = 0.05
+    ratio: float = 8.0
+    attack_ms: float = 20.0
+    release_ms: float = 250.0
+    makeup_db: float = 0.0
+
+    def __post_init__(self) -> None:
+        self.sidechain_role = str(self.sidechain_role)
+        self.target_role = str(self.target_role)
+        for name in ("threshold", "ratio", "attack_ms", "release_ms", "makeup_db"):
+            setattr(self, name, _float(getattr(self, name)))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "sidechain_role": self.sidechain_role,
+            "target_role": self.target_role,
+            "threshold": self.threshold,
+            "ratio": self.ratio,
+            "attack_ms": self.attack_ms,
+            "release_ms": self.release_ms,
+            "makeup_db": self.makeup_db,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "Ducking3":
+        if not isinstance(data, Mapping):
+            raise EDLError("DUCKING_SHAPE", f"ducking is not an object: {data!r}")
+        return cls(
+            sidechain_role=data.get("sidechain_role", "dialogue"),
+            target_role=data.get("target_role", "music"),
+            threshold=data.get("threshold", 0.05),
+            ratio=data.get("ratio", 8.0),
+            attack_ms=data.get("attack_ms", 20.0),
+            release_ms=data.get("release_ms", 250.0),
+            makeup_db=data.get("makeup_db", 0.0),
+        )
+
+
+# ------------------------------------------------------------- sequences
+
+
+@dataclass
+class NestedSequence:
+    """A named inner timeline, referenced by ``Clip3.sequence``."""
+
+    id: str = ""
+    timeline: "Timeline3" = field(default_factory=lambda: Timeline3(fps=1, size=(2, 2)))
+
+    def __post_init__(self) -> None:
+        self.id = str(self.id)
+        if not isinstance(self.timeline, Timeline3):
+            self.timeline = Timeline3.from_dict(self.timeline)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"id": self.id, "timeline": self.timeline.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "NestedSequence":
+        if not isinstance(data, Mapping):
+            raise EDLError("SEQUENCE_SHAPE", f"sequence is not an object: {data!r}")
+        return cls(id=data.get("id", ""), timeline=data.get("timeline") or {})
 
 
 # ---------------------------------------------------------------- timeline
@@ -377,16 +1000,61 @@ class Timeline3:
     size: Tuple[int, int]
     clips: List[Clip3] = field(default_factory=list)
     version: str = EDL3_VERSION
+    sequences: Dict[str, NestedSequence] = field(default_factory=dict)
+    adjustments: List[AdjustmentLayer] = field(default_factory=list)
+    text_layers: List[TextLayer] = field(default_factory=list)
+    captions: List[CaptionTrack] = field(default_factory=list)
+    audio: List[AudioTrack3] = field(default_factory=list)
+    ducking: Optional[Ducking3] = None
 
     def __post_init__(self) -> None:
         self.version = str(self.version)
-        self.fps = int(self.fps)
-        width, height = self.size
-        self.size = (int(width), int(height))
+        try:
+            self.fps = int(self.fps)
+        except (TypeError, ValueError):
+            self.fps = -1
+        raw_size = self.size
+        if isinstance(raw_size, Mapping):
+            width, height = raw_size.get("width", 0), raw_size.get("height", 0)
+        elif isinstance(raw_size, Sequence) and not isinstance(raw_size, (str, bytes)):
+            values = list(raw_size)
+            width, height = (values + [0, 0])[:2]
+        else:
+            width, height = 0, 0
+        self.size = (int(_float(width)), int(_float(height)))
         self.clips = [
             clip if isinstance(clip, Clip3) else Clip3.from_dict(clip)
             for clip in (self.clips or [])
         ]
+        coerced_sequences: Dict[str, NestedSequence] = {}
+        for key, raw in (self.sequences or {}).items():
+            sequence = (
+                raw
+                if isinstance(raw, NestedSequence)
+                else NestedSequence.from_dict(raw)
+            )
+            coerced_sequences[str(key)] = sequence
+        self.sequences = coerced_sequences
+        self.adjustments = [
+            item
+            if isinstance(item, AdjustmentLayer)
+            else AdjustmentLayer.from_dict(item)
+            for item in (self.adjustments or [])
+        ]
+        self.text_layers = [
+            item if isinstance(item, TextLayer) else TextLayer.from_dict(item)
+            for item in (self.text_layers or [])
+        ]
+        self.captions = [
+            item if isinstance(item, CaptionTrack) else CaptionTrack.from_dict(item)
+            for item in (self.captions or [])
+        ]
+        self.audio = [
+            item if isinstance(item, AudioTrack3) else AudioTrack3.from_dict(item)
+            for item in (self.audio or [])
+        ]
+        if isinstance(self.ducking, Mapping):
+            self.ducking = Ducking3.from_dict(self.ducking)
 
     @property
     def width(self) -> int:
@@ -398,15 +1066,34 @@ class Timeline3:
 
     @property
     def duration(self) -> float:
+        declared = [
+            clip.dst_out
+            for clip in self.clips
+            if clip.dst_out is not None and clip.dst_in is not None
+        ]
+        if declared and len(declared) == len(self.clips):
+            return max(declared)
         return sum(max(0.0, clip.duration) for clip in self.clips)
 
     # -- validation -------------------------------------------------------
-    def validate(self) -> List[Dict[str, str]]:
+    def validate(self, *, depth: int = 0, prefix: str = "") -> List[Dict[str, str]]:
+        """Return every problem, never raising. ``depth`` is used for nesting."""
         problems: List[Dict[str, str]] = []
 
         def add(code: str, where: str, detail: str) -> None:
-            problems.append({"code": code, "where": where, "detail": detail})
+            problems.append(
+                {"code": code, "where": f"{prefix}{where}", "detail": detail}
+            )
 
+        self._validate_header(add)
+        self._validate_clips(add, depth, problems)
+        self._validate_adjustments(add)
+        self._validate_text(add)
+        self._validate_captions(add)
+        self._validate_audio(add)
+        return problems
+
+    def _validate_header(self, add) -> None:
         if self.version != EDL3_VERSION:
             add("SCHEMA_VERSION", "version", f"unsupported version {self.version!r}")
         if self.fps <= 0:
@@ -420,6 +1107,31 @@ class Timeline3:
         if not self.clips:
             add("TIMELINE_EMPTY", "clips", "a timeline needs at least one clip")
 
+        for key, sequence in self.sequences.items():
+            if not sequence.id:
+                add("SEQUENCE_SHAPE", f"sequences.{key}.id", "sequence id is empty")
+            elif sequence.id != key:
+                add(
+                    "SEQUENCE_SHAPE",
+                    f"sequences.{key}.id",
+                    f"sequence id {sequence.id!r} does not match its key {key!r}",
+                )
+
+    def _validate_clips(self, add, depth: int, problems: List[Dict[str, str]]) -> None:
+        declared = [
+            clip
+            for clip in self.clips
+            if clip.dst_in is not None or clip.dst_out is not None
+        ]
+        if declared and len(declared) != len(self.clips):
+            add(
+                "CLIP_RANGE",
+                "clips",
+                "clips must declare dst_in/dst_out uniformly, not partially",
+            )
+        if self.clips and len(declared) == len(self.clips):
+            self._validate_placement(add)
+
         seen_ids: Dict[str, int] = {}
         for index, clip in enumerate(self.clips):
             clip_where = f"clips[{index}]"
@@ -430,8 +1142,25 @@ class Timeline3:
                     f"clip id {clip.id!r} already used by clips[{seen_ids[clip.id]}]",
                 )
             seen_ids.setdefault(clip.id, index)
-            if not clip.source:
+
+            if clip.sequence is not None:
+                if clip.source:
+                    add(
+                        "CLIP_SHAPE",
+                        clip_where,
+                        "a clip declares both source and sequence",
+                    )
+                if not clip.sequence:
+                    add("CLIP_SHAPE", f"{clip_where}.sequence", "sequence id is empty")
+                elif clip.sequence not in self.sequences:
+                    add(
+                        "NESTING_UNKNOWN",
+                        f"{clip_where}.sequence",
+                        f"no nested sequence {clip.sequence!r} on this timeline",
+                    )
+            elif not clip.source:
                 add("CLIP_RANGE", f"{clip_where}.source", "source is empty")
+
             if not math.isfinite(clip.src_in) or clip.src_in < 0.0:
                 add(
                     "CLIP_RANGE",
@@ -442,68 +1171,51 @@ class Timeline3:
                 add(
                     "CLIP_RANGE",
                     f"{clip_where}.src_out",
-                    f"src_out ({clip.src_out}) must be greater than src_in ({clip.src_in})",
+                    f"src_out ({clip.src_out}) must be greater than src_in "
+                    f"({clip.src_in})",
+                )
+            if clip.dst_in is not None and clip.dst_out is not None:
+                if clip.dst_in < 0.0 or not math.isfinite(clip.dst_in):
+                    add(
+                        "CLIP_RANGE",
+                        f"{clip_where}.dst_in",
+                        f"dst_in must be >= 0, got {clip.dst_in}",
+                    )
+                if clip.dst_out <= clip.dst_in or not math.isfinite(clip.dst_out):
+                    add(
+                        "CLIP_RANGE",
+                        f"{clip_where}.dst_out",
+                        f"dst_out ({clip.dst_out}) must be greater than dst_in "
+                        f"({clip.dst_in})",
+                    )
+                elif self.fps > 0 and clip.src_out > clip.src_in:
+                    if (
+                        abs(clip.timeline_duration - clip.duration)
+                        > 1.0 / self.fps + 1e-9
+                    ):
+                        add(
+                            "CLIP_RANGE",
+                            clip_where,
+                            f"dst duration {clip.timeline_duration:.4f} differs from "
+                            f"src duration {clip.duration:.4f} by more than one frame",
+                        )
+
+            duration = clip.timeline_duration
+            for effect_index, effect in enumerate(clip.effects):
+                _validate_effect(
+                    effect,
+                    f"{clip_where}.effects[{effect_index}]",
+                    duration,
+                    add,
                 )
 
-            duration = clip.duration
-            for effect_index, effect in enumerate(clip.effects):
-                effect_where = f"{clip_where}.effects[{effect_index}]"
-                if effect.kind not in EFFECT_KINDS:
-                    add(
-                        "EFFECT_UNKNOWN",
-                        f"{effect_where}.kind",
-                        f"unknown effect kind {effect.kind!r}",
-                    )
-                for name in effect.params:
-                    if effect.kind == "transform" and name not in TRANSFORM_PARAMS:
-                        add(
-                            "EFFECT_PARAM",
-                            f"{effect_where}.params.{name}",
-                            f"unknown transform param {name!r}",
-                        )
-                for name, track in effect.keyframes.items():
-                    track_where = f"{effect_where}.keyframes.{name}"
-                    if effect.kind == "transform" and name not in TRANSFORM_PARAMS:
-                        add(
-                            "KEYFRAME_PARAM",
-                            track_where,
-                            f"unknown keyframable transform param {name!r}",
-                        )
-                        continue
-                    order = track.order_problem()
-                    if order is not None:
-                        add("KEYFRAME_ORDER", track_where, order)
-                        continue
-                    for position, key in enumerate(track.keys):
-                        key_where = f"{track_where}[{position}]"
-                        if key.interp not in INTERPOLATIONS:
-                            add(
-                                "KEYFRAME_INTERP",
-                                key_where,
-                                f"unknown interpolation {key.interp!r}",
-                            )
-                        if key.t < 0.0 or key.t > duration:
-                            add(
-                                "KEYFRAME_RANGE",
-                                key_where,
-                                f"t={key.t} outside clip [0, {duration}]",
-                            )
-                        if name == "opacity" and not (0.0 <= key.value <= 1.0):
-                            add(
-                                "KEYFRAME_RANGE",
-                                key_where,
-                                f"opacity {key.value} outside [0, 1]",
-                            )
-                        if name == "scale" and not (key.value > 0.0):
-                            add(
-                                "KEYFRAME_RANGE",
-                                key_where,
-                                f"scale {key.value} must be positive",
-                            )
-
-            transition = clip.transition_in
-            if transition is not None:
-                transition_where = f"{clip_where}.transition_in"
+            for slot, transition in (
+                ("transition_in", clip.transition_in),
+                ("transition_out", clip.transition_out),
+            ):
+                if transition is None:
+                    continue
+                transition_where = f"{clip_where}.{slot}"
                 if transition.kind not in TRANSITION_KINDS:
                     add(
                         "TRANSITION_UNKNOWN",
@@ -516,14 +1228,232 @@ class Timeline3:
                         f"{transition_where}.duration",
                         f"duration must be positive, got {transition.duration}",
                     )
-                elif transition.duration > duration:
+                elif transition.duration > duration + 1e-9:
                     add(
                         "TRANSITION_TOO_LONG",
                         f"{transition_where}.duration",
-                        f"duration {transition.duration} exceeds clip duration {duration}",
+                        f"duration {transition.duration} exceeds clip duration "
+                        f"{duration}",
                     )
 
-        return problems
+        self._validate_sequences(add, depth, problems)
+
+    def _validate_placement(self, add) -> None:
+        """Declared dst windows must tile the timeline: no gap, no overlap."""
+        cursor = 0.0
+        for index, clip in enumerate(self.clips):
+            assert clip.dst_in is not None and clip.dst_out is not None
+            if abs(clip.dst_in - cursor) > 1e-6:
+                add(
+                    "CLIP_RANGE",
+                    f"clips[{index}].dst_in",
+                    f"dst_in {clip.dst_in:.6f} leaves a gap or overlap at "
+                    f"{cursor:.6f}; the slice concatenates clips",
+                )
+            cursor = max(cursor, clip.dst_out)
+
+    def _validate_sequences(
+        self, add, depth: int, problems: List[Dict[str, str]]
+    ) -> None:
+        for key, sequence in self.sequences.items():
+            where = f"sequences.{key}"
+            if depth + 1 > MAX_NESTING_DEPTH:
+                add(
+                    "NESTING_TOO_DEEP",
+                    where,
+                    f"nesting depth {depth + 1} exceeds the declared maximum "
+                    f"{MAX_NESTING_DEPTH}",
+                )
+                continue
+            already_prefixed = sequence.timeline.validate(
+                depth=depth + 1, prefix=f"sequences.{key}.timeline."
+            )
+            problems.extend(already_prefixed)
+
+    def _validate_adjustments(self, add) -> None:
+        duration = self.duration
+        for index, layer in enumerate(self.adjustments):
+            where = f"adjustments[{index}]"
+            if layer.track < 1:
+                add(
+                    "ADJUSTMENT_TRACK",
+                    f"{where}.track",
+                    f"an adjustment layer sits above the content, track >= 1, "
+                    f"got {layer.track}",
+                )
+            if not layer.effects:
+                add("ADJUSTMENT_TRACK", f"{where}.effects", "no effects declared")
+            for effect_index, effect in enumerate(layer.effects):
+                _validate_effect(
+                    effect, f"{where}.effects[{effect_index}]", duration, add
+                )
+
+    def _validate_text(self, add) -> None:
+        for index, layer in enumerate(self.text_layers):
+            where = f"text_layers[{index}]"
+            self._validate_text_style(layer.style, f"{where}.style", add)
+            if not layer.text.strip():
+                add("TEXT_STYLE", f"{where}.text", "text is empty")
+            if layer.time_in < 0.0 or not math.isfinite(layer.time_in):
+                add(
+                    "TEXT_RANGE",
+                    f"{where}.in",
+                    f"in must be >= 0, got {layer.time_in}",
+                )
+            if layer.time_out <= layer.time_in:
+                add(
+                    "TEXT_RANGE",
+                    f"{where}.out",
+                    f"out ({layer.time_out}) must be after in ({layer.time_in})",
+                )
+            for name, track in layer.keyframes.items():
+                track_where = f"{where}.keyframes.{name}"
+                if name not in TEXT_KEYFRAME_PARAMS:
+                    add(
+                        "KEYFRAME_PARAM",
+                        track_where,
+                        f"unknown text keyframe param {name!r} "
+                        f"(declared: {sorted(TEXT_KEYFRAME_PARAMS)})",
+                    )
+                    continue
+                order = track.order_problem()
+                if order is not None:
+                    add("KEYFRAME_ORDER", track_where, order)
+                    continue
+                for position, key in enumerate(track.keys):
+                    key_where = f"{track_where}[{position}]"
+                    if key.t < 0.0 or key.t > layer.duration + 1e-9:
+                        add(
+                            "KEYFRAME_RANGE",
+                            key_where,
+                            f"t={key.t} outside the layer [0, {layer.duration}]",
+                        )
+                    if not (0.0 <= key.value <= 1.0):
+                        add(
+                            "KEYFRAME_RANGE",
+                            key_where,
+                            f"{name}={key.value} outside [0, 1]",
+                        )
+
+    @staticmethod
+    def _validate_text_style(style: TextStyle, where: str, add) -> None:
+        if not style.family.strip():
+            add("TEXT_STYLE", f"{where}.family", "font family is empty")
+        if not (0.0 < style.size <= MAX_TEXT_SIZE):
+            add(
+                "TEXT_STYLE",
+                f"{where}.size",
+                f"size must be in (0, {MAX_TEXT_SIZE}], got {style.size}",
+            )
+        if not _TEXT_COLOR.match(style.color):
+            add(
+                "TEXT_STYLE",
+                f"{where}.color",
+                f"colour must be #rrggbb, got {style.color!r}",
+            )
+        if not (0.0 <= style.stroke <= MAX_TEXT_STROKE):
+            add(
+                "TEXT_STYLE",
+                f"{where}.stroke",
+                f"stroke must be in [0, {MAX_TEXT_STROKE}], got {style.stroke}",
+            )
+        for axis, value in zip(("x", "y"), style.position):
+            if not (0.0 <= value <= 1.0):
+                add(
+                    "TEXT_STYLE",
+                    f"{where}.position.{axis}",
+                    f"position must be normalised [0, 1], got {value}",
+                )
+        if style.align not in _TEXT_ALIGNS:
+            add(
+                "TEXT_STYLE",
+                f"{where}.align",
+                f"align must be one of {sorted(_TEXT_ALIGNS)}, got {style.align!r}",
+            )
+
+    def _validate_captions(self, add) -> None:
+        for index, track in enumerate(self.captions):
+            where = f"captions[{index}]"
+            for cue_index, cue in enumerate(track.clips):
+                cue_where = f"{where}.clips[{cue_index}]"
+                if not cue.text.strip():
+                    add("CAPTION_RANGE", f"{cue_where}.text", "caption text is empty")
+                if cue.time_in < 0.0 or not math.isfinite(cue.time_in):
+                    add(
+                        "CAPTION_RANGE",
+                        f"{cue_where}.in",
+                        f"in must be >= 0, got {cue.time_in}",
+                    )
+                if cue.time_out <= cue.time_in:
+                    add(
+                        "CAPTION_RANGE",
+                        f"{cue_where}.out",
+                        f"out ({cue.time_out}) must be after in ({cue.time_in})",
+                    )
+            ordered = sorted(track.clips, key=lambda cue: cue.time_in)
+            for previous, current in zip(ordered, ordered[1:]):
+                if current.time_in < previous.time_out - 1e-9:
+                    add(
+                        "CAPTION_OVERLAP",
+                        where,
+                        f"cue at {current.time_in:.3f}s starts before the previous "
+                        f"one ends at {previous.time_out:.3f}s",
+                    )
+
+    def _validate_audio(self, add) -> None:
+        for index, track in enumerate(self.audio):
+            where = f"audio[{index}]"
+            if not track.role.strip():
+                add("AUDIO_RANGE", f"{where}.role", "audio track role is empty")
+            if not track.clips:
+                add("AUDIO_RANGE", f"{where}.clips", "audio track has no clips")
+            for clip_index, clip in enumerate(track.clips):
+                clip_where = f"{where}.clips[{clip_index}]"
+                if not clip.source:
+                    add("AUDIO_RANGE", f"{clip_where}.source", "source is empty")
+                if clip.src_out <= clip.src_in:
+                    add(
+                        "AUDIO_RANGE",
+                        f"{clip_where}.src_out",
+                        f"src_out ({clip.src_out}) must be greater than src_in "
+                        f"({clip.src_in})",
+                    )
+                if clip.dst_out <= clip.dst_in:
+                    add(
+                        "AUDIO_RANGE",
+                        f"{clip_where}.dst_out",
+                        f"dst_out ({clip.dst_out}) must be greater than dst_in "
+                        f"({clip.dst_in})",
+                    )
+                if not (-60.0 <= clip.gain_db <= 24.0):
+                    add(
+                        "AUDIO_RANGE",
+                        f"{clip_where}.gain_db",
+                        f"gain must be in [-60, 24] dB, got {clip.gain_db}",
+                    )
+
+        spec = self.ducking
+        if spec is None:
+            return
+        where = "ducking"
+        if not spec.sidechain_role.strip() or not spec.target_role.strip():
+            add("DUCKING_RANGE", where, "roles must be non-empty")
+        elif spec.sidechain_role == spec.target_role:
+            add("DUCKING_RANGE", where, "sidechain and target roles must differ")
+        for name, low, high in (
+            ("threshold", 0.000976563, 1.0),
+            ("ratio", 1.0, 20.0),
+            ("attack_ms", 0.01, 2000.0),
+            ("release_ms", 0.01, 9000.0),
+            ("makeup_db", 0.0, 36.0),
+        ):
+            value = getattr(spec, name)
+            if not (low <= value <= high):
+                add(
+                    "DUCKING_RANGE",
+                    f"{where}.{name}",
+                    f"value {value} outside [{low}, {high}]",
+                )
 
     # -- serialisation ----------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
@@ -532,6 +1462,14 @@ class Timeline3:
             "fps": self.fps,
             "size": [self.width, self.height],
             "clips": [clip.to_dict() for clip in self.clips],
+            "sequences": {
+                key: sequence.to_dict() for key, sequence in self.sequences.items()
+            },
+            "adjustments": [layer.to_dict() for layer in self.adjustments],
+            "text_layers": [layer.to_dict() for layer in self.text_layers],
+            "captions": [track.to_dict() for track in self.captions],
+            "audio": [track.to_dict() for track in self.audio],
+            "ducking": self.ducking.to_dict() if self.ducking is not None else None,
         }
 
     @classmethod
@@ -540,13 +1478,31 @@ class Timeline3:
             raise EDLError("TIMELINE_SHAPE", f"timeline is not an object: {data!r}")
         raw_size = data.get("size") or (0, 0)
         if isinstance(raw_size, Mapping):
-            width = int(raw_size.get("width", 0))
-            height = int(raw_size.get("height", 0))
+            width = int(_float(raw_size.get("width", 0)))
+            height = int(_float(raw_size.get("height", 0)))
         else:
-            width, height = raw_size
+            values = list(raw_size) if isinstance(raw_size, Sequence) else [0, 0]
+            width, height = (values + [0, 0])[:2]
         return cls(
-            fps=int(data.get("fps", 0)),
-            size=(int(width), int(height)),
+            fps=data.get("fps", 0),
+            size=(int(_float(width)), int(_float(height))),
             clips=[Clip3.from_dict(raw) for raw in (data.get("clips") or [])],
             version=str(data.get("version", EDL3_VERSION)),
+            sequences=dict(data.get("sequences") or {}),
+            adjustments=[
+                AdjustmentLayer.from_dict(raw)
+                for raw in (data.get("adjustments") or [])
+            ],
+            text_layers=[
+                TextLayer.from_dict(raw) for raw in (data.get("text_layers") or [])
+            ],
+            captions=[
+                CaptionTrack.from_dict(raw) for raw in (data.get("captions") or [])
+            ],
+            audio=[AudioTrack3.from_dict(raw) for raw in (data.get("audio") or [])],
+            ducking=(
+                None
+                if data.get("ducking") is None
+                else Ducking3.from_dict(data["ducking"])
+            ),
         )
