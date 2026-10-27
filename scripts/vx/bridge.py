@@ -1745,6 +1745,10 @@ def _gain_dialogue(
             gain_pre_clamp = gain_max_by_peak
     gain_db = round(_clamp(gain_pre_clamp, GAIN_LIMITS_DB[0], GAIN_LIMITS_DB[1]), 2)
     shortfall = round(abs(gain_pre_clamp - gain_db), 2)
+    lra_raw = measured.get("input_lra") if isinstance(measured, Mapping) else None
+    input_lra = float(lra_raw) if _finite(lra_raw) else None
+    lra_threshold = float(THRESHOLDS["lra_wide"])
+    compress = input_lra is not None and input_lra > lra_threshold
     entry: Dict[str, Any] = {
         "clip_id": clip.clip_id,
         "measured_i": round(float(input_i), 3),
@@ -1752,6 +1756,8 @@ def _gain_dialogue(
         "target_i": float(target_lufs),
         "declared": f"target {float(target_lufs):g}",
         "shortfall_lu": shortfall,
+        "input_lra": round(input_lra, 2) if input_lra is not None else None,
+        "compress": compress,
     }
     loudness_shortfall = 0.0
     if peak_limited:
@@ -1785,7 +1791,37 @@ def _gain_dialogue(
                 "shortfall_lu": shortfall,
             }
         )
-    return replace(clip, gain_db=gain_db)
+    if compress:
+        entry["declared_compress"] = (
+            f"compress applicato: LRA {input_lra:.1f} LU > {lra_threshold:g} LU"
+        )
+    elif input_lra is None:
+        report.not_applied.append(
+            {
+                "anchor_id": None,
+                "clip_id": clip.clip_id,
+                "reason": "compress_unmeasured",
+                "input_lra": None,
+                "threshold_lra": lra_threshold,
+                "declared": (
+                    f"compress assente: LRA non misurato (soglia {lra_threshold:g} LU)"
+                ),
+            }
+        )
+    else:
+        report.not_applied.append(
+            {
+                "anchor_id": None,
+                "clip_id": clip.clip_id,
+                "reason": "compress_declined",
+                "input_lra": round(input_lra, 2),
+                "threshold_lra": lra_threshold,
+                "declared": (
+                    f"compress assente: LRA {input_lra:.1f} LU <= {lra_threshold:g} LU"
+                ),
+            }
+        )
+    return replace(clip, gain_db=gain_db, compress=compress)
 
 
 def _replace_plan(

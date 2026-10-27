@@ -43,6 +43,7 @@ _CLIP_KEYS = {
     "transition_in",
     "transition_out",
     "gain_db",
+    "compress",
 }
 _TRANSITION_KEYS = {"type", "duration_sec"}
 _DUCKING_KEYS = {
@@ -221,6 +222,7 @@ class ClipSegment:
     transition_in: Optional[Transition] = None
     transition_out: Optional[Transition] = None
     gain_db: float = 0.0
+    compress: bool = False
 
     @property
     def duration(self) -> float:
@@ -435,6 +437,9 @@ class EDLPlan:
             errors.append(f"{base}.gain_db must be finite")
         elif not (-60.0 <= float(clip.gain_db) <= 24.0):
             errors.append(f"{base}.gain_db must be in [-60, 24]")
+
+        if not isinstance(clip.compress, bool):
+            errors.append(f"{base}.compress must be a bool")
 
         for name, transition in (
             ("transition_in", clip.transition_in),
@@ -737,12 +742,19 @@ def _clip_to_dict(clip: ClipSegment) -> Dict[str, Any]:
         data["transition_out"] = _transition_to_dict(clip.transition_out)
     if clip.gain_db != 0.0:
         data["gain_db"] = clip.gain_db
+    if clip.compress:
+        data["compress"] = True
     return data
 
 
 def _track_to_dict(track: Track, *, video: bool) -> Dict[str, Any]:
     data: Dict[str, Any] = {"track_id": track.track_id, "role": track.role}
-    if not video and len(track.clips) == 1 and track.clips[0].gain_db == 0.0:
+    if (
+        not video
+        and len(track.clips) == 1
+        and track.clips[0].gain_db == 0.0
+        and not track.clips[0].compress
+    ):
         clip = track.clips[0]
         data.update(
             {
@@ -866,6 +878,7 @@ def _clip_from_dict(
             raw.get("transition_out"), f"{path}.transition_out", errors
         ),
         gain_db=raw.get("gain_db", 0.0),
+        compress=bool(raw.get("compress", False)),
     )
 
 

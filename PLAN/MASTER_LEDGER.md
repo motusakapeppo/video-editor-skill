@@ -85,7 +85,7 @@ Restano della fase: compress in auto, SNR e music ratio misurati, più musiche.
 | ID | Task | Accettazione binaria | Stato |
 |---|---|---|---|
 | F1-T01 | A1-A12 del backlog | già verificati: `vx auto --montage` su 8 clip, 8 a_roll, ±1 LU, sottotitoli sulla tela, silenzi tagliati, ducking | DONE |
-| F1-T02 | Compress automatico con finding | compress applicato solo con finding; assenza dichiarata con la misura | TODO |
+| F1-T02 | Compress automatico con finding | compress applicato solo con finding; assenza dichiarata con la misura | DONE - 11 assert in `tests/test_f1_compress.py`; LRA 15 LU: decisione su ogni clip e tre `acompressor` nel grafo; LRA 5: nessun compressore e `compress_declined` con 5.0 <= 12.0; LRA assente: `compress_unmeasured`; la musica non viene mai compressa dalla decisione del dialogo; regressioni 2.2, migratore e renderer verdi |
 | F1-T03 | SNR e music ratio nel referto | i due valori compaiono in `auto_report.json` con la soglia usata | TODO |
 | F1-T04 | Più musiche con più tracce | due tracce musicali mixate con ducking distinto e dichiarate | TODO |
 

@@ -1087,6 +1087,12 @@ def _edl_audio_clip_chain(
     gain = float(getattr(clip, "gain_db", 0.0) or 0.0)
     if gain != 0.0:
         chain += f",volume={gain:.3f}dB"
+    if getattr(clip, "compress", False):
+        chain += (
+            f",acompressor=threshold={_db_to_linear(-18.0):.6f}"
+            ":ratio=2.00:attack=10.0:release=250.0"
+            f":makeup={_db_to_linear(2.0):.6f}"
+        )
     if fades and duration > 0:
         fade = min(THRESHOLDS["dialogue_fade_ms"] / 1000.0, duration / 2.0)
         chain += f",afade=t=in:st=0:d={fade:.6f}"
