@@ -59,6 +59,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .edl3_time import AudioPolicy
+
 EDL3_VERSION = "vx.edl3/1"
 
 #: Deeper nesting is rejected with ``NESTING_TOO_DEEP``.
@@ -66,6 +68,10 @@ MAX_NESTING_DEPTH = 2
 
 INTERPOLATIONS = frozenset({"linear", "hold", "bezier"})
 TRANSITION_KINDS = frozenset({"fade_in", "fade_out", "crossfade"})
+
+#: Audio time policies a speed ramp may declare. The vocabulary is the planning
+#: module's own (:class:`vx.edl3_time.AudioPolicy`), not a copy of it.
+AUDIO_TIME_POLICIES = frozenset(str(item.value) for item in AudioPolicy)
 
 #: Animation mechanisms an effect kind may declare (D012).
 BACKENDS = frozenset({"expr", "sendcmd", "zoompan", "chromium", "frames"})
@@ -548,6 +554,95 @@ def _validate_effect(
                 add("KEYFRAME_RANGE", key_where, problem)
 
 
+def _validate_clip_time(clip: Clip3, where: str, add) -> None:
+    """Shape and domain of ``speed``/``reverse``/``freeze``/``compose``.
+
+    Caps and modes are the planning modules' business: this only refuses a
+    document whose numbers cannot describe a treatment at all.
+    """
+    if isinstance(clip.speed, list):
+        if len(clip.speed) < 2:
+            add(
+                "SPEED_RANGE",
+                f"{where}.speed",
+                f"a ramp needs at least 2 keyframes, got {len(clip.speed)}",
+            )
+        for index, point in enumerate(clip.speed):
+            for key in ("t_timeline", "t_source"):
+                value = point[key]
+                if not math.isfinite(value) or value < 0.0:
+                    add(
+                        "SPEED_RANGE",
+                        f"{where}.speed[{index}].{key}",
+                        f"{key} must be finite and >= 0, got {value}",
+                    )
+        for index in range(1, len(clip.speed)):
+            left = clip.speed[index - 1]
+            right = clip.speed[index]
+            if (
+                right["t_timeline"] <= left["t_timeline"]
+                or right["t_source"] <= left["t_source"]
+            ):
+                add(
+                    "SPEED_RANGE",
+                    f"{where}.speed[{index}]",
+                    f"{right} does not advance past {left} on both axes",
+                )
+    elif clip.speed is not None:
+        ratio = float(clip.speed)
+        if not math.isfinite(ratio) or ratio <= 0.0:
+            add(
+                "SPEED_RANGE",
+                f"{where}.speed",
+                f"a speed ratio must be finite and > 0, got {ratio}",
+            )
+
+    if clip.freeze is not None:
+        missing = [key for key in ("t", "hold") if key not in clip.freeze]
+        if missing:
+            add(
+                "FREEZE_SHAPE",
+                f"{where}.freeze",
+                f"freeze needs t and hold, missing {missing}",
+            )
+        else:
+            if not math.isfinite(clip.freeze["t"]) or clip.freeze["t"] < 0.0:
+                add(
+                    "FREEZE_SHAPE",
+                    f"{where}.freeze.t",
+                    f"t must be finite and >= 0, got {clip.freeze['t']}",
+                )
+            if not math.isfinite(clip.freeze["hold"]) or clip.freeze["hold"] <= 0.0:
+                add(
+                    "FREEZE_SHAPE",
+                    f"{where}.freeze.hold",
+                    f"hold must be finite and > 0, got {clip.freeze['hold']}",
+                )
+
+    if clip.compose is not None:
+        op = clip.compose.get("op")
+        if not isinstance(op, str) or not op.strip():
+            add(
+                "COMPOSE_SHAPE",
+                f"{where}.compose.op",
+                "compose needs a non-empty op (pip/mask/blend/chroma)",
+            )
+        if clip.layer < 1:
+            add(
+                "COMPOSE_SHAPE",
+                f"{where}.compose",
+                "compose composites onto the layer below, so it applies to a "
+                f"clip on layer >= 1; this clip sits on layer {clip.layer}",
+            )
+
+    if clip.audio_policy is not None and clip.audio_policy not in AUDIO_TIME_POLICIES:
+        add(
+            "AUDIO_POLICY",
+            f"{where}.audio_policy",
+            f"audio policy {clip.audio_policy!r} not in {sorted(AUDIO_TIME_POLICIES)}",
+        )
+
+
 # ------------------------------------------------------------- transitions
 
 
@@ -578,6 +673,84 @@ class Transition:
 # ------------------------------------------------------------------- clips
 
 
+def _speed_point(raw: Any, where: str) -> Dict[str, float]:
+    """One ``(t_timeline, t_source)`` keyframe in its serialised form."""
+    if isinstance(raw, Mapping):
+        if "t_timeline" in raw and "t_source" in raw:
+            pair = (raw["t_timeline"], raw["t_source"])
+        elif "timeline" in raw and "source" in raw:
+            pair = (raw["timeline"], raw["source"])
+        else:
+            raise EDLError(
+                "SPEED_RANGE",
+                f"{where}: a keyframe needs t_timeline/t_source, got {raw!r}",
+            )
+    elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        if len(raw) != 2:
+            raise EDLError(
+                "SPEED_RANGE",
+                f"{where}: a keyframe pair holds 2 values, got {len(raw)}",
+            )
+        pair = (raw[0], raw[1])
+    else:
+        raise EDLError(
+            "SPEED_RANGE", f"{where}: a keyframe is a pair or a mapping, got {raw!r}"
+        )
+    try:
+        return {"t_timeline": float(pair[0]), "t_source": float(pair[1])}
+    except (TypeError, ValueError) as exc:
+        raise EDLError(
+            "SPEED_RANGE", f"{where}: a keyframe time is not a number: {raw!r}"
+        ) from exc
+
+
+def _speed_value(raw: Any) -> Any:
+    """``None``, a ratio, or a list of keyframes: the three declared shapes."""
+    if raw is None:
+        return None
+    if isinstance(raw, Mapping):
+        raw = raw.get("points")
+        if raw is None:
+            raise EDLError("SPEED_RANGE", "a speed mapping must carry a 'points' list")
+    if isinstance(raw, bool):
+        raise EDLError("SPEED_RANGE", "speed is a ratio or keyframes, not a boolean")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        return [
+            _speed_point(item, f"speed point {index}") for index, item in enumerate(raw)
+        ]
+    raise EDLError("SPEED_RANGE", f"speed is a ratio or keyframes, got {raw!r}")
+
+
+def _freeze_value(raw: Any) -> Optional[Dict[str, float]]:
+    """``{t, hold}`` in seconds, or ``None``. Unknown keys are dropped."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise EDLError("FREEZE_SHAPE", f"freeze is an object {{t, hold}}, got {raw!r}")
+    spec: Dict[str, float] = {}
+    for key in ("t", "hold"):
+        if key not in raw:
+            continue
+        try:
+            spec[key] = float(raw[key])
+        except (TypeError, ValueError) as exc:
+            raise EDLError(
+                "FREEZE_SHAPE", f"freeze.{key} is not a number: {raw[key]!r}"
+            ) from exc
+    return spec
+
+
+def _compose_value(raw: Any) -> Optional[Dict[str, Any]]:
+    """The raw compositing declaration; its semantics belong to the builders."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise EDLError("COMPOSE_SHAPE", f"compose is an object, got {raw!r}")
+    return dict(raw)
+
+
 @dataclass
 class Clip3:
     """One segment on the timeline.
@@ -586,6 +759,10 @@ class Clip3:
     :class:`NestedSequence` id) is meaningful. ``dst_in``/``dst_out`` are the
     placement on the timeline; when omitted the clip is concatenated after the
     previous one, which is what the slice renderer has always done.
+
+    ``speed`` is a ratio or a list of ``(t_timeline, t_source)`` keyframes;
+    ``reverse``/``freeze`` are the time extremes and ``compose`` the layer
+    compositing declaration (``op`` plus its parameters).
     """
 
     id: str
@@ -600,6 +777,17 @@ class Clip3:
     dst_out: Optional[float] = None
     #: Video layer: 0 is the base track that concatenates; >= 1 overlays.
     layer: int = 0
+    #: Speed ramp: a positive ratio or keyframes; ``None`` plays at 1x.
+    speed: Optional[Any] = None
+    #: Reverse picture and audio across the whole clip.
+    reverse: bool = False
+    #: ``{"t": seconds, "hold": seconds}`` single-frame hold.
+    freeze: Optional[Dict[str, float]] = None
+    #: ``{"op": "pip"|"mask"|"blend"|"chroma", ...params}`` on a layer >= 1 clip.
+    compose: Optional[Dict[str, Any]] = None
+    #: Declared audio time policy for the ramp; ``None`` means the compiler's
+    #: default (``segments``), reported as a default rather than as a choice.
+    audio_policy: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.id = str(self.id)
@@ -618,6 +806,13 @@ class Clip3:
             self.layer = int(self.layer)
         except (TypeError, ValueError):
             self.layer = -1
+        self.speed = _speed_value(self.speed)
+        self.reverse = bool(self.reverse)
+        self.freeze = _freeze_value(self.freeze)
+        self.compose = _compose_value(self.compose)
+        self.audio_policy = (
+            None if self.audio_policy is None else str(self.audio_policy)
+        )
 
     @property
     def duration(self) -> float:
@@ -653,6 +848,11 @@ class Clip3:
             "dst_in": self.dst_in,
             "dst_out": self.dst_out,
             "layer": self.layer,
+            "speed": self.speed,
+            "reverse": self.reverse,
+            "freeze": dict(self.freeze) if self.freeze is not None else None,
+            "compose": dict(self.compose) if self.compose is not None else None,
+            "audio_policy": self.audio_policy,
             "effects": [effect.to_dict() for effect in self.effects],
             "transition_in": (
                 self.transition_in.to_dict() if self.transition_in is not None else None
@@ -694,6 +894,11 @@ class Clip3:
             if data.get("dst_out") is None
             else _float(data.get("dst_out")),
             layer=data.get("layer", 0),
+            speed=data.get("speed"),
+            reverse=data.get("reverse", False),
+            freeze=data.get("freeze"),
+            compose=data.get("compose"),
+            audio_policy=data.get("audio_policy"),
         )
 
 
@@ -1256,6 +1461,8 @@ class Timeline3:
                     duration,
                     add,
                 )
+
+            _validate_clip_time(clip, clip_where, add)
 
             for slot, transition in (
                 ("transition_in", clip.transition_in),

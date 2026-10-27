@@ -62,11 +62,21 @@ from .edl3 import (
     EFFECT_REGISTRY,
     Keyframe,
     KeyframeTrack,
+    MAX_NESTING_DEPTH,
     RENDERABLE_EFFECTS,
     RENDERABLE_TRANSITIONS,
     Transition,
     Timeline3,
 )
+from .edl3_compose import (
+    BUILDERS as COMPOSE_BUILDERS,
+    blend_fragment,
+    relabel,
+    validate_op,
+)
+from .edl3_extremes import freeze_plan, reverse_plan
+from .edl3_nested import resolve as resolve_nesting
+from .edl3_time import AudioPolicy, RemapCurve, audio_fragment, ramp_fragment
 
 BACKEND_EXPR = "expr"
 BACKEND_SENDCMD = "sendcmd"
@@ -110,6 +120,19 @@ RULES = frozenset(
     }
 )
 AUDIO_POLICIES = frozenset({"refuse", "drop", "mix"})
+#: Audio time policy used for a ramp the document does not declare one for.
+DEFAULT_RAMP_AUDIO_POLICY = AudioPolicy.SEGMENTS
+#: Compositing ops that build alpha inside the clip, before the layer stage.
+KEYING_OPS = frozenset({"pip", "mask", "chroma"})
+#: Canonical per-clip transform order. Emitted in this order, reported as is.
+CLIP_ORDER = (
+    "source",
+    "time_fx",
+    "speed",
+    "geometry",
+    "keying",
+    "compose",
+)
 AUDIO_BITRATE = "192k"
 AUDIO_RATE = 48000
 #: Dialogue joint fade, mirroring the house 12 ms cut fade.
@@ -148,6 +171,10 @@ HARD_CODES = frozenset(
         "CAPTION_OVERLAP",
         "AUDIO_RANGE",
         "DUCKING_RANGE",
+        "SPEED_RANGE",
+        "FREEZE_SHAPE",
+        "COMPOSE_SHAPE",
+        "AUDIO_POLICY",
     }
 )
 
@@ -170,6 +197,51 @@ REFUSAL_CODES = frozenset(
         "UNSUPPORTED_AUDIO",
         "MISSING_SOURCE",
         "RENDER_FAILED",
+        "SPEED_RANGE",
+        "FREEZE_SHAPE",
+        "COMPOSE_SHAPE",
+        "COMPOSE_FRAGMENT",
+    }
+)
+
+#: Codes the planning modules raise themselves. They are propagated untouched,
+#: so a caller sees the module's own vocabulary instead of a generic wrapper.
+MODULE_CODES = frozenset(
+    {
+        "REVERSE_TOO_LONG",
+        "FREEZE_TOO_LONG",
+        "EXTREMES_DURATION_INVALID",
+        "EXTREMES_TIME_INVALID",
+        "EXTREMES_HOLD_INVALID",
+        "EXTREMES_FPS_INVALID",
+        "ATEMPO_RATIO_INVALID",
+        "ATEMPO_BOUNDS",
+        "ATEMPO_CASCADE_UNREACHABLE",
+        "AUDIO_SAMPLE_RATE_INVALID",
+        "AUDIO_POLICY_UNKNOWN",
+        "REMAP_SHAPE",
+        "REMAP_EMPTY",
+        "REMAP_NONFINITE",
+        "REMAP_NEGATIVE",
+        "REMAP_ORDER",
+        "REMAP_DUPLICATE",
+        "REMAP_TOO_SHORT",
+        "RAMP_FPS_INVALID",
+        "NESTING_CYCLE",
+        "NESTING_TOO_DEEP",
+        "NESTING_UNKNOWN",
+        "NESTING_SHAPE",
+        "NESTING_DEPTH_INVALID",
+        "COMPOSE_OP",
+        "COMPOSE_PARAMS",
+        "PIP_GEOMETRY",
+        "PIP_BORDER",
+        "MASK_SHAPE",
+        "MASK_GEOMETRY",
+        "MASK_FEATHER",
+        "BLEND_MODE",
+        "CHROMA_COLOR",
+        "CHROMA_RANGE",
     }
 )
 
@@ -188,6 +260,9 @@ __all__ = [
     "AUDIO_POLICIES",
     "HARD_CODES",
     "REFUSAL_CODES",
+    "MODULE_CODES",
+    "KEYING_OPS",
+    "CLIP_ORDER",
     "SUPPORTED_EFFECTS",
     "CompileError",
     "resolve_settings",
@@ -574,6 +649,156 @@ def _effective_effects(
     return by_kind, chosen
 
 
+def _render_blocks(
+    index: int,
+    source: str,
+    blocks: List[Dict[str, Any]],
+    final_label: str,
+) -> List[str]:
+    """Emit a clip pipeline as ``-filter_complex_script`` lines.
+
+    Two block kinds, in the order the document declares them:
+
+    * ``filters`` — appends to the current chain;
+    * ``fanout``  — ``split``, one branch per segment, ``concat`` back (reverse
+      and freeze are linear; a freeze or a multi-segment ramp fans out).
+
+    The emitter is what enforces the canonical order: it never sorts, so the
+    chain order is exactly the block order the caller built.
+    """
+    lines: List[str] = []
+    label = source
+    pending: List[str] = []
+    serial = 0
+
+    for block in blocks:
+        kind = block["kind"]
+        if kind == "filters":
+            pending.extend(block["filters"])
+            continue
+
+        if kind == "fanout":
+            branches = list(block["branches"])
+            if len(branches) == 1:
+                pending.extend(branches[0])
+                pending.extend(block.get("post") or [])
+                continue
+            outs = [f"fo{index}_{serial}_{slot}" for slot in range(len(branches))]
+            split = block.get("split")
+            if not split:
+                raise CompileError(
+                    "COMPOSE_FRAGMENT",
+                    f"a {len(branches)}-branch fan-out needs a split filter",
+                    f"clips[{index}]",
+                )
+            lines.append(
+                label + ",".join(pending + [split]) + "".join(f"[{o}]" for o in outs)
+            )
+            mids: List[str] = []
+            for slot, (out, branch) in enumerate(zip(outs, branches)):
+                mid = f"fb{index}_{serial}_{slot}"
+                lines.append(f"[{out}]" + ",".join(branch) + f"[{mid}]")
+                mids.append(mid)
+            joined = f"fj{index}_{serial}"
+            lines.append(
+                "".join(f"[{m}]" for m in mids)
+                + (block.get("concat") or "null")
+                + f"[{joined}]"
+            )
+            label = f"[{joined}]"
+            pending = list(block.get("post") or [])
+            serial += 1
+            continue
+
+        raise CompileError(
+            "COMPOSE_FRAGMENT", f"unknown block kind {kind!r}", f"clips[{index}]"
+        )
+
+    lines.append(label + ",".join(pending or ["null"]) + f"[{final_label}]")
+    return lines
+
+
+# -------------------------------------------------------------- clip stages
+
+
+def _time_fx_stage(
+    clip: Any, index: int, fps: int
+) -> Tuple[List[Dict[str, Any]], List[str], Dict[str, Any]]:
+    """Reverse, then freeze: the two time extremes, at the head of the chain."""
+    blocks: List[Dict[str, Any]] = []
+    applied: List[str] = []
+    details: Dict[str, Any] = {}
+    if clip.reverse:
+        plan = reverse_plan(clip.duration, has_audio=False)
+        blocks.append({"kind": "filters", "filters": list(plan["video_filters"])})
+        applied.append("reverse")
+        details["reverse"] = {
+            "duration": plan["duration"],
+            "memory_note": plan["memory_note"],
+        }
+    if clip.freeze is not None:
+        plan = freeze_plan(clip.freeze["t"], clip.freeze["hold"], fps=float(fps))
+        blocks.append(
+            {
+                "kind": "fanout",
+                "split": plan["split"],
+                "branches": [[chain] for chain in plan["video_filters"]],
+                "concat": plan["concat"],
+                "post": list(plan["post"]),
+            }
+        )
+        applied.append("freeze")
+        details["freeze"] = {
+            "frame_index": plan["frame_index"],
+            "freeze_at": plan["freeze_at"],
+            "hold": plan["hold_duration"],
+            "audio_note": plan["audio_note"],
+        }
+    return blocks, applied, details
+
+
+def _speed_curve(clip: Any) -> Optional[RemapCurve]:
+    """The declared ramp as a ``RemapCurve``; a ratio becomes two keyframes."""
+    if clip.speed is None:
+        return None
+    if isinstance(clip.speed, list):
+        return RemapCurve(clip.speed)
+    span = clip.duration
+    ratio = float(clip.speed)
+    return RemapCurve([(0.0, 0.0), (span / ratio, span)])
+
+
+def _speed_stage(
+    clip: Any, index: int, fps: int
+) -> Tuple[Optional[Dict[str, Any]], Optional[float], Optional[Dict[str, Any]]]:
+    """The ramp block, the effective ratio and the plan the report quotes."""
+    curve = _speed_curve(clip)
+    if curve is None:
+        return None, None, None
+    plan = ramp_fragment(curve, fps=float(fps))
+    block = {
+        "kind": "fanout",
+        "split": plan["split"],
+        "branches": [[chain] for chain in plan["video_filters"]],
+        "concat": plan["concat"],
+        "post": list(plan["post"]),
+    }
+    return block, float(plan["ratio"]), plan
+
+
+def _compose_declaration(
+    raw: Mapping[str, Any], width: int, height: int
+) -> Tuple[str, Dict[str, Any]]:
+    """Split ``{op, ...params}`` and fill the frame size the compiler knows."""
+    op = str(raw.get("op"))
+    params = {key: value for key, value in raw.items() if key != "op"}
+    if op == "pip":
+        params.setdefault("width", width)
+        params.setdefault("height", height)
+    validate_op(op, params)
+    return op, params
+
+
 def _clip_plan(
     index: int,
     clip: Any,
@@ -598,54 +823,85 @@ def _clip_plan(
     scaled_width = _even(width * scale)
     scaled_height = _even(height * scale)
 
-    foreground: List[str] = ["setpts=PTS-STARTPTS"]
+    blocks: List[Dict[str, Any]] = [
+        {"kind": "filters", "filters": ["setpts=PTS-STARTPTS"]}
+    ]
+    time_blocks, time_fx, time_details = _time_fx_stage(clip, index, fps)
+    blocks.extend(time_blocks)
+    speed_block, speed_ratio, speed_plan = _speed_stage(clip, index, fps)
+    if speed_block is not None:
+        blocks.append(speed_block)
+
+    geometry: List[str] = []
     crop = effects.get("crop")
     if crop:
-        foreground.append(_crop_fragment(crop[0]))
-    foreground.append(
+        geometry.append(_crop_fragment(crop[0]))
+    geometry.append(
         f"scale={scaled_width}:{scaled_height}:"
         "force_original_aspect_ratio=decrease:flags=bicubic"
     )
     for ordinal, color in enumerate(effects.get("color") or []):
-        foreground.append(_color_fragment(index, ordinal, color, fps, duration))
+        geometry.append(_color_fragment(index, ordinal, color, fps, duration))
     for blur in effects.get("blur") or []:
-        foreground.append(_blur_fragment(blur))
+        geometry.append(_blur_fragment(blur))
+    blocks.append({"kind": "filters", "filters": geometry})
 
     opacity_filter: Optional[str] = None
     opacity_mode = "none"
     if transform:
-        foreground.append("format=rgba")
         opacity_filter, opacity_mode = _opacity_fragment(
             index, opacity_track, static_opacity, backend, fps, duration
         )
+        stage = ["format=rgba"]
         if opacity_filter is not None:
-            foreground.append(opacity_filter)
+            stage.append(opacity_filter)
+        blocks.append({"kind": "filters", "filters": stage})
 
     fade_filter = _transition_fragment(clip.transition_in, duration)
     fade_out_filter = _transition_fragment(clip.transition_out, duration)
     fades = [fade for fade in (fade_filter, fade_out_filter) if fade is not None]
 
+    compose_ops: List[str] = []
+    compose_op: Optional[str] = None
+    compose_fragment: Optional[Dict[str, Any]] = None
+    if clip.compose is not None:
+        compose_op, compose_params = _compose_declaration(clip.compose, width, height)
+        compose_ops.append(compose_op)
+        if compose_op == "blend":
+            compose_fragment = blend_fragment(compose_params["mode"])
+        else:
+            compose_fragment = COMPOSE_BUILDERS[compose_op](**compose_params)
+
+    canvas = [f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2", "setsar=1"]
     chains: List[str] = []
     if transform is None:
-        direct = foreground + [
-            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
-            "setsar=1",
-            "format=yuv420p",
+        clip_blocks = blocks + [
+            {"kind": "filters", "filters": canvas + ["format=yuv420p"] + fades}
         ]
-        direct.extend(fades)
-        chains.append(f"[{index}:v]" + ",".join(direct) + f"[c{index}]")
+        chains = _render_blocks(index, f"[{index}:v]", clip_blocks, f"c{index}")
     else:
-        chains.append(f"[{index}:v]" + ",".join(foreground) + f"[fg{index}]")
+        chains = _render_blocks(index, f"[{index}:v]", blocks, f"fg{index}")
         chains.append(
             f"color=c=black:s={width}x{height}:r={fps}:d={_num(duration)}[bg{index}]"
         )
-        composited = [
+        centred = (
             f"[bg{index}][fg{index}]overlay="
-            "x=(W-w)/2:y=(H-h)/2:format=auto:eof_action=pass:shortest=1",
-            "format=yuv420p",
-        ]
+            "x=(W-w)/2:y=(H-h)/2:format=auto:eof_action=pass:shortest=1"
+        )
+        composited = [centred, "format=yuv420p"]
         composited.extend(fades)
         chains.append(",".join(composited) + f"[c{index}]")
+
+    audio_policy = (
+        DEFAULT_RAMP_AUDIO_POLICY.value
+        if clip.audio_policy is None
+        else str(clip.audio_policy)
+    )
+    audio_payload: Optional[Dict[str, Any]] = None
+    if speed_plan is not None:
+        audio_payload = audio_fragment(
+            audio_policy, float(speed_plan["ratio"])
+        ).to_dict()
 
     mechanisms = {
         kind: chosen.get(kind, EFFECT_REGISTRY[kind].backend) for kind in effects
@@ -663,6 +919,16 @@ def _clip_plan(
         "fade_out_filter": fade_out_filter,
         "scale": scale,
         "keyframes": (len(opacity_track.keys) if opacity_track is not None else 0),
+        "time_fx": time_fx,
+        "time_fx_detail": time_details,
+        "speed": speed_ratio,
+        "audio_policy": audio_policy,
+        "audio_policy_declared": clip.audio_policy is not None,
+        "audio": audio_payload,
+        "compose": compose_ops,
+        "compose_op": compose_op,
+        "compose_fragment": compose_fragment,
+        "order": list(CLIP_ORDER),
         "chains": chains,
     }
 
@@ -677,13 +943,44 @@ def _audio_roles(timeline: Timeline3) -> Tuple[str, str]:
     return sidechain, target or "music"
 
 
-def _audio_clip_filters(clip: Any, *, delay: bool) -> List[str]:
+def _audio_time_filters(timeline: Timeline3, audio_clip: Any) -> List[str]:
+    """Reverse and ramp filters for an audio clip that follows a video clip.
+
+    The bus is a separate entity from the picture, so the link is the declared
+    source: an audio clip whose ``source`` matches a retimed video clip gets the
+    same treatment, planned by the very modules the picture uses.
+    """
+    for clip in timeline.clips:
+        if clip.source != audio_clip.source:
+            continue
+        filters: List[str] = []
+        if clip.reverse:
+            filters.append("areverse")
+        if clip.speed is not None:
+            curve = _speed_curve(clip)
+            if curve is not None:
+                plan = ramp_fragment(curve, fps=float(timeline.fps))
+                policy = (
+                    DEFAULT_RAMP_AUDIO_POLICY.value
+                    if clip.audio_policy is None
+                    else str(clip.audio_policy)
+                )
+                filters.extend(list(audio_fragment(policy, float(plan["ratio"]))))
+        if filters:
+            return filters
+    return []
+
+
+def _audio_clip_filters(
+    clip: Any, *, delay: bool, time_filters: Optional[List[str]] = None
+) -> List[str]:
     duration = max(0.0, clip.src_out - clip.src_in)
     filters = [
         f"atrim=start=0.000000:end={_num(duration)}",
         "asetpts=PTS-STARTPTS",
         f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo",
     ]
+    filters.extend(time_filters or [])
     if clip.gain_db != 0.0:
         filters.append(f"volume={float(clip.gain_db):.3f}dB")
     if delay:
@@ -739,7 +1036,11 @@ def _audio_bus(
     for position, clip in enumerate(dialogue):
         label = f"dlg{position}"
         index = declare(clip)
-        filters = ",".join(_audio_clip_filters(clip, delay=False))
+        filters = ",".join(
+            _audio_clip_filters(
+                clip, delay=False, time_filters=_audio_time_filters(timeline, clip)
+            )
+        )
         chains.append(f"[{index}:a]{filters}[{label}]")
         dialogue_labels.append(label)
     if len(dialogue_labels) == 1:
@@ -755,7 +1056,11 @@ def _audio_bus(
     for position, clip in enumerate(music):
         label = f"mus{position}"
         index = declare(clip)
-        filters = ",".join(_audio_clip_filters(clip, delay=True))
+        filters = ",".join(
+            _audio_clip_filters(
+                clip, delay=True, time_filters=_audio_time_filters(timeline, clip)
+            )
+        )
         chains.append(f"[{index}:a]{filters}[{label}]")
         music_labels.append(label)
     if len(music_labels) == 1:
@@ -826,13 +1131,6 @@ def _refuse_unsupported(timeline: Timeline3, audio: str) -> None:
             "caption tracks are validated and serialised only; the Chromium/ASS "
             "backend lands in F2-T07, so nothing is rendered silently",
             "captions[0]",
-        )
-    if timeline.sequences or any(clip.sequence is not None for clip in timeline.clips):
-        raise CompileError(
-            "UNSUPPORTED_SEQUENCE",
-            "nested sequences are validated and serialised only; this compiler "
-            "does not flatten them",
-            "sequences",
         )
     if timeline.audio and audio == "refuse":
         raise CompileError(
@@ -942,8 +1240,15 @@ def compile_timeline(
     *,
     audio: str = "refuse",
     settings: Optional[Mapping[str, Any]] = None,
+    nested_paths: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Validate, route every effect, and return a compile plan."""
+    """Validate, route every effect, and return a compile plan.
+
+    Nested sequences are resolved by :mod:`vx.edl3_nested` and *rendered once*
+    by :func:`render`; the resulting ``{virtual_source: path}`` map arrives as
+    ``nested_paths``. A document with nesting cannot be compiled without it,
+    because a compile never runs ffmpeg.
+    """
     if timeline.version != EDL3_VERSION:
         raise CompileError(
             "SCHEMA_VERSION",
@@ -958,9 +1263,29 @@ def compile_timeline(
         )
     resolved = resolve_settings(settings)
 
+    nesting = resolve_nesting(timeline, max_depth=MAX_NESTING_DEPTH)
+
     for problem in timeline.validate():
         if problem["code"] in HARD_CODES:
             raise CompileError(problem["code"], problem["detail"], problem["where"])
+
+    sources: Dict[int, str] = {}
+    for clip_index, clip in enumerate(timeline.clips):
+        if clip.sequence is None:
+            continue
+        virtual = nesting["sources"].get(clip.id)
+        path = None if virtual is None else (nested_paths or {}).get(virtual)
+        if path is None:
+            raise CompileError(
+                "UNSUPPORTED_SEQUENCE",
+                f"clip {clip.id!r} references sequence {clip.sequence!r}: an "
+                "inner timeline is rendered once by render() and joins the source "
+                "table as "
+                f"{virtual or 'a virtual source'!r}; compile_timeline is pure, so "
+                "it needs that rendered source in nested_paths",
+                f"clips[{clip_index}].sequence",
+            )
+        sources[clip_index] = str(path)
 
     table, routed, chromium = _route_effects(timeline, resolved)
     _refuse_unsupported(timeline, audio)
@@ -980,10 +1305,11 @@ def compile_timeline(
     plans: Dict[int, Dict[str, Any]] = {}
     for clip_index, clip in enumerate(timeline.clips):
         clip_where = f"clips[{clip_index}]"
-        if clip.sequence is None and not Path(clip.source).exists():
+        source = sources.get(clip_index, clip.source)
+        if not Path(source).exists():
             raise CompileError(
                 "MISSING_SOURCE",
-                f"source file not found: {clip.source}",
+                f"source file not found: {source}",
                 f"{clip_where}.source",
             )
         effects, chosen = _effective_effects(timeline, clip, clip_where, routed)
@@ -1031,14 +1357,67 @@ def compile_timeline(
     for position, (index, clip) in enumerate(overlay_clips):
         start = float(clip.dst_in or 0.0)
         end = float(clip.dst_out or 0.0)
-        chains.extend(plans[index]["chains"])
-        chains.append(f"[c{index}]setpts=PTS+{_num(start)}/TB[ov{position}]")
-        chains.append(
-            f"[{base_label}][ov{position}]overlay="
-            f"enable='between(t,{_num(start)},{_num(end)})':"
-            "eof_action=pass:format=auto"
-            f"[base{position}]"
+        window = (
+            f"enable='between(t,{_num(start)},{_num(end)})':eof_action=pass:format=auto"
         )
+        op = plans[index]["compose_op"]
+        chains.extend(plans[index]["chains"])
+        if op is None:
+            chains.append(f"[c{index}]setpts=PTS+{_num(start)}/TB[ov{position}]")
+            chains.append(
+                f"[{base_label}][ov{position}]overlay={window}[base{position}]"
+            )
+        elif op == "blend":
+            fragment = relabel(
+                plans[index]["compose_fragment"],
+                {
+                    "base": f"bwin{position}",
+                    "fg": f"c{index}",
+                    "blend": f"blended{position}",
+                },
+            )
+            chains.append(f"[{base_label}]split=2[bm{position}][bw{position}]")
+            chains.append(
+                f"[bw{position}]trim=start={_num(start)}:end={_num(end)},"
+                f"setpts=PTS-STARTPTS[bwin{position}]"
+            )
+            chains.extend(
+                _chain_into(fragment, f"blended{position}", ["format=yuv420p"])
+            )
+            chains.append(
+                f"[blended{position}]setpts=PTS+{_num(start)}/TB[blendt{position}]"
+            )
+            chains.append(
+                f"[bm{position}][blendt{position}]overlay=0:0:{window}[base{position}]"
+            )
+        else:
+            if op not in KEYING_OPS:
+                # Unreachable through a validated document; a guard, not a fallback.
+                raise CompileError(
+                    "COMPOSE_OP",
+                    f"compose op {op!r} has no layer-stage wiring "
+                    f"(keying ops: {sorted(KEYING_OPS)}, plus blend)",
+                    f"clips[{index}].compose",
+                )
+            fragment = relabel(
+                plans[index]["compose_fragment"],
+                {
+                    "fg": f"ov{position}",
+                    "pip": f"pip{position}",
+                    "masked": f"msk{position}",
+                    "chroma": f"chr{position}",
+                    "mskA": f"ma{position}",
+                    "mskB": f"mb{position}",
+                    "mskMask": f"mm{position}",
+                },
+            )
+            chains.append(f"[c{index}]setpts=PTS+{_num(start)}/TB[ov{position}]")
+            chains.extend(fragment["filters"])
+            keyed = fragment["produces"].strip("[]")
+            chains.append(
+                f"[{base_label}][{keyed}]overlay=0:0:{window},"
+                f"format=yuv420p[base{position}]"
+            )
         base_label = f"base{position}"
 
     audio_chains, audio_input_args, audio_label = _audio_bus(
@@ -1047,18 +1426,41 @@ def compile_timeline(
     chains.extend(audio_chains)
 
     input_args: List[str] = []
-    for clip in timeline.clips:
+    for clip_index, clip in enumerate(timeline.clips):
         input_args.extend(
             [
                 "-ss",
                 _num(clip.src_in),
                 "-t",
-                _num(clip.timeline_duration),
+                _num(_input_span(clip)),
                 "-i",
-                str(clip.source),
+                sources.get(clip_index, clip.source),
             ]
         )
     input_args.extend(audio_input_args)
+
+    warnings: List[str] = []
+    for index, clip in enumerate(timeline.clips):
+        entry = plans[index]
+        if entry["speed"] is not None and not entry["audio_policy_declared"]:
+            warnings.append(
+                f"clips[{index}].speed: the document declares no audio policy, so "
+                f"the compiler used {entry['audio_policy']!r} "
+                f"(declared: segments, silence, pitch)"
+            )
+        if "freeze" in entry["time_fx"] and timeline.audio:
+            warnings.append(
+                f"clips[{index}].freeze: the hold is video-only; the audio bus is "
+                "not held across the freeze"
+            )
+        if timeline.audio and (
+            entry["speed"] is not None or "freeze" in entry["time_fx"]
+        ):
+            warnings.append(
+                f"clips[{index}]: the retimed picture is not "
+                f"{timeline.duration:.3f}s long, while the audio bus is padded and "
+                "trimmed to that declared duration"
+            )
 
     return {
         "version": timeline.version,
@@ -1070,30 +1472,50 @@ def compile_timeline(
         "audio_map": f"[{audio_label}]" if audio_label else None,
         "overlays": len(overlay_clips),
         "clips": [
-            {key: value for key, value in plans[index].items() if key != "chains"}
+            {
+                key: value
+                for key, value in plans[index].items()
+                if key not in {"chains", "compose_fragment"}
+            }
             for index in range(len(timeline.clips))
         ],
         "backends": table,
         "chromium": chromium,
-        "warnings": [],
+        "nested_sequences": list(nesting["order"]),
+        "warnings": warnings,
     }
 
 
-def render(
-    timeline: Timeline3,
-    output: Any,
-    *,
-    workdir: Optional[Any] = None,
-    timeout: Optional[int] = None,
-    audio: str = "refuse",
-    settings: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Render ``timeline`` to ``output`` and return the compile/run report."""
-    plan = compile_timeline(timeline, audio=audio, settings=settings)
-    destination = Path(output)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    script_dir = Path(workdir) if workdir is not None else destination.parent
-    script_dir.mkdir(parents=True, exist_ok=True)
+def _input_span(clip: Any) -> float:
+    """Seconds to read from the source.
+
+    A ramp or a freeze changes how long the result is, so the read length is the
+    declared source span, never the timeline placement.
+    """
+    if clip.speed is not None or clip.freeze is not None:
+        return max(0.0, clip.duration)
+    return clip.timeline_duration
+
+
+def _chain_into(
+    fragment: Mapping[str, Any], produce: str, extra: List[str]
+) -> List[str]:
+    """Append ``extra`` filters to the one chain that produces ``produce``."""
+    filters = list(fragment.get("filters") or [])
+    token = f"[{produce}]"
+    if not filters or not filters[-1].endswith(token):
+        raise CompileError(
+            "COMPOSE_FRAGMENT",
+            f"fragment {fragment.get('op')!r} does not produce {token}",
+            str(fragment.get("produces")),
+        )
+    filters[-1] = filters[-1][: -len(token)] + "," + ",".join(extra) + token
+    return filters
+
+
+def _encode(
+    plan: Mapping[str, Any], destination: Path, script_dir: Path, timeout: Optional[int]
+) -> Tuple[ffmpeg.Proc, Path]:
     script_path = script_dir / "filter_complex.txt"
     script_path.write_text(plan["filter_script"], encoding="utf-8", newline="\n")
 
@@ -1138,6 +1560,59 @@ def render(
             "ffmpeg reported success but wrote no output",
             str(destination),
         )
+    return proc, script_path
+
+
+def _render_nested(
+    timeline: Timeline3,
+    script_dir: Path,
+    timeout: Optional[int],
+    audio: str,
+    settings: Optional[Mapping[str, Any]],
+) -> Dict[str, str]:
+    """Render every reachable inner sequence exactly once, children first."""
+    plan = resolve_nesting(timeline, max_depth=MAX_NESTING_DEPTH)
+    if not plan["renders"]:
+        return {}
+    root = script_dir / "nested"
+    root.mkdir(parents=True, exist_ok=True)
+    paths: Dict[str, str] = {}
+    for entry in plan["renders"]:
+        virtual = entry["virtual_source"]
+        destination = root / f"{virtual}.mp4"
+        if not destination.exists() or destination.stat().st_size == 0:
+            inner_dir = root / virtual
+            inner_dir.mkdir(parents=True, exist_ok=True)
+            inner_plan = compile_timeline(
+                entry["timeline"],
+                audio=audio,
+                settings=settings,
+                nested_paths=dict(paths),
+            )
+            _encode(inner_plan, destination, inner_dir, timeout)
+        paths[virtual] = str(destination)
+    return paths
+
+
+def render(
+    timeline: Timeline3,
+    output: Any,
+    *,
+    workdir: Optional[Any] = None,
+    timeout: Optional[int] = None,
+    audio: str = "refuse",
+    settings: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Render ``timeline`` to ``output`` and return the compile/run report."""
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    script_dir = Path(workdir) if workdir is not None else destination.parent
+    script_dir.mkdir(parents=True, exist_ok=True)
+    nested = _render_nested(timeline, script_dir, timeout, audio, settings)
+    plan = compile_timeline(
+        timeline, audio=audio, settings=settings, nested_paths=nested
+    )
+    proc, script_path = _encode(plan, destination, script_dir, timeout)
 
     report: Dict[str, Any] = {
         "version": plan["version"],
@@ -1156,6 +1631,8 @@ def render(
         "overlays": plan["overlays"],
         "backends": plan["backends"],
         "chromium": plan["chromium"],
+        "nested_sequences": plan["nested_sequences"],
+        "nested_renders": len(nested),
         "warnings": plan["warnings"],
         "command": proc.args,
         "stderr_tail": proc.tail(5),
