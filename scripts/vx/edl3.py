@@ -87,6 +87,10 @@ class EffectSpec:
     animated_params: Tuple[str, ...]
     backend: str
     notes: str
+    #: The ffmpeg mechanism a ``chromium`` declaration falls back to when the
+    #: node declares no property that genuinely needs a layout engine. Empty
+    #: means "this kind has no ffmpeg fallback", so the node is refused.
+    fallback: str = ""
 
 
 #: The effect registry. ``backend`` is the mechanism used *when a parameter is
@@ -105,6 +109,7 @@ EFFECT_REGISTRY: Dict[str, EffectSpec] = {
             "scale is NOT animatable (D012 #2: scale has no time variable, it "
             "would need zoompan/scale2ref)"
         ),
+        fallback="expr",
     ),
     "crop": EffectSpec(
         kind="crop",
@@ -117,6 +122,7 @@ EFFECT_REGISTRY: Dict[str, EffectSpec] = {
             "so the rect animates per frame as expressions of T; a downstream "
             "fixed-scale fit absorbs the changing crop size"
         ),
+        fallback="expr",
     ),
     "color": EffectSpec(
         kind="color",
@@ -129,6 +135,7 @@ EFFECT_REGISTRY: Dict[str, EffectSpec] = {
             "flattened to one command per frame, emitted before the eq "
             "instance it targets (D012 #1)"
         ),
+        fallback="sendcmd",
     ),
     "blur": EffectSpec(
         kind="blur",
@@ -137,6 +144,7 @@ EFFECT_REGISTRY: Dict[str, EffectSpec] = {
         animated_params=(),
         backend="expr",
         notes="static gblur=sigma; not animatable in this contract",
+        fallback="expr",
     ),
     "chroma_key": EffectSpec(
         kind="chroma_key",
@@ -395,6 +403,8 @@ class Effect:
     kind: str
     params: Dict[str, float] = field(default_factory=dict)
     keyframes: Dict[str, KeyframeTrack] = field(default_factory=dict)
+    backend: Optional[str] = None
+    properties: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self.kind = str(self.kind)
@@ -403,10 +413,22 @@ class Effect:
             coerced_params[str(name)] = _float(value)
         self.params = coerced_params
         self.keyframes = _coerce_tracks(self.keyframes or {})
+        self.backend = str(self.backend) if self.backend is not None else None
+        if isinstance(self.properties, str):
+            self.properties = (self.properties,)
+        else:
+            self.properties = tuple(str(name) for name in (self.properties or ()))
 
     @property
     def spec(self) -> Optional[EffectSpec]:
         return EFFECT_REGISTRY.get(self.kind)
+
+    @property
+    def declared_backend(self) -> str:
+        if self.backend:
+            return self.backend
+        spec = self.spec
+        return "" if spec is None else spec.backend
 
     def sample(self, name: str, t: float) -> Optional[float]:
         """Animated value when a track exists, otherwise the static param."""
@@ -426,6 +448,8 @@ class Effect:
             "keyframes": {
                 name: track.to_dict() for name, track in self.keyframes.items()
             },
+            "backend": self.backend,
+            "properties": list(self.properties),
         }
 
     @classmethod
@@ -436,6 +460,8 @@ class Effect:
             kind=str(data.get("kind", "")),
             params=dict(data.get("params") or {}),
             keyframes=_coerce_tracks(data.get("keyframes") or {}),
+            backend=data.get("backend"),
+            properties=tuple(data.get("properties") or ()),
         )
 
 
@@ -572,6 +598,8 @@ class Clip3:
     sequence: Optional[str] = None
     dst_in: Optional[float] = None
     dst_out: Optional[float] = None
+    #: Video layer: 0 is the base track that concatenates; >= 1 overlays.
+    layer: int = 0
 
     def __post_init__(self) -> None:
         self.id = str(self.id)
@@ -586,6 +614,10 @@ class Clip3:
         self.sequence = None if self.sequence is None else str(self.sequence)
         self.dst_in = None if self.dst_in is None else _float(self.dst_in)
         self.dst_out = None if self.dst_out is None else _float(self.dst_out)
+        try:
+            self.layer = int(self.layer)
+        except (TypeError, ValueError):
+            self.layer = -1
 
     @property
     def duration(self) -> float:
@@ -620,6 +652,7 @@ class Clip3:
             "src_out": self.src_out,
             "dst_in": self.dst_in,
             "dst_out": self.dst_out,
+            "layer": self.layer,
             "effects": [effect.to_dict() for effect in self.effects],
             "transition_in": (
                 self.transition_in.to_dict() if self.transition_in is not None else None
@@ -660,6 +693,7 @@ class Clip3:
             dst_out=None
             if data.get("dst_out") is None
             else _float(data.get("dst_out")),
+            layer=data.get("layer", 0),
         )
 
 
@@ -1200,6 +1234,20 @@ class Timeline3:
                             f"src duration {clip.duration:.4f} by more than one frame",
                         )
 
+            if clip.layer < 0:
+                add(
+                    "LAYER_RANGE",
+                    f"{clip_where}.layer",
+                    f"layer must be >= 0, got {clip.layer}",
+                )
+            elif clip.layer >= 1 and (clip.dst_in is None or clip.dst_out is None):
+                add(
+                    "LAYER_RANGE",
+                    clip_where,
+                    "a layer >= 1 overlay needs dst_in/dst_out: its window is "
+                    "the only place it is visible",
+                )
+
             duration = clip.timeline_duration
             for effect_index, effect in enumerate(clip.effects):
                 _validate_effect(
@@ -1239,9 +1287,15 @@ class Timeline3:
         self._validate_sequences(add, depth, problems)
 
     def _validate_placement(self, add) -> None:
-        """Declared dst windows must tile the timeline: no gap, no overlap."""
+        """Layer 0 must tile the timeline: no gap, no overlap.
+
+        Higher layers are windows placed *over* that base, so they are not part
+        of the tiling; the compiler refuses their internal overlaps instead.
+        """
         cursor = 0.0
         for index, clip in enumerate(self.clips):
+            if clip.layer != 0:
+                continue
             assert clip.dst_in is not None and clip.dst_out is not None
             if abs(clip.dst_in - cursor) > 1e-6:
                 add(

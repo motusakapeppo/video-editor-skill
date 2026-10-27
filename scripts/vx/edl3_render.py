@@ -1,5 +1,17 @@
 """vx.edl3_render — compile an ``vx.edl3/1`` document to ffmpeg and render it.
 
+Backend rule
+------------
+``ffmpeg`` is the default engine for every cut, B-roll, colour, audio and
+standard titling. ``chromium`` is admitted only for what genuinely needs an
+engine that reflows, and that is decided by a *declared property*, never by the
+effect's name: see :data:`CHROMIUM_QUALIFYING`. A node that declares
+``chromium`` without one of those properties is redirected to its registry
+fallback; without a fallback it is refused. Availability is a declared setting
+(:data:`DEFAULT_SETTINGS`, ``chromium_available=False`` until F3 builds the
+engine), so a qualified node reports ``backend_unavailable`` instead of
+pretending.
+
 Implemented end to end
 ----------------------
 * ``transform`` — static ``scale``; ``opacity`` animated with real alpha
@@ -10,16 +22,29 @@ Implemented end to end
   frame because ``eq`` has no time variable in its options;
 * ``blur`` — static ``gblur``;
 * ``fade_in`` / ``fade_out`` transitions;
-* adjustment layers, applied before each clip's own effects.
+* adjustment layers, applied before each clip's own effects;
+* multi-layer video: layer 0 concatenates, every higher layer is one
+  ``overlay`` gated by ``enable='between(t,start,end)'``;
+* the audio bus: dialogue concatenated, music placed with ``adelay``, ducked by
+  ``sidechaincompress`` keyed on the dialogue, summed with ``amix``.
 
 Refused loudly, never skipped
 -----------------------------
 ``chroma_key`` and any kind outside :data:`edl3.RENDERABLE_EFFECTS` →
-``UNSUPPORTED_EFFECT``. Text layers and caption tracks → ``UNSUPPORTED_EFFECT``
-until F2-T07 wires the Chromium/ASS backend. Nested sequences →
-``UNSUPPORTED_SEQUENCE``. ``crossfade`` → ``UNSUPPORTED_TRANSITION``. Audio
-tracks → ``UNSUPPORTED_AUDIO`` unless the caller asks for ``audio="drop"``,
-which the report states as ``audio_policy`` (the picture only).
+``UNSUPPORTED_EFFECT``. A chromium node that qualifies while the engine is
+absent → ``BACKEND_UNAVAILABLE``; a chromium node with no fallback →
+``BACKEND_REFUSED``; an unknown property or backend → ``BACKEND_PROPERTY`` /
+``BACKEND_UNKNOWN``. Two overlays on the same layer → ``LAYER_OVERLAP``. Text
+layers and caption tracks → ``UNSUPPORTED_EFFECT`` until F2-T07. Nested
+sequences → ``UNSUPPORTED_SEQUENCE``. ``crossfade`` → ``UNSUPPORTED_TRANSITION``.
+Audio is ``UNSUPPORTED_AUDIO`` under the default ``audio="refuse"`` policy;
+``audio="mix"`` builds the bus and ``audio="drop"`` states the picture-only
+policy.
+
+Loudness: EDL3 declares no loudness target and carries no findings, so the bus
+is not normalised. That is the same rule the EDL renderer applies at stage 04
+(no finding -> remux, do not invent a normalisation); the mixed bus is trimmed
+to the picture duration and encoded with the house AAC settings.
 
 ``compile_timeline`` is pure: it never runs ffmpeg. ``render`` writes the
 script, runs ffmpeg with ``-filter_complex_script`` and returns the report.
@@ -28,10 +53,11 @@ script, runs ffmpeg with ``-filter_complex_script`` and returns the report.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import ffmpeg
 from .edl3 import (
+    BACKENDS,
     EDL3_VERSION,
     EFFECT_REGISTRY,
     Keyframe,
@@ -44,9 +70,50 @@ from .edl3 import (
 
 BACKEND_EXPR = "expr"
 BACKEND_SENDCMD = "sendcmd"
-#: More opacity keyframes than this switches from a baked expression to sendcmd.
+BACKEND_CHROMIUM = "chromium"
+#: More keyframes on a mechanism-flexible track than this switches from a baked
+#: expression to sendcmd. One constant: select_backend and choose_backend read it.
 SENDCMD_THRESHOLD = 3
-AUDIO_POLICIES = frozenset({"refuse", "drop"})
+#: (kind, param) tracks that can compile either way; only these flip.
+SENDCMD_TRACKS = frozenset({("transform", "opacity")})
+#: Properties that justify a real layout engine. Declared, never inferred from a
+#: kind name: a node cannot smuggle ``chromium`` past this set.
+CHROMIUM_QUALIFYING = frozenset(
+    {"layout", "backdrop_filter", "blend_animated", "reflow"}
+)
+#: Declared compiler settings. F3 flips ``chromium_available`` through settings
+#: without editing a single routing branch.
+DEFAULT_SETTINGS: Dict[str, Any] = {"chromium_available": False}
+#: Mechanisms this compiler actually emits per kind. A node that declares
+#: anything else is refused: a report may never name a mechanism the graph does
+#: not use.
+IMPLEMENTED_BACKENDS: Dict[str, frozenset] = {
+    "transform": frozenset({BACKEND_EXPR, BACKEND_SENDCMD}),
+    "crop": frozenset({BACKEND_EXPR}),
+    "color": frozenset({BACKEND_SENDCMD}),
+    "blur": frozenset({BACKEND_EXPR}),
+}
+RULE_DEFAULT = "default"
+RULE_KEYFRAMES = "keyframe_threshold"
+RULE_QUALIFIED = "chromium_qualified"
+RULE_REDIRECTED = "chromium_redirected"
+RULE_UNAVAILABLE = "chromium_unavailable"
+RULE_REFUSED = "no_fallback_refused"
+RULES = frozenset(
+    {
+        RULE_DEFAULT,
+        RULE_KEYFRAMES,
+        RULE_QUALIFIED,
+        RULE_REDIRECTED,
+        RULE_UNAVAILABLE,
+        RULE_REFUSED,
+    }
+)
+AUDIO_POLICIES = frozenset({"refuse", "drop", "mix"})
+AUDIO_BITRATE = "192k"
+AUDIO_RATE = 48000
+#: Dialogue joint fade, mirroring the house 12 ms cut fade.
+DIALOGUE_FADE_SEC = 0.012
 
 #: Structural validation codes the compiler refuses outright.
 HARD_CODES = frozenset(
@@ -58,6 +125,7 @@ HARD_CODES = frozenset(
         "DUPLICATE_CLIP_ID",
         "CLIP_RANGE",
         "CLIP_SHAPE",
+        "LAYER_RANGE",
         "EFFECT_UNKNOWN",
         "EFFECT_PARAM",
         "EFFECT_RANGE",
@@ -83,17 +151,47 @@ HARD_CODES = frozenset(
     }
 )
 
+#: Codes this module raises itself. Every refusal names one of them.
+REFUSAL_CODES = frozenset(
+    {
+        "AUDIO_POLICY",
+        "SETTINGS_UNKNOWN",
+        "SETTINGS_TYPE",
+        "BACKEND_UNKNOWN",
+        "BACKEND_PROPERTY",
+        "BACKEND_UNIMPLEMENTED",
+        "BACKEND_UNAVAILABLE",
+        "BACKEND_REFUSED",
+        "LAYER_OVERLAP",
+        "LAYER_RANGE",
+        "UNSUPPORTED_EFFECT",
+        "UNSUPPORTED_SEQUENCE",
+        "UNSUPPORTED_TRANSITION",
+        "UNSUPPORTED_AUDIO",
+        "MISSING_SOURCE",
+        "RENDER_FAILED",
+    }
+)
+
 #: Effect kinds the compiler can emit today, from the registry's own view.
 SUPPORTED_EFFECTS = tuple(sorted(RENDERABLE_EFFECTS))
 
 __all__ = [
     "BACKEND_EXPR",
     "BACKEND_SENDCMD",
+    "BACKEND_CHROMIUM",
     "SENDCMD_THRESHOLD",
+    "SENDCMD_TRACKS",
+    "CHROMIUM_QUALIFYING",
+    "DEFAULT_SETTINGS",
+    "RULES",
     "AUDIO_POLICIES",
     "HARD_CODES",
+    "REFUSAL_CODES",
     "SUPPORTED_EFFECTS",
     "CompileError",
+    "resolve_settings",
+    "select_backend",
     "choose_backend",
     "track_expression",
     "sendcmd_commands",
@@ -190,20 +288,154 @@ def sendcmd_commands(
     return ";".join(commands)
 
 
-# ---------------------------------------------------------------- planning
+# ---------------------------------------------------------------- routing
+
+
+def _coerce_flag(name: str, raw: Any) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off", ""}:
+            return False
+    raise CompileError(
+        "SETTINGS_TYPE",
+        f"{name} must be a boolean, got {raw!r}",
+        f"settings.{name}",
+    )
+
+
+def resolve_settings(
+    settings: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge the caller's settings over the declared defaults."""
+    resolved: Dict[str, Any] = dict(DEFAULT_SETTINGS)
+    for name, raw in (settings or {}).items():
+        if name not in DEFAULT_SETTINGS:
+            raise CompileError(
+                "SETTINGS_UNKNOWN",
+                f"unknown compiler setting {name!r} "
+                f"(declared: {sorted(DEFAULT_SETTINGS)})",
+                f"settings.{name}",
+            )
+        resolved[name] = _coerce_flag(name, raw)
+    return resolved
+
+
+def _flexible_keyframe_count(effect: Any) -> int:
+    largest = 0
+    for kind, param in SENDCMD_TRACKS:
+        if kind != effect.kind:
+            continue
+        track = effect.keyframes.get(param)
+        if track is not None:
+            largest = max(largest, len(track.keys))
+    return largest
+
+
+def _declared_properties(effect: Any) -> Tuple[str, ...]:
+    raw = getattr(effect, "properties", ()) or ()
+    if isinstance(raw, str):
+        return (raw,)
+    return tuple(str(name) for name in raw)
+
+
+def select_backend(
+    effect: Any, *, settings: Optional[Mapping[str, Any]] = None
+) -> Dict[str, Any]:
+    """Route one effect to a mechanism and state the rule that decided it."""
+    resolved = resolve_settings(settings)
+    available = bool(resolved["chromium_available"])
+    spec = EFFECT_REGISTRY.get(effect.kind)
+    declared = str(getattr(effect, "declared_backend", "") or "")
+    if not declared and spec is not None:
+        declared = spec.backend
+    fallback = "" if spec is None else spec.fallback
+    properties = _declared_properties(effect)
+
+    if declared not in BACKENDS:
+        raise CompileError(
+            "BACKEND_UNKNOWN",
+            f"{effect.kind!r} declares backend {declared!r}; declared mechanisms "
+            f"are {sorted(BACKENDS)}",
+            f"effects.{effect.kind}.backend",
+        )
+
+    unknown = [name for name in properties if name not in CHROMIUM_QUALIFYING]
+    if unknown:
+        raise CompileError(
+            "BACKEND_PROPERTY",
+            f"{effect.kind!r} declares unknown propert"
+            f"{'y' if len(unknown) == 1 else 'ies'} {unknown}; the declared set is "
+            f"{sorted(CHROMIUM_QUALIFYING)}",
+            f"effects.{effect.kind}.properties",
+        )
+    if properties and declared != BACKEND_CHROMIUM:
+        raise CompileError(
+            "BACKEND_PROPERTY",
+            f"{effect.kind!r} declares properties {list(properties)} on backend "
+            f"{declared!r}; properties describe a chromium requirement",
+            f"effects.{effect.kind}.properties",
+        )
+
+    entry: Dict[str, Any] = {
+        "kind": effect.kind,
+        "declared": declared,
+        "chosen": declared,
+        "rule": RULE_DEFAULT,
+        "fallback": fallback,
+        "available": available,
+    }
+
+    if declared == BACKEND_CHROMIUM:
+        if properties:
+            entry["chosen"] = BACKEND_CHROMIUM if available else ""
+            entry["rule"] = RULE_QUALIFIED if available else RULE_UNAVAILABLE
+            return entry
+        if fallback:
+            chosen = fallback
+            if chosen == BACKEND_EXPR and (
+                _flexible_keyframe_count(effect) > SENDCMD_THRESHOLD
+            ):
+                chosen = BACKEND_SENDCMD
+            entry["chosen"] = chosen
+            entry["rule"] = RULE_REDIRECTED
+            return entry
+        entry["chosen"] = ""
+        entry["rule"] = RULE_REFUSED
+        return entry
+
+    if declared == BACKEND_EXPR and (
+        _flexible_keyframe_count(effect) > SENDCMD_THRESHOLD
+    ):
+        entry["chosen"] = BACKEND_SENDCMD
+        entry["rule"] = RULE_KEYFRAMES
+    implemented = IMPLEMENTED_BACKENDS.get(effect.kind)
+    if implemented is not None and declared not in implemented:
+        raise CompileError(
+            "BACKEND_UNIMPLEMENTED",
+            f"{effect.kind!r} declares {declared!r} but this compiler emits "
+            f"{sorted(implemented)} for that kind; declaring another engine "
+            "cannot change what the graph does",
+            f"effects.{effect.kind}.backend",
+        )
+    return entry
 
 
 def choose_backend(timeline: Timeline3) -> str:
-    """The opacity backend: the largest opacity track decides for the document."""
+    """The document's opacity backend: the largest opacity track decides."""
     largest = 0
     for clip in timeline.clips:
         transform = clip.effect("transform")
         if transform is None:
             continue
-        for name, track in transform.keyframes.items():
-            if name == "opacity":
-                largest = max(largest, len(track.keys))
+        largest = max(largest, _flexible_keyframe_count(transform))
     return BACKEND_SENDCMD if largest > SENDCMD_THRESHOLD else BACKEND_EXPR
+
+
+# ---------------------------------------------------------------- planning
 
 
 def _even(value: float) -> int:
@@ -297,23 +529,32 @@ def _transition_fragment(
 
 
 def _effective_effects(
-    timeline: Timeline3, clip: Any, where: str
-) -> Dict[str, List[Any]]:
+    timeline: Timeline3,
+    clip: Any,
+    where: str,
+    routed: Mapping[str, Dict[str, Any]],
+) -> Tuple[Dict[str, List[Any]], Dict[str, str]]:
     """Adjustment layers first (track ascending), then the clip's own effects.
 
     Colour and blur stack, because they are point-wise and order is meaningful.
     Geometry (``crop``) and the compositing transform may not stack: two crop
     rects or two scales have no declared meaning here, so the compiler refuses
-    instead of inventing one.
+    instead of inventing one. The returned map is the mechanism actually chosen
+    for each kind, which is the fallback when chromium was redirected.
     """
-    merged: List[Any] = []
-    for layer in sorted(timeline.adjustments, key=lambda item: item.track):
-        merged.extend(layer.effects)
-    merged.extend(clip.effects)
+    merged: List[Tuple[str, Any]] = []
+    ordered = sorted(enumerate(timeline.adjustments), key=lambda item: item[1].track)
+    for index, layer in ordered:
+        for position, effect in enumerate(layer.effects):
+            merged.append((f"adjustments[{index}].effects[{position}]", effect))
+    for position, effect in enumerate(clip.effects):
+        merged.append((f"{where}.effects[{position}]", effect))
 
     by_kind: Dict[str, List[Any]] = {}
-    for effect in merged:
+    chosen: Dict[str, str] = {}
+    for scope, effect in merged:
         by_kind.setdefault(effect.kind, []).append(effect)
+        chosen[effect.kind] = routed[scope]["chosen"]
     for kind, instances in by_kind.items():
         if kind not in RENDERABLE_EFFECTS:
             raise CompileError(
@@ -330,13 +571,14 @@ def _effective_effects(
                 "geometry and transform stack is not implemented",
                 where,
             )
-    return by_kind
+    return by_kind, chosen
 
 
 def _clip_plan(
     index: int,
     clip: Any,
     effects: Dict[str, List[Any]],
+    chosen: Dict[str, str],
     backend: str,
     width: int,
     height: int,
@@ -405,10 +647,13 @@ def _clip_plan(
         composited.extend(fades)
         chains.append(",".join(composited) + f"[c{index}]")
 
-    mechanisms = {kind: EFFECT_REGISTRY[kind].backend for kind in effects}
+    mechanisms = {
+        kind: chosen.get(kind, EFFECT_REGISTRY[kind].backend) for kind in effects
+    }
     return {
         "id": clip.id,
         "index": index,
+        "layer": clip.layer,
         "duration": duration,
         "backend": backend if opacity_mode == "keyframed" else BACKEND_EXPR,
         "backends": mechanisms,
@@ -420,6 +665,148 @@ def _clip_plan(
         "keyframes": (len(opacity_track.keys) if opacity_track is not None else 0),
         "chains": chains,
     }
+
+
+# ------------------------------------------------------------------ audio
+
+
+def _audio_roles(timeline: Timeline3) -> Tuple[str, str]:
+    ducking = timeline.ducking
+    target = ducking.target_role if ducking is not None else "music"
+    sidechain = ducking.sidechain_role if ducking is not None else ""
+    return sidechain, target or "music"
+
+
+def _audio_clip_filters(clip: Any, *, delay: bool) -> List[str]:
+    duration = max(0.0, clip.src_out - clip.src_in)
+    filters = [
+        f"atrim=start=0.000000:end={_num(duration)}",
+        "asetpts=PTS-STARTPTS",
+        f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo",
+    ]
+    if clip.gain_db != 0.0:
+        filters.append(f"volume={float(clip.gain_db):.3f}dB")
+    if delay:
+        milliseconds = int(round(float(clip.dst_in) * 1000.0))
+        filters.append(f"adelay={milliseconds}|{milliseconds}")
+    elif duration > 0.0:
+        fade = min(DIALOGUE_FADE_SEC, duration / 2.0)
+        filters.append(f"afade=t=in:st=0.000000:d={_num(fade)}")
+        filters.append(f"afade=t=out:st={_num(duration - fade)}:d={_num(fade)}")
+    return filters
+
+
+def _audio_bus(
+    timeline: Timeline3, policy: str, first_index: int
+) -> Tuple[List[str], List[str], Optional[str]]:
+    """Return ``(chains, input_args, final_label)`` for the declared audio buses."""
+    if policy == "drop" or not timeline.audio:
+        return [], [], None
+
+    _sidechain_role, target_role = _audio_roles(timeline)
+    dialogue: List[Any] = []
+    music: List[Any] = []
+    for track in timeline.audio:
+        bucket = music if track.role == target_role else dialogue
+        bucket.extend(track.clips)
+    if not dialogue and not music:
+        return [], [], None
+    dialogue.sort(key=lambda clip: (float(clip.dst_in), float(clip.src_in)))
+    music.sort(key=lambda clip: (float(clip.dst_in), float(clip.src_in)))
+
+    chains: List[str] = []
+    input_args: List[str] = []
+    cursor = first_index
+
+    def declare(clip: Any) -> int:
+        nonlocal cursor
+        index = cursor
+        cursor += 1
+        duration = max(0.0, clip.src_out - clip.src_in)
+        input_args.extend(
+            [
+                "-ss",
+                _num(clip.src_in),
+                "-t",
+                _num(duration),
+                "-i",
+                clip.source,
+            ]
+        )
+        return index
+
+    dialogue_labels: List[str] = []
+    for position, clip in enumerate(dialogue):
+        label = f"dlg{position}"
+        index = declare(clip)
+        filters = ",".join(_audio_clip_filters(clip, delay=False))
+        chains.append(f"[{index}:a]{filters}[{label}]")
+        dialogue_labels.append(label)
+    if len(dialogue_labels) == 1:
+        dialogue_label: Optional[str] = dialogue_labels[0]
+    elif dialogue_labels:
+        inputs = "".join(f"[{label}]" for label in dialogue_labels)
+        chains.append(f"{inputs}concat=n={len(dialogue_labels)}:v=0:a=1[dialog]")
+        dialogue_label = "dialog"
+    else:
+        dialogue_label = None
+
+    music_labels: List[str] = []
+    for position, clip in enumerate(music):
+        label = f"mus{position}"
+        index = declare(clip)
+        filters = ",".join(_audio_clip_filters(clip, delay=True))
+        chains.append(f"[{index}:a]{filters}[{label}]")
+        music_labels.append(label)
+    if len(music_labels) == 1:
+        music_label: Optional[str] = music_labels[0]
+    elif music_labels:
+        inputs = "".join(f"[{label}]" for label in music_labels)
+        chains.append(
+            f"{inputs}amix=inputs={len(music_labels)}:duration=longest:"
+            "dropout_transition=0:normalize=0[music]"
+        )
+        music_label = "music"
+    else:
+        music_label = None
+
+    ducking = timeline.ducking
+    if ducking is not None and dialogue_label and music_label:
+        linear = max(1.0, 10.0 ** (float(ducking.makeup_db) / 20.0))
+        chains.append(f"[{dialogue_label}]asplit=2[dialog_mix][dialog_sc]")
+        chains.append(
+            f"[dialog_sc]apad=whole_dur={_num(float(timeline.duration))}[dialog_sc_pad]"
+        )
+        chains.append(
+            f"[{music_label}][dialog_sc_pad]sidechaincompress="
+            f"threshold={float(ducking.threshold):.3f}:"
+            f"ratio={float(ducking.ratio):.3f}:"
+            f"attack={float(ducking.attack_ms):.3f}:"
+            f"release={float(ducking.release_ms):.3f}:"
+            f"makeup={linear:.3f}[music_duck]"
+        )
+        mixed = (
+            "[dialog_mix][music_duck]amix=inputs=2:duration=longest:"
+            "dropout_transition=0:normalize=0"
+        )
+    elif dialogue_label and music_label:
+        mixed = (
+            f"[{dialogue_label}][{music_label}]amix=inputs=2:duration=longest:"
+            "dropout_transition=0:normalize=0"
+        )
+    elif dialogue_label:
+        mixed = f"[{dialogue_label}]anull"
+    else:
+        mixed = f"[{music_label}]anull"
+    chains.append(f"{mixed}[aout_mix]")
+
+    duration = float(timeline.duration)
+    chains.append(
+        f"[aout_mix]apad=whole_dur={_num(duration)},"
+        f"atrim=start=0.000000:end={_num(duration)},"
+        "asetpts=PTS-STARTPTS[aout]"
+    )
+    return chains, input_args, "aout"
 
 
 # --------------------------------------------------------------- compiling
@@ -447,18 +834,116 @@ def _refuse_unsupported(timeline: Timeline3, audio: str) -> None:
             "does not flatten them",
             "sequences",
         )
-    if timeline.audio and audio != "drop":
+    if timeline.audio and audio == "refuse":
         raise CompileError(
             "UNSUPPORTED_AUDIO",
-            f"{len(timeline.audio)} audio track(s) carried but this compiler does "
-            "not mix audio; pass audio='drop' to render the picture only and "
-            "record the policy",
+            f"{len(timeline.audio)} audio track(s) carried but audio is refused "
+            "by policy; pass audio='mix' to build the bus or audio='drop' to "
+            "render the picture only and record the policy",
             "audio",
         )
 
 
-def compile_timeline(timeline: Timeline3, *, audio: str = "refuse") -> Dict[str, Any]:
-    """Validate, refuse unsupported features, and return a compile plan."""
+def _route_effects(
+    timeline: Timeline3, settings: Mapping[str, Any]
+) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    scopes: List[Tuple[str, Any]] = []
+    for index, layer in enumerate(timeline.adjustments):
+        for position, effect in enumerate(layer.effects):
+            scopes.append((f"adjustments[{index}].effects[{position}]", effect))
+    for index, clip in enumerate(timeline.clips):
+        for position, effect in enumerate(clip.effects):
+            scopes.append((f"clips[{index}].effects[{position}]", effect))
+
+    table: List[Dict[str, Any]] = []
+    routed: Dict[str, Dict[str, Any]] = {}
+    summary = {
+        "available": bool(settings["chromium_available"]),
+        "qualified": 0,
+        "redirected": 0,
+        "refused": 0,
+    }
+    for where, effect in scopes:
+        entry = select_backend(effect, settings=settings)
+        if entry["rule"] == RULE_QUALIFIED:
+            summary["qualified"] += 1
+        elif entry["rule"] == RULE_REDIRECTED:
+            summary["redirected"] += 1
+        elif entry["rule"] == RULE_REFUSED:
+            summary["refused"] += 1
+        routed[where] = entry
+        table.append(
+            {
+                "effect": effect.kind,
+                "chosen": entry["chosen"],
+                "rule": entry["rule"],
+                "where": where,
+            }
+        )
+        if entry["rule"] == RULE_REFUSED:
+            raise CompileError(
+                "BACKEND_REFUSED",
+                f"{effect.kind!r} declares chromium with no qualifying property "
+                f"and no ffmpeg fallback; qualifying properties are "
+                f"{sorted(CHROMIUM_QUALIFYING)}",
+                where,
+            )
+        if entry["rule"] in {RULE_UNAVAILABLE, RULE_QUALIFIED}:
+            raise CompileError(
+                "BACKEND_UNAVAILABLE",
+                f"{effect.kind!r} declares chromium with properties "
+                f"{list(_declared_properties(effect))}: the engine qualifies but "
+                f"is not built (settings.chromium_available="
+                f"{summary['available']}, F3); it is refused, never rendered with "
+                "the wrong mechanism",
+                where,
+            )
+    return table, routed, summary
+
+
+def _split_layers(
+    timeline: Timeline3,
+) -> Tuple[List[Tuple[int, Any]], List[Tuple[int, Any]]]:
+    base: List[Tuple[int, Any]] = []
+    overlays: List[Tuple[int, Any]] = []
+    for index, clip in enumerate(timeline.clips):
+        (overlays if clip.layer >= 1 else base).append((index, clip))
+    return base, overlays
+
+
+def _refuse_layer_overlap(overlays: List[Tuple[int, Any]]) -> None:
+    by_layer: Dict[int, List[Tuple[int, Any]]] = {}
+    for index, clip in overlays:
+        if clip.dst_in is None or clip.dst_out is None:
+            raise CompileError(
+                "LAYER_RANGE",
+                f"layer {clip.layer} clip {clip.id!r} needs dst_in/dst_out: its "
+                "window is the only place it is visible",
+                f"clips[{index}]",
+            )
+        by_layer.setdefault(int(clip.layer), []).append((index, clip))
+    for layer, items in sorted(by_layer.items()):
+        ordered = sorted(items, key=lambda item: (float(item[1].dst_in), item[1].id))
+        for previous, current in zip(ordered, ordered[1:]):
+            previous_end = float(previous[1].dst_out)
+            current_start = float(current[1].dst_in)
+            if current_start < previous_end - 1e-6:
+                raise CompileError(
+                    "LAYER_OVERLAP",
+                    f"layer {layer}: clip {current[1].id!r} starts at "
+                    f"{current_start:.6f}s before clip {previous[1].id!r} ends at "
+                    f"{previous_end:.6f}s",
+                    f"clips[{current[0]}]",
+                )
+
+
+def compile_timeline(
+    timeline: Timeline3,
+    *,
+    audio: str = "refuse",
+    settings: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Validate, route every effect, and return a compile plan."""
     if timeline.version != EDL3_VERSION:
         raise CompileError(
             "SCHEMA_VERSION",
@@ -471,16 +956,28 @@ def compile_timeline(timeline: Timeline3, *, audio: str = "refuse") -> Dict[str,
             f"audio policy {audio!r} not in {sorted(AUDIO_POLICIES)}",
             "audio",
         )
+    resolved = resolve_settings(settings)
 
     for problem in timeline.validate():
         if problem["code"] in HARD_CODES:
             raise CompileError(problem["code"], problem["detail"], problem["where"])
 
+    table, routed, chromium = _route_effects(timeline, resolved)
     _refuse_unsupported(timeline, audio)
+
+    base_clips, overlay_clips = _split_layers(timeline)
+    if not base_clips:
+        raise CompileError(
+            "LAYER_RANGE",
+            "a timeline needs at least one layer 0 clip to concatenate; "
+            f"every clip sits on layer >= 1 ({len(overlay_clips)} clip(s))",
+            "clips",
+        )
+    _refuse_layer_overlap(overlay_clips)
 
     backend = choose_backend(timeline)
 
-    plans: List[Dict[str, Any]] = []
+    plans: Dict[int, Dict[str, Any]] = {}
     for clip_index, clip in enumerate(timeline.clips):
         clip_where = f"clips[{clip_index}]"
         if clip.sequence is None and not Path(clip.source).exists():
@@ -489,7 +986,7 @@ def compile_timeline(timeline: Timeline3, *, audio: str = "refuse") -> Dict[str,
                 f"source file not found: {clip.source}",
                 f"{clip_where}.source",
             )
-        effects = _effective_effects(timeline, clip, clip_where)
+        effects, chosen = _effective_effects(timeline, clip, clip_where, routed)
         for slot, transition in (
             ("transition_in", clip.transition_in),
             ("transition_out", clip.transition_out),
@@ -502,28 +999,52 @@ def compile_timeline(timeline: Timeline3, *, audio: str = "refuse") -> Dict[str,
                 f"(implemented: {sorted(RENDERABLE_TRANSITIONS)})",
                 f"{clip_where}.{slot}.kind",
             )
-        plans.append(
-            _clip_plan(
-                clip_index,
-                clip,
-                effects,
-                backend,
-                timeline.width,
-                timeline.height,
-                timeline.fps,
-            )
+        plans[clip_index] = _clip_plan(
+            clip_index,
+            clip,
+            effects,
+            chosen,
+            chosen.get("transform") or BACKEND_EXPR,
+            timeline.width,
+            timeline.height,
+            timeline.fps,
         )
 
     chains: List[str] = []
-    for plan in plans:
-        chains.extend(plan["chains"])
-
-    if len(plans) == 1:
-        final_label = "c0"
+    for index, _clip in base_clips:
+        chains.extend(plans[index]["chains"])
+    if len(base_clips) == 1:
+        base_label = f"c{base_clips[0][0]}"
     else:
-        inputs = "".join(f"[c{index}]" for index in range(len(plans)))
-        chains.append(f"{inputs}concat=n={len(plans)}:v=1:a=0[out]")
-        final_label = "out"
+        inputs = "".join(f"[c{index}]" for index, _clip in base_clips)
+        chains.append(f"{inputs}concat=n={len(base_clips)}:v=1:a=0[out]")
+        base_label = "out"
+
+    overlay_clips = sorted(
+        overlay_clips,
+        key=lambda item: (
+            int(item[1].layer),
+            float(item[1].dst_in or 0.0),
+            item[1].id,
+        ),
+    )
+    for position, (index, clip) in enumerate(overlay_clips):
+        start = float(clip.dst_in or 0.0)
+        end = float(clip.dst_out or 0.0)
+        chains.extend(plans[index]["chains"])
+        chains.append(f"[c{index}]setpts=PTS+{_num(start)}/TB[ov{position}]")
+        chains.append(
+            f"[{base_label}][ov{position}]overlay="
+            f"enable='between(t,{_num(start)},{_num(end)})':"
+            "eof_action=pass:format=auto"
+            f"[base{position}]"
+        )
+        base_label = f"base{position}"
+
+    audio_chains, audio_input_args, audio_label = _audio_bus(
+        timeline, audio, len(timeline.clips)
+    )
+    chains.extend(audio_chains)
 
     input_args: List[str] = []
     for clip in timeline.clips:
@@ -537,6 +1058,7 @@ def compile_timeline(timeline: Timeline3, *, audio: str = "refuse") -> Dict[str,
                 str(clip.source),
             ]
         )
+    input_args.extend(audio_input_args)
 
     return {
         "version": timeline.version,
@@ -544,8 +1066,15 @@ def compile_timeline(timeline: Timeline3, *, audio: str = "refuse") -> Dict[str,
         "audio_policy": audio,
         "filter_script": ";\n".join(chains) + "\n",
         "input_args": input_args,
-        "map": f"[{final_label}]",
-        "clips": [{k: v for k, v in plan.items() if k != "chains"} for plan in plans],
+        "map": f"[{base_label}]",
+        "audio_map": f"[{audio_label}]" if audio_label else None,
+        "overlays": len(overlay_clips),
+        "clips": [
+            {key: value for key, value in plans[index].items() if key != "chains"}
+            for index in range(len(timeline.clips))
+        ],
+        "backends": table,
+        "chromium": chromium,
         "warnings": [],
     }
 
@@ -557,9 +1086,10 @@ def render(
     workdir: Optional[Any] = None,
     timeout: Optional[int] = None,
     audio: str = "refuse",
+    settings: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Render ``timeline`` to ``output`` and return the compile/run report."""
-    plan = compile_timeline(timeline, audio=audio)
+    plan = compile_timeline(timeline, audio=audio, settings=settings)
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     script_dir = Path(workdir) if workdir is not None else destination.parent
@@ -568,13 +1098,24 @@ def render(
     script_path.write_text(plan["filter_script"], encoding="utf-8", newline="\n")
 
     args = list(plan["input_args"])
+    args.extend(["-filter_complex_script", str(script_path), "-map", plan["map"]])
+    if plan["audio_map"]:
+        args.extend(
+            [
+                "-map",
+                plan["audio_map"],
+                "-c:a",
+                "aac",
+                "-b:a",
+                AUDIO_BITRATE,
+                "-ar",
+                str(AUDIO_RATE),
+            ]
+        )
+    else:
+        args.append("-an")
     args.extend(
         [
-            "-filter_complex_script",
-            str(script_path),
-            "-map",
-            plan["map"],
-            "-an",
             "-sn",
             "-dn",
             "-c:v",
@@ -610,6 +1151,11 @@ def render(
         "filter_script": plan["filter_script"],
         "filter_script_path": str(script_path.resolve()),
         "clips": plan["clips"],
+        "map": plan["map"],
+        "audio_map": plan["audio_map"],
+        "overlays": plan["overlays"],
+        "backends": plan["backends"],
+        "chromium": plan["chromium"],
         "warnings": plan["warnings"],
         "command": proc.args,
         "stderr_tail": proc.tail(5),
