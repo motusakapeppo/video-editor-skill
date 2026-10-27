@@ -38,7 +38,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from . import ffmpeg as ff
-from . import motion_lint
+from . import motion_cache, motion_lint
 from .contract import VxError
 
 __all__ = [
@@ -1352,17 +1352,24 @@ def capture(
     frame_timeout_s: Optional[float] = None,
     capture_timeout_s: Optional[float] = None,
     skip_lint: bool = False,
+    workdir: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """Render one frame per 1/fps of virtual time and write RGBA PNGs.
 
     The static linter runs first and refuses a template with any finding, so a
     dead template never pays for a browser launch. `skip_lint` exists only for
     tests that deliberately exercise the runtime network block.
+
+    `workdir` turns on the frame cache of :mod:`vx.motion_cache`, rooted at
+    `<workdir>/.motion-cache`. Without it the cache is off, nothing extra is
+    written, and the result declares `cache: {"status": "disabled", ...}` --
+    there is no global cache to fall back to.
     """
     if not skip_lint:
         motion_lint.lint_or_raise(template_dir, runtime_check=False)
     template = load_template(template_dir)
     resolved = validate_params(template, params)
+    cache = motion_cache.Cache(workdir)
     rate = float(fps if fps is not None else template["fps"])
     if rate <= 0:
         raise MotionError(
@@ -1411,6 +1418,7 @@ def capture(
 
     seek_path = _seek_path(seek_js)
     blocked: List[str] = []
+    degraded: List[str] = []
     paths: List[str] = []
     digests: List[str] = []
 
@@ -1452,64 +1460,95 @@ def capture(
         page.evaluate("(payload) => { window.__vxParams = payload; }", resolved)
 
         for index in range(count):
-            remaining = deadline - time.perf_counter()
-            if remaining <= 0:
-                raise MotionError(
-                    "CAPTURE_TIMEOUT",
-                    f"frame {index} not reached within {capture_limit}s "
-                    f"(whole-capture ceiling)",
-                    frame=index,
-                    timeout_s=capture_limit,
-                    frames_done=len(paths),
-                )
-            budget_ms = int(min(frame_limit, remaining) * 1000)
             moment = index / rate
-            try:
-                outcome = page.evaluate(
-                    _SEEK_JS,
-                    {"path": seek_path, "t": moment, "timeoutMs": budget_ms},
+            png: Optional[bytes] = None
+            frame_key: Optional[str] = None
+            if cache.enabled:
+                frame_key = cache.key(
+                    template["dir"],
+                    resolved,
+                    fps=rate,
+                    size=(width, height),
+                    engine=engine,
+                    t=moment,
                 )
-            except Exception as exc:  # noqa: BLE001 - declared, not swallowed
-                raise MotionError(
-                    "SEEK_FAILED",
-                    f"frame {index} at t={moment:.4f}s: the browser refused the seek: {exc}",
-                    frame=index,
-                    time=moment,
-                ) from exc
-            status = (outcome or {}).get("status")
-            if status == "SEEK_MISSING":
-                raise MotionError(
-                    "SEEK_MISSING",
-                    f"template {template['name']!r} does not expose {seek_js}()",
-                    template=template["name"],
-                    frame=index,
-                )
-            if status == "SEEK_ERROR":
-                raise MotionError(
-                    "SEEK_FAILED",
-                    f"frame {index} at t={moment:.4f}s: {outcome.get('message')}",
-                    frame=index,
-                    time=moment,
-                )
-            if status == "TIMEOUT":
-                code = "CAPTURE_TIMEOUT" if remaining < frame_limit else "FRAME_TIMEOUT"
-                raise MotionError(
-                    code,
-                    f"frame {index} at t={moment:.4f}s did not paint within "
-                    f"{budget_ms / 1000.0:.2f}s",
-                    frame=index,
-                    time=moment,
-                    timeout_s=budget_ms / 1000.0,
-                )
-            png = page.screenshot(omit_background=True, type="png")
+                png = cache.read(frame_key)
+            if png is None:
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    raise MotionError(
+                        "CAPTURE_TIMEOUT",
+                        f"frame {index} not reached within {capture_limit}s "
+                        f"(whole-capture ceiling)",
+                        frame=index,
+                        timeout_s=capture_limit,
+                        frames_done=len(paths),
+                    )
+                budget_ms = int(min(frame_limit, remaining) * 1000)
+                try:
+                    outcome = page.evaluate(
+                        _SEEK_JS,
+                        {"path": seek_path, "t": moment, "timeoutMs": budget_ms},
+                    )
+                except Exception as exc:  # noqa: BLE001 - declared, not swallowed
+                    raise MotionError(
+                        "SEEK_FAILED",
+                        f"frame {index} at t={moment:.4f}s: the browser refused the seek: {exc}",
+                        frame=index,
+                        time=moment,
+                    ) from exc
+                status = (outcome or {}).get("status")
+                if status == "SEEK_MISSING":
+                    raise MotionError(
+                        "SEEK_MISSING",
+                        f"template {template['name']!r} does not expose {seek_js}()",
+                        template=template["name"],
+                        frame=index,
+                    )
+                if status == "SEEK_ERROR":
+                    raise MotionError(
+                        "SEEK_FAILED",
+                        f"frame {index} at t={moment:.4f}s: {outcome.get('message')}",
+                        frame=index,
+                        time=moment,
+                    )
+                if status == "TIMEOUT":
+                    code = (
+                        "CAPTURE_TIMEOUT"
+                        if remaining < frame_limit
+                        else "FRAME_TIMEOUT"
+                    )
+                    raise MotionError(
+                        code,
+                        f"frame {index} at t={moment:.4f}s did not paint within "
+                        f"{budget_ms / 1000.0:.2f}s",
+                        frame=index,
+                        time=moment,
+                        timeout_s=budget_ms / 1000.0,
+                    )
+                png = page.screenshot(omit_background=True, type="png")
+                if frame_key is not None:
+                    try:
+                        cache.put(frame_key, png)
+                    except motion_cache.CacheRefused as exc:
+                        degraded.append(f"frame {index}: {exc}")
+                    except (OSError, VxError) as exc:
+                        degraded.append(f"frame {index}: cache write failed: {exc}")
             path = destination / f"frame_{index:05d}.png"
             path.write_bytes(png)
             paths.append(str(path))
             digests.append(hashlib.sha256(png).hexdigest())
     finally:
         _close_quietly(page, context, browser, pw)
+        if cache.enabled:
+            try:
+                cache.register()
+            except (OSError, VxError) as exc:
+                degraded.append(f"vault registration failed: {exc}")
 
     elapsed = time.perf_counter() - started
+    cache_report = cache.report()
+    cache_report["degraded"] = list(degraded)
     return {
         "template": template["name"],
         "engine": engine,
@@ -1525,6 +1564,7 @@ def capture(
         "frame_sha256": digests,
         "frame_timeout_s": frame_limit,
         "capture_timeout_s": capture_limit,
+        "cache": cache_report,
     }
 
 
