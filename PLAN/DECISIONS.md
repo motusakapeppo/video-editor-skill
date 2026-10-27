@@ -100,3 +100,30 @@ Senza questi campi la scelta autonoma è un rischio legale travestito da funzion
 Con questi campi `LICENSES_MATRIX.md` si genera invece di essere scritto a mano,
 e un font senza licenza verificata non può entrare in un lavoro di committenza
 perché il codice non ha un valore con cui ammetterlo.
+
+## D008 — Su Dafont l'autonomia si ferma dove dicono loro (2026-10-27)
+
+Letto e verificato il `robots.txt` di `dafont.com`: vieta `/search.php`,
+`/alpha.php`, `/dl.php` e `/download/`. Non è un dettaglio implementativo, è la
+risposta alla richiesta: **la ricerca e il prelievo automatici su Dafont non sono
+percorribili**, e la skill non aggira un divieto — non cambia User-Agent, non
+ruota indirizzi, non finge di essere un umano. Un divieto aggirato è un rischio
+che si paga dopo, e stavamo costruendo una funzione che serve a ridurre i rischi,
+non ad aggiungerne.
+
+Quindi la funzione si divide in due, e nessuna delle due è un ripiego:
+
+1. **Dove l'autonomia è lecita, è totale.** Esiste un provider per cataloghi che
+   permettono l'accesso programmatico (licenza aperta, uso commerciale
+   dichiarato): cerca, classifica, sceglie e usa senza chiedere nulla a nessuno.
+   È la strada per «essere autonoma qualora serva».
+2. **Dove non è lecita, resta un passo umano e il resto è automatico.** Su Dafont
+   la skill prepara una rosa di candidati con il link diretto, dice per ognuno la
+   licenza letta dalla pagina, e aspetta che il file arrivi in una cartella. Da lì
+   riprende da sola: verifica la licenza, calcola l'hash, registra il font, lo
+   copia nella cartella del lavoro, lo usa e lo mette in `LICENSES_MATRIX.md`.
+
+Il primo punto non è un contentino: un catalogo con licenza aperta e uso
+commerciale esplicito è **meglio** di Dafont per un lavoro di committenza, perché
+la licenza è verificabile e non c'è da interpretare «free for personal use».
+Dafont resta utile per il gusto, dove il passo umano costa dieci secondi.
