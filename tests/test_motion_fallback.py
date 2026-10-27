@@ -21,8 +21,11 @@ f. the two gates of the browser path are the fallback's gates too: the static
    lint refuses a broken template before any pixel, and the shared validator
    refuses an unknown parameter with PARAM_UNKNOWN.
 
-The measured numbers (mid-frame sha256, bytes, seconds per frame) are printed and
-written to ``tests/fixtures/motion_fallback_proof.json``.
+The measured numbers (mid-frame sha256, bytes, seconds per frame) are printed; the
+deterministic ones (sha256, bytes) are also written to
+``tests/fixtures/motion_fallback_proof.json``. Timings stay out of that file on
+purpose: a committed fixture that changes on every run is noise, and a diff full of
+milliseconds hides the line that matters.
 """
 
 from __future__ import annotations
@@ -357,8 +360,6 @@ def main() -> int:
                         "frame_count": first["frame_count"],
                         "fps": first["fps"],
                         "size": first["size"],
-                        "elapsed_s": first["elapsed_s"],
-                        "seconds_per_frame": first["seconds_per_frame"],
                     }
                 )
 

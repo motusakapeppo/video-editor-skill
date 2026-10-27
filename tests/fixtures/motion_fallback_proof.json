@@ -8,14 +8,12 @@
         "layout",
         "effects"
       ],
-      "elapsed_s": 0.147,
       "engine": "pillow",
       "fps": 10.0,
       "frame": "frame_00010.png",
       "frame_count": 20,
       "mid_sha256": "62c70504e070d2df3a21f367c82f6676333a9eb7344a330630f5769b97c2f0b4",
       "name": "title",
-      "seconds_per_frame": 0.0073,
       "size": [
         320,
         568
@@ -29,14 +27,12 @@
         "layout",
         "effects"
       ],
-      "elapsed_s": 0.184,
       "engine": "pillow",
       "fps": 10.0,
       "frame": "frame_00011.png",
       "frame_count": 22,
       "mid_sha256": "1623fac51332a635c07c79f3e369e9ab42382f23b438af413e56597767390583",
       "name": "chart",
-      "seconds_per_frame": 0.0084,
       "size": [
         320,
         568
@@ -50,14 +46,12 @@
         "layout",
         "effects"
       ],
-      "elapsed_s": 0.33,
       "engine": "pillow",
       "fps": 10.0,
       "frame": "frame_00011.png",
       "frame_count": 22,
       "mid_sha256": "00ff241d2f6e3dd42887b994885838bf39b9a42be1ff09e224f5a63c0cc57653",
       "name": "subtitle",
-      "seconds_per_frame": 0.015,
       "size": [
         320,
         568
