@@ -38,6 +38,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from . import ffmpeg as ff
+from . import motion_lint
 from .contract import VxError
 
 __all__ = [
@@ -1350,8 +1351,16 @@ def capture(
     seek_js: str = "window.__vxSeek",
     frame_timeout_s: Optional[float] = None,
     capture_timeout_s: Optional[float] = None,
+    skip_lint: bool = False,
 ) -> Dict[str, Any]:
-    """Render one frame per 1/fps of virtual time and write RGBA PNGs."""
+    """Render one frame per 1/fps of virtual time and write RGBA PNGs.
+
+    The static linter runs first and refuses a template with any finding, so a
+    dead template never pays for a browser launch. `skip_lint` exists only for
+    tests that deliberately exercise the runtime network block.
+    """
+    if not skip_lint:
+        motion_lint.lint_or_raise(template_dir, runtime_check=False)
     template = load_template(template_dir)
     resolved = validate_params(template, params)
     rate = float(fps if fps is not None else template["fps"])

@@ -231,6 +231,7 @@ def run(work: Path) -> Optional[float]:
         {},
         work / "remote_out",
         frame_timeout_s=30.0,
+        skip_lint=True,
     )
     blocked = remote["blocked_requests"]
     check(
