@@ -460,7 +460,7 @@ def _bridge_plan(
             transcripts[source_id] = transcript
         except Exception as exc:  # noqa: BLE001 - the bridge declares it
             transcripts[source_id] = exc
-    return bridge.build(
+    new_plan, report = bridge.build(
         plan,
         analyses,
         target_lufs=TARGET_LUFS,
@@ -469,6 +469,48 @@ def _bridge_plan(
         faces=face_tracks,
         motion=motion,
     )
+    return new_plan, report, analyses
+
+
+def audio_summary(
+    analyses: Mapping[str, Any],
+    ceiling_dbtp: Optional[float],
+) -> Dict[str, Any]:
+    """The audio block of the report: measured values, each with its threshold.
+
+    ``snr_db`` takes the worst source and ``music_ratio`` the most musical one,
+    because averaging would hide both: the report has to name the clip that needed
+    denoise most and the one that is a bed candidate. A source whose analysis
+    raised is skipped, never counted as zero. With no measurement the value is
+    None and the threshold is still declared, so the absence stays readable.
+    """
+
+    def field(item: Any, name: str) -> Optional[float]:
+        value = (
+            item.get(name) if isinstance(item, Mapping) else getattr(item, name, None)
+        )
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    snr = [
+        value
+        for value in (field(item, "snr_db") for item in analyses.values())
+        if value is not None
+    ]
+    music = [
+        value
+        for value in (field(item, "music_ratio") for item in analyses.values())
+        if value is not None
+    ]
+    return {
+        "ceiling_dbtp": ceiling_dbtp,
+        "limiter": "alimiter" if ceiling_dbtp is not None else None,
+        "snr_db": round(min(snr), 2) if snr else None,
+        "snr_threshold_db": float(contract.THRESHOLDS["noise_snr_low"]),
+        "music_ratio": round(max(music), 3) if music else None,
+        "music_ratio_threshold": float(contract.THRESHOLDS["triage_music_ratio_low"]),
+    }
 
 
 def _render_effects(report: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -571,10 +613,11 @@ def _run_locked(
     captions_ass: Optional[str] = None
     captions_srt: Optional[str] = None
     bridge_gains_applied = False
+    analyses: Dict[str, Any] = {}
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge", log=log, status="start")
         subs_enabled = not bool(getattr(args, "no_subs", False))
-        plan, bridge_report = _bridge_plan(
+        plan, bridge_report, analyses = _bridge_plan(
             plan, captions=subs_enabled, media=media_by_source
         )
         reframe_map, restore_map = _render_effects(bridge_report)
@@ -727,10 +770,7 @@ def _run_locked(
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "bridge": bridge_summary,
         "render_estimate": render_estimate,
-        "audio": {
-            "ceiling_dbtp": ceiling_dbtp,
-            "limiter": "alimiter" if ceiling_dbtp is not None else None,
-        },
+        "audio": audio_summary(analyses, ceiling_dbtp),
         "selected": [
             {
                 "asset_id": entry.get("asset_id"),

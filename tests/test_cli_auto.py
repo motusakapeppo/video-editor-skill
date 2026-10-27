@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from vx import probe  # noqa: E402
+from vx import contract, probe  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -336,6 +336,26 @@ def main() -> int:
             and isinstance(bridge_block.get("not_applied"), int)
             and Path(str(bridge_block.get("report") or "")).is_file(),
             bridge_block,
+        )
+
+        audio_block = report.get("audio") or {}
+        check(
+            "F1-T03: snr_db e music_ratio nel referto, con la soglia usata",
+            "snr_db" in audio_block
+            and "music_ratio" in audio_block
+            and audio_block.get("snr_threshold_db")
+            == contract.THRESHOLDS["noise_snr_low"]
+            and audio_block.get("music_ratio_threshold")
+            == contract.THRESHOLDS["triage_music_ratio_low"]
+            and (
+                audio_block.get("snr_db") is None
+                or isinstance(audio_block.get("snr_db"), (int, float))
+            )
+            and (
+                audio_block.get("music_ratio") is None
+                or isinstance(audio_block.get("music_ratio"), (int, float))
+            ),
+            audio_block,
         )
 
         rejected = report.get("rejected") or []
