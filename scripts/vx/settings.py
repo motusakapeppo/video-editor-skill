@@ -27,6 +27,17 @@ from . import features
 
 SETTINGS_SCHEMA = "vx.settings/1.0"
 
+# Hard ceilings for child processes, in seconds. A probe that cannot answer in
+# two minutes or a render that cannot finish in an hour is a hang, not slowness:
+# the caller kills it instead of waiting for a machine that may never reply.
+# Values are clamped to PROCESS_TIMEOUT_RANGE where they are used, so a bad
+# profile cannot disable the watchdog or make it expire instantly.
+PROCESS_TIMEOUTS: Dict[str, int] = {
+    "probe": 120,
+    "render": 3600,
+}
+PROCESS_TIMEOUT_RANGE: tuple[int, int] = (1, 86400)
+
 _APPLIED: Dict[str, Any] = {}
 _REFRESHERS: List[Callable[[Dict[str, Any]], None]] = []
 
@@ -147,6 +158,15 @@ def register_refresher(fn: Callable[[Dict[str, Any]], None]) -> None:
     """Modules that derive constants at import time register here to be re-derived."""
     if fn not in _REFRESHERS:
         _REFRESHERS.append(fn)
+
+
+def clamp_timeout(value: int) -> int:
+    low, high = PROCESS_TIMEOUT_RANGE
+    return max(low, min(high, int(value)))
+
+
+def timeout_for(kind: str) -> int:
+    return clamp_timeout(PROCESS_TIMEOUTS.get(kind, PROCESS_TIMEOUTS["render"]))
 
 
 def _deep_merge(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:

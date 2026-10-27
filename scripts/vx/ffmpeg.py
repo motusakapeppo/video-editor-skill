@@ -8,9 +8,9 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
-from .contract import MissingDependency
+from .contract import MissingDependency, VxError
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -63,51 +63,96 @@ class Proc:
         return "\n".join(self.stderr.strip().splitlines()[-lines:])
 
 
-def run(args: Iterable[str], *, timeout: int = 3600) -> Proc:
-    """Run a command as an argument list. Never uses a shell."""
-    argv = [str(a) for a in args]
+class ProcessTimeout(VxError):
+    """A child process outlived its declared ceiling; it was killed and reaped."""
+
+    def __init__(self, payload: Dict[str, object]) -> None:
+        self.payload = dict(payload)
+        super().__init__(
+            f"{self.payload.get('step')} timed out after "
+            f"{self.payload.get('timeout_s')}s: {self.payload.get('cmd_head')}"
+        )
+
+
+def _timeout_seconds(step: str, timeout: Optional[int]) -> int:
+    from . import settings
+
+    return (
+        settings.clamp_timeout(timeout)
+        if timeout is not None
+        else settings.timeout_for(step)
+    )
+
+
+def _run_with_timeout(argv: List[str], timeout: int, step: str) -> Proc:
     creationflags = CREATE_NO_WINDOW if os.name == "nt" else 0
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=creationflags,
+    )
     try:
-        proc = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            creationflags=creationflags,
-            stdin=subprocess.DEVNULL,
-        )
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        return Proc(
-            rc=124, stdout="", stderr=f"timeout after {timeout}s: {exc}", args=argv
-        )
-    return Proc(proc.returncode, proc.stdout or "", proc.stderr or "", argv)
+        proc.kill()
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            # The kill is already in flight; the process is reaped by the OS and
+            # the caller must still receive the original timeout, never a hang.
+            pass
+        payload = {
+            "step": step,
+            "timeout_s": timeout,
+            "cmd_head": " ".join(argv[:4]),
+        }
+        raise ProcessTimeout(payload) from exc
+    return Proc(proc.returncode, stdout or "", stderr or "", argv)
 
 
-def run_ff(args: Iterable[str], *, timeout: int = 3600, loglevel: str = "info") -> Proc:
+def run(
+    args: Iterable[str], *, timeout: Optional[int] = None, step: str = "render"
+) -> Proc:
+    """Run a command as an argument list. Never uses a shell, never outlives its ceiling."""
+    argv = [str(a) for a in args]
+    return _run_with_timeout(argv, _timeout_seconds(step, timeout), step)
+
+
+def run_ff(
+    args: Iterable[str],
+    *,
+    timeout: Optional[int] = None,
+    loglevel: str = "info",
+    step: str = "render",
+) -> Proc:
     """Run ffmpeg with the house flags. loglevel defaults to info on purpose:
     silencedetect writes its findings at info level and -loglevel error hides them."""
     base = [ffmpeg(), "-hide_banner", "-nostdin", "-y", "-loglevel", loglevel]
-    return run(base + [str(a) for a in args], timeout=timeout)
+    return run(base + [str(a) for a in args], timeout=timeout, step=step)
 
 
 def run_fp(args: Iterable[str]) -> Proc:
     return run(
-        [ffprobe(), "-hide_banner", "-loglevel", "error"] + [str(a) for a in args]
+        [ffprobe(), "-hide_banner", "-loglevel", "error"] + [str(a) for a in args],
+        step="probe",
     )
 
 
 @functools.lru_cache(maxsize=1)
 def capabilities() -> dict:
     """Parse the local ffmpeg build: filters, encoders, and the muxers we need."""
-    filters = run_ff(["-filters"], loglevel="error")
+    filters = run_ff(["-filters"], loglevel="error", step="probe")
     names = set()
     for line in filters.stdout.splitlines() + filters.stderr.splitlines():
         parts = line.split()
         if len(parts) >= 2 and len(parts[0]) <= 3:
             names.add(parts[1])
-    encoders = run_ff(["-encoders"], loglevel="error")
+    encoders = run_ff(["-encoders"], loglevel="error", step="probe")
     enc = set()
     for line in encoders.stdout.splitlines() + encoders.stderr.splitlines():
         parts = line.split()
@@ -166,7 +211,7 @@ def capabilities() -> dict:
 
 @functools.lru_cache(maxsize=1)
 def version() -> str:
-    proc = run([ffmpeg(), "-version"])
+    proc = run([ffmpeg(), "-version"], step="probe")
     first = proc.stdout.splitlines()[0] if proc.stdout else ""
     return first.replace("ffmpeg version ", "").split()[0] if first else "unknown"
 
