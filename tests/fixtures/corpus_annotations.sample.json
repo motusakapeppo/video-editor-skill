@@ -1,0 +1,91 @@
+{
+  "sample": true,
+  "module_sha256": "5b25fa907b8522658b4ae4052433e19417340c56e89aa9d24d50bd608ee9eb41",
+  "imported_at": "2026-10-27T00:00:00Z",
+  "clips": {
+    "sample_speech": {
+      "file": "sample_speech.mp4",
+      "duration_sec": 42,
+      "type": "Parlato",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "ok",
+        "silences": "none",
+        "music": "no"
+      },
+      "hook": "strong",
+      "publishable": "yes",
+      "notes": "Invented clip: clean talking head, nothing to fix.",
+      "moments": [
+        {
+          "start": 12,
+          "end": 21,
+          "why": "Invented punchline followed by laughter."
+        },
+        {
+          "start": 25,
+          "end": 33,
+          "why": "Invented concrete advice."
+        }
+      ],
+      "topic_changes": [
+        {
+          "at": 30,
+          "what": "Invented shift from the trip story to gear advice."
+        },
+        {
+          "at": 38,
+          "what": "Invented closing remark."
+        }
+      ]
+    },
+    "sample_music": {
+      "file": "sample_music.mp4",
+      "duration_sec": 30,
+      "type": "Musica",
+      "axes": {
+        "shake": "evident",
+        "exposure": "dark",
+        "cast": "light",
+        "noise": "annoying",
+        "volume": "low",
+        "silences": "few",
+        "music": "yes_ok"
+      },
+      "hook": "medium",
+      "publishable": "no",
+      "notes": "Invented live clip: handheld, dark, hiss, quiet mix.",
+      "moments": [
+        {
+          "start": 5,
+          "end": 15,
+          "why": "Invented chorus drop."
+        }
+      ],
+      "topic_changes": []
+    },
+    "sample_broll": {
+      "file": "sample_broll.mp4",
+      "duration_sec": 18,
+      "type": "Mista",
+      "axes": {
+        "shake": "light",
+        "exposure": "blown",
+        "cast": "evident",
+        "noise": "light",
+        "volume": "unbalanced",
+        "silences": "many",
+        "music": "yes_masks"
+      },
+      "hook": "weak",
+      "publishable": "almost",
+      "notes": "Invented b-roll: window highlights clipped, music covers the voice.",
+      "moments": [],
+      "topic_changes": []
+    }
+  },
+  "skipped": []
+}

@@ -15,9 +15,10 @@ made-up one is not.
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 SCHEMA = "vx.visual/1.0"
 
@@ -112,6 +113,193 @@ _DRIVER_KEYS: Dict[str, Optional[str]] = {
 _FIXTURE = (
     Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "corpus_stats.json"
 )
+_ANNOTATIONS_FIXTURE = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "corpus_annotations.json"
+)
+_LEDGER_REL = "PLAN/MASTER_LEDGER.md"
+_LEDGER = Path(__file__).resolve().parents[2] / "PLAN" / "MASTER_LEDGER.md"
+
+# Human vocabulary from the T09 module. Keys are the de-accented, lower-cased
+# Italian labels the annotator writes; values are the canonical tokens every
+# consumer speaks. A label outside this table is not a level: the importer
+# rejects it instead of guessing.
+ANNOTATION_LEVELS: Dict[str, Dict[str, str]] = {
+    "shake": {
+        "ok": "ok",
+        "lieve": "light",
+        "evidente": "evident",
+        "inguardabile": "unwatchable",
+    },
+    "exposure": {
+        "ok": "ok",
+        "scura": "dark",
+        "molto scura": "very_dark",
+        "chiara": "bright",
+        "bruciata": "blown",
+    },
+    "cast": {
+        "nessuna": "none",
+        "lieve": "light",
+        "evidente": "evident",
+    },
+    "noise": {
+        "assente": "absent",
+        "lieve": "light",
+        "evidente": "evident",
+        "fastidioso": "annoying",
+    },
+    "volume": {
+        "ok": "ok",
+        "basso": "low",
+        "alto": "high",
+        "sbilanciato": "unbalanced",
+        "non c'e audio": "none",
+    },
+    "silences": {
+        "nessuno": "none",
+        "pochi": "few",
+        "molti": "many",
+        "non applicabile": "na",
+    },
+    "music": {
+        "no": "no",
+        "si (ok)": "yes_ok",
+        "si (copre la voce)": "yes_masks",
+        "non applicabile": "na",
+    },
+    "hook": {
+        "forte": "strong",
+        "medio": "medium",
+        "debole": "weak",
+    },
+}
+
+# Severity rank per canonical token, declared here so the percentile path is
+# deterministic and documented instead of inferred. ``None`` means the token
+# carries no severity (the axis does not apply) and is excluded from percentiles.
+# Ranks are comparable in the severity direction only; they are never a quality
+# score. Exposure has two directions (dark and bright) mapped to equal severity.
+ANNOTATION_RANKS: Dict[str, Dict[str, Optional[int]]] = {
+    "shake": {"ok": 0, "light": 1, "evident": 2, "unwatchable": 3},
+    "exposure": {"ok": 0, "dark": 1, "very_dark": 2, "bright": 1, "blown": 2},
+    "cast": {"none": 0, "light": 1, "evident": 2},
+    "noise": {"absent": 0, "light": 1, "evident": 2, "annoying": 3},
+    "volume": {"ok": 0, "low": 1, "high": 2, "unbalanced": 2, "none": 3},
+    "silences": {"none": 0, "few": 1, "many": 2, "na": None},
+    "music": {"no": 0, "yes_ok": 1, "yes_masks": 2, "na": None},
+    "hook": {"strong": 0, "medium": 1, "weak": 2},
+}
+
+
+def _read_t09_status() -> Dict[str, Any]:
+    """Read the F0-T09 row of the master ledger, safely.
+
+    The ledger is the programme's memory: a missing or unreadable ledger must
+    leave the thresholds ``provisional`` (the conservative reading), never
+    silently promote them to measured.
+    """
+    status = "UNKNOWN"
+    row = None
+    if _LEDGER.is_file():
+        try:
+            lines = _LEDGER.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for number, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if not stripped.startswith("| F0-T09"):
+                continue
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if len(cells) >= 2:
+                status = cells[-1]
+                row = number
+    return {
+        "status": status,
+        "done": status.upper().startswith("DONE"),
+        "row": row,
+        "source": _LEDGER_REL,
+    }
+
+
+_T09 = _read_t09_status()
+
+# Status read from the ledger at import time. ``CORPUS_PROVISIONAL`` is the
+# single gate every consumer can read: while T09 is not DONE, corpus-derived
+# thresholds are provisional by definition (ledger rule D010).
+T09_STATUS: str = str(_T09["status"])
+T09_DONE: bool = bool(_T09["done"])
+CORPUS_PROVISIONAL: bool = not T09_DONE
+
+
+def _percentile(values: List[float], p: float) -> Optional[float]:
+    """Linear-interpolated percentile, identical to numpy's default.
+
+    ``tests/measure_corpus.py`` derives the shipped thresholds with
+    ``numpy.percentile(..., method="linear")``. Re-implementing it here keeps the
+    registry stdlib-only and lets an annotated corpus be scored without numpy.
+    """
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return None
+    if len(ordered) == 1:
+        return round(ordered[0], 4)
+    position = (len(ordered) - 1) * p / 100.0
+    low = int(math.floor(position))
+    high = int(math.ceil(position))
+    if low == high:
+        return round(ordered[low], 4)
+    fraction = position - low
+    blended = ordered[low] * (1.0 - fraction) + ordered[high] * fraction
+    return round(blended, 4)
+
+
+def annotated_percentiles(clips: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """p33/p67 of the documented severity ranks for each annotated axis.
+
+    Input is the ``clips`` object of a T09 annotation file: every clip carries
+    ``axes`` (shake, exposure, cast, noise, volume, silences, music) and a
+    top-level ``hook``, all in canonical tokens. Tokens with no severity rank
+    (``na``) are excluded and counted out via ``n``. The result is deterministic:
+    same annotations in, same p33/p67 out, rounded to four decimals like
+    ``measure_corpus.py``.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for axis, ranks in ANNOTATION_RANKS.items():
+        values: List[float] = []
+        for clip in clips.values():
+            if not isinstance(clip, dict):
+                continue
+            if axis == "hook":
+                token = clip.get("hook")
+            else:
+                axes = clip.get("axes")
+                token = axes.get(axis) if isinstance(axes, dict) else None
+            rank = ranks.get(token) if isinstance(token, str) else None
+            if rank is not None:
+                values.append(float(rank))
+        out[axis] = {
+            "p33": _percentile(values, 33.0),
+            "p67": _percentile(values, 67.0),
+            "n": len(values),
+        }
+    return out
+
+
+def _load_annotated() -> Optional[Dict[str, Dict[str, Any]]]:
+    """Percentiles of the real annotation corpus, when the human module exists."""
+    if not _ANNOTATIONS_FIXTURE.is_file():
+        return None
+    try:
+        data = json.loads(_ANNOTATIONS_FIXTURE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    clips = data.get("clips") if isinstance(data, dict) else None
+    if not isinstance(clips, dict) or not clips:
+        return None
+    return annotated_percentiles(clips)
 
 
 def _load_thresholds() -> Dict[str, Dict[str, Any]]:
@@ -153,6 +341,52 @@ def reload_thresholds() -> Dict[str, Dict[str, Any]]:
     global THRESHOLDS
     THRESHOLDS = _load_thresholds()
     return THRESHOLDS
+
+
+def _threshold_state(has_numbers: bool, annotated: bool) -> str:
+    if not has_numbers or CORPUS_PROVISIONAL:
+        return "provisional"
+    if annotated:
+        return "annotated"
+    return "measured"
+
+
+def provenance() -> Dict[str, Any]:
+    """Report the provenance of every calibrated threshold.
+
+    States, in increasing strength:
+
+    ``provisional``  no numbers, or T09 is not DONE in the ledger: the corpus
+                     thresholds are a guess by the ledger's own rule (D010).
+    ``measured``     T09 is DONE and numbers come from ``corpus_stats.json``.
+    ``annotated``    T09 is DONE and a real human annotation corpus
+                     (``corpus_annotations.json``) also backs the axes.
+
+    The existing ``THRESHOLDS`` API and values are untouched; this is a read-only
+    view over them plus the ledger status and the optional annotated percentiles.
+    """
+    annotated = _load_annotated()
+    thresholds: Dict[str, Dict[str, Any]] = {}
+    for axis, entry in THRESHOLDS.items():
+        p33, p67 = entry.get("p33"), entry.get("p67")
+        has_numbers = p33 is not None and p67 is not None
+        thresholds[axis] = {
+            "p33": p33,
+            "p67": p67,
+            "state": _threshold_state(has_numbers, annotated is not None),
+            "source": entry.get("provenance"),
+        }
+    return {
+        "t09": {
+            "status": T09_STATUS,
+            "done": T09_DONE,
+            "row": _T09.get("row"),
+            "source": _LEDGER_REL,
+        },
+        "corpus_provisional": CORPUS_PROVISIONAL,
+        "annotations": annotated,
+        "thresholds": thresholds,
+    }
 
 
 def _selftest() -> int:
