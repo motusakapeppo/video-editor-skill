@@ -127,3 +127,33 @@ Il primo punto non è un contentino: un catalogo con licenza aperta e uso
 commerciale esplicito è **meglio** di Dafont per un lavoro di committenza, perché
 la licenza è verificabile e non c'è da interpretare «free for personal use».
 Dafont resta utile per il gusto, dove il passo umano costa dieci secondi.
+
+## D009 — F17 prima di EDL 3 (2026-10-27)
+
+Scelta di ordine, richiesta dall'utente («la migliore per sicurezza e
+funzionamento»): la cassaforte dei dati viene prima del nuovo formato di
+montaggio, benché il piano elenchi EDL 3 come F2.
+
+Motivo: EDL 3, Motion Studio e la libreria effetti moltiplicano i file che
+scriviamo — layer, cache, frame, asset generati. Ogni file in più è un'occasione
+di cancellare qualcosa che non era nostro. Le regole di proprietà, quarantena e
+verifica si applicano bene a un sistema che ha pochi scrittori; applicarle dopo
+significa rincorrerle in un sistema che ha già imparato a scrivere ovunque.
+
+Quattro regole non negoziabili che F17 impone da qui in avanti:
+
+1. **Si cancella solo ciò che è nostro.** Ogni radice di lavoro porta un
+   marcatore `.vx-owned` con l'elenco dei percorsi e dei loro hash. Un percorso
+   senza marcatore non viene mai toccato, nemmeno se sembra un residuo.
+2. **Non si cancella: si mette in quarantena.** Un file nostro che non serve più
+   va in `.quarantine/<data>/`, e da lì sparisce solo dopo sette giorni. Un
+   `--dry-run` dice sempre cosa accadrebbe prima che accada.
+3. **Prima si dichiara, poi si scrive.** Il giornale write-ahead registra
+   l'intenzione di scrivere un artefatto prima di scriverlo: dopo un crash si sa
+   cosa doveva esistere, e un file a metà si riconosce invece di sembrare valido.
+4. **Un originale non si tocca mai, e si verifica.** Lo sha256 del sorgente è
+   scritto all'ingest e ricontrollato alla fine; un file nostro viene ri-hashato
+   per scoprire il degrado silenzioso del disco.
+
+Limiti ai sottoprocessi: ogni chiamata a ffmpeg ha un tempo massimo e viene
+terminata se lo supera, con errore dichiarato e non con un'attesa infinita.
