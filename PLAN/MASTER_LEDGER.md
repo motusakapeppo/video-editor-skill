@@ -102,11 +102,11 @@ provvisorie (D010).
 | F2-T02 | W1 contratto | `Effect`, `Keyframe` (linear/bezier/hold), `AdjustmentLayer`, `TextLayer`, `CaptionTrack`, `NestedSequence`, `Transition` in un modulo EDL 3 separato | valida un documento con tutte le entità; rifiuta keyframe fuori ordine e valori fuori dominio con codice dichiarato | DONE `9327c89` — registro con backend, 32 controlli |
 | F2-T03 | W1 migratore | 2.2 -> 3.0 su documenti reali | i documenti 2.2 del caso studio migrano; il render del migrato ha gli stessi frame hash dell'originale; round trip 3.0->2.2->3.0 senza perdite | DONE `9327c89` — MAD 0.0000, 3/3 frame identici, 17 controlli |
 | F2-T04 | W2 compilatore | scelta del backend per effetto: espressione ffmpeg / `sendcmd` / Chromium / frame per frame | ogni voce dichiara il backend e la regola di soglia; oltre soglia un effetto passa a `sendcmd` e il test lo prova contando i comandi | DONE `b57a051` - 43 controlli; luma 205 dentro/fuori, ducking 13.30 dB |
-| F2-T05 | W3 tempo | speed ramp e time remap con politica audio dichiarata nel contratto (segmenti `atempo` / pitch mantenuto / silenzio) | un ramp da 1x a 2x ha la durata attesa al frame e audio senza buchi ne click; la politica sta nel documento | TODO |
-| F2-T06 | W4 estremi | reverse e freeze con tetto di durata dichiarato | oltre il tetto il documento e rifiutato con il numero; sotto il tetto il frame e identico al sorgente invertito | TODO |
-| F2-T07 | W5 composizione | PiP, maschere, blend, chroma key | per ognuno un documento, un frame di riferimento e un test sul canale alfa | TODO |
-| F2-T08 | W6 annidamento | sequenze annidate con parametri e tempi propri | una sequenza dentro una sequenza renderizza; i tempi interni non dipendono da quelli esterni | TODO |
-| F2-T09 | W7 chiusura | suite golden per ogni effetto, documentazione, `SKILL.md` | ogni effetto ha un frame su disco; `SKILL.md` sotto 250 righe; suite verde | TODO |
+| F2-T05 | W3 tempo | speed ramp e time remap con politica audio dichiarata nel contratto (segmenti `atempo` / pitch mantenuto / silenzio) | un ramp da 1x a 2x ha la durata attesa al frame e audio senza buchi ne click; la politica sta nel documento | DONE `64acdcf` + `a0a7a76` - ramp 2x rende 1.000s, 25+48 controlli |
+| F2-T06 | W4 estremi | reverse e freeze con tetto di durata dichiarato | oltre il tetto il documento e rifiutato con il numero; sotto il tetto il frame e identico al sorgente invertito | DONE `64acdcf` + `a0a7a76` - freeze hash identico, MAD 0.048, 21 controlli |
+| F2-T07 | W5 composizione | PiP, maschere, blend, chroma key | per ognuno un documento, un frame di riferimento e un test sul canale alfa | DONE `64acdcf` + `a0a7a76` - PiP, maschera, blend, chroma, 33 controlli |
+| F2-T08 | W6 annidamento | sequenze annidate con parametri e tempi propri | una sequenza dentro una sequenza renderizza; i tempi interni non dipendono da quelli esterni | DONE `64acdcf` + `a0a7a76` - annidamento reso una volta sola, 22 controlli |
+| F2-T09 | W7 chiusura | suite golden per ogni effetto, documentazione, `SKILL.md` | ogni effetto ha un frame su disco; `SKILL.md` sotto 250 righe; suite verde | DONE `f028e1c` - 15 effetti, 34 frame, MAD 0.000 |
 
 ## F3 — Motion Studio (Chromium)
 Playwright headless, timeline sospesa, cattura deterministica, alpha, 40+
