@@ -1,0 +1,30 @@
+{
+  "name": "vx-transition-slide",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "fill": {
+      "type": "color",
+      "values": ["#101A17", "#0E0E12", "#141026", "#1A1010"],
+      "default": "#101A17"
+    },
+    "edge": {
+      "type": "color",
+      "values": ["#FFD400", "#FFFFFF", "#38E1FF", "#FF4D4D"],
+      "default": "#FFD400"
+    },
+    "slant": {
+      "type": "number",
+      "min": 0,
+      "max": 12,
+      "default": 7
+    },
+    "shadow": {
+      "type": "number",
+      "min": 0,
+      "max": 1,
+      "default": 0.6
+    }
+  }
+}

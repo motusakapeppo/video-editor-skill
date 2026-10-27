@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-bounce",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 92,
+      "default": "Resta vicino resta sveglio"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#38E1FF", "#FFD400", "#FF4D4D", "#7CFF6B", "#FFFFFF"],
+      "default": "#38E1FF"
+    },
+    "energy": {
+      "type": "number",
+      "min": 0.5,
+      "max": 1.6,
+      "default": 1.0
+    },
+    "casing": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-underline",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 100,
+      "default": "Le parole giuste al momento giusto"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FF4D4D", "#FFD400", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FF4D4D"
+    },
+    "thickness": {
+      "type": "int",
+      "min": 2,
+      "max": 16,
+      "default": 7
+    },
+    "casing": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    }
+  }
+}

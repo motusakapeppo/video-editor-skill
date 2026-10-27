@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-title-full-frame</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #barTop, #barBottom {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    background: #07090d;
+  }
+  #inner {
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+  #rule {
+    border-radius: 999px;
+    transform-origin: 50% 50%;
+  }
+  #line1 {
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1.02;
+    letter-spacing: -0.025em;
+    text-shadow: 0 4px 28px rgba(0, 0, 0, 0.45);
+  }
+  #line2 {
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+    line-height: 1.24;
+    letter-spacing: 0.035em;
+    text-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="barTop"></div>
+  <div id="barBottom"></div>
+  <div id="inner">
+    <div id="rule"></div>
+    <div id="line1"></div>
+    <div id="line2"></div>
+  </div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.2;
+
+  var DEFAULTS = {
+    title: "Il Momento",
+    subtitle: "Una storia in due atti",
+    accent: "#FFD400",
+    bars: true
+  };
+
+  var stage = document.getElementById("stage");
+  var el = {
+    barTop: document.getElementById("barTop"),
+    barBottom: document.getElementById("barBottom"),
+    inner: document.getElementById("inner"),
+    rule: document.getElementById("rule"),
+    line1: document.getElementById("line1"),
+    line2: document.getElementById("line2")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var barH = p.bars ? Math.round(h * 0.062) : 0;
+    var pad = Math.round(w * 0.08);
+    var line1Px = Math.round(h * 0.078);
+    var line2Px = Math.round(h * 0.032);
+    var ruleW = Math.round(w * 0.28);
+    var ruleH = Math.max(4, Math.round(h * 0.0026));
+    var gapA = Math.round(h * 0.028);
+    var gapB = Math.round(h * 0.026);
+
+    el.barTop.style.height = barH + "px";
+    el.barTop.style.top = "0px";
+    el.barBottom.style.height = barH + "px";
+    el.barBottom.style.bottom = "0px";
+
+    el.inner.style.left = pad + "px";
+    el.inner.style.right = pad + "px";
+
+    el.line1.style.fontSize = line1Px + "px";
+    el.line2.style.fontSize = line2Px + "px";
+    el.line1.textContent = p.title;
+    el.line2.textContent = p.subtitle;
+
+    el.rule.style.width = ruleW + "px";
+    el.rule.style.height = ruleH + "px";
+    el.rule.style.background = p.accent;
+    el.rule.style.marginBottom = gapA + "px";
+    el.line2.style.marginTop = gapB + "px";
+
+    var bars = easeOutQuint(span(t, 0.10, 0.56));
+    var rule = easeOutQuint(span(t, 0.30, 0.86));
+    var t1 = easeOutCubic(span(t, 0.20, 0.64));
+    var t2 = easeOutCubic(span(t, 0.38, 0.94));
+    var out = easeOutCubic(span(t, DURATION - 0.40, DURATION - 0.04));
+
+    var lift = Math.round(h * 0.016);
+
+    el.barTop.style.transform = "translate3d(0," +
+      Math.round(-barH * (1 - bars)) + "px,0)";
+    el.barBottom.style.transform = "translate3d(0," +
+      Math.round(barH * (1 - bars)) + "px,0)";
+
+    el.inner.style.opacity = String(1 - out);
+    el.inner.style.transform = "translate3d(0," +
+      Math.round(out * -lift) + "px,0)";
+
+    el.rule.style.opacity = String(clamp01(rule * 3));
+    el.rule.style.transform = "scaleX(" + rule.toFixed(5) + ")";
+
+    el.line1.style.opacity = String(t1);
+    el.line1.style.transform = "translate3d(0," +
+      Math.round((1 - t1) * lift) + "px,0)";
+
+    el.line2.style.opacity = String(t2);
+    el.line2.style.transform = "translate3d(0," +
+      Math.round((1 - t2) * lift) + "px,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

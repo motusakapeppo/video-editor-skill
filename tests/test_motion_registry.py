@@ -134,12 +134,26 @@ def codes_of(blocked_entry: Dict[str, Any]) -> List[str]:
 
 
 def case_a() -> None:
-    print("\n a. the shipped template registers")
+    print("\n a. the shipped library registers")
     reg = motion_registry.Registry()
+    names = reg.names()
     check(
-        "names() is the one shipped template",
-        reg.names() == [SHIPPED],
-        str(reg.names()),
+        "the shipped template is still admitted",
+        SHIPPED in names,
+        f"{len(names)} admitted",
+    )
+    # The exact inventory (54 names, 4 per family, 10 subtitles) is pinned once,
+    # in tests/test_motion_library.py. Here the subject is the catalogue's own
+    # contract: admission, ordering, uniqueness and an empty blocked().
+    check(
+        "names() is sorted and unique",
+        names == sorted(set(names)),
+        f"{len(names)} names",
+    )
+    check(
+        "the catalogue holds the promised library, not one template",
+        len(names) >= 40,
+        f"{len(names)} templates",
     )
     check("blocked() is empty on a clean tree", reg.blocked() == {}, str(reg.blocked()))
     entry = reg.get(SHIPPED)
@@ -147,8 +161,8 @@ def case_a() -> None:
     listed = reg.list()
     check(
         "list() returns entries in name order",
-        [item.name for item in listed] == [SHIPPED],
-        str([item.name for item in listed]),
+        [item.name for item in listed] == names,
+        f"{len(listed)} entries",
     )
 
     described = reg.describe()
@@ -367,10 +381,11 @@ def case_d() -> None:
         payload.get("construct_reads") == [],
         str(payload.get("construct_reads")),
     )
+    names = payload.get("names") or []
     check(
         "the first call performs the scan",
-        payload.get("call_reads") != [] and payload.get("names") == [SHIPPED],
-        f"reads={payload.get('call_reads')} names={payload.get('names')}",
+        payload.get("call_reads") != [] and SHIPPED in names and len(names) >= 40,
+        f"reads={payload.get('call_reads')} names={len(names)}",
     )
 
 

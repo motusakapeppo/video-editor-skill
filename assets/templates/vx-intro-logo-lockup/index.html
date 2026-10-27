@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-intro-logo-lockup</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #lockup {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #mark {
+    position: relative;
+    box-sizing: border-box;
+    border-style: solid;
+    border-color: #FFD400;
+    transform-origin: 50% 50%;
+  }
+  #markCore {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background: #FFD400;
+  }
+  #word {
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1;
+    white-space: nowrap;
+    text-transform: uppercase;
+    transform-origin: 50% 50%;
+    text-shadow: 0 4px 30px rgba(0, 0, 0, 0.45);
+  }
+  #kicker {
+    color: rgba(255, 255, 255, 0.66);
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.32em;
+    transform-origin: 50% 50%;
+  }
+  #rule {
+    height: 2px;
+    transform-origin: 50% 50%;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="lockup">
+    <div id="mark"><div id="markCore"></div></div>
+    <div id="word"></div>
+    <div id="kicker"></div>
+    <div id="rule"></div>
+  </div>
+</div>
+<script>
+/* Clock contract: the harness writes window.__vxParams, then calls
+   window.__vxSeek(t) for each frame. Everything below is a pure function of t
+   and the params; nothing reads a clock. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    brand: "SPAZIO13",
+    kicker: "Studio creativo",
+    accent: "#FFD400",
+    mark: "diamond"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    lockup: document.getElementById("lockup"),
+    mark: document.getElementById("mark"),
+    core: document.getElementById("markCore"),
+    word: document.getElementById("word"),
+    kicker: document.getElementById("kicker"),
+    rule: document.getElementById("rule")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var brand = String(p.brand == null ? "" : p.brand);
+    var kicker = String(p.kicker == null ? "" : p.kicker);
+    var accent = String(p.accent || DEFAULTS.accent);
+    var shape = String(p.mark || DEFAULTS.mark);
+
+    var markPx = Math.round(Math.min(w, h) * 0.170);
+    var wordPx = Math.round(h * 0.104);
+    if (brand.length > 9) {
+      wordPx = Math.max(42, Math.round(wordPx * 9 / brand.length));
+    }
+    var kickerPx = Math.round(h * 0.0195);
+
+    el.mark.style.width = markPx + "px";
+    el.mark.style.height = markPx + "px";
+    el.mark.style.marginBottom = Math.round(h * 0.034) + "px";
+    el.mark.style.borderWidth = Math.max(4, Math.round(markPx * 0.072)) + "px";
+    el.mark.style.borderColor = accent;
+    el.mark.style.borderRadius = shape === "ring" ? "50%" : (shape === "square" ? "18%" : "0px");
+
+    el.core.style.width = shape === "ring" ? "34%" : "40%";
+    el.core.style.height = shape === "ring" ? "34%" : "40%";
+    el.core.style.background = accent;
+    el.core.style.borderRadius = shape === "ring" ? "50%" : "4%";
+
+    el.word.style.fontSize = wordPx + "px";
+    el.word.style.letterSpacing = (-0.014 * wordPx).toFixed(2) + "px";
+    el.word.textContent = brand;
+
+    el.kicker.style.fontSize = kickerPx + "px";
+    el.kicker.style.marginTop = Math.round(h * 0.016) + "px";
+    el.kicker.textContent = kicker;
+
+    el.rule.style.width = Math.round(w * 0.30) + "px";
+    el.rule.style.marginTop = Math.round(h * 0.026) + "px";
+    el.rule.style.background = accent;
+
+    var mk = easeOutQuint(span(t, 0.12, 0.98));
+    var wd = easeOutCubic(span(t, 0.20, 1.06));
+    var kk = easeOutCubic(span(t, 0.36, 1.20));
+    var rl = easeOutQuint(span(t, 1.08, 1.72));
+
+    el.mark.style.opacity = String(clamp01(mk * 1.4));
+    el.mark.style.transform = "rotate(" + (shape === "diamond" ? 45 : 0) + "deg) scale(" +
+      (0.62 + 0.38 * mk).toFixed(4) + ")";
+
+    el.word.style.opacity = String(wd);
+    el.word.style.transform = "translate3d(0," + Math.round((1 - wd) * h * 0.013) +
+      "px,0) scale(" + (1.06 - 0.06 * wd).toFixed(4) + ")";
+
+    el.kicker.style.opacity = String(kk * 0.92);
+    el.kicker.style.transform = "translate3d(0," + Math.round((1 - kk) * h * 0.008) + "px,0)";
+
+    el.rule.style.opacity = rl > 0 ? "1" : "0";
+    el.rule.style.transform = "scaleX(" + rl.toFixed(4) + ")";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

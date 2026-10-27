@@ -1,0 +1,28 @@
+{
+  "name": "vx-title-kicker",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "kicker": {
+      "type": "string",
+      "max_length": 34,
+      "default": "Intervista esclusiva"
+    },
+    "name": {
+      "type": "string",
+      "max_length": 26,
+      "default": "Marta Bellini"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#38E1FF"
+    },
+    "align": {
+      "type": "string",
+      "values": ["left", "center"],
+      "default": "left"
+    }
+  }
+}

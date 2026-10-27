@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-kinetic-mask-reveal</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #block {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .mask {
+    overflow: hidden;
+    padding-bottom: 0.08em;
+  }
+  #line0 {
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1.02;
+    letter-spacing: -0.032em;
+    text-shadow: 0 6px 34px rgba(0, 0, 0, 0.46);
+  }
+  #line1 {
+    color: rgba(255, 255, 255, 0.86);
+    font-weight: 500;
+    line-height: 1.22;
+    letter-spacing: 0.01em;
+  }
+  #sweep {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    border-radius: 999px;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="block">
+    <div id="sweep"></div>
+    <div class="mask" id="mask0"><div id="line0"></div></div>
+    <div class="mask" id="mask1"><div id="line1"></div></div>
+  </div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.6;
+
+  var DEFAULTS = {
+    text: "La luce entra da sinistra",
+    sub: "e non lascia niente al buio",
+    accent: "#FF4D4D",
+    reveal: "left"
+  };
+
+  var stage = document.getElementById("stage");
+  var el = {
+    block: document.getElementById("block"),
+    mask0: document.getElementById("mask0"),
+    mask1: document.getElementById("mask1"),
+    line0: document.getElementById("line0"),
+    line1: document.getElementById("line1"),
+    sweep: document.getElementById("sweep")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+
+  function clipFor(progress, fromLeft) {
+    var hidden = (1 - progress) * 100;
+    var value = hidden < 0.01 ? 0 : hidden;
+    if (fromLeft) {
+      return "inset(0% " + value.toFixed(3) + "% 0% 0%)";
+    }
+    return "inset(0% 0% 0% " + value.toFixed(3) + "%)";
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var pad = Math.round(w * 0.085);
+    var fromLeft = p.reveal !== "right";
+    var line0Px = Math.round(h * 0.064);
+    var line1Px = Math.round(h * 0.034);
+    var gap = Math.round(h * 0.024);
+    var blockW = w - pad * 2;
+
+    el.block.style.paddingLeft = pad + "px";
+    el.block.style.paddingRight = pad + "px";
+
+    el.line0.style.fontSize = line0Px + "px";
+    el.line1.style.fontSize = line1Px + "px";
+    el.line0.textContent = p.text;
+    el.line1.textContent = p.sub;
+    el.line0.style.marginBottom = gap + "px";
+
+    el.sweep.style.background = p.accent;
+
+    var reveal0 = easeOutCubic(span(t, 0.12, 0.80));
+    var reveal1 = easeOutCubic(span(t, 0.34, 1.08));
+    var sweepAlpha = 1 - easeOutCubic(span(t, 0.58, 0.86));
+    var out = easeOutCubic(span(t, DURATION - 0.44, DURATION - 0.04));
+
+    el.mask0.style.clipPath = clipFor(reveal0, fromLeft);
+    el.mask1.style.clipPath = clipFor(reveal1, fromLeft);
+    el.block.style.opacity = String(1 - out);
+
+    var edge = reveal1 * blockW;
+    var sweepX = fromLeft ? edge : (blockW - edge);
+    el.sweep.style.left = Math.round(sweepX) + "px";
+    el.sweep.style.opacity = String(sweepAlpha * clamp01(reveal1 * 6));
+
+    el.line0.style.opacity = "1";
+    el.line1.style.opacity = "1";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

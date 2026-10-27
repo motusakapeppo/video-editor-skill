@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-background-waves</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: #050B12;
+    overflow: hidden;
+  }
+  #sky {
+    position: absolute;
+    inset: 0;
+  }
+  #moon {
+    position: absolute;
+    border-radius: 50%;
+  }
+  #svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #veil {
+    position: absolute;
+    inset: 0;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="sky"></div>
+  <div id="moon"></div>
+  <svg id="svg" viewBox="0 0 1080 1920" preserveAspectRatio="none">
+    <path id="w2" d=""></path>
+    <path id="w1" d=""></path>
+    <path id="w0" d=""></path>
+    <path id="crest2" d="" fill="none"></path>
+    <path id="crest1" d="" fill="none"></path>
+    <path id="crest0" d="" fill="none"></path>
+  </svg>
+  <div id="veil"></div>
+</div>
+<script>
+/* vx-background-waves: three layered wave paths translating horizontally at
+   different speeds over an opaque night sea. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    accent: "#2BE1C4",
+    amplitude: 62,
+    speed: 1.0,
+    glow: true
+  };
+
+  var LAYERS = [
+    { id: "w0", crest: "crest0", base: 0.615, amp: 0.62, speed: 34, alpha: 0.30, rgb: [40, 120, 190] },
+    { id: "w1", crest: "crest1", base: 0.715, amp: 0.85, speed: 62, alpha: 0.46, rgb: [24, 86, 160] },
+    { id: "w2", crest: "crest2", base: 0.820, amp: 1.00, speed: 104, alpha: 0.72, rgb: [12, 54, 118] }
+  ];
+
+  var stage = document.getElementById("stage");
+  var sky = document.getElementById("sky");
+  var moon = document.getElementById("moon");
+  var veil = document.getElementById("veil");
+  var svg = document.getElementById("svg");
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function hexToRgb(hex) {
+    var s = String(hex).replace("#", "");
+    if (s.length === 3) {
+      s = s.charAt(0) + s.charAt(0) + s.charAt(1) + s.charAt(1) + s.charAt(2) + s.charAt(2);
+    }
+    return [
+      parseInt(s.slice(0, 2), 16),
+      parseInt(s.slice(2, 4), 16),
+      parseInt(s.slice(4, 6), 16)
+    ];
+  }
+
+  function wavePath(w, h, baseY, amp, phase, bottom) {
+    var d = "M -700 " + Math.round(baseY);
+    for (var x = -700; x <= 1900; x += 25) {
+      var y = baseY +
+        amp * Math.sin((x + phase) * 0.0042) +
+        amp * 0.42 * Math.sin((x + phase) * 0.0113 + 1.7) +
+        amp * 0.18 * Math.sin((x + phase) * 0.0261 + 3.1);
+      d += " L " + x + " " + y.toFixed(2);
+    }
+    d += " L 1900 " + bottom + " L -700 " + bottom + " Z";
+    return d;
+  }
+
+  function crestPath(baseY, amp, phase, width) {
+    var d = "";
+    for (var x = -700; x <= 1900; x += 25) {
+      var y = baseY +
+        amp * Math.sin((x + phase) * 0.0042) +
+        amp * 0.42 * Math.sin((x + phase) * 0.0113 + 1.7) +
+        amp * 0.18 * Math.sin((x + phase) * 0.0261 + 3.1);
+      d += (d ? " L " : "M ") + x + " " + y.toFixed(2);
+    }
+    return d;
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var amp = Number(p.amplitude);
+    var speed = Number(p.speed);
+    var reveal = easeOutCubic(clamp01(t / 0.55));
+    var bottom = h + 40;
+    var tint = hexToRgb(p.accent);
+
+    svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+
+    sky.style.background =
+      "linear-gradient(to bottom, #04080F 0%, #061726 38%, #07293E 62%, #05121F 100%)";
+
+    var moonR = Math.round(h * 0.10);
+    var glowA = p.glow ? 1 : 0.28;
+    moon.style.width = moonR * 2 + "px";
+    moon.style.height = moonR * 2 + "px";
+    moon.style.left = Math.round(w * 0.72 - moonR) + "px";
+    moon.style.top = Math.round(h * 0.19 - moonR) + "px";
+    moon.style.opacity = String(reveal);
+    moon.style.background =
+      "radial-gradient(circle at 50% 50%, rgba(232,255,252,0.95) 0%, rgba(150,240,228,0.75) 26%, rgba(70,190,190," +
+      (0.22 * glowA).toFixed(3) + ") 52%, rgba(70,190,190,0) 72%)";
+
+    for (var i = 0; i < LAYERS.length; i++) {
+      var L = LAYERS[i];
+      var phase = t * speed * L.speed;
+      var baseY = h * L.base + (1 - reveal) * h * 0.045;
+      var layerAmp = amp * L.amp * (0.35 + 0.65 * reveal);
+      var body = document.getElementById(L.id);
+      var crest = document.getElementById(L.crest);
+      body.setAttribute("d", wavePath(w, h, baseY, layerAmp, phase, bottom));
+      body.setAttribute("fill", "rgba(" + L.rgb[0] + "," + L.rgb[1] + "," + L.rgb[2] +
+        "," + L.alpha.toFixed(3) + ")");
+      crest.setAttribute("d", crestPath(baseY, layerAmp, phase, w));
+      crest.setAttribute("stroke", "rgba(" + Math.round(tint[0] * 0.55 + 110) + "," +
+        Math.round(tint[1] * 0.55 + 110) + "," + Math.round(tint[2] * 0.55 + 110) + "," +
+        (0.16 + 0.30 * reveal).toFixed(3) + ")");
+      crest.setAttribute("stroke-width", String(2 + 1.6 * i));
+    }
+
+    veil.style.background =
+      "linear-gradient(to bottom, rgba(3,8,14,0) 46%, rgba(3,8,14,0.30) 74%, rgba(3,8,14,0.62) 100%)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

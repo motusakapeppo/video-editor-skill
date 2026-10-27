@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-chart-stack</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #caption {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.58);
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #headline {
+    position: absolute;
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .row { position: absolute; }
+  .name {
+    position: absolute;
+    left: 0;
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 700;
+    letter-spacing: 0.20em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .total {
+    position: absolute;
+    right: 0;
+    text-align: right;
+    color: #ffffff;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .track {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.075);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    overflow: hidden;
+    border-radius: 3px;
+    transform-origin: 0 50%;
+  }
+  .seg { height: 100%; flex: 0 0 auto; }
+  #legend { position: absolute; }
+  .item {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.62);
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .mark { border-radius: 50%; flex: 0 0 auto; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="caption"></div>
+  <div id="headline"></div>
+  <div id="rows"></div>
+  <div id="legend"></div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 72,
+    series: "46,32,22",
+    rows: "Q1,Q2,Q3",
+    legend: "Direct,Paid,Organic",
+    caption: "Share of spend",
+    accent: "#7CFF6B"
+  };
+
+  var ROW_SCALE = [1.0, 0.84, 0.68];
+  var SEGMENTS = 3;
+
+  var TIMELINE = {
+    head: [0.02, 0.28],
+    grow: [0.12, 0.78],
+    legend: [0.34, 0.68]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    caption: document.getElementById("caption"),
+    headline: document.getElementById("headline"),
+    rows: document.getElementById("rows"),
+    legend: document.getElementById("legend")
+  };
+
+  var rows = [];
+  var legendItems = [];
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+  function trimText(raw) {
+    var text = String(raw == null ? "" : raw);
+    while (text.length && text.charAt(0) === " ") { text = text.slice(1); }
+    while (text.length && text.charAt(text.length - 1) === " ") {
+      text = text.slice(0, text.length - 1);
+    }
+    return text;
+  }
+  function parseList(raw, fallback) {
+    var out = [];
+    var parts = String(raw == null ? "" : raw).split(",");
+    var i;
+    for (i = 0; i < parts.length; i += 1) {
+      var n = Number(trimText(parts[i]));
+      if (isFinite(n) && n > 0) { out.push(n); }
+    }
+    if (!out.length) { out = fallback.slice(0); }
+    return out;
+  }
+
+  function build() {
+    var i;
+    var j;
+    for (i = 0; i < ROW_SCALE.length; i += 1) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var name = document.createElement("div");
+      name.className = "name";
+      var total = document.createElement("div");
+      total.className = "total";
+      var track = document.createElement("div");
+      track.className = "track";
+      var fill = document.createElement("div");
+      fill.className = "fill";
+      var segs = [];
+      for (j = 0; j < SEGMENTS; j += 1) {
+        var seg = document.createElement("div");
+        seg.className = "seg";
+        fill.appendChild(seg);
+        segs.push(seg);
+      }
+      track.appendChild(fill);
+      row.appendChild(name);
+      row.appendChild(total);
+      row.appendChild(track);
+      el.rows.appendChild(row);
+      rows.push({ row: row, name: name, total: total, track: track, fill: fill, segs: segs });
+    }
+    for (i = 0; i < SEGMENTS; i += 1) {
+      var item = document.createElement("div");
+      item.className = "item";
+      var mark = document.createElement("div");
+      mark.className = "mark";
+      var label = document.createElement("div");
+      item.appendChild(mark);
+      item.appendChild(label);
+      el.legend.appendChild(item);
+      legendItems.push({ item: item, mark: mark, label: label });
+    }
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var pad = Math.round(w * 0.085);
+    var plotW = w - pad * 2;
+    var first = Math.round(h * 0.425);
+    var pitch = Math.round(h * 0.112);
+    var barH = Math.round(h * 0.040);
+
+    el.caption.style.left = pad + "px";
+    el.caption.style.top = Math.round(h * 0.243) + "px";
+    el.caption.style.fontSize = Math.round(h * 0.0185) + "px";
+
+    el.headline.style.left = pad + "px";
+    el.headline.style.width = plotW + "px";
+    el.headline.style.top = Math.round(h * 0.272) + "px";
+    el.headline.style.fontSize = Math.round(h * 0.082) + "px";
+
+    var i;
+    for (i = 0; i < rows.length; i += 1) {
+      rows[i].row.style.left = pad + "px";
+      rows[i].row.style.top = (first + pitch * i) + "px";
+      rows[i].row.style.width = plotW + "px";
+      rows[i].row.style.height = (barH + Math.round(h * 0.036)) + "px";
+
+      rows[i].name.style.fontSize = Math.round(h * 0.0155) + "px";
+      rows[i].total.style.fontSize = Math.round(h * 0.0215) + "px";
+      rows[i].track.style.top = Math.round(h * 0.034) + "px";
+      rows[i].track.style.height = barH + "px";
+    }
+
+    el.legend.style.left = pad + "px";
+    el.legend.style.top = (first + pitch * ROW_SCALE.length + Math.round(h * 0.036)) + "px";
+    el.legend.style.width = plotW + "px";
+    el.legend.style.height = Math.round(h * 0.034) + "px";
+
+    for (i = 0; i < legendItems.length; i += 1) {
+      legendItems[i].item.style.left = Math.round((plotW / SEGMENTS) * i) + "px";
+      legendItems[i].item.style.top = "0px";
+      legendItems[i].item.style.fontSize = Math.round(h * 0.0145) + "px";
+      legendItems[i].mark.style.width = Math.round(h * 0.0095) + "px";
+      legendItems[i].mark.style.height = Math.round(h * 0.0095) + "px";
+      legendItems[i].mark.style.marginRight = Math.round(w * 0.013) + "px";
+    }
+
+    return { plotW: plotW };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.max(0, Math.min(100, finite(params.value, DEFAULTS.value)));
+    var head = easeOutCubic(span(t, TIMELINE.head));
+    var legend = easeOutCubic(span(t, TIMELINE.legend));
+    var names = String(params.rows || "").split(",");
+    var parts = parseList(params.series, [46, 32, 22]).slice(0, SEGMENTS);
+    var labels = String(params.legend || "").split(",");
+    var tones = [params.accent, "rgba(255,255,255,0.55)", "rgba(255,255,255,0.22)"];
+
+    var sum = 0;
+    var i;
+    var j;
+    for (i = 0; i < parts.length; i += 1) { sum += parts[i]; }
+
+    el.caption.textContent = params.caption;
+    el.caption.style.opacity = String(head);
+    el.headline.textContent = String(Math.round(value * head)) + "%";
+    el.headline.style.opacity = String(head);
+
+    for (i = 0; i < rows.length; i += 1) {
+      var grow = easeOutQuint(span(t, [TIMELINE.grow[0] + i * 0.05, TIMELINE.grow[1] + i * 0.03]));
+      var width = (value / 100) * box.plotW * ROW_SCALE[i] * grow;
+
+      rows[i].name.textContent = trimText(names[i] || "");
+      rows[i].name.style.opacity = String(clamp01(grow * 2.4));
+      rows[i].total.textContent = Math.round(value * ROW_SCALE[i] * grow) + "%";
+      rows[i].total.style.opacity = String(clamp01(grow * 2.2));
+
+      rows[i].track.style.opacity = String(clamp01(grow * 2));
+      rows[i].fill.style.width = width.toFixed(2) + "px";
+
+      for (j = 0; j < SEGMENTS; j += 1) {
+        var share = j < parts.length ? parts[j] / sum : 0;
+        rows[i].segs[j].style.width = (share * 100).toFixed(3) + "%";
+        rows[i].segs[j].style.background = tones[j];
+      }
+    }
+
+    for (i = 0; i < legendItems.length; i += 1) {
+      var appear = clamp01((legend - i * 0.08) * 2.6);
+      legendItems[i].item.style.opacity = String(appear * 0.95);
+      legendItems[i].mark.style.background = tones[i];
+      legendItems[i].label.textContent = trimText(labels[i] || "");
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  build();
+  apply(0);
+})();
+</script>
+</body>
+</html>

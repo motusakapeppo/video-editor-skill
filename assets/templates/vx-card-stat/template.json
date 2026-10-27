@@ -1,0 +1,35 @@
+{
+  "name": "vx-card-stat",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "label": {
+      "type": "string",
+      "max_length": 34,
+      "default": "Ascoltatori mensili"
+    },
+    "value": {
+      "type": "number",
+      "min": 0,
+      "max": 99999,
+      "default": 1284
+    },
+    "delta": {
+      "type": "number",
+      "min": -99,
+      "max": 99,
+      "default": 12.4
+    },
+    "note": {
+      "type": "string",
+      "max_length": 26,
+      "default": "vs mese scorso"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#7CFF6B", "#FFD400", "#38E1FF", "#FF5C8A"],
+      "default": "#7CFF6B"
+    }
+  }
+}

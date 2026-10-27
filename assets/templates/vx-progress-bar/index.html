@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-progress-bar</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #block { position: absolute; transform-origin: 0 50%; }
+  #head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    transform-origin: 0 100%;
+  }
+  #label {
+    color: rgba(255, 255, 255, 0.74);
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #readout { display: flex; align-items: baseline; }
+  #pct {
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  #unit {
+    color: rgba(255, 255, 255, 0.48);
+    font-weight: 700;
+    margin-left: 0.06em;
+  }
+  #ticks {
+    transform-origin: 0 50%;
+    background-image: repeating-linear-gradient(
+      to right,
+      rgba(255, 255, 255, 0.26) 0px,
+      rgba(255, 255, 255, 0.26) 2px,
+      transparent 2px,
+      transparent 10%
+    );
+  }
+  #track {
+    position: relative;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    transform-origin: 0 50%;
+  }
+  #fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    border-radius: 999px;
+    transform-origin: 0 50%;
+  }
+  #knob {
+    position: absolute;
+    top: 50%;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="block">
+    <div id="head">
+      <div id="label"></div>
+      <div id="readout"><div id="pct"></div><div id="unit">%</div></div>
+    </div>
+    <div id="ticks"></div>
+    <div id="track">
+      <div id="fill"></div>
+      <div id="knob"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 68,
+    label: "Rendering sequence",
+    accent: "#FFD400",
+    detail: "ticks"
+  };
+
+  var TIMELINE = {
+    head: [0.04, 0.34],
+    track: [0.10, 0.46],
+    ticks: [0.20, 0.58],
+    fill: [0.20, 0.86]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    block: document.getElementById("block"),
+    head: document.getElementById("head"),
+    label: document.getElementById("label"),
+    pct: document.getElementById("pct"),
+    unit: document.getElementById("unit"),
+    ticks: document.getElementById("ticks"),
+    track: document.getElementById("track"),
+    fill: document.getElementById("fill"),
+    knob: document.getElementById("knob")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var pad = Math.round(w * 0.076);
+    var blockW = w - pad * 2;
+    var trackH = Math.max(10, Math.round(h * 0.0135));
+    var labelPx = Math.round(h * 0.0205);
+    var pctPx = Math.round(h * 0.060);
+
+    el.block.style.left = pad + "px";
+    el.block.style.top = Math.round(h * 0.452) + "px";
+    el.block.style.width = blockW + "px";
+
+    el.label.style.fontSize = labelPx + "px";
+    el.pct.style.fontSize = pctPx + "px";
+    el.unit.style.fontSize = Math.round(pctPx * 0.46) + "px";
+    el.head.style.marginBottom = Math.round(h * 0.026) + "px";
+
+    el.ticks.style.height = Math.max(8, Math.round(h * 0.0095)) + "px";
+    el.ticks.style.marginBottom = Math.round(h * 0.013) + "px";
+
+    el.track.style.height = trackH + "px";
+    el.knob.style.width = Math.round(trackH * 2.0) + "px";
+    el.knob.style.height = Math.round(trackH * 2.0) + "px";
+
+    return { blockW: blockW, trackH: trackH };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.max(0, Math.min(100, finite(params.value, DEFAULTS.value)));
+    var head = easeOutQuint(span(t, TIMELINE.head));
+    var track = easeOutQuint(span(t, TIMELINE.track));
+    var ticks = easeOutCubic(span(t, TIMELINE.ticks));
+    var fill = easeOutCubic(span(t, TIMELINE.fill));
+    var frac = (value / 100) * fill;
+
+    el.label.textContent = params.label;
+    el.pct.textContent = String(Math.round(value * fill));
+
+    el.block.style.opacity = String(head);
+    el.block.style.transform = "translate3d(0," +
+      Math.round((1 - head) * window.innerHeight * 0.014) + "px,0)";
+
+    el.ticks.style.display = params.detail === "plain" ? "none" : "block";
+    el.ticks.style.opacity = String(ticks * 0.9);
+    el.ticks.style.transform = "scaleX(" + ticks.toFixed(5) + ")";
+
+    el.track.style.opacity = String(track);
+    el.track.style.transform = "scaleX(" + track.toFixed(5) + ")";
+
+    el.fill.style.width = (frac * box.blockW).toFixed(2) + "px";
+    el.fill.style.background = params.accent;
+
+    el.knob.style.left = (frac * box.blockW).toFixed(2) + "px";
+    el.knob.style.background = params.accent;
+    el.knob.style.opacity = String(fill > 0.02 ? 1 : 0);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "name": "vx-sticker-burst",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "label": {
+      "type": "string",
+      "max_length": 18,
+      "default": "NEW DROP"
+    },
+    "kicker": {
+      "type": "string",
+      "max_length": 24,
+      "default": "LIVE NOW"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "spikes": {
+      "type": "int",
+      "min": 8,
+      "max": 26,
+      "default": 16
+    },
+    "tilt": {
+      "type": "number",
+      "min": -20,
+      "max": 20,
+      "default": -7
+    }
+  }
+}

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-kinetic-stack</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #rail {
+    position: absolute;
+    width: 5px;
+    border-radius: 999px;
+    transform-origin: 50% 0%;
+  }
+  #stack {
+    position: absolute;
+    text-align: left;
+  }
+  .word {
+    display: block;
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1.0;
+    letter-spacing: -0.03em;
+    white-space: nowrap;
+    text-shadow: 0 6px 30px rgba(0, 0, 0, 0.5);
+    transform-origin: 0% 60%;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="rail"></div>
+  <div id="stack">
+    <div class="word" id="r0"></div>
+    <div class="word" id="r1"></div>
+    <div class="word" id="r2"></div>
+    <div class="word" id="r3"></div>
+  </div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.4;
+
+  var DEFAULTS = {
+    words: "Pensa, Costruisci, Misura, Ripeti",
+    accent: "#38E1FF",
+    gap: 0.78,
+    dim: 0.45
+  };
+
+  var stage = document.getElementById("stage");
+  var rail = document.getElementById("rail");
+  var stack = document.getElementById("stack");
+  var rows = [];
+  var i;
+  for (i = 0; i < 4; i++) {
+    rows.push(document.getElementById("r" + i));
+  }
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function splitWords(text) {
+    var out = [];
+    var buf = "";
+    var index;
+    var ch;
+    for (index = 0; index < text.length; index++) {
+      ch = text.charAt(index);
+      if (ch === " " || ch === "," || ch === "\n" || ch === "\t" || ch === "/") {
+        if (buf) { out.push(buf); buf = ""; }
+      } else {
+        buf += ch;
+      }
+    }
+    if (buf) { out.push(buf); }
+    return out;
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var parts = splitWords(String(p.words));
+    if (parts.length > rows.length) { parts = parts.slice(0, rows.length); }
+    if (!parts.length) { parts = [" "]; }
+
+    var fontSize = Math.round(h * 0.070);
+    var lineGap = Math.round(fontSize * Number(p.gap) * 0.34);
+    var step = Math.round(w * 0.045);
+    var pad = Math.round(w * 0.12);
+    var dim = Number(p.dim);
+    var out = easeOutCubic(span(t, DURATION - 0.40, DURATION - 0.03));
+    var rise = Math.round(fontSize * 1.15);
+
+    var total = parts.length * fontSize + (parts.length - 1) * lineGap;
+    var top = Math.round((h - total) / 2);
+
+    stack.style.left = pad + "px";
+    stack.style.top = top + "px";
+
+    var active = 0;
+    var scan;
+    for (scan = 0; scan < parts.length; scan++) {
+      if (t >= 0.12 + scan * 0.36) { active = scan + 1; }
+    }
+    if (active < 1) { active = 1; }
+
+    rail.style.left = (pad - Math.round(w * 0.048)) + "px";
+    rail.style.top = top + "px";
+    rail.style.height = (active * fontSize + (active - 1) * lineGap) + "px";
+    rail.style.background = p.accent;
+
+    var railIn = easeOutQuint(span(t, 0.10, 0.62));
+    rail.style.opacity = String(clamp01(railIn * 2.4) * (1 - out));
+    rail.style.transform = "scaleY(" + railIn.toFixed(5) + ")";
+
+    var index;
+    var node;
+    var local;
+    var later;
+    var j;
+    var shown;
+
+    for (index = 0; index < rows.length; index++) {
+      node = rows[index];
+      node.style.fontSize = fontSize + "px";
+      node.style.marginTop = index === 0 ? "0px" : lineGap + "px";
+      node.style.marginLeft = index * step + "px";
+
+      if (index >= parts.length) {
+        node.textContent = "";
+        node.style.opacity = "0";
+        node.style.transform = "translate3d(0," + rise + "px,0)";
+        continue;
+      }
+
+      node.textContent = parts[index];
+
+      later = 0;
+      for (j = index + 1; j < parts.length; j++) {
+        shown = span(t, 0.12 + j * 0.36, 0.12 + j * 0.36 + 0.38);
+        later += shown;
+      }
+      later = later / Math.max(1, parts.length - 1);
+      if (later > 1) { later = 1; }
+
+      local = easeOutQuint(span(t, 0.12 + index * 0.36, 0.12 + index * 0.36 + 0.38));
+
+      node.style.opacity = String(clamp01(local * 2.2) * (1 - dim * later) * (1 - out));
+      node.style.transform = "translate3d(0," +
+        Math.round((1 - local) * rise) + "px,0) scale(" +
+        (1 - 0.085 * later).toFixed(5) + ")";
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

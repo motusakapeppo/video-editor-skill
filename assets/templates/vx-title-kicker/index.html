@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-title-kicker</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #block {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  #kickerRow {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0;
+  }
+  #kickerDot { flex: 0 0 auto; border-radius: 999px; }
+  #kicker {
+    font-weight: 700;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    line-height: 1.2;
+    color: rgba(255, 255, 255, 0.86);
+  }
+  #name {
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 0.96;
+    letter-spacing: -0.035em;
+    text-shadow: 0 6px 34px rgba(0, 0, 0, 0.46);
+  }
+  #underline {
+    border-radius:999px;
+    transform-origin: 0 50%;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="block">
+    <div id="kickerRow">
+      <div id="kickerDot"></div>
+      <div id="kicker"></div>
+    </div>
+    <div id="name"></div>
+    <div id="underline"></div>
+  </div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.4;
+
+  var DEFAULTS = {
+    kicker: "Intervista esclusiva",
+    name: "Marta Bellini",
+    accent: "#38E1FF",
+    align: "left"
+  };
+
+  var stage = document.getElementById("stage");
+  var el = {
+    block: document.getElementById("block"),
+    kickerRow: document.getElementById("kickerRow"),
+    kickerDot: document.getElementById("kickerDot"),
+    kicker: document.getElementById("kicker"),
+    name: document.getElementById("name"),
+    underline: document.getElementById("underline")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var pad = Math.round(w * 0.085);
+    var centred = p.align === "center";
+    var dot = Math.max(7, Math.round(h * 0.0048));
+    var dotGap = Math.round(w * 0.022);
+
+    el.block.style.paddingLeft = pad + "px";
+    el.block.style.paddingRight = pad + "px";
+    el.block.style.alignItems = centred ? "center" : "flex-start";
+    el.block.style.textAlign = centred ? "center" : "left";
+    el.kickerRow.style.justifyContent = centred ? "center" : "flex-start";
+
+    el.kickerDot.style.width = dot + "px";
+    el.kickerDot.style.height = dot + "px";
+    el.kickerDot.style.background = p.accent;
+    el.kickerDot.style.marginRight = dotGap + "px";
+
+    el.kicker.style.fontSize = Math.round(h * 0.0158) + "px";
+    el.kicker.textContent = p.kicker;
+
+    el.name.style.fontSize = Math.round(h * 0.098) + "px";
+    el.name.style.maxWidth = Math.round(w * 0.80) + "px";
+    el.name.style.marginTop = Math.round(h * 0.020) + "px";
+    el.name.textContent = p.name;
+
+    el.underline.style.width = Math.round(w * 0.30) + "px";
+    el.underline.style.height = Math.max(5, Math.round(h * 0.0034)) + "px";
+    el.underline.style.background = p.accent;
+    el.underline.style.marginTop = Math.round(h * 0.030) + "px";
+
+    var kick = easeOutCubic(span(t, 0.10, 0.48));
+    var dotIn = easeOutQuint(span(t, 0.14, 0.46));
+    var name = easeOutQuint(span(t, 0.24, 0.78));
+    var line = easeOutQuint(span(t, 0.58, 1.12));
+    var out = easeOutCubic(span(t, DURATION - 0.40, DURATION - 0.03));
+
+    el.kickerRow.style.opacity = String(kick);
+    el.kickerRow.style.transform = "translate3d(" +
+      Math.round((1 - kick) * -w * 0.020) + "px,0,0)";
+    el.kickerDot.style.transform = "scale(" + dotIn.toFixed(5) + ")";
+
+    el.name.style.opacity = String(name * (1 - out));
+    el.name.style.transform = "translate3d(0," +
+      Math.round((1 - name) * h * 0.045) + "px,0)";
+
+    el.underline.style.opacity = String(clamp01(line * 4) * (1 - out));
+    el.underline.style.transform = "scaleX(" + line.toFixed(5) + ")";
+    el.underline.style.transformOrigin = centred ? "50% 50%" : "0% 50%";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

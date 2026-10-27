@@ -1,0 +1,31 @@
+{
+  "name": "vx-background-grid",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "accent": {
+      "type": "color",
+      "values": ["#38E1FF", "#FF4D6D", "#FFD400", "#7CFF6B"],
+      "default": "#38E1FF"
+    },
+    "gridSize": {
+      "type": "number",
+      "min": 24,
+      "max": 200,
+      "default": 54
+    },
+    "horizon": {
+      "type": "number",
+      "min": 0.3,
+      "max": 0.7,
+      "default": 0.54
+    },
+    "speed": {
+      "type": "number",
+      "min": 0,
+      "max": 3,
+      "default": 1.0
+    }
+  }
+}

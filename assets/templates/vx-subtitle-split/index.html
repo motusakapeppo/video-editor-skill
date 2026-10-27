@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-subtitle-split</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  .band {
+    position: absolute;
+    text-align: center;
+    color: #ffffff;
+    font-weight: 800;
+    font-size: 1px;
+    line-height: 1.06;
+    letter-spacing: -0.015em;
+    text-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+    will-change: transform, opacity;
+  }
+  .rule {
+    border-radius: 999px;
+    transform-origin: 0 50%;
+    will-change: transform, opacity;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="top" class="band"><div id="toptext"></div><div id="toprule" class="rule"></div></div>
+  <div id="bottom" class="band"><div id="botrule" class="rule"></div><div id="bottext"></div></div>
+</div>
+<script>
+/* The line is cut in two: one half hugs the top of the frame, the other the
+   bottom, leaving an empty centre. Both halves and both rules are driven by t. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.6;
+
+  var DEFAULTS = {
+    text: "Meta in alto meta in basso respira",
+    accent: "#FFD400",
+    inset: 0.15,
+    casing: "none"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    top: document.getElementById("top"),
+    toptext: document.getElementById("toptext"),
+    toprule: document.getElementById("toprule"),
+    bottom: document.getElementById("bottom"),
+    botrule: document.getElementById("botrule"),
+    bottext: document.getElementById("bottext")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function cut(text) {
+    var words = text.split(/\s+/).filter(function (item) { return item.length > 0; });
+    var half;
+    var top;
+    var bottom;
+    if (!words.length) { return ["", ""]; }
+    if (words.length === 1) { return [words[0], ""]; }
+    half = Math.ceil(words.length / 2);
+    top = words.slice(0, half).join(" ");
+    bottom = words.slice(half).join(" ");
+    return [top, bottom];
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var text = String(p.text);
+    var inset = Number(p.inset);
+    var halves;
+    var fontPx;
+    var rulePx;
+    var ruleW;
+    var ruleH;
+    var gapPx;
+    var exit;
+    var topIn;
+    var botIn;
+    var sweepTop;
+    var sweepBottom;
+    var travel;
+
+    if (!isFinite(inset)) { inset = 0.15; }
+    if (inset < 0) { inset = 0; }
+    if (inset > 0.45) { inset = 0.45; }
+    if (p.casing === "upper") { text = text.toUpperCase(); }
+    halves = cut(text);
+
+    fontPx = Math.round(h * 0.042);
+    ruleH = Math.max(4, Math.round(h * 0.0050));
+    ruleW = Math.round(w * 0.30);
+    gapPx = Math.round(h * 0.012);
+    travel = Math.round(h * 0.042);
+
+    el.top.style.left = Math.round(w * 0.08) + "px";
+    el.top.style.right = Math.round(w * 0.08) + "px";
+    el.top.style.top = Math.round(h * inset) + "px";
+    el.top.style.bottom = "auto";
+    el.top.style.fontSize = fontPx + "px";
+
+    el.bottom.style.left = Math.round(w * 0.08) + "px";
+    el.bottom.style.right = Math.round(w * 0.08) + "px";
+    el.bottom.style.bottom = Math.round(h * inset) + "px";
+    el.bottom.style.top = "auto";
+    el.bottom.style.fontSize = fontPx + "px";
+
+    el.toptext.textContent = halves[0];
+    el.bottext.textContent = halves[1];
+
+    el.toprule.style.height = ruleH + "px";
+    el.toprule.style.width = ruleW + "px";
+    el.toprule.style.margin = gapPx + "px auto 0 auto";
+    el.toprule.style.background = p.accent;
+
+    el.botrule.style.height = ruleH + "px";
+    el.botrule.style.width = ruleW + "px";
+    el.botrule.style.margin = "0 auto " + gapPx + "px auto";
+    el.botrule.style.background = p.accent;
+
+    exit = 1 - span(t, DURATION * 0.86, DURATION * 0.99);
+    topIn = easeOutCubic(span(t, 0.14, 0.74));
+    botIn = easeOutCubic(span(t, 0.32, 0.92));
+    sweepTop = easeOutQuint(span(t, 0.42, 1.02));
+    sweepBottom = easeOutQuint(span(t, 0.56, 1.16));
+
+    el.top.style.opacity = String(clamp01(topIn * 1.06) * exit);
+    el.top.style.transform = "translate3d(0," +
+      Math.round((1 - topIn) * -travel) + "px,0)";
+    el.toprule.style.opacity = String(clamp01(sweepTop * 1.6) * exit);
+    el.toprule.style.transform = "scaleX(" + sweepTop.toFixed(5) + ")";
+
+    el.bottom.style.opacity = String(halves[1] ? clamp01(botIn * 1.06) * exit : 0);
+    el.bottom.style.transform = "translate3d(0," +
+      Math.round((1 - botIn) * travel) + "px,0)";
+    el.botrule.style.opacity = String(clamp01(sweepBottom * 1.6) * exit);
+    el.botrule.style.transform = "scaleX(" + sweepBottom.toFixed(5) + ")";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

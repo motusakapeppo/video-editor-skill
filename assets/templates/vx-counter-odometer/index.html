@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-counter-odometer</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #wrap { position: absolute; text-align: center; }
+  #caption {
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 700;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #digits {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  .col {
+    position: relative;
+    overflow: hidden;
+  }
+  .strip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    text-align: center;
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    white-space: pre;
+    font-variant-numeric: tabular-nums;
+  }
+  .col.lead .strip { color: rgba(255, 255, 255, 0.22); }
+  #hair {
+    margin: 0 auto;
+    height: 5px;
+    border-radius: 3px;
+  }
+  #note {
+    color: rgba(255, 255, 255, 0.42);
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="wrap">
+    <div id="caption"></div>
+    <div id="digits"></div>
+    <div id="hair"></div>
+    <div id="note"></div>
+  </div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 4820,
+    caption: "Total downloads",
+    note: "last 30 days",
+    accent: "#FFD400"
+  };
+
+  var PLACES = 4;
+
+  var TIMELINE = {
+    caption: [0.02, 0.28],
+    roll: [0.10, 0.80],
+    hair: [0.44, 0.72],
+    note: [0.50, 0.78]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    wrap: document.getElementById("wrap"),
+    caption: document.getElementById("caption"),
+    digits: document.getElementById("digits"),
+    hair: document.getElementById("hair"),
+    note: document.getElementById("note")
+  };
+
+  var cols = [];
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function build() {
+    var stack = "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n0";
+    var i;
+    for (i = 0; i < PLACES; i += 1) {
+      var col = document.createElement("div");
+      col.className = "col";
+      var strip = document.createElement("div");
+      strip.className = "strip";
+      strip.textContent = stack;
+      col.appendChild(strip);
+      el.digits.appendChild(col);
+      cols.push({ col: col, strip: strip });
+    }
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var font = Math.round(h * 0.132);
+    var cellH = Math.round(font * 1.30);
+    var colW = Math.round(font * 0.615);
+    var total = colW * PLACES;
+
+    el.wrap.style.left = Math.round((w - total) / 2) + "px";
+    el.wrap.style.top = Math.round(h * 0.395) + "px";
+    el.wrap.style.width = total + "px";
+
+    el.caption.style.fontSize = Math.round(h * 0.0195) + "px";
+    el.caption.style.marginBottom = Math.round(h * 0.030) + "px";
+
+    el.digits.style.height = cellH + "px";
+    el.digits.style.marginBottom = Math.round(h * 0.024) + "px";
+
+    var i;
+    for (i = 0; i < cols.length; i += 1) {
+      cols[i].col.style.width = colW + "px";
+      cols[i].col.style.height = cellH + "px";
+      cols[i].strip.style.lineHeight = cellH + "px";
+      cols[i].strip.style.fontSize = font + "px";
+    }
+
+    el.hair.style.width = Math.round(total * 0.22) + "px";
+    el.hair.style.marginBottom = Math.round(h * 0.022) + "px";
+    el.note.style.fontSize = Math.round(h * 0.0175) + "px";
+
+    return { cellH: cellH };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.round(Math.max(0, Math.min(9999, finite(params.value, DEFAULTS.value))));
+    var caption = easeOutCubic(span(t, TIMELINE.caption));
+    var hair = easeOutCubic(span(t, TIMELINE.hair));
+    var note = easeOutCubic(span(t, TIMELINE.note));
+
+    var text = String(value);
+    while (text.length < PLACES) { text = "0" + text; }
+    var lead = 0;
+    while (lead < PLACES - 1 && text.charAt(lead) === "0") { lead += 1; }
+
+    el.caption.textContent = params.caption;
+    el.caption.style.opacity = String(caption);
+    el.caption.style.transform = "translate3d(0," +
+      Math.round((1 - caption) * -window.innerHeight * 0.012) + "px,0)";
+
+    var i;
+    for (i = 0; i < PLACES; i += 1) {
+      var digit = Number(text.charAt(i));
+      var local = easeOutQuint(span(t, [TIMELINE.roll[0] + i * 0.025, TIMELINE.roll[1] + i * 0.020]));
+      cols[i].strip.style.transform =
+        "translate3d(0,-" + (local * digit * box.cellH).toFixed(2) + "px,0)";
+      if (i < lead) {
+        cols[i].col.className = "col lead";
+      } else {
+        cols[i].col.className = "col";
+      }
+    }
+
+    el.hair.style.background = params.accent;
+    el.hair.style.opacity = String(hair);
+    el.hair.style.transform = "scaleX(" + hair.toFixed(5) + ")";
+
+    el.note.textContent = params.note;
+    el.note.style.opacity = String(note * 0.95);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  build();
+  apply(0);
+})();
+</script>
+</body>
+</html>

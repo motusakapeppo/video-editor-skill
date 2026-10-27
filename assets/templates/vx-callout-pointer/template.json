@@ -1,0 +1,30 @@
+{
+  "name": "vx-callout-pointer",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "anchor_x": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 64
+    },
+    "anchor_y": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 40
+    },
+    "label": {
+      "type": "string",
+      "max_length": 34,
+      "default": "Dettaglio chiave"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    }
+  }
+}

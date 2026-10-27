@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-intro-curtain</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; overflow: hidden; }
+  #titleWrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  #eyebrow {
+    color: #F2C14E;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.42em;
+    white-space: nowrap;
+    transform-origin: 50% 50%;
+  }
+  #title {
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 0.98;
+    letter-spacing: -0.025em;
+    transform-origin: 50% 50%;
+    text-shadow: 0 8px 46px rgba(0, 0, 0, 0.55);
+  }
+  #rule { height: 3px; transform-origin: 50% 50%; }
+  .panel { position: absolute; top: 0; height: 100%; background: #0B0B0F; will-change: transform; }
+  .feather { position: absolute; top: 0; height: 100%; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="titleWrap">
+    <div id="eyebrow"></div>
+    <div id="title"></div>
+    <div id="rule"></div>
+  </div>
+  <div class="panel" id="panelL"><div class="feather" id="featherL"></div></div>
+  <div class="panel" id="panelR"><div class="feather" id="featherR"></div></div>
+</div>
+<script>
+/* Clock contract: the harness writes window.__vxParams, then calls
+   window.__vxSeek(t) for each frame. Everything below is a pure function of t
+   and the params; nothing reads a clock. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    title: "Atto primo",
+    eyebrow: "Cortina",
+    accent: "#F2C14E",
+    panel: "#0B0B0F"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    eyebrow: document.getElementById("eyebrow"),
+    title: document.getElementById("title"),
+    rule: document.getElementById("rule"),
+    panelL: document.getElementById("panelL"),
+    panelR: document.getElementById("panelR"),
+    featherL: document.getElementById("featherL"),
+    featherR: document.getElementById("featherR")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function rgba(hex, alpha) {
+    var value = String(hex).replace("#", "");
+    if (value.length === 3) {
+      value = value.charAt(0) + value.charAt(0) +
+              value.charAt(1) + value.charAt(1) +
+              value.charAt(2) + value.charAt(2);
+    }
+    var r = parseInt(value.slice(0, 2), 16) || 0;
+    var g = parseInt(value.slice(2, 4), 16) || 0;
+    var b = parseInt(value.slice(4, 6), 16) || 0;
+    return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var title = String(p.title == null ? "" : p.title);
+    var eyebrow = String(p.eyebrow == null ? "" : p.eyebrow);
+    var accent = String(p.accent || DEFAULTS.accent);
+    var panel = String(p.panel || DEFAULTS.panel);
+
+    el.panelL.style.background = panel;
+    el.panelR.style.background = panel;
+
+    var pw = Math.round(w * 0.506);
+    var feather = Math.round(w * 0.075);
+
+    el.panelL.style.left = "0px";
+    el.panelL.style.width = pw + "px";
+    el.panelR.style.left = (w - pw) + "px";
+    el.panelR.style.width = pw + "px";
+
+    el.featherL.style.right = "0px";
+    el.featherL.style.width = feather + "px";
+    el.featherL.style.background = "linear-gradient(90deg, " + panel + " 0%, " +
+      rgba(panel, 0) + " 100%)";
+    el.featherR.style.left = "0px";
+    el.featherR.style.width = feather + "px";
+    el.featherR.style.background = "linear-gradient(90deg, " + rgba(panel, 0) +
+      " 0%, " + panel + " 100%)";
+
+    el.title.style.fontSize = Math.round(h * 0.058) + "px";
+    el.title.textContent = title;
+    el.eyebrow.style.fontSize = Math.round(h * 0.0195) + "px";
+    el.eyebrow.style.marginBottom = Math.round(h * 0.020) + "px";
+    el.eyebrow.textContent = eyebrow;
+    el.rule.style.width = Math.round(w * 0.110) + "px";
+    el.rule.style.marginTop = Math.round(h * 0.024) + "px";
+    el.rule.style.background = accent;
+
+    var open = span(t, 0.10, 1.45);
+    el.panelL.style.transform = "translate3d(" + Math.round(-open * pw) + "px,0,0)";
+    el.panelR.style.transform = "translate3d(" + Math.round(open * pw) + "px,0,0)";
+
+    var eb = easeOutCubic(span(t, 0.52, 1.10));
+    var tt = easeOutCubic(span(t, 0.62, 1.28));
+    var rl = easeOutQuint(span(t, 1.00, 1.55));
+
+    el.eyebrow.style.opacity = String(eb);
+    el.eyebrow.style.transform = "translate3d(0," + Math.round((1 - eb) * h * 0.010) + "px,0)";
+
+    el.title.style.opacity = String(tt);
+    el.title.style.transform = "scale(" + (1.09 - 0.09 * tt).toFixed(4) + ")";
+
+    el.rule.style.opacity = rl > 0 ? "1" : "0";
+    el.rule.style.transform = "scaleX(" + rl.toFixed(4) + ")";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

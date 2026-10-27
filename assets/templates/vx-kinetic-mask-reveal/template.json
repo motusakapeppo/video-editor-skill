@@ -1,0 +1,28 @@
+{
+  "name": "vx-kinetic-mask-reveal",
+  "fps": 30,
+  "duration": 2.6,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 44,
+      "default": "La luce entra da sinistra"
+    },
+    "sub": {
+      "type": "string",
+      "max_length": 64,
+      "default": "e non lascia niente al buio"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FF4D4D"
+    },
+    "reveal": {
+      "type": "string",
+      "values": ["left", "right"],
+      "default": "left"
+    }
+  }
+}

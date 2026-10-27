@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-sticker-burst</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    overflow: hidden;
+  }
+  #badge {
+    position: absolute;
+    transform-origin: 50% 50%;
+  }
+  #burstSvg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #wordWrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #word {
+    color: #12121A;
+    font-weight: 900;
+    text-transform: uppercase;
+    line-height: 0.92;
+    letter-spacing: -0.03em;
+    text-align: center;
+    transform-origin: 50% 50%;
+  }
+  #kicker {
+    position: absolute;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: #FFFFFF;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.34em;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="badge">
+    <svg id="burstSvg" viewBox="0 0 1080 1920">
+      <polygon id="ghost" points=""></polygon>
+      <polygon id="star" points=""></polygon>
+    </svg>
+    <div id="wordWrap"><div id="word"></div></div>
+  </div>
+  <div id="kicker"></div>
+</div>
+<script>
+/* vx-sticker-burst: a hand-cut starburst behind a word, popping in with
+   overshoot. Geometry is a closed-form function of the spike index. */
+(function () {
+  "use strict";
+
+  var DUR = 2.0;
+  var DEFAULTS = {
+    label: "NEW DROP",
+    kicker: "LIVE NOW",
+    accent: "#FFD400",
+    spikes: 16,
+    tilt: -7
+  };
+
+  var stage = document.getElementById("stage");
+  var badge = document.getElementById("badge");
+  var svg = document.getElementById("burstSvg");
+  var ghost = document.getElementById("ghost");
+  var star = document.getElementById("star");
+  var word = document.getElementById("word");
+  var kicker = document.getElementById("kicker");
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutBack(x) {
+    var c1 = 2.2, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+
+  function starPoints(cx, cy, outer, inner, spikes, wobble) {
+    var out = [];
+    var total = spikes * 2;
+    for (var i = 0; i < total; i++) {
+      var angle = (i / total) * Math.PI * 2 - Math.PI / 2;
+      var isOuter = i % 2 === 0;
+      var radius = isOuter
+        ? outer * (1 + wobble * Math.sin(i * 2.37))
+        : inner * (1 + wobble * 0.5 * Math.cos(i * 1.71));
+      out.push((cx + Math.cos(angle) * radius).toFixed(2) + "," +
+        (cy + Math.sin(angle) * radius).toFixed(2));
+    }
+    return out.join(" ");
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var min = Math.min(w, h);
+    var cx = w * 0.5;
+    var cy = h * 0.46;
+    var outer = min * 0.40;
+    var spikes = Math.max(6, Math.min(28, Math.round(Number(p.spikes))));
+    var pop = easeOutBack(span(t, 0.06 * DUR, 0.42 * DUR));
+    var kick = easeOutCubic(span(t, 0.34 * DUR, 0.56 * DUR));
+    var exit = easeOutCubic(span(t, 0.84 * DUR, 1.0 * DUR));
+
+    badge.style.width = Math.round(outer * 2) + "px";
+    badge.style.height = Math.round(outer * 2) + "px";
+    badge.style.left = Math.round(cx - outer) + "px";
+    badge.style.top = Math.round(cy - outer) + "px";
+    svg.setAttribute("viewBox", "0 0 " + Math.round(outer * 2) + " " + Math.round(outer * 2));
+
+    var localC = outer;
+    star.setAttribute("points",
+      starPoints(localC, localC, outer * 0.96, outer * 0.58, spikes, 0.10));
+    star.setAttribute("fill", p.accent);
+    ghost.setAttribute("points",
+      starPoints(localC + outer * 0.032, localC + outer * 0.032,
+        outer * 0.98, outer * 0.60, spikes, 0.10));
+    ghost.setAttribute("fill", "rgba(10,10,16,0.26)");
+
+    var s = 0.35 + 0.65 * pop;
+    badge.style.opacity = String(clamp01(pop * 2.2));
+    badge.style.transform = "scale(" + s.toFixed(4) + ") rotate(" +
+      (Number(p.tilt) + (1 - pop) * -9).toFixed(3) + "deg) translate3d(0," +
+      Math.round((1 - pop) * h * 0.02 + exit * h * 0.5) + "px,0)";
+
+    var wordLen = String(p.label).length;
+    var size = min * 0.104;
+    var perLine = wordLen > 9 ? 2 : 1;
+    var charsPerLine = Math.ceil(wordLen / perLine);
+    size = Math.min(size, (outer * 1.10) / (charsPerLine * 0.60));
+    word.style.fontSize = Math.round(size) + "px";
+    word.style.width = Math.round(outer * 1.12) + "px";
+    word.textContent = p.label;
+    word.style.opacity = String(clamp01(pop * 1.6));
+
+    kicker.textContent = p.kicker;
+    kicker.style.fontSize = Math.round(min * 0.030) + "px";
+    kicker.style.top = Math.round(cy + outer * 1.06) + "px";
+    kicker.style.opacity = String(kick);
+    kicker.style.transform = "translate3d(0," + Math.round((1 - kick) * h * 0.02) + "px,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

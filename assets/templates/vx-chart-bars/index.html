@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-chart-bars</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #caption {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.58);
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #headline {
+    position: absolute;
+    text-align: right;
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #grid { position: absolute; }
+  #base {
+    position: absolute;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.30);
+    transform-origin: 0 50%;
+  }
+  .bar {
+    position: absolute;
+    border-radius: 4px 4px 0 0;
+    transform-origin: 50% 100%;
+  }
+  .tag {
+    position: absolute;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.92);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .tick {
+    position: absolute;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.38);
+    font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="caption"></div>
+  <div id="headline"></div>
+  <div id="grid"></div>
+  <div id="base"></div>
+  <div id="plot"></div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 78,
+    caption: "Weekly output",
+    labels: "Mon,Tue,Wed,Thu,Fri",
+    accent: "#FFD400"
+  };
+
+  var RATIOS = [0.42, 0.61, 0.55, 0.80, 1.00];
+
+  var TIMELINE = {
+    head: [0.02, 0.28],
+    growth: [0.10, 0.74],
+    axis: [0.06, 0.40]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    caption: document.getElementById("caption"),
+    headline: document.getElementById("headline"),
+    grid: document.getElementById("grid"),
+    base: document.getElementById("base"),
+    plot: document.getElementById("plot")
+  };
+
+  var bars = [];
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+  function trimText(raw) {
+    var text = String(raw == null ? "" : raw);
+    while (text.length && text.charAt(0) === " ") { text = text.slice(1); }
+    while (text.length && text.charAt(text.length - 1) === " ") {
+      text = text.slice(0, text.length - 1);
+    }
+    return text;
+  }
+
+  function build() {
+    var i;
+    for (i = 0; i < RATIOS.length; i += 1) {
+      var bar = document.createElement("div");
+      bar.className = "bar";
+      var tag = document.createElement("div");
+      tag.className = "tag";
+      var tick = document.createElement("div");
+      tick.className = "tick";
+      el.plot.appendChild(bar);
+      el.plot.appendChild(tag);
+      el.plot.appendChild(tick);
+      bars.push({ bar: bar, tag: tag, tick: tick });
+    }
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var pad = Math.round(w * 0.085);
+    var plotW = w - pad * 2;
+    var baseY = Math.round(h * 0.735);
+    var plotH = Math.round(h * 0.305);
+    var slot = plotW / RATIOS.length;
+    var barW = Math.round(slot * 0.52);
+
+    el.caption.style.left = pad + "px";
+    el.caption.style.top = Math.round(h * 0.398) + "px";
+    el.caption.style.fontSize = Math.round(h * 0.0185) + "px";
+
+    el.headline.style.left = pad + "px";
+    el.headline.style.width = plotW + "px";
+    el.headline.style.top = Math.round(h * 0.360) + "px";
+    el.headline.style.fontSize = Math.round(h * 0.062) + "px";
+
+    el.grid.style.left = pad + "px";
+    el.grid.style.top = (baseY - plotH) + "px";
+    el.grid.style.width = plotW + "px";
+    el.grid.style.height = plotH + "px";
+
+    el.base.style.left = pad + "px";
+    el.base.style.top = baseY + "px";
+    el.base.style.width = plotW + "px";
+
+    var i;
+    for (i = 0; i < bars.length; i += 1) {
+      var center = pad + slot * i + slot / 2;
+      bars[i].bar.style.left = Math.round(center - barW / 2) + "px";
+      bars[i].bar.style.width = barW + "px";
+      bars[i].tag.style.left = Math.round(center - slot / 2) + "px";
+      bars[i].tag.style.width = Math.round(slot) + "px";
+      bars[i].tag.style.fontSize = Math.round(h * 0.0195) + "px";
+      bars[i].tick.style.left = Math.round(center - slot / 2) + "px";
+      bars[i].tick.style.width = Math.round(slot) + "px";
+      bars[i].tick.style.top = (baseY + Math.round(h * 0.020)) + "px";
+      bars[i].tick.style.fontSize = Math.round(h * 0.0165) + "px";
+    }
+
+    return { baseY: baseY, plotH: plotH };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.max(0, Math.min(100, finite(params.value, DEFAULTS.value)));
+    var head = easeOutCubic(span(t, TIMELINE.head));
+    var axis = easeOutCubic(span(t, TIMELINE.axis));
+    var names = String(params.labels || "").split(",");
+    var i;
+
+    el.caption.textContent = params.caption;
+    el.caption.style.opacity = String(head);
+
+    el.headline.textContent = String(Math.round(value * head)) + "%";
+    el.headline.style.opacity = String(head);
+
+    el.grid.style.opacity = String(axis * 0.55);
+    el.grid.style.backgroundImage =
+      "repeating-linear-gradient(to bottom, rgba(255,255,255,0.16) 0px," +
+      " rgba(255,255,255,0.16) 1px, transparent 1px, transparent 25%)";
+
+    el.base.style.opacity = String(axis);
+    el.base.style.transform = "scaleX(" + axis.toFixed(5) + ")";
+
+    for (i = 0; i < bars.length; i += 1) {
+      var grow = easeOutQuint(span(t, [TIMELINE.growth[0] + i * 0.035, TIMELINE.growth[1] + i * 0.025]));
+      var barValue = value * RATIOS[i];
+      var height = grow * (barValue / 100) * box.plotH;
+
+      bars[i].bar.style.height = Math.max(2, height).toFixed(2) + "px";
+      bars[i].bar.style.top = (box.baseY - Math.max(2, height)).toFixed(2) + "px";
+      bars[i].bar.style.background = i === bars.length - 1
+        ? params.accent
+        : "rgba(255,255,255,0.26)";
+      bars[i].bar.style.opacity = String(clamp01(grow * 2.4));
+
+      bars[i].tag.textContent = String(Math.round(barValue * grow));
+      bars[i].tag.style.top = (box.baseY - height - window.innerHeight * 0.034) + "px";
+      bars[i].tag.style.opacity = String(clamp01((grow - 0.25) * 2));
+      bars[i].tag.style.color = i === bars.length - 1
+        ? "#ffffff"
+        : "rgba(255,255,255,0.62)";
+
+      bars[i].tick.textContent = trimText(names[i] || "");
+      bars[i].tick.style.opacity = String(axis * 0.95);
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  build();
+  apply(0);
+})();
+</script>
+</body>
+</html>

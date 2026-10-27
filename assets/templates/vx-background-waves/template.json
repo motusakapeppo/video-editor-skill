@@ -1,0 +1,29 @@
+{
+  "name": "vx-background-waves",
+  "fps": 30,
+  "duration": 2.6,
+  "size": [1080, 1920],
+  "params": {
+    "accent": {
+      "type": "color",
+      "values": ["#2BE1C4", "#4DA3FF", "#FF6FB5", "#BFE36B"],
+      "default": "#2BE1C4"
+    },
+    "amplitude": {
+      "type": "number",
+      "min": 20,
+      "max": 140,
+      "default": 62
+    },
+    "speed": {
+      "type": "number",
+      "min": 0,
+      "max": 2.5,
+      "default": 1.0
+    },
+    "glow": {
+      "type": "bool",
+      "default": true
+    }
+  }
+}

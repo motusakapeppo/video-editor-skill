@@ -1,0 +1,18 @@
+{
+  "name": "vx-chart-stack",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 0, "max": 100, "default": 72 },
+    "series": { "type": "string", "max_length": 32, "default": "46,32,22" },
+    "rows": { "type": "string", "max_length": 24, "default": "Q1,Q2,Q3" },
+    "legend": { "type": "string", "max_length": 48, "default": "Direct,Paid,Organic" },
+    "caption": { "type": "string", "max_length": 32, "default": "Share of spend" },
+    "accent": {
+      "type": "color",
+      "values": ["#7CFF6B", "#FFD400", "#38E1FF", "#FF4D4D", "#FFFFFF"],
+      "default": "#7CFF6B"
+    }
+  }
+}

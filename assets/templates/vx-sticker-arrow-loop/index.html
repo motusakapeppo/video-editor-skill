@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-sticker-arrow-loop</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    overflow: hidden;
+  }
+  #ink {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  #word {
+    position: absolute;
+    color: #FFFFFF;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+    line-height: 1.0;
+    text-align: center;
+    text-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+  }
+  #note {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.70);
+    font-weight: 600;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    text-align: center;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="ink" viewBox="0 0 1080 1920">
+    <path id="trail" d="" fill="none" stroke-linecap="round"></path>
+    <polygon id="head" points="0,0 -34,-13 -34,13"></polygon>
+  </svg>
+  <div id="word"></div>
+  <div id="note"></div>
+</div>
+<script>
+/* vx-sticker-arrow-loop: one spiral arrow drawn progressively, head snapping
+   in at the tip. Everything is a closed-form function of t. */
+(function () {
+  "use strict";
+
+  var DUR = 2.1;
+  var END_ANGLE = -0.95;
+  var DEFAULTS = {
+    label: "ANCORA",
+    note: "loop it",
+    accent: "#38E1FF",
+    thickness: 24,
+    turns: 1.16
+  };
+
+  var stage = document.getElementById("stage");
+  var svg = document.getElementById("ink");
+  var trail = document.getElementById("trail");
+  var head = document.getElementById("head");
+  var word = document.getElementById("word");
+  var note = document.getElementById("note");
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function smooth(x) { var y = clamp01(x); return y * y * (3 - 2 * y); }
+
+  function point(cx, cy, rx, ry, turns, end, u) {
+    var angle = END_ANGLE - (1 - u) * turns * Math.PI * 2;
+    var shrink = 1 - (1 - end) * u;
+    return {
+      x: cx + Math.cos(angle) * rx * shrink,
+      y: cy + Math.sin(angle) * ry * shrink
+    };
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var cx = w * 0.5;
+    var cy = h * 0.47;
+    var rx = w * 0.375;
+    var ry = Math.min(h * 0.225, rx * 1.04);
+    var end = 0.62;
+    var turns = Math.max(0.8, Math.min(2.2, Number(p.turns)));
+    var draw = easeOutQuint(span(t, 0.04 * DUR, 0.42 * DUR));
+    var headIn = smooth(span(t, 0.34 * DUR, 0.46 * DUR));
+    var wordIn = easeOutCubic(span(t, 0.20 * DUR, 0.40 * DUR));
+    var noteIn = easeOutCubic(span(t, 0.40 * DUR, 0.52 * DUR));
+    var thick = Number(p.thickness);
+
+    svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+
+    var steps = 150;
+    var d = "";
+    for (var i = 0; i <= steps; i++) {
+      var pt = point(cx, cy, rx, ry, turns, end, i / steps);
+      d += (i === 0 ? "M " : " L ") + pt.x.toFixed(2) + " " + pt.y.toFixed(2);
+    }
+    trail.setAttribute("d", d);
+    trail.setAttribute("pathLength", "100");
+    trail.setAttribute("stroke", p.accent);
+    trail.setAttribute("stroke-width", String(thick));
+    trail.setAttribute("stroke-dasharray", "100");
+    trail.setAttribute("stroke-dashoffset", String((100 * (1 - draw * 0.985)).toFixed(3)));
+    trail.setAttribute("opacity", "1");
+
+    var tip = point(cx, cy, rx, ry, turns, end, 1);
+    var back = point(cx, cy, rx, ry, turns, end, 0.965);
+    var angle = Math.atan2(tip.y - back.y, tip.x - back.x) * 180 / Math.PI;
+    var headLen = thick * 3.5;
+    var headHalf = thick * 1.32;
+    head.setAttribute("points",
+      "0,0 " + (-headLen).toFixed(2) + "," + (-headHalf).toFixed(2) + " " +
+      (-headLen).toFixed(2) + "," + headHalf.toFixed(2));
+    head.setAttribute("transform", "translate(" + tip.x.toFixed(2) + "," +
+      tip.y.toFixed(2) + ") rotate(" + angle.toFixed(2) + ") scale(" +
+      (0.35 + 0.65 * headIn).toFixed(3) + ")");
+    head.setAttribute("fill", p.accent);
+    head.setAttribute("opacity", String(headIn));
+
+    var len = Math.max(1, String(p.label).length);
+    var size = Math.min(h * 0.066, (rx * 1.06) / (len * 0.60));
+    word.textContent = p.label;
+    word.style.fontSize = Math.round(size) + "px";
+    word.style.width = Math.round(rx * 2) + "px";
+    word.style.left = Math.round(cx - rx) + "px";
+    word.style.top = Math.round(cy - size * 0.54) + "px";
+    word.style.opacity = String(wordIn);
+    word.style.transform = "translate3d(0," + Math.round((1 - wordIn) * h * 0.014) + "px,0)";
+
+    note.textContent = p.note;
+    note.style.fontSize = Math.round(h * 0.0165) + "px";
+    note.style.width = Math.round(rx * 2) + "px";
+    note.style.left = Math.round(cx - rx) + "px";
+    note.style.top = Math.round(cy + ry * 0.62) + "px";
+    note.style.opacity = String(noteIn * 0.92);
+    note.style.transform = "translate3d(0," + Math.round((1 - noteIn) * h * 0.012) + "px,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

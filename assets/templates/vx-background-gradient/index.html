@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-background-gradient</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: #06070C;
+    overflow: hidden;
+  }
+  .blob {
+    position: absolute;
+    border-radius: 50%;
+    transform-origin: 50% 50%;
+  }
+  #sheen {
+    position: absolute;
+    inset: 0;
+  }
+  #vignette {
+    position: absolute;
+    inset: 0;
+  }
+  #grain {
+    position: absolute;
+    inset: 0;
+    opacity: 0.10;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.14) 0px, rgba(255,255,255,0.14) 1px, rgba(0,0,0,0) 1px, rgba(0,0,0,0) 4px);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="blob" id="b0"></div>
+  <div class="blob" id="b1"></div>
+  <div class="blob" id="b2"></div>
+  <div class="blob" id="b3"></div>
+  <div id="sheen"></div>
+  <div id="vignette"></div>
+  <div id="grain"></div>
+</div>
+<script>
+/* vx-background-gradient: layered radial gradients drifting with t.
+   Fully opaque edge to edge: the stage paints an opaque base and every layer
+   composites on top of it. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    palette: "aurora",
+    intensity: 70,
+    drift: 1.0,
+    vignette: true
+  };
+
+  var PALETTES = {
+    aurora: ["#1B48FF", "#00E2B4", "#8A2BFF"],
+    ember: ["#FF3B1F", "#FFA200", "#7A1BFF"],
+    ocean: ["#00306E", "#00B6FF", "#0B1B4A"],
+    mono: ["#FFFFFF", "#8FA0B8", "#20293A"]
+  };
+
+  var BLOBS = [
+    { cx: 0.24, cy: 0.28, r: 0.62, ax: 0.10, ay: 0.07, wx: 0.55, wy: 0.83, ph: 0.0, k: 0 },
+    { cx: 0.78, cy: 0.40, r: 0.52, ax: 0.12, ay: 0.09, wx: 0.71, wy: 0.47, ph: 1.9, k: 1 },
+    { cx: 0.52, cy: 0.74, r: 0.70, ax: 0.08, ay: 0.10, wx: 0.39, wy: 0.61, ph: 3.4, k: 2 },
+    { cx: 0.62, cy: 0.12, r: 0.40, ax: 0.14, ay: 0.05, wx: 0.93, wy: 0.29, ph: 5.1, k: 0 }
+  ];
+
+  var stage = document.getElementById("stage");
+  var sheen = document.getElementById("sheen");
+  var vignette = document.getElementById("vignette");
+  var blobEls = [0, 1, 2, 3].map(function (i) {
+    return document.getElementById("b" + i);
+  });
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function easeInOutSine(x) { return 0.5 - 0.5 * Math.cos(Math.PI * clamp01(x)); }
+
+  function hexToRgb(hex) {
+    var h = String(hex).replace("#", "");
+    if (h.length === 3) {
+      h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+    }
+    return [
+      parseInt(h.slice(0, 2), 16),
+      parseInt(h.slice(2, 4), 16),
+      parseInt(h.slice(4, 6), 16)
+    ];
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var min = Math.min(w, h);
+    var palette = PALETTES[p.palette] || PALETTES.aurora;
+    var power = clamp01(Number(p.intensity) / 100);
+    var speed = Number(p.drift);
+    var reveal = easeInOutSine(t / 0.6);
+
+    for (var i = 0; i < BLOBS.length; i++) {
+      var b = BLOBS[i];
+      var el = blobEls[i];
+      var rgb = hexToRgb(palette[b.k]);
+      var x = (b.cx + b.ax * Math.sin(t * speed * b.wx + b.ph)) * w;
+      var y = (b.cy + b.ay * Math.cos(t * speed * b.wy + b.ph * 1.3)) * h;
+      var radius = b.r * min * (0.92 + 0.08 * Math.sin(t * speed * 0.7 + b.ph));
+      var alpha = (0.16 + 0.44 * power) * reveal;
+      el.style.width = Math.round(radius * 2) + "px";
+      el.style.height = Math.round(radius * 2) + "px";
+      el.style.left = Math.round(x - radius) + "px";
+      el.style.top = Math.round(y - radius) + "px";
+      el.style.background = "radial-gradient(circle at 50% 50%, rgba(" +
+        rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + alpha.toFixed(4) + ") 0%, rgba(" +
+        rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0) 68%)";
+    }
+
+    var sheenA = 0.05 + 0.10 * power;
+    sheen.style.background =
+      "radial-gradient(120% 70% at " + Math.round(50 + 18 * Math.sin(t * speed * 0.42)) +
+      "% " + Math.round(38 + 12 * Math.cos(t * speed * 0.36)) + "%, rgba(255,255,255," +
+      sheenA.toFixed(4) + ") 0%, rgba(255,255,255,0) 62%)";
+
+    vignette.style.background = p.vignette
+      ? "radial-gradient(circle at 50% 46%, rgba(0,0,0,0) 34%, rgba(0,0,0,0.62) 100%)"
+      : "rgba(0,0,0,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

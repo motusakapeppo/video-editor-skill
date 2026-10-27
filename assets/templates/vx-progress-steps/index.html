@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-progress-steps</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #kicker {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #count {
+    position: absolute;
+    text-align: right;
+    color: rgba(255, 255, 255, 0.45);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.10em;
+    white-space: nowrap;
+  }
+  #rule {
+    position: absolute;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.18);
+    transform-origin: 0 50%;
+  }
+  #rail {
+    position: absolute;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+  }
+  #railFill {
+    position: absolute;
+    left: 0; top: 0;
+    width: 100%;
+    border-radius: 999px;
+    transform-origin: 50% 0;
+  }
+  .row {
+    position: absolute;
+    display: flex;
+    align-items: center;
+  }
+  .dot {
+    position: relative;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    box-sizing: border-box;
+  }
+  .core {
+    position: absolute;
+    left: 50%; top: 50%;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .ring {
+    position: absolute;
+    left: 50%; top: 50%;
+    border-radius: 50%;
+    box-sizing: border-box;
+    transform: translate(-50%, -50%);
+  }
+  .text { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .idx {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.3);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="kicker"></div>
+  <div id="count"></div>
+<div id="rule"></div>
+  <div id="rail"><div id="railFill"></div></div>
+  <div id="rows"></div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 3,
+    captions: "Brief,Script,Shoot,Edit",
+    kicker: "Workflow",
+    accent: "#7CFF6B"
+  };
+
+  var STEPS = 4;
+
+  var TIMELINE = {
+    head: [0.02, 0.26],
+    rows: [0.12, 0.55],
+    rail: [0.16, 0.78],
+    count: [0.46, 0.72]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    kicker: document.getElementById("kicker"),
+    count: document.getElementById("count"),
+    rule: document.getElementById("rule"),
+    rail: document.getElementById("rail"),
+    railFill: document.getElementById("railFill"),
+    rows: document.getElementById("rows")
+  };
+
+  var rows = [];
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+  function trimText(raw) {
+    var text = String(raw == null ? "" : raw);
+    while (text.length && text.charAt(0) === " ") { text = text.slice(1); }
+    while (text.length && text.charAt(text.length - 1) === " ") {
+      text = text.slice(0, text.length - 1);
+    }
+    return text;
+  }
+
+  function build() {
+    var i;
+    for (i = 0; i < STEPS; i += 1) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var dot = document.createElement("div");
+      dot.className = "dot";
+      var core = document.createElement("div");
+      core.className = "core";
+      var ring = document.createElement("div");
+      ring.className = "ring";
+      dot.appendChild(core);
+      dot.appendChild(ring);
+      var idx = document.createElement("div");
+      idx.className = "idx";
+      idx.textContent = (i + 1 < 10 ? "0" : "") + (i + 1);
+      var text = document.createElement("div");
+      text.className = "text";
+      row.appendChild(dot);
+      row.appendChild(idx);
+      row.appendChild(text);
+      el.rows.appendChild(row);
+      rows.push({ row: row, dot: dot, core: core, ring: ring, idx: idx, text: text });
+    }
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var pad = Math.round(w * 0.088);
+    var gap = Math.round(h * 0.126);
+    var first = Math.round(h * 0.332);
+    var nodeR = Math.round(w * 0.019);
+    var textPx = Math.round(h * 0.034);
+    var idxPx = Math.round(h * 0.019);
+    var rowH = Math.round(textPx * 1.34);
+    var railW = Math.max(3, Math.round(w * 0.005));
+
+    el.kicker.style.left = pad + "px";
+    el.kicker.style.top = Math.round(h * 0.238) + "px";
+    el.kicker.style.fontSize = Math.round(h * 0.019) + "px";
+
+    el.count.style.left = pad + "px";
+    el.count.style.top = Math.round(h * 0.238) + "px";
+    el.count.style.width = (w - pad * 2) + "px";
+    el.count.style.fontSize = Math.round(h * 0.019) + "px";
+
+    el.rule.style.left = pad + "px";
+    el.rule.style.top = Math.round(h * 0.288) + "px";
+    el.rule.style.width = (w - pad * 2) + "px";
+
+    el.rail.style.left = (pad + nodeR - Math.round(railW / 2)) + "px";
+    el.rail.style.top = first + "px";
+    el.rail.style.width = railW + "px";
+    el.rail.style.height = (gap * (STEPS - 1)) + "px";
+
+    var i;
+    for (i = 0; i < rows.length; i += 1) {
+      var item = rows[i];
+      var center = first + gap * i;
+      item.row.style.left = pad + "px";
+      item.row.style.top = (center - Math.round(rowH / 2)) + "px";
+      item.row.style.height = rowH + "px";
+      item.row.style.width = (w - pad * 2) + "px";
+
+      item.dot.style.width = (nodeR * 2) + "px";
+      item.dot.style.height = (nodeR * 2) + "px";
+      item.core.style.width = (nodeR * 1.02) + "px";
+      item.core.style.height = (nodeR * 1.02) + "px";
+      item.ring.style.width = (nodeR * 2) + "px";
+      item.ring.style.height = (nodeR * 2) + "px";
+      item.ring.style.borderWidth = Math.max(2, Math.round(nodeR * 0.24)) + "px";
+
+      item.idx.style.fontSize = idxPx + "px";
+      item.idx.style.width = Math.round(w * 0.075) + "px";
+      item.idx.style.marginLeft = Math.round(w * 0.028) + "px";
+      item.text.style.fontSize = textPx + "px";
+      item.text.style.marginLeft = Math.round(w * 0.012) + "px";
+    }
+
+    return { railH: gap * (STEPS - 1) };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.max(0, Math.min(STEPS, finite(params.value, DEFAULTS.value)));
+    var done = Math.round(value);
+    var current = done >= STEPS ? STEPS - 1 : done;
+
+    var head = easeOutCubic(span(t, TIMELINE.head));
+    var rail = easeOutCubic(span(t, TIMELINE.rail));
+    var count = easeOutCubic(span(t, TIMELINE.count));
+
+    var names = String(params.captions || "").split(",");
+    var i;
+
+    el.kicker.textContent = params.kicker;
+    el.count.textContent = ("0" + done).slice(-2) + " / 0" + STEPS;
+
+    var railFrac = (done / (STEPS - 1)) * rail;
+    el.railFill.style.height = (railFrac * box.railH).toFixed(2) + "px";
+    el.railFill.style.background = params.accent;
+    el.rail.style.opacity = String(clamp01(rail * 1.5));
+
+    for (i = 0; i < rows.length; i += 1) {
+      var item = rows[i];
+      var reveal = easeOutQuint(span(t, [TIMELINE.rows[0] + i * 0.055, TIMELINE.rows[1] + i * 0.055]));
+      var isDone = i < done;
+      var isCurrent = i === current;
+
+      item.text.textContent = trimText(names[i] || "");
+      item.text.style.color = isCurrent
+        ? "#ffffff"
+        : (isDone ? "rgba(255,255,255,0.78)" : "rgba(255,255,255,0.38)");
+      item.text.style.fontWeight = isCurrent ? "700" : "500";
+      item.idx.style.color = isDone || isCurrent
+        ? "rgba(255,255,255,0.62)"
+        : "rgba(255,255,255,0.26)";
+
+      item.dot.style.borderColor = isDone || isCurrent
+        ? params.accent
+        : "rgba(255,255,255,0.24)";
+      item.dot.style.borderStyle = "solid";
+      item.dot.style.borderWidth = Math.max(2, Math.round(window.innerWidth * 0.0038)) + "px";
+
+      item.core.style.background = isDone ? params.accent : "rgba(0,0,0,0)";
+      item.core.style.opacity = isDone ? "1" : "0";
+
+      item.ring.style.borderColor = params.accent;
+      item.ring.style.opacity = isCurrent ? "0.85" : "0";
+
+      item.row.style.opacity = String(reveal);
+      item.row.style.transform = "translate3d(" +
+        Math.round((1 - reveal) * window.innerWidth * 0.030) + "px,0,0)";
+    }
+
+    el.kicker.style.opacity = String(head);
+    el.rule.style.opacity = String(head);
+    el.rule.style.transform = "scaleX(" + head.toFixed(5) + ")";
+    el.count.style.opacity = String(count * 0.9);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  build();
+  apply(0);
+})();
+</script>
+</body>
+</html>

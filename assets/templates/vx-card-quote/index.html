@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-card-quote</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    overflow: hidden;
+  }
+  #card {
+    position: absolute;
+    background: rgba(9, 10, 15, 0.90);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+    transform-origin: 12% 100%;
+    overflow: visible;
+  }
+  #mark {
+    position: absolute;
+    font-family: Georgia, "Times New Roman", "Segoe UI", serif;
+    font-weight: 700;
+    line-height: 0.66;
+    transform-origin: 0% 100%;
+  }
+  #body {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+  }
+  #quote {
+    color: #F4F5F8;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  #foot {
+    flex: 0 0 auto;
+  }
+  #rule {
+    transform-origin: 0% 50%;
+  }
+  #attrib {
+    color: rgba(255, 255, 255, 0.72);
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+  #attrib b {
+    color: #FFFFFF;
+    font-weight: 800;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="card">
+    <div id="mark">&#8220;</div>
+    <div id="body">
+      <div id="quote"></div>
+      <div id="foot">
+        <div id="rule"></div>
+        <div id="attrib"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+/* vx-card-quote: a pull-quote card with an oversized quotation mark bleeding
+   off the top edge and an attribution line under a short accent rule. */
+(function () {
+  "use strict";
+
+  var DUR = 2.4;
+  var DEFAULTS = {
+    quote: "Il silenzio tra due note e la parte che nessuno scrive.",
+    author: "Marta Rinaldi",
+    role: "composizione",
+    accent: "#FFD400"
+  };
+
+  var stage = document.getElementById("stage");
+  var card = document.getElementById("card");
+  var body = document.getElementById("body");
+  var mark = document.getElementById("mark");
+  var quote = document.getElementById("quote");
+  var rule = document.getElementById("rule");
+  var attrib = document.getElementById("attrib");
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function easeOutBack(x) {
+    var c1 = 2.4, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var left = Math.round(w * 0.075);
+    var width = Math.round(w * 0.85);
+    var height = Math.round(h * 0.300);
+    var top = Math.round(h * 0.375);
+    var pad = Math.round(w * 0.058);
+    var rise = easeOutQuint(span(t, 0.03 * DUR, 0.26 * DUR));
+    var markP = easeOutBack(span(t, 0.12 * DUR, 0.34 * DUR));
+    var textP = easeOutCubic(span(t, 0.16 * DUR, 0.36 * DUR));
+    var ruleP = easeOutQuint(span(t, 0.26 * DUR, 0.40 * DUR));
+    var attrP = easeOutCubic(span(t, 0.30 * DUR, 0.44 * DUR));
+    var exit = easeOutCubic(span(t, 0.90 * DUR, 1.0 * DUR));
+
+    card.style.left = left + "px";
+    card.style.width = width + "px";
+    card.style.height = height + "px";
+    card.style.top = top + "px";
+    card.style.borderRadius = Math.round(w * 0.042) + "px";
+    card.style.opacity = String(clamp01(rise * 1.4) * (1 - exit));
+    card.style.transform = "translate3d(0," +
+      Math.round((1 - rise) * h * 0.05 + exit * h * 0.03) + "px,0) scale(" +
+      (0.962 + 0.038 * rise).toFixed(4) + ")";
+
+    mark.style.left = Math.round(pad * 0.42) + "px";
+    mark.style.top = Math.round(-h * 0.112) + "px";
+    mark.style.fontSize = Math.round(h * 0.240) + "px";
+    mark.style.color = p.accent;
+    mark.style.opacity = String(clamp01(markP));
+    mark.style.transform = "scale(" + (0.45 + 0.55 * markP).toFixed(4) + ")";
+
+    var len = String(p.quote).length;
+    var quotePx = Math.round(h * 0.0335);
+    if (len > 64) { quotePx = Math.round(h * 0.0295); }
+    if (len > 96) { quotePx = Math.round(h * 0.0255); }
+
+    body.style.left = Math.round(pad * 1.30) + "px";
+    body.style.right = Math.round(pad * 0.80) + "px";
+    body.style.top = Math.round(pad * 1.05) + "px";
+    body.style.bottom = Math.round(pad * 1.00) + "px";
+
+    quote.textContent = p.quote;
+    quote.style.fontSize = quotePx + "px";
+    quote.style.lineHeight = "1.34";
+    quote.style.opacity = String(textP);
+    quote.style.transform = "translate3d(0," + Math.round((1 - textP) * h * 0.016) + "px,0)";
+
+    rule.style.width = Math.round(w * 0.072) + "px";
+    rule.style.height = Math.max(3, Math.round(h * 0.0022)) + "px";
+    rule.style.marginBottom = Math.round(h * 0.018) + "px";
+    rule.style.background = p.accent;
+    rule.style.opacity = String(ruleP);
+    rule.style.transform = "scaleX(" + ruleP.toFixed(4) + ")";
+
+    attrib.innerHTML = "";
+    var strong = document.createElement("b");
+    strong.textContent = p.author;
+    attrib.appendChild(strong);
+    attrib.appendChild(document.createTextNode("  \u00B7  " + p.role));
+    attrib.style.fontSize = Math.round(h * 0.0158) + "px";
+    attrib.style.opacity = String(attrP * 0.95);
+    attrib.style.transform = "translate3d(0," + Math.round((1 - attrP) * h * 0.012) + "px,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

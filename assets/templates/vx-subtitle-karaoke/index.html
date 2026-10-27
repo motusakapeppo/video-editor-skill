@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-subtitle-karaoke</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #wrap {
+    position: absolute;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.30;
+    font-weight: 800;
+    letter-spacing: -0.012em;
+    text-shadow: 0 3px 20px rgba(0, 0, 0, 0.52);
+  }
+  #wrap .word {
+    position: relative;
+    display: inline-block;
+    white-space: pre;
+    padding-bottom: 0.14em;
+  }
+  #wrap .bar {
+    position: absolute;
+    left: 0.02em;
+    right: 0.02em;
+    bottom: 0;
+    border-radius: 999px;
+    transform-origin: 0 50%;
+    will-change: transform, opacity;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="wrap"></div>
+</div>
+<script>
+/* The clock is the seek, never the wall clock: every pixel below is a pure
+   function of t and the injected params. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.6;
+  var SWEEP_START = 0.30;
+  var SWEEP_END = 1.95;
+
+  var DEFAULTS = {
+    text: "Nessuno nasce imparato si diventa",
+    accent: "#38E1FF",
+    pace: 1.0,
+    casing: "none"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    wrap: document.getElementById("wrap")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeInOutCubic(x) {
+    return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var text = String(p.text);
+    var pace = Number(p.pace);
+    var words;
+    var barPx;
+    var fontPx;
+    var gapPx;
+    var count;
+    var exit;
+    var q;
+    var node;
+    var i;
+    var word;
+    var txt;
+    var bar;
+    var local;
+    var alpha;
+
+    if (!isFinite(pace) || pace <= 0) { pace = 1.0; }
+    if (p.casing === "upper") { text = text.toUpperCase(); }
+    words = text.split(/\s+/).filter(function (item) { return item.length > 0; });
+    if (!words.length) { words = [""]; }
+
+    fontPx = Math.round(h * 0.040);
+    gapPx = Math.round(h * 0.017);
+    barPx = Math.max(3, Math.round(h * 0.0050));
+
+    el.wrap.style.left = Math.round(w * 0.07) + "px";
+    el.wrap.style.right = Math.round(w * 0.07) + "px";
+    el.wrap.style.bottom = Math.round(h * 0.108) + "px";
+    el.wrap.style.fontSize = fontPx + "px";
+    el.wrap.style.gap = gapPx + "px";
+
+    el.wrap.textContent = "";
+    count = words.length;
+    exit = 1 - span(t, DURATION * 0.84, DURATION * 0.99);
+    q = easeInOutCubic(span(t, SWEEP_START, SWEEP_START + (SWEEP_END - SWEEP_START) / pace));
+    node = document.createElement("span");
+
+    for (i = 0; i < count; i++) {
+      word = node.cloneNode(false);
+      word.className = "word";
+
+      txt = document.createElement("span");
+      txt.textContent = words[i];
+
+      bar = document.createElement("span");
+      bar.className = "bar";
+      bar.style.height = barPx + "px";
+      bar.style.background = p.accent;
+
+      local = clamp01(q * count - i);
+      alpha = 0.30 + 0.70 * local;
+      txt.style.color = "rgba(255,255,255," + alpha.toFixed(4) + ")";
+      bar.style.opacity = String(clamp01(local * 1.6) * exit);
+      bar.style.transform = "scaleX(" + local.toFixed(5) + ")";
+
+      word.style.opacity = String(exit);
+      word.appendChild(txt);
+      word.appendChild(bar);
+      el.wrap.appendChild(word);
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

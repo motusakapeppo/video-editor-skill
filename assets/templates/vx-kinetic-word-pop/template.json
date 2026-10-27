@@ -1,0 +1,29 @@
+{
+  "name": "vx-kinetic-word-pop",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 72,
+      "default": "Ogni parola arriva a tempo"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "stagger": {
+      "type": "number",
+      "min": 0.05,
+      "max": 0.26,
+      "default": 0.13
+    },
+    "caps": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    }
+  }
+}

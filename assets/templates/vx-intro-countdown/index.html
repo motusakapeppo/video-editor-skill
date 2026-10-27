@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-intro-countdown</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; overflow: hidden; }
+  #dial {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    box-sizing: border-box;
+    border-style: solid;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+  }
+  #crossV, #crossH { position: absolute; background: rgba(255, 255, 255, 0.22); }
+  #hand {
+    position: absolute;
+    left: 50%;
+    bottom: 50%;
+    transform-origin: 50% 100%;
+    background: #FFD400;
+  }
+  #hub {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+  }
+  #digit {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 0.86;
+    letter-spacing: -0.03em;
+    text-align: center;
+    transform-origin: 50% 50%;
+    text-shadow: 0 6px 40px rgba(0, 0, 0, 0.55);
+  }
+  #caption {
+    position: absolute;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.42em;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="crossV"></div>
+  <div id="crossH"></div>
+  <div id="dial"></div>
+  <div id="hand"></div>
+  <div id="hub"></div>
+  <div id="digit"></div>
+  <div id="caption"></div>
+</div>
+<script>
+/* Clock contract: the harness writes window.__vxParams, then calls
+   window.__vxSeek(t) for each frame. Everything below is a pure function of t
+   and the params; nothing reads a clock. */
+(function () {
+  "use strict";
+
+  var TOTAL = 2.4;
+
+  var DEFAULTS = {
+    caption: "Stand by",
+    accent: "#FFD400",
+    ink: "#FFFFFF",
+    steps: 3
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    crossV: document.getElementById("crossV"),
+    crossH: document.getElementById("crossH"),
+    dial: document.getElementById("dial"),
+    hand: document.getElementById("hand"),
+    hub: document.getElementById("hub"),
+    digit: document.getElementById("digit"),
+    caption: document.getElementById("caption")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var accent = String(p.accent || DEFAULTS.accent);
+    var ink = String(p.ink || DEFAULTS.ink);
+    var caption = String(p.caption == null ? "" : p.caption);
+
+    var steps = Math.round(Number(p.steps));
+    if (!(steps >= 2)) { steps = 2; }
+    if (steps > 5) { steps = 5; }
+
+    var dialPx = Math.round(Math.min(w, h) * 0.80);
+    var radius = dialPx / 2;
+    var stroke = Math.max(5, Math.round(dialPx * 0.012));
+
+    el.dial.style.width = dialPx + "px";
+    el.dial.style.height = dialPx + "px";
+    el.dial.style.borderWidth = stroke + "px";
+    el.dial.style.borderColor = accent;
+
+    el.crossV.style.left = Math.round(w / 2) + "px";
+    el.crossV.style.top = "0px";
+    el.crossV.style.width = Math.max(2, Math.round(w * 0.0019)) + "px";
+    el.crossV.style.height = h + "px";
+
+    el.crossH.style.top = Math.round(h / 2) + "px";
+    el.crossH.style.left = "0px";
+    el.crossH.style.height = Math.max(2, Math.round(w * 0.0019)) + "px";
+    el.crossH.style.width = w + "px";
+
+    el.hand.style.height = Math.round(radius * 0.84) + "px";
+    el.hand.style.width = Math.max(5, Math.round(dialPx * 0.011)) + "px";
+    el.hand.style.background = accent;
+    el.hand.style.marginLeft = -Math.max(5, Math.round(dialPx * 0.011)) / 2 + "px";
+
+    var hubPx = Math.max(14, Math.round(dialPx * 0.030));
+    el.hub.style.width = hubPx + "px";
+    el.hub.style.height = hubPx + "px";
+    el.hub.style.background = accent;
+
+    el.digit.style.fontSize = Math.round(h * 0.295) + "px";
+    el.digit.style.color = ink;
+
+    el.caption.style.fontSize = Math.round(h * 0.0185) + "px";
+    el.caption.style.top = Math.round(h / 2 + radius + h * 0.055) + "px";
+    el.caption.textContent = caption;
+
+    var stepDur = TOTAL / steps;
+    var index = Math.floor(t / stepDur);
+    if (index < 0) { index = 0; }
+    if (index > steps - 1) { index = steps - 1; }
+    var phase = clamp01((t - index * stepDur) / stepDur);
+    var value = steps - index;
+
+    if (String(value) !== el.digit.textContent) {
+      el.digit.textContent = String(value);
+    }
+
+    var pop = easeOutCubic(clamp01(phase * 6));
+    var vis = clamp01(phase * 8);
+    el.digit.style.opacity = String(vis);
+    el.digit.style.transform = "translate(-50%, -50%) scale(" + (1.14 - 0.14 * pop).toFixed(4) + ")";
+
+    var deg = 360 * phase;
+    el.hand.style.transform = "rotate(" + deg.toFixed(3) + "deg)";
+    el.hand.style.opacity = String(0.35 + 0.65 * clamp01(phase * 10));
+
+    var dialIn = easeOutQuint(span(t, 0.0, 0.42));
+    el.dial.style.opacity = String(dialIn);
+    el.dial.style.transform = "translate(-50%, -50%) scale(" + (0.94 + 0.06 * dialIn).toFixed(4) + ")";
+    el.crossV.style.opacity = String(dialIn * 0.9);
+    el.crossH.style.opacity = String(dialIn * 0.9);
+    el.hub.style.opacity = String(dialIn);
+
+    el.caption.style.opacity = String(easeOutCubic(span(t, 0.12, 0.66)) * 0.95);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

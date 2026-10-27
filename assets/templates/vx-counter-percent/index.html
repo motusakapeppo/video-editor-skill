@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-counter-percent</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #mask {
+    position: absolute;
+    overflow: hidden;
+  }
+  #row {
+    display: flex;
+    align-items: flex-end;
+    transform-origin: 0 100%;
+  }
+  #num {
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.055em;
+    line-height: 0.92;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #pct {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+  #base {
+    position: absolute;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.38);
+    transform-origin: 0 50%;
+  }
+  #tick {
+    position: absolute;
+    transform-origin: 0 50%;
+  }
+  #caption {
+    position: absolute;
+    text-align: right;
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #note {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.40);
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="caption"></div>
+  <div id="mask">
+    <div id="row">
+      <div id="num"></div>
+      <div id="pct">%</div>
+    </div>
+  </div>
+  <div id="base"></div>
+  <div id="tick"></div>
+  <div id="note"></div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 87,
+    caption: "Conversion rate",
+    note: "Aug 2026",
+    accent: "#7CFF6B"
+  };
+
+  var TIMELINE = {
+    base: [0.04, 0.42],
+    rise: [0.10, 0.62],
+    caption: [0.30, 0.60],
+    note: [0.46, 0.74]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    mask: document.getElementById("mask"),
+    row: document.getElementById("row"),
+    num: document.getElementById("num"),
+    pct: document.getElementById("pct"),
+    base: document.getElementById("base"),
+    tick: document.getElementById("tick"),
+    caption: document.getElementById("caption"),
+    note: document.getElementById("note")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var pad = Math.round(w * 0.078);
+    var baseline = Math.round(h * 0.658);
+    var font = Math.round(h * 0.300);
+    var maskH = Math.round(font * 0.86);
+
+    el.mask.style.left = pad + "px";
+    el.mask.style.top = (baseline - maskH) + "px";
+    el.mask.style.width = (w - pad * 2) + "px";
+    el.mask.style.height = maskH + "px";
+
+    el.row.style.height = maskH + "px";
+    el.num.style.fontSize = font + "px";
+    el.pct.style.fontSize = Math.round(font * 0.33) + "px";
+    el.pct.style.marginBottom = Math.round(maskH * 0.44) + "px";
+    el.pct.style.marginLeft = Math.round(w * 0.006) + "px";
+
+    el.base.style.left = pad + "px";
+    el.base.style.top = baseline + "px";
+    el.base.style.width = (w - pad * 2) + "px";
+
+    el.tick.style.left = pad + "px";
+    el.tick.style.top = (baseline - 2) + "px";
+    el.tick.style.width = Math.round(w * 0.115) + "px";
+    el.tick.style.height = 5 + "px";
+
+    el.caption.style.left = pad + "px";
+    el.caption.style.top = (baseline - Math.round(h * 0.355)) + "px";
+    el.caption.style.width = (w - pad * 2) + "px";
+    el.caption.style.fontSize = Math.round(h * 0.0205) + "px";
+
+    el.note.style.left = pad + "px";
+    el.note.style.top = (baseline + Math.round(h * 0.034)) + "px";
+    el.note.style.fontSize = Math.round(h * 0.0165) + "px";
+
+    el.pct.style.color = "rgba(255,255,255,0.55)";
+
+    return { maskH: maskH, baseline: baseline };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.max(0, Math.min(100, finite(params.value, DEFAULTS.value)));
+    var base = easeOutQuint(span(t, TIMELINE.base));
+    var rise = easeOutQuint(span(t, TIMELINE.rise));
+    var caption = easeOutCubic(span(t, TIMELINE.caption));
+    var note = easeOutCubic(span(t, TIMELINE.note));
+
+    el.num.textContent = String(Math.round(value * rise));
+    el.row.style.transform = "translate3d(0," +
+      (box.maskH * (1 - rise)).toFixed(2) + "px,0)";
+    el.row.style.opacity = String(clamp01(rise * 3));
+
+    el.pct.style.opacity = String(clamp01(rise * 2));
+
+    el.base.style.transform = "scaleX(" + base.toFixed(5) + ")";
+    el.base.style.opacity = String(base);
+
+    el.tick.style.background = params.accent;
+    el.tick.style.transform = "scaleX(" + base.toFixed(5) + ")";
+    el.tick.style.opacity = String(base);
+
+    el.caption.textContent = params.caption;
+    el.caption.style.opacity = String(caption * 0.95);
+    el.caption.style.transform = "translate3d(0," +
+      Math.round((1 - caption) * -window.innerHeight * 0.010) + "px,0)";
+
+    el.note.textContent = params.note;
+    el.note.style.opacity = String(note * 0.9);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

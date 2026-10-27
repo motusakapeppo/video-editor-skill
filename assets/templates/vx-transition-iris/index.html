@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-transition-iris</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; overflow: hidden; }
+  #veil { position: absolute; inset: 0; }
+  #ring {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    box-sizing: border-box;
+    border-style: solid;
+    border-radius: 50%;
+  }
+  #crossV, #crossH { position: absolute; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="veil"></div>
+  <div id="ring"></div>
+  <div id="crossV"></div>
+  <div id="crossH"></div>
+</div>
+<script>
+/* Clock contract: the harness writes window.__vxParams, then calls
+   window.__vxSeek(t) for each frame. Everything below is a pure function of t
+   and the params; nothing reads a clock. */
+(function () {
+  "use strict";
+
+  var TOTAL = 2.0;
+
+  var DEFAULTS = {
+    fill: "#0E0E12",
+    edge: "#FFFFFF",
+    feather: 16,
+    crosshair: true
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    veil: document.getElementById("veil"),
+    ring: document.getElementById("ring"),
+    crossV: document.getElementById("crossV"),
+    crossH: document.getElementById("crossH")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function rgba(hexValue, alpha) {
+    var value = String(hexValue).replace("#", "");
+    if (value.length === 3) {
+      value = value.charAt(0) + value.charAt(0) +
+              value.charAt(1) + value.charAt(1) +
+              value.charAt(2) + value.charAt(2);
+    }
+    var r = parseInt(value.slice(0, 2), 16) || 0;
+    var g = parseInt(value.slice(2, 4), 16) || 0;
+    var b = parseInt(value.slice(4, 6), 16) || 0;
+    return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var fill = String(p.fill || DEFAULTS.fill);
+    var edge = String(p.edge || DEFAULTS.edge);
+    var feather = Number(p.feather);
+
+    if (!(feather >= 0)) { feather = 0; }
+    if (feather > 90) { feather = 90; }
+
+    var u = clamp01(t / TOTAL);
+    var maxR = Math.sqrt(w * w + h * h) / 2 * 1.04;
+    var r = Math.round(u * maxR);
+
+    el.veil.style.background = "radial-gradient(circle at 50% 50%, " +
+      rgba(fill, 0) + " 0px, " + rgba(fill, 0) + " " + r + "px, " +
+      fill + " " + (r + Math.round(feather)) + "px, " + fill + " 100%)";
+
+    var stroke = Math.max(4, Math.round(Math.min(w, h) * 0.0075));
+    var size = Math.round(r * 2);
+    el.ring.style.width = size + "px";
+    el.ring.style.height = size + "px";
+    el.ring.style.borderWidth = stroke + "px";
+    el.ring.style.borderColor = edge;
+    el.ring.style.transform = "translate(-50%, -50%)";
+    el.ring.style.opacity = r > 2 ? String(0.85 * clamp01((maxR - r) / (maxR * 0.08))) : "0";
+
+    var line = Math.max(2, Math.round(w * 0.0019));
+    var crosses = p.crosshair ? 0.30 : 0;
+    el.crossV.style.left = Math.round(w / 2 - line / 2) + "px";
+    el.crossV.style.top = "0px";
+    el.crossV.style.width = line + "px";
+    el.crossV.style.height = h + "px";
+    el.crossV.style.background = rgba(edge, crosses);
+
+    el.crossH.style.left = "0px";
+    el.crossH.style.top = Math.round(h / 2 - line / 2) + "px";
+    el.crossH.style.width = w + "px";
+    el.crossH.style.height = line + "px";
+    el.crossH.style.background = rgba(edge, crosses);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

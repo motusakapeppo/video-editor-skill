@@ -1,0 +1,16 @@
+{
+  "name": "vx-counter-odometer",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "int", "min": 0, "max": 9999, "default": 4820 },
+    "caption": { "type": "string", "max_length": 40, "default": "Total downloads" },
+    "note": { "type": "string", "max_length": 40, "default": "last 30 days" },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#38E1FF", "#FF4D4D", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    }
+  }
+}

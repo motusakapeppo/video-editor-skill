@@ -1,0 +1,27 @@
+{
+  "name": "vx-title-full-frame",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "title": {
+      "type": "string",
+      "max_length": 44,
+      "default": "Il Momento"
+    },
+    "subtitle": {
+      "type": "string",
+      "max_length": 64,
+      "default": "Una storia in due atti"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "bars": {
+      "type": "bool",
+      "default": true
+    }
+  }
+}

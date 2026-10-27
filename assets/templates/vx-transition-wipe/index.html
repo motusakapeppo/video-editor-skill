@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-transition-wipe</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; overflow: hidden; }
+  #panel {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    will-change: transform;
+  }
+  #shade {
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.075) 0%, rgba(0, 0, 0, 0.24) 100%);
+  }
+  #lead { position: absolute; right: 0; top: 0; height: 100%; }
+  #bloom {
+    position: absolute;
+    right: 0;
+    top: 0;
+    height: 100%;
+    transform: translateX(100%);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="panel">
+    <div id="shade"></div>
+    <div id="bloom"></div>
+    <div id="lead"></div>
+  </div>
+</div>
+<script>
+/* Clock contract: the harness writes window.__vxParams, then calls
+   window.__vxSeek(t) for each frame. Everything below is a pure function of t
+   and the params; nothing reads a clock. */
+(function () {
+  "use strict";
+
+  var TOTAL = 2.0;
+
+  var DEFAULTS = {
+    fill: "#0E0E12",
+    edge: "#FFFFFF",
+    edgeWidth: 8
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    panel: document.getElementById("panel"),
+    lead: document.getElementById("lead"),
+    bloom: document.getElementById("bloom")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function hex(hexValue, alpha) {
+    var value = String(hexValue).replace("#", "");
+    if (value.length === 3) {
+      value = value.charAt(0) + value.charAt(0) +
+              value.charAt(1) + value.charAt(1) +
+              value.charAt(2) + value.charAt(2);
+    }
+    var r = parseInt(value.slice(0, 2), 16) || 0;
+    var g = parseInt(value.slice(2, 4), 16) || 0;
+    var b = parseInt(value.slice(4, 6), 16) || 0;
+    return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var fill = String(p.fill || DEFAULTS.fill);
+    var edge = String(p.edge || DEFAULTS.edge);
+    var edgeWidth = Number(p.edgeWidth);
+
+    if (!(edgeWidth >= 2)) { edgeWidth = 2; }
+    if (edgeWidth > 30) { edgeWidth = 30; }
+    edgeWidth = Math.round(edgeWidth);
+
+    el.panel.style.width = w + "px";
+    el.panel.style.height = h + "px";
+    el.panel.style.backgroundColor = fill;
+
+    el.lead.style.width = edgeWidth + "px";
+    el.lead.style.background = edge;
+    el.lead.style.opacity = "1";
+
+    el.bloom.style.width = Math.round(edgeWidth * 4 + h * 0.030) + "px";
+    el.bloom.style.background = "linear-gradient(90deg, " + hex(edge, 0.55) +
+      " 0%, " + hex(edge, 0.14) + " 38%, " + hex(edge, 0) + " 100%)";
+
+    var u = clamp01(t / TOTAL);
+    el.panel.style.transform = "translate3d(" + Math.round(-w + u * w) + "px,0,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

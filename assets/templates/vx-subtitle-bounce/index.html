@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-subtitle-bounce</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #stack {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  #wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: center;
+    font-weight: 800;
+    line-height: 1.14;
+    letter-spacing: -0.014em;
+    text-shadow: 0 4px 22px rgba(0, 0, 0, 0.55);
+  }
+  #wrap .word {
+    display: inline-block;
+    white-space: pre;
+    transform-origin: 50% 100%;
+    will-change: transform, opacity;
+  }
+  #base {
+    border-radius: 999px;
+    transform-origin: 50% 50%;
+    will-change: transform, opacity;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="stack">
+    <div id="wrap"></div>
+    <div id="base"></div>
+  </div>
+</div>
+<script>
+/* Each word falls onto a shared baseline; squash and stretch are computed from
+   t only, so a re-seek of the same instant is byte-identical. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.4;
+
+  var DEFAULTS = {
+    text: "Resta vicino resta sveglio",
+    accent: "#38E1FF",
+    energy: 1.0,
+    casing: "none"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    stack: document.getElementById("stack"),
+    wrap: document.getElementById("wrap"),
+    base: document.getElementById("base")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var text = String(p.text);
+    var energy = Number(p.energy);
+    var words;
+    var fontPx;
+    var gapPx;
+    var basePx;
+    var count;
+    var exit;
+    var stagger;
+    var drop;
+    var node;
+    var i;
+    var word;
+    var start;
+    var local;
+    var arc;
+    var land;
+    var grow;
+
+    if (!isFinite(energy) || energy <= 0) { energy = 1.0; }
+    if (p.casing === "upper") { text = text.toUpperCase(); }
+    words = text.split(/\s+/).filter(function (item) { return item.length > 0; });
+    if (!words.length) { words = [""]; }
+
+    fontPx = Math.round(h * 0.041);
+    gapPx = Math.round(h * 0.015);
+    basePx = Math.max(4, Math.round(h * 0.0055));
+
+    el.stack.style.left = Math.round(w * 0.07) + "px";
+    el.stack.style.right = Math.round(w * 0.07) + "px";
+    el.stack.style.bottom = Math.round(h * 0.108) + "px";
+
+    el.wrap.style.fontSize = fontPx + "px";
+    el.wrap.style.gap = gapPx + "px";
+
+    el.base.style.height = basePx + "px";
+    el.base.style.width = "100%";
+    el.base.style.marginTop = Math.round(h * 0.010) + "px";
+    el.base.style.background = p.accent;
+
+    el.wrap.textContent = "";
+    count = words.length;
+    exit = 1 - span(t, DURATION * 0.82, DURATION * 0.99);
+    stagger = Math.min(0.085, 0.56 / count);
+    drop = Math.round(h * 0.075 * energy);
+    node = document.createElement("span");
+
+    for (i = 0; i < count; i++) {
+      word = node.cloneNode(false);
+      word.className = "word";
+      word.textContent = words[i];
+      word.style.color = "#FFFFFF";
+
+      start = 0.10 + i * stagger;
+      local = span(t, start, start + 0.46);
+      arc = Math.sin(Math.PI * local) * (1 - local * 0.35);
+      land = easeOutQuint(local);
+
+      word.style.opacity = String(clamp01(local * 2.6) * exit);
+      word.style.transform = "translate3d(0," +
+        Math.round((1 - easeOutCubic(local)) * drop) + "px,0)" +
+        " scale(" + (1 + 0.16 * arc).toFixed(4) + "," +
+        (1 - 0.20 * arc).toFixed(4) + ")";
+      el.wrap.appendChild(word);
+    }
+
+    grow = easeOutQuint(span(t, 0.24, 1.05));
+    el.base.style.opacity = String(clamp01(grow * 1.4) * exit);
+    el.base.style.transform = "scaleX(" + (0.06 + 0.94 * grow).toFixed(5) + ")";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

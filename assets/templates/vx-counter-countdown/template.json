@@ -1,0 +1,15 @@
+{
+  "name": "vx-counter-countdown",
+  "fps": 30,
+  "duration": 2.6,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 1, "max": 3, "default": 3 },
+    "caption": { "type": "string", "max_length": 32, "default": "Get ready" },
+    "accent": {
+      "type": "color",
+      "values": ["#FF4D4D", "#FFD400", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FF4D4D"
+    }
+  }
+}

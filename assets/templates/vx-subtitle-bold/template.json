@@ -1,0 +1,28 @@
+{
+  "name": "vx-subtitle-bold",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 72,
+      "default": "Adesso o mai piu"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FF4D4D", "#FFD400", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FF4D4D"
+    },
+    "align": {
+      "type": "string",
+      "values": ["left", "center"],
+      "default": "left"
+    },
+    "tracking": {
+      "type": "string",
+      "values": ["tight", "tighter"],
+      "default": "tight"
+    }
+  }
+}

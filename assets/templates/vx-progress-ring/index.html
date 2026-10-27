@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-progress-ring</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #caption {
+    position: absolute;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.55);
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #dial { position: absolute; transform-origin: 50% 50%; }
+  #dial svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  #core {
+    position: absolute;
+    left: 0; top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  #valueRow { display: flex; align-items: baseline; }
+  #number {
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.045em;
+    font-variant-numeric: tabular-nums;
+  }
+  #unit {
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 700;
+  }
+  #hint {
+    color: rgba(255, 255, 255, 0.42);
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    margin-top: 0.10em;
+  }
+  #label {
+    position: absolute;
+    text-align: center;
+    color: #ffffff;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="caption"></div>
+  <div id="dial">
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <circle id="halo" cx="50" cy="50" r="49" fill="none"
+              stroke="rgba(255,255,255,0.10)" stroke-width="0.6"
+              stroke-dasharray="1.2 3.2"></circle>
+      <circle id="bed" cx="50" cy="50" r="41" fill="none"
+              stroke="rgba(255,255,255,0.13)" stroke-width="5"></circle>
+      <circle id="arc" cx="50" cy="50" r="41" fill="none"
+              stroke-width="5" stroke-linecap="round"
+              transform="rotate(-90 50 50)"></circle>
+      <circle id="tip" cx="50" cy="9" r="1.7" fill="#ffffff"></circle>
+    </svg>
+    <div id="core">
+      <div id="valueRow"><div id="number"></div><div id="unit">%</div></div>
+      <div id="hint"></div>
+    </div>
+  </div>
+  <div id="label"></div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 74,
+    label: "Storage used",
+    caption: "sync / 2.4 GB",
+    accent: "#38E1FF"
+  };
+
+  var TIMELINE = {
+    caption: [0.02, 0.30],
+    dial: [0.06, 0.42],
+    arc: [0.16, 0.82],
+    label: [0.42, 0.78]
+  };
+
+  var RADIUS = 41;
+  var CIRC = 2 * Math.PI * RADIUS;
+
+  var el = {
+    stage: document.getElementById("stage"),
+    caption: document.getElementById("caption"),
+    dial: document.getElementById("dial"),
+    arc: document.getElementById("arc"),
+    tip: document.getElementById("tip"),
+    core: document.getElementById("core"),
+    number: document.getElementById("number"),
+    unit: document.getElementById("unit"),
+    hint: document.getElementById("hint"),
+    label: document.getElementById("label")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var size = Math.round(Math.min(w * 0.66, h * 0.335));
+    var left = Math.round((w - size) / 2);
+    var top = Math.round(h * 0.285);
+
+    el.caption.style.left = "0px";
+    el.caption.style.width = w + "px";
+    el.caption.style.top = Math.round(h * 0.205) + "px";
+    el.caption.style.fontSize = Math.round(h * 0.0185) + "px";
+
+    el.dial.style.left = left + "px";
+    el.dial.style.top = top + "px";
+    el.dial.style.width = size + "px";
+    el.dial.style.height = size + "px";
+
+    el.core.style.width = size + "px";
+    el.core.style.height = size + "px";
+
+    el.number.style.fontSize = Math.round(size * 0.235) + "px";
+    el.unit.style.fontSize = Math.round(size * 0.105) + "px";
+    el.hint.style.fontSize = Math.round(size * 0.052) + "px";
+
+    el.label.style.left = "0px";
+    el.label.style.width = w + "px";
+    el.label.style.top = (top + size + Math.round(h * 0.032)) + "px";
+    el.label.style.fontSize = Math.round(h * 0.031) + "px";
+
+    return { size: size };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.max(0, Math.min(100, finite(params.value, DEFAULTS.value)));
+    var caption = easeOutCubic(span(t, TIMELINE.caption));
+    var dial = easeOutQuint(span(t, TIMELINE.dial));
+    var arc = easeOutCubic(span(t, TIMELINE.arc));
+    var label = easeOutCubic(span(t, TIMELINE.label));
+    var frac = (value / 100) * arc;
+
+    el.arc.style.stroke = params.accent;
+    el.arc.style.strokeDasharray = CIRC.toFixed(3) + " " + CIRC.toFixed(3);
+    el.arc.style.strokeDashoffset = (CIRC * (1 - frac)).toFixed(3);
+
+    var angle = frac * Math.PI * 2 - Math.PI / 2;
+    el.tip.setAttribute("cx", (50 + Math.cos(angle) * RADIUS).toFixed(3));
+    el.tip.setAttribute("cy", (50 + Math.sin(angle) * RADIUS).toFixed(3));
+    el.tip.setAttribute("fill", params.accent);
+    el.tip.setAttribute("r", (frac > 0.004 ? 1.9 : 0).toFixed(3));
+
+    el.caption.textContent = params.caption;
+    el.caption.style.opacity = String(caption * 0.95);
+    el.caption.style.transform = "translate3d(0," +
+      Math.round((1 - caption) * -window.innerHeight * 0.012) + "px,0)";
+
+    el.dial.style.opacity = String(clamp01(dial * 1.4));
+    el.dial.style.transform = "scale(" + (0.94 + dial * 0.06).toFixed(5) + ")";
+
+    el.number.textContent = String(Math.round(value * arc));
+    el.core.style.opacity = String(clamp01(arc * 1.9));
+    el.hint.textContent = "of " + (100 - Math.round(value)) + " free";
+
+    el.label.textContent = params.label;
+    el.label.style.opacity = String(label);
+    el.label.style.transform = "translate3d(0," +
+      Math.round((1 - label) * window.innerHeight * 0.012) + "px,0)";
+
+    void box;
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

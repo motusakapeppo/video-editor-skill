@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-box",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 90,
+      "default": "Qui comincia il viaggio"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF6B4A", "#38E1FF", "#B7FF4D", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "radius": {
+      "type": "int",
+      "min": 0,
+      "max": 44,
+      "default": 26
+    },
+    "casing": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    }
+  }
+}

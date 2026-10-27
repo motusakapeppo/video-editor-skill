@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-background-grid</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: #04060C;
+    overflow: hidden;
+  }
+  #sky {
+    position: absolute;
+    inset: 0;
+  }
+  #floor {
+    position: absolute;
+    left: -100%;
+    width: 300%;
+    transform-origin: 50% 0;
+    background-repeat: repeat;
+  }
+  #haze {
+    position: absolute;
+    left: 0;
+    right: 0;
+  }
+  #horizon {
+    position: absolute;
+    left: 0;
+    right: 0;
+    transform-origin: 50% 50%;
+  }
+  #sunGlow {
+    position: absolute;
+    border-radius: 50%;
+    transform-origin: 50% 50%;
+  }
+  #sunCore {
+    position: absolute;
+    border-radius: 50%;
+    transform-origin: 50% 50%;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="sky"></div>
+  <div id="sunGlow"></div>
+  <div id="sunCore"></div>
+  <div id="floor"></div>
+  <div id="haze"></div>
+  <div id="horizon"></div>
+</div>
+<script>
+/* vx-background-grid: perspective floor grid with a moving horizon line and a
+   soft glow. Opaque edge to edge. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    accent: "#38E1FF",
+    gridSize: 78,
+    horizon: 0.54,
+    speed: 1.0
+  };
+
+  var stage = document.getElementById("stage");
+  var sky = document.getElementById("sky");
+  var floor = document.getElementById("floor");
+  var haze = document.getElementById("haze");
+  var horizon = document.getElementById("horizon");
+  var sunGlow = document.getElementById("sunGlow");
+  var sunCore = document.getElementById("sunCore");
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function hexToRgb(hex) {
+    var h = String(hex).replace("#", "");
+    if (h.length === 3) {
+      h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+    }
+    return [
+      parseInt(h.slice(0, 2), 16),
+      parseInt(h.slice(2, 4), 16),
+      parseInt(h.slice(4, 6), 16)
+    ];
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var rgb = hexToRgb(p.accent);
+    var col = "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",";
+    var hz = Math.round(clamp01(Number(p.horizon)) * h);
+    var size = Math.max(18, Math.round(Number(p.gridSize)));
+    var speed = Number(p.speed);
+    var offset = (t * speed * size * 2.2) % size;
+
+    sky.style.background =
+      "linear-gradient(to bottom, #04060C 0%, #060A16 " + Math.round(hz * 0.55) +
+      "px, rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ",0.20) " + hz +
+      "px, #04060C " + hz + "px, #04060C 100%)";
+
+    var glowW = Math.round(w * 1.6);
+    var glowH = Math.round(h * 0.20);
+    var pulse = 0.86 + 0.14 * Math.sin(t * 1.1);
+    sunGlow.style.width = glowW + "px";
+    sunGlow.style.height = glowH + "px";
+    sunGlow.style.left = Math.round(w * 0.5 - glowW / 2) + "px";
+    sunGlow.style.top = Math.round(hz - glowH * 0.62) + "px";
+    sunGlow.style.borderRadius = "50%";
+    sunGlow.style.background =
+      "radial-gradient(closest-side, " + col + (0.34 * pulse).toFixed(3) + ") 0%, " + col +
+      (0.12 * pulse).toFixed(3) + ") 44%, " + col + "0) 100%)";
+
+    var coreW = Math.round(w * 0.46);
+    var coreH = Math.round(h * 0.030);
+    sunCore.style.width = coreW + "px";
+    sunCore.style.height = coreH + "px";
+    sunCore.style.left = Math.round(w * 0.5 - coreW / 2) + "px";
+    sunCore.style.top = Math.round(hz - coreH * 0.62) + "px";
+    sunCore.style.borderRadius = "50%";
+    sunCore.style.background =
+      "radial-gradient(closest-side, rgba(255,255,255,0.95) 0%, " + col +
+      "0.72) 38%, " + col + "0) 100%)";
+
+    floor.style.top = hz + "px";
+    floor.style.height = Math.round(h * 0.95) + "px";
+    floor.style.transform = "perspective(" + Math.round(h * 0.40) +
+      "px) rotateX(75deg) scale(2.1)";
+    floor.style.backgroundImage =
+      "repeating-linear-gradient(90deg, " + col + "0.50) 0px, " + col + "0.50) 1px, " +
+      col + "0) 1px, " + col + "0) " + size + "px), " +
+      "repeating-linear-gradient(0deg, " + col + "0.62) 0px, " + col + "0.62) 1px, " +
+      col + "0) 1px, " + col + "0) " + size + "px)";
+    floor.style.backgroundPosition = "0px 0px, 0px " + offset.toFixed(3) + "px";
+
+    haze.style.top = hz + "px";
+    haze.style.height = Math.round(h * 0.16) + "px";
+    haze.style.background =
+      "linear-gradient(to bottom, rgba(4,6,12,0.88) 0%, rgba(4,6,12,0.40) 40%, rgba(4,6,12,0) 100%)";
+
+    horizon.style.top = Math.round(hz - 1) + "px";
+    horizon.style.height = "2px";
+    horizon.style.background = col + "0.9)";
+    horizon.style.boxShadow = "0 0 26px 6px " + col + "0.42)";
+    horizon.style.opacity = String(0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 1.4)));
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

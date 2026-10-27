@@ -1,0 +1,28 @@
+{
+  "name": "vx-card-quote",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "quote": {
+      "type": "string",
+      "max_length": 120,
+      "default": "Il silenzio tra due note e la parte che nessuno scrive."
+    },
+    "author": {
+      "type": "string",
+      "max_length": 40,
+      "default": "Marta Rinaldi"
+    },
+    "role": {
+      "type": "string",
+      "max_length": 32,
+      "default": "composizione"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF5C8A", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    }
+  }
+}

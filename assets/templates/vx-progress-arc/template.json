@@ -1,0 +1,16 @@
+{
+  "name": "vx-progress-arc",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 0, "max": 100, "default": 62 },
+    "caption": { "type": "string", "max_length": 40, "default": "Load average" },
+    "unit": { "type": "string", "values": ["%", "pts", "kw"], "default": "%" },
+    "accent": {
+      "type": "color",
+      "values": ["#FF4D4D", "#FFD400", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FF4D4D"
+    }
+  }
+}

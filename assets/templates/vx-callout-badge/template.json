@@ -1,0 +1,36 @@
+{
+  "name": "vx-callout-badge",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "anchor_x": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 38
+    },
+    "anchor_y": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 46
+    },
+    "number": {
+      "type": "int",
+      "min": 1,
+      "max": 99,
+      "default": 3
+    },
+    "label": {
+      "type": "string",
+      "max_length": 40,
+      "default": "Passaggi rimasti"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#7CFF6B"
+    }
+  }
+}

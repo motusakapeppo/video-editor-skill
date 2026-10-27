@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-highlight",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 96,
+      "default": "Nessuna scorciatoia solo lavoro"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FF8AD8"],
+      "default": "#FFD400"
+    },
+    "marker_alpha": {
+      "type": "number",
+      "min": 0.2,
+      "max": 1.0,
+      "default": 0.62
+    },
+    "casing": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    }
+  }
+}

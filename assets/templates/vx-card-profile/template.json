@@ -1,0 +1,28 @@
+{
+  "name": "vx-card-profile",
+  "fps": 30,
+  "duration": 2.3,
+  "size": [1080, 1920],
+  "params": {
+    "name": {
+      "type": "string",
+      "max_length": 34,
+      "default": "Giulia Ferri"
+    },
+    "role": {
+      "type": "string",
+      "max_length": 40,
+      "default": "Fotografa"
+    },
+    "tag": {
+      "type": "string",
+      "max_length": 18,
+      "default": "Ospite"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FF5C8A", "#FFD400", "#38E1FF", "#7CFF6B"],
+      "default": "#FF5C8A"
+    }
+  }
+}

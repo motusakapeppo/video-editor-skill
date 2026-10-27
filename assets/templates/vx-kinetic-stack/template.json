@@ -1,0 +1,30 @@
+{
+  "name": "vx-kinetic-stack",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "words": {
+      "type": "string",
+      "max_length": 48,
+      "default": "Pensa, Costruisci, Misura, Ripeti"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#38E1FF"
+    },
+    "gap": {
+      "type": "number",
+      "min": 0.4,
+      "max": 1.1,
+      "default": 0.78
+    },
+    "dim": {
+      "type": "number",
+      "min": 0,
+      "max": 0.8,
+      "default": 0.45
+    }
+  }
+}

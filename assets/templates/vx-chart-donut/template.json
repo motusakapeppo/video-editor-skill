@@ -1,0 +1,17 @@
+{
+  "name": "vx-chart-donut",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 0, "max": 100, "default": 88 },
+    "segments": { "type": "string", "max_length": 40, "default": "38,27,21,14" },
+    "labels": { "type": "string", "max_length": 64, "default": "Direct,Search,Social,Referral" },
+    "caption": { "type": "string", "max_length": 32, "default": "Traffic mix" },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#38E1FF", "#FF4D4D", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "vx-title-split",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "tag": {
+      "type": "string",
+      "max_length": 24,
+      "default": "Capitolo 02"
+    },
+    "title": {
+      "type": "string",
+      "max_length": 42,
+      "default": "Due voci, un taglio"
+    },
+    "subtitle": {
+      "type": "string",
+      "max_length": 58,
+      "default": "La frattura che tiene insieme"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FF4D4D"
+    }
+  }
+}

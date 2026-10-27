@@ -1,0 +1,28 @@
+{
+  "name": "vx-transition-iris",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "fill": {
+      "type": "color",
+      "values": ["#0E0E12", "#101A17", "#141026", "#1A1010"],
+      "default": "#0E0E12"
+    },
+    "edge": {
+      "type": "color",
+      "values": ["#FFFFFF", "#FFD400", "#38E1FF", "#7CFF6B"],
+      "default": "#FFFFFF"
+    },
+    "feather": {
+      "type": "number",
+      "min": 0,
+      "max": 90,
+      "default": 16
+    },
+    "crosshair": {
+      "type": "bool",
+      "default": true
+    }
+  }
+}

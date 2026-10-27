@@ -1,0 +1,29 @@
+{
+  "name": "vx-background-gradient",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "palette": {
+      "type": "string",
+      "values": ["aurora", "ember", "ocean", "mono"],
+      "default": "aurora"
+    },
+    "intensity": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 70
+    },
+    "drift": {
+      "type": "number",
+      "min": 0,
+      "max": 2,
+      "default": 1.0
+    },
+    "vignette": {
+      "type": "bool",
+      "default": true
+    }
+  }
+}

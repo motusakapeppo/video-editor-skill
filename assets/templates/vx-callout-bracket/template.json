@@ -1,0 +1,36 @@
+{
+  "name": "vx-callout-bracket",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "anchor_x": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 50
+    },
+    "anchor_y": {
+      "type": "number",
+      "min": 0,
+      "max": 100,
+      "default": 44
+    },
+    "region_w": {
+      "type": "number",
+      "min": 18,
+      "max": 44,
+      "default": 30
+    },
+    "label": {
+      "type": "string",
+      "max_length": 40,
+      "default": "Zona da osservare"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#38E1FF"
+    }
+  }
+}

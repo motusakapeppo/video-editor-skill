@@ -1,0 +1,28 @@
+{
+  "name": "vx-intro-logo-lockup",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "brand": {
+      "type": "string",
+      "max_length": 18,
+      "default": "SPAZIO13"
+    },
+    "kicker": {
+      "type": "string",
+      "max_length": 28,
+      "default": "Studio creativo"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "mark": {
+      "type": "string",
+      "values": ["diamond", "ring", "square"],
+      "default": "diamond"
+    }
+  }
+}

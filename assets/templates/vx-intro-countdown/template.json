@@ -1,0 +1,29 @@
+{
+  "name": "vx-intro-countdown",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "caption": {
+      "type": "string",
+      "max_length": 22,
+      "default": "Stand by"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B"],
+      "default": "#FFD400"
+    },
+    "ink": {
+      "type": "color",
+      "values": ["#FFFFFF", "#FFF3C4", "#D8ECFF"],
+      "default": "#FFFFFF"
+    },
+    "steps": {
+      "type": "int",
+      "min": 2,
+      "max": 5,
+      "default": 3
+    }
+  }
+}

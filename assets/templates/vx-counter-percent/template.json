@@ -1,0 +1,16 @@
+{
+  "name": "vx-counter-percent",
+  "fps": 30,
+  "duration": 1.9,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 0, "max": 100, "default": 87 },
+    "caption": { "type": "string", "max_length": 36, "default": "Conversion rate" },
+    "note": { "type": "string", "max_length": 28, "default": "Aug 2026" },
+    "accent": {
+      "type": "color",
+      "values": ["#7CFF6B", "#FFD400", "#FF4D4D", "#38E1FF", "#FFFFFF"],
+      "default": "#7CFF6B"
+    }
+  }
+}

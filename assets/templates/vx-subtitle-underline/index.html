@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-subtitle-underline</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #wrap {
+    position: absolute;
+    text-align: center;
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.012em;
+    color: #ffffff;
+    text-shadow: 0 3px 20px rgba(0, 0, 0, 0.50);
+  }
+  #wrap .line { display: block; }
+  #wrap .ribbon {
+    display: block;
+    border-radius: 999px;
+    transform-origin: 0 50%;
+    will-change: transform, opacity;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="wrap"></div>
+</div>
+<script>
+/* Pure function of t and the params: the ribbons are swept by writing scaleX
+   from t. The harness freezes CSS animation, so there is none. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.4;
+
+  var DEFAULTS = {
+    text: "Le parole giuste al momento giusto",
+    accent: "#FF4D4D",
+    thickness: 7,
+    casing: "none"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    wrap: document.getElementById("wrap")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function splitLines(text) {
+    var words = text.split(/\s+/).filter(function (item) { return item.length > 0; });
+    var lines = [];
+    var half;
+    if (!words.length) { return [""]; }
+    if (words.length < 5) { return [words.join(" ")]; }
+    half = Math.ceil(words.length / 2);
+    lines.push(words.slice(0, half).join(" "));
+    lines.push(words.slice(half).join(" "));
+    return lines;
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var text = String(p.text);
+    var thickness = Number(p.thickness);
+    var lines;
+    var fontPx;
+    var ribbonPx;
+    var gapPx;
+    var exit;
+    var i;
+    var node;
+    var line;
+    var ribbon;
+    var start;
+    var local;
+    var fade;
+
+    if (!isFinite(thickness)) { thickness = 0; }
+    if (thickness < 0) { thickness = 0; }
+    if (p.casing === "upper") { text = text.toUpperCase(); }
+    lines = splitLines(text);
+
+    fontPx = Math.round(h * 0.040);
+    ribbonPx = Math.max(2, Math.round(thickness));
+    gapPx = Math.round(h * 0.010);
+
+    el.wrap.style.left = Math.round(w * 0.07) + "px";
+    el.wrap.style.right = Math.round(w * 0.07) + "px";
+    el.wrap.style.bottom = Math.round(h * 0.106) + "px";
+    el.wrap.style.fontSize = fontPx + "px";
+
+    el.wrap.textContent = "";
+    exit = 1 - span(t, DURATION * 0.82, DURATION * 0.99);
+    node = document.createElement("div");
+
+    for (i = 0; i < lines.length; i++) {
+      line = node.cloneNode(false);
+      line.className = "line";
+
+      ribbon = document.createElement("span");
+      ribbon.className = "ribbon";
+      ribbon.style.height = ribbonPx + "px";
+      ribbon.style.background = p.accent;
+      ribbon.style.marginTop = gapPx + "px";
+
+      start = 0.12 + i * 0.24;
+      local = easeOutQuint(span(t, start, start + 0.62));
+      fade = easeOutCubic(span(t, start - 0.04, start + 0.40));
+
+      line.textContent = lines[i];
+      line.style.opacity = String(clamp01(fade * 1.1) * exit);
+      line.style.transform = "translate3d(0," +
+        Math.round((1 - fade) * h * 0.018) + "px,0)";
+
+      ribbon.style.opacity = String(clamp01(local * 1.5) * exit);
+      ribbon.style.transform = "scaleX(" + local.toFixed(5) + ")";
+
+      line.appendChild(ribbon);
+      el.wrap.appendChild(line);
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

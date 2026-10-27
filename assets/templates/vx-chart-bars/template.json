@@ -1,0 +1,16 @@
+{
+  "name": "vx-chart-bars",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 0, "max": 100, "default": 78 },
+    "caption": { "type": "string", "max_length": 32, "default": "Weekly output" },
+    "labels": { "type": "string", "max_length": 64, "default": "Mon,Tue,Wed,Thu,Fri" },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#38E1FF", "#FF4D4D", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    }
+  }
+}

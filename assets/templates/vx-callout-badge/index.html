@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-callout-badge</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #ring {
+    position: absolute;
+    border-radius: 999px;
+    box-sizing: border-box;
+    transform-origin: 50% 50%;
+  }
+  #ball {
+    position: absolute;
+    border-radius: 999px;
+    transform-origin: 50% 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #num {
+    color: #0a0c11;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.03em;
+  }
+  #label {
+    position: absolute;
+    color: #ffffff;
+    font-weight: 600;
+    line-height: 1.24;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="ring"></div>
+  <div id="ball"><div id="num"></div></div>
+  <div id="label"></div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.0;
+
+  var DEFAULTS = {
+    anchor_x: 38,
+    anchor_y: 46,
+    number: 3,
+    label: "Passaggi rimasti",
+    accent: "#7CFF6B"
+  };
+
+  var stage = document.getElementById("stage");
+  var el = {
+    ring: document.getElementById("ring"),
+    ball: document.getElementById("ball"),
+    num: document.getElementById("num"),
+    label: document.getElementById("label")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var d = Math.round(h * 0.078);
+    var ax = clamp(Number(p.anchor_x) / 100 * w, w * 0.12 + d / 2, w * 0.88 - d / 2);
+    var ay = clamp(Number(p.anchor_y) / 100 * h, h * 0.10, h * 0.90);
+    var gap = Math.round(w * 0.035);
+    var toRight = ax < w * 0.5;
+    var out = easeOutCubic(span(t, DURATION - 0.32, DURATION - 0.03));
+
+    var pop = easeOutQuint(span(t, 0.08, 0.40));
+    var settle = easeOutCubic(span(t, 0.40, 0.62));
+    var scale = pop <= 0 ? 0 : (1.14 * pop - 0.14 * settle * pop);
+    var ringIn = easeOutCubic(span(t, 0.26, 0.90));
+    var labelIn = easeOutCubic(span(t, 0.34, 0.80));
+
+    el.ring.style.width = d + "px";
+    el.ring.style.height = d + "px";
+    el.ring.style.left = Math.round(ax - d / 2) + "px";
+    el.ring.style.top = Math.round(ay - d / 2) + "px";
+    el.ring.style.borderWidth = Math.max(3, Math.round(h * 0.0022)) + "px";
+    el.ring.style.borderColor = p.accent;
+    el.ring.style.transform = "scale(" + (1 + 0.62 * ringIn).toFixed(5) + ")";
+    el.ring.style.opacity = String((1 - ringIn) * 0.55 * (1 - out));
+
+    el.ball.style.width = d + "px";
+    el.ball.style.height = d + "px";
+    el.ball.style.left = Math.round(ax - d / 2) + "px";
+    el.ball.style.top = Math.round(ay - d / 2) + "px";
+    el.ball.style.background = p.accent;
+    el.ball.style.transform = "scale(" + scale.toFixed(5) + ")";
+    el.ball.style.opacity = String(1 - out);
+    el.ball.style.boxShadow = "0 10px 30px rgba(0,0,0,0.38)";
+
+    el.num.style.fontSize = Math.round(h * 0.040) + "px";
+    el.num.textContent = String(Math.round(Number(p.number)));
+    el.num.style.opacity = String(clamp01(pop * 3));
+
+    el.label.style.fontSize = Math.round(h * 0.0215) + "px";
+    el.label.style.maxWidth = Math.round(w * 0.32) + "px";
+    el.label.textContent = p.label;
+    el.label.style.top = Math.round(ay) + "px";
+    el.label.style.textAlign = toRight ? "left" : "right";
+    if (toRight) {
+      el.label.style.left = Math.round(ax + d / 2 + gap) + "px";
+      el.label.style.right = "auto";
+    } else {
+      el.label.style.left = "auto";
+      el.label.style.right = Math.round(w - ax + d / 2 + gap) + "px";
+    }
+    el.label.style.transform = "translate3d(" +
+      Math.round((1 - labelIn) * (toRight ? w : -w) * 0.02) + "px,-50%,0)";
+    el.label.style.opacity = String(labelIn * (1 - out));
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

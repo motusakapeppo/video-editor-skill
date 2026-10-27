@@ -1,0 +1,24 @@
+{
+  "name": "vx-transition-luma",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "fill": {
+      "type": "color",
+      "values": ["#141026", "#0E0E12", "#101A17", "#1A1010"],
+      "default": "#141026"
+    },
+    "tint": {
+      "type": "color",
+      "values": ["#38E1FF", "#FFD400", "#FFFFFF", "#FF4D4D"],
+      "default": "#38E1FF"
+    },
+    "feather": {
+      "type": "number",
+      "min": 0.02,
+      "max": 0.45,
+      "default": 0.16
+    }
+  }
+}

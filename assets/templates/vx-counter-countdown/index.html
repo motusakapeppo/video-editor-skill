@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-counter-countdown</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #ringBox { position: absolute; transform-origin: 50% 50%; }
+  #ringBox svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  #num {
+    position: absolute;
+    text-align: center;
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.05em;
+    font-variant-numeric: tabular-nums;
+    transform-origin: 50% 50%;
+  }
+  #caption {
+    position: absolute;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.52);
+    font-weight: 700;
+    letter-spacing: 0.30em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #pips {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pip {
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.20);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="ringBox">
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <circle id="ring" cx="50" cy="50" r="46" fill="none"
+              stroke-width="1.4"></circle>
+      <circle id="dash" cx="50" cy="50" r="41" fill="none"
+              stroke="rgba(255,255,255,0.16)" stroke-width="0.5"
+              stroke-dasharray="0.7 2.4"></circle>
+    </svg>
+  </div>
+  <div id="num"></div>
+  <div id="caption"></div>
+  <div id="pips">
+    <div class="pip"></div>
+    <div class="pip"></div>
+    <div class="pip"></div>
+  </div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 3,
+    caption: "Get ready",
+    accent: "#FF4D4D"
+  };
+
+  var STEPS = 3;
+  var STEP = 0.80;
+  var TOTAL = 2.55;
+
+  var el = {
+    stage: document.getElementById("stage"),
+    ringBox: document.getElementById("ringBox"),
+    ring: document.getElementById("ring"),
+    num: document.getElementById("num"),
+    caption: document.getElementById("caption"),
+    pips: document.getElementById("pips")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var size = Math.round(Math.min(w * 0.70, h * 0.335));
+    var centerY = Math.round(h * 0.470);
+
+    el.ringBox.style.left = Math.round((w - size) / 2) + "px";
+    el.ringBox.style.top = (centerY - Math.round(size / 2)) + "px";
+    el.ringBox.style.width = size + "px";
+    el.ringBox.style.height = size + "px";
+
+    el.num.style.left = "0px";
+    el.num.style.width = w + "px";
+    el.num.style.top = (centerY - Math.round(size * 0.30)) + "px";
+    el.num.style.fontSize = Math.round(h * 0.185) + "px";
+    el.num.style.lineHeight = Math.round(size * 0.62) + "px";
+
+    el.caption.style.left = "0px";
+    el.caption.style.width = w + "px";
+    el.caption.style.top = (centerY + Math.round(size * 0.42)) + "px";
+    el.caption.style.fontSize = Math.round(h * 0.0195) + "px";
+
+    el.pips.style.left = "0px";
+    el.pips.style.width = w + "px";
+    el.pips.style.top = (centerY + Math.round(size * 0.56)) + "px";
+    el.pips.style.height = Math.round(h * 0.008) + "px";
+
+    var i;
+    var pips = el.pips.children;
+    for (i = 0; i < pips.length; i += 1) {
+      pips[i].style.width = Math.round(w * 0.028) + "px";
+      pips[i].style.height = Math.max(4, Math.round(h * 0.0042)) + "px";
+      pips[i].style.marginLeft = Math.round(w * 0.006) + "px";
+      pips[i].style.marginRight = Math.round(w * 0.006) + "px";
+    }
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    layout();
+
+    var start = Math.max(1, Math.min(STEPS, Math.round(finite(params.value, DEFAULTS.value))));
+
+    var clock = Math.max(0, t);
+    var index = Math.min(STEPS - 1, Math.floor(clock / STEP));
+    var local = clamp01((clock - index * STEP) / STEP);
+    var enter = easeOutCubic(clamp01(t / 0.16));
+    var exit = 1 - easeOutCubic(clamp01((t - (TOTAL - 0.22)) / 0.22));
+
+    var pop = easeOutQuint(clamp01(local * 5));
+    var ringScale = (1 - 0.20 * easeOutCubic(local)) * (0.86 + 0.14 * pop);
+    var ringFade = enter * (0.95 - 0.45 * local) * (0.55 + 0.45 * exit);
+    var numFade = enter * (1 - 0.35 * local) * exit;
+
+    el.ring.setAttribute("stroke", params.accent);
+    el.ring.setAttribute("stroke-width", (1.4 + 0.5 * (1 - local)).toFixed(3));
+
+    el.ringBox.style.transform = "scale(" + ringScale.toFixed(5) + ")";
+    el.ringBox.style.opacity = String(clamp01(ringFade));
+
+    el.num.textContent = String(start - index);
+    el.num.style.opacity = String(clamp01(numFade));
+    el.num.style.transform = "scale(" + (0.90 + 0.10 * pop).toFixed(5) + ")";
+
+    el.caption.textContent = params.caption;
+    el.caption.style.opacity = String(clamp01(enter * 0.9 * (0.35 + 0.65 * exit)));
+    el.caption.style.transform = "translate3d(0," +
+      Math.round((1 - enter) * window.innerHeight * 0.010) + "px,0)";
+
+    var pips = el.pips.children;
+    var i;
+    for (i = 0; i < pips.length; i += 1) {
+      var state = i < index ? 1 : (i === index ? 0.55 + 0.45 * local : 0.16);
+      pips[i].style.background = i <= index
+        ? params.accent
+        : "rgba(255,255,255,0.20)";
+      pips[i].style.opacity = String(enter * clamp01(state) * exit);
+      pips[i].style.transform = "scaleY(" + (i === index ? (0.8 + 0.4 * local) : 1).toFixed(3) + ")";
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

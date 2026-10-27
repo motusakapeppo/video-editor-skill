@@ -1,0 +1,20 @@
+{
+  "name": "vx-progress-steps",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 0, "max": 4, "default": 3 },
+    "captions": {
+      "type": "string",
+      "max_length": 96,
+      "default": "Brief,Script,Shoot,Edit"
+    },
+    "kicker": { "type": "string", "max_length": 28, "default": "Workflow" },
+    "accent": {
+      "type": "color",
+      "values": ["#7CFF6B", "#FFD400", "#FF4D4D", "#38E1FF", "#FFFFFF"],
+      "default": "#7CFF6B"
+    }
+  }
+}

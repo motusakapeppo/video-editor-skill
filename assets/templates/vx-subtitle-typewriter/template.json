@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-typewriter",
+  "fps": 30,
+  "duration": 2.6,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 60,
+      "default": "Il tempo non aspetta nessuno"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#7CFF6B", "#FFD400", "#38E1FF", "#FF4D4D", "#FFFFFF"],
+      "default": "#7CFF6B"
+    },
+    "speed": {
+      "type": "number",
+      "min": 0.6,
+      "max": 1.8,
+      "default": 1.0
+    },
+    "casing": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    }
+  }
+}

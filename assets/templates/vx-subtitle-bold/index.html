@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-subtitle-bold</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #block {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    will-change: transform, opacity;
+  }
+  #bar {
+    height: 10px;
+    border-radius: 999px;
+    transform-origin: 0 50%;
+    will-change: transform, opacity;
+  }
+  #text {
+    color: #ffffff;
+    font-weight: 900;
+    line-height: 0.95;
+    letter-spacing: -0.032em;
+    text-transform: uppercase;
+    text-shadow: 0 6px 30px rgba(0, 0, 0, 0.55);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="block">
+    <div id="bar"></div>
+    <div id="text"></div>
+  </div>
+</div>
+<script>
+/* Heavy uppercase caption: the bar grows from t, the block slides up from t.
+   No transition, no animation, no clock -- only the seek. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.2;
+
+  var DEFAULTS = {
+    text: "Adesso o mai piu",
+    accent: "#FF4D4D",
+    align: "left",
+    tracking: "tight"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    block: document.getElementById("block"),
+    bar: document.getElementById("bar"),
+    text: document.getElementById("text")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var fontPx;
+    var barW;
+    var barH;
+    var grow;
+    var rise;
+    var exit;
+    var textIn;
+
+    fontPx = Math.round(h * 0.050);
+    barW = Math.round(w * 0.19);
+    barH = Math.max(6, Math.round(h * 0.0072));
+
+    el.block.style.left = Math.round(w * 0.07) + "px";
+    el.block.style.right = Math.round(w * 0.07) + "px";
+    el.block.style.bottom = Math.round(h * 0.104) + "px";
+    el.block.style.alignItems = p.align === "center" ? "center" : "flex-start";
+
+    el.bar.style.width = barW + "px";
+    el.bar.style.height = barH + "px";
+    el.bar.style.background = p.accent;
+    el.bar.style.marginBottom = Math.round(h * 0.017) + "px";
+
+    el.text.style.fontSize = fontPx + "px";
+    el.text.style.textAlign = p.align === "center" ? "center" : "left";
+    el.text.style.letterSpacing = p.tracking === "tighter" ? "-0.046em" : "-0.030em";
+    el.text.textContent = String(p.text);
+
+    grow = easeOutQuint(span(t, 0.10, 0.62));
+    textIn = easeOutCubic(span(t, 0.18, 0.86));
+    exit = span(t, DURATION * 0.82, DURATION * 0.99);
+    rise = Math.round(h * 0.034);
+
+    el.bar.style.opacity = String(clamp01(grow * 1.8) * (1 - exit));
+    el.bar.style.transform = "scaleX(" + grow.toFixed(5) + ")";
+
+    el.text.style.opacity = String(clamp01(textIn * 1.08) * (1 - exit));
+    el.block.style.transform = "translate3d(0," +
+      Math.round((1 - textIn) * rise - exit * rise * 0.8) + "px,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

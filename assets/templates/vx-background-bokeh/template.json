@@ -1,0 +1,25 @@
+{
+  "name": "vx-background-bokeh",
+  "fps": 30,
+  "duration": 2.8,
+  "size": [1080, 1920],
+  "params": {
+    "palette": {
+      "type": "string",
+      "values": ["warm", "cool", "gold", "rose"],
+      "default": "warm"
+    },
+    "count": {
+      "type": "int",
+      "min": 8,
+      "max": 24,
+      "default": 18
+    },
+    "speed": {
+      "type": "number",
+      "min": 0,
+      "max": 2,
+      "default": 1.0
+    }
+  }
+}

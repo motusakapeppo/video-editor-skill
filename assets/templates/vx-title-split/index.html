@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-title-split</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #wedge {
+    position: absolute;
+    top: -10%;
+    height: 120%;
+    transform-origin: 0 0;
+    border-radius: 2px;
+  }
+  #wedgeThin {
+    position: absolute;
+    top: -10%;
+    height: 120%;
+    background: #ffffff;
+    transform-origin: 0 0;
+  }
+  #left { position: absolute; text-align: left; }
+  #right { position: absolute; text-align: right; }
+  #tag {
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    line-height: 1.2;
+  }
+  #title {
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1.03;
+    letter-spacing: -0.025em;
+    text-shadow: 0 4px 26px rgba(0, 0, 0, 0.45);
+  }
+  #subtitle {
+    color: rgba(255, 255, 255, 0.9);
+    font-weight: 500;
+    line-height: 1.26;
+    letter-spacing: 0.01em;
+    text-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="wedge"></div>
+  <div id="wedgeThin"></div>
+  <div id="left">
+    <div id="tag"></div>
+    <div id="title"></div>
+  </div>
+  <div id="right">
+    <div id="subtitle"></div>
+  </div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.0;
+
+  var DEFAULTS = {
+    tag: "Capitolo 02",
+    title: "Due voci, un taglio",
+    subtitle: "La frattura che tiene insieme",
+    accent: "#FF4D4D"
+  };
+
+  var stage = document.getElementById("stage");
+  var el = {
+    wedge: document.getElementById("wedge"),
+    wedgeThin: document.getElementById("wedgeThin"),
+    left: document.getElementById("left"),
+    right: document.getElementById("right"),
+    tag: document.getElementById("tag"),
+    title: document.getElementById("title"),
+    subtitle: document.getElementById("subtitle")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var pad = Math.round(w * 0.075);
+    var wedgeW = Math.round(w * 0.10);
+    var wedgeLeft = Math.round(w * 0.545);
+    var thinW = Math.max(3, Math.round(w * 0.004));
+    var skew = -8;
+
+    el.wedge.style.left = wedgeLeft + "px";
+    el.wedge.style.width = wedgeW + "px";
+    el.wedge.style.transform = "skewX(" + skew + "deg)";
+    el.wedge.style.background = p.accent;
+
+    el.wedgeThin.style.left = (wedgeLeft + wedgeW + Math.round(w * 0.012)) + "px";
+    el.wedgeThin.style.width = thinW + "px";
+    el.wedgeThin.style.opacity = "0.55";
+    el.wedgeThin.style.transform = "skewX(" + skew + "deg)";
+
+    el.left.style.left = pad + "px";
+    el.left.style.top = Math.round(h * 0.305) + "px";
+    el.left.style.width = Math.round(w * 0.30) + "px";
+    el.left.style.textAlign = "left";
+
+    el.right.style.right = pad + "px";
+    el.right.style.top = Math.round(h * 0.575) + "px";
+    el.right.style.width = Math.round(w * 0.335) + "px";
+    el.right.style.textAlign = "right";
+
+    el.tag.style.fontSize = Math.round(h * 0.0185) + "px";
+    el.tag.style.color = p.accent;
+    el.tag.style.marginBottom = Math.round(h * 0.022) + "px";
+    el.title.style.fontSize = Math.round(h * 0.052) + "px";
+    el.subtitle.style.fontSize = Math.round(h * 0.0265) + "px";
+    el.tag.textContent = p.tag;
+    el.title.textContent = p.title;
+    el.subtitle.textContent = p.subtitle;
+
+    var wedge = easeOutQuint(span(t, 0.08, 0.58));
+    var tag = easeOutCubic(span(t, 0.16, 0.52));
+    var title = easeOutCubic(span(t, 0.26, 0.80));
+    var sub = easeOutCubic(span(t, 0.44, 0.96));
+    var out = easeOutCubic(span(t, DURATION - 0.38, DURATION - 0.03));
+
+    el.wedge.style.opacity = String(wedge * (1 - out));
+    el.wedge.style.transform = "translate3d(" +
+      Math.round((1 - wedge) * w * 0.34) + "px,0,0) skewX(" + skew + "deg)";
+    el.wedgeThin.style.opacity = String(0.55 * wedge * (1 - out));
+    el.wedgeThin.style.transform = "translate3d(" +
+      Math.round((1 - wedge) * w * 0.34) + "px,0,0) skewX(" + skew + "deg)";
+
+    el.left.style.opacity = String(1 - out);
+    el.left.style.transform = "translate3d(" +
+      Math.round((1 - title) * -w * 0.055) + "px,0,0)";
+
+    el.tag.style.opacity = String(tag);
+    el.tag.style.transform = "translate3d(0," +
+      Math.round((1 - tag) * h * 0.014) + "px,0)";
+
+    el.title.style.opacity = String(title);
+    el.title.style.transform = "translate3d(0," +
+      Math.round((1 - title) * h * 0.020) + "px,0)";
+
+    el.right.style.opacity = String(1 - out);
+    el.subtitle.style.opacity = String(sub);
+    el.right.style.transform = "translate3d(" +
+      Math.round((1 - sub) * w * 0.06) + "px,0,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

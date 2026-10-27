@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-counter-ticker</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #plate {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.055);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-sizing: border-box;
+    transform-origin: 0 50%;
+  }
+  .edge {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 3px;
+    transform-origin: 0 50%;
+  }
+  #edgeTop { top: 0; }
+  #edgeBottom { bottom: 0; }
+  #headRow {
+    position: absolute;
+    display: flex;
+    align-items: center;
+  }
+  #pip { border-radius: 50%; flex: 0 0 auto; }
+  #label {
+    color: rgba(255, 255, 255, 0.66);
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #live {
+    margin-left: auto;
+    color: rgba(255, 255, 255, 0.30);
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    font-size: 0; /* set in layout */
+  }
+  #number {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    color: #ffffff;
+    font-family: "SFMono-Regular", "Consolas", "Liberation Mono", Menlo, monospace;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+    white-space: pre;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="plate">
+    <div class="edge" id="edgeTop"></div>
+    <div class="edge" id="edgeBottom"></div>
+    <div id="headRow">
+      <div id="pip"></div>
+      <div id="label"></div>
+      <div id="live">LIVE</div>
+    </div>
+    <div id="number"></div>
+  </div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 12840,
+    label: "Subscribers",
+    digits: 5,
+    accent: "#38E1FF"
+  };
+
+  var TIMELINE = {
+    plate: [0.02, 0.30],
+    edges: [0.14, 0.52],
+    head: [0.20, 0.44],
+    number: [0.10, 0.86]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    plate: document.getElementById("plate"),
+    edgeTop: document.getElementById("edgeTop"),
+    edgeBottom: document.getElementById("edgeBottom"),
+    headRow: document.getElementById("headRow"),
+    pip: document.getElementById("pip"),
+    label: document.getElementById("label"),
+    live: document.getElementById("live"),
+    number: document.getElementById("number")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+  function pad(num, width) {
+    var text = String(num);
+    while (text.length < width) { text = "0" + text; }
+    return text;
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var pad = Math.round(w * 0.085);
+    var plateW = w - pad * 2;
+    var plateH = Math.round(h * 0.188);
+    var inside = Math.round(w * 0.055);
+
+    el.plate.style.left = pad + "px";
+    el.plate.style.top = Math.round(h * 0.404) + "px";
+    el.plate.style.width = plateW + "px";
+    el.plate.style.height = plateH + "px";
+
+    el.headRow.style.left = inside + "px";
+    el.headRow.style.right = inside + "px";
+    el.headRow.style.top = Math.round(plateH * 0.17) + "px";
+    el.headRow.style.height = Math.round(h * 0.030) + "px";
+
+    el.pip.style.width = Math.round(h * 0.011) + "px";
+    el.pip.style.height = Math.round(h * 0.011) + "px";
+    el.pip.style.marginRight = Math.round(h * 0.012) + "px";
+
+    el.label.style.fontSize = Math.round(h * 0.0185) + "px";
+    el.live.style.fontSize = Math.round(h * 0.0155) + "px";
+
+    el.number.style.left = inside + "px";
+    el.number.style.width = (plateW - inside * 2) + "px";
+    el.number.style.fontSize = Math.round(h * 0.0860) + "px";
+    el.number.style.top = Math.round(plateH * 0.38) + "px";
+    el.number.style.lineHeight = Math.round(h * 0.089) + "px";
+
+    return { plateW: plateW };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    layout();
+
+    var value = Math.max(0, Math.min(99999, finite(params.value, DEFAULTS.value)));
+    var width = Math.round(Math.max(3, Math.min(6, finite(params.digits, DEFAULTS.digits))));
+
+    var plate = easeOutQuint(span(t, TIMELINE.plate));
+    var edges = easeOutCubic(span(t, TIMELINE.edges));
+    var head = easeOutCubic(span(t, TIMELINE.head));
+    var number = easeOutCubic(span(t, TIMELINE.number));
+
+    el.plate.style.opacity = String(plate);
+    el.plate.style.transform = "translate3d(" +
+      Math.round((1 - plate) * -window.innerWidth * 0.024) + "px,0,0)";
+
+    el.edgeTop.style.background = params.accent;
+    el.edgeBottom.style.background = params.accent;
+    el.edgeTop.style.transform = "scaleX(" + edges.toFixed(5) + ")";
+    el.edgeBottom.style.transform = "scaleX(" + edges.toFixed(5) + ")";
+    el.edgeTop.style.opacity = String(edges);
+    el.edgeBottom.style.opacity = String(edges);
+
+    el.pip.style.background = params.accent;
+    el.pip.style.opacity = String(head);
+    el.pip.style.transform = "scale(" + (0.6 + head * 0.4).toFixed(4) + ")";
+
+    el.label.textContent = params.label;
+    el.live.textContent = "LIVE";
+
+    el.number.textContent = pad(Math.round(value * number), width);
+    el.number.style.opacity = String(clamp01(number * 2.2));
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

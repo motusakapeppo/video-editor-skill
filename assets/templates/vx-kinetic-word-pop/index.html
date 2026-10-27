@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-kinetic-word-pop</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #words {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: center;
+    justify-content: center;
+    text-align: center;
+  }
+  .w {
+    display: inline-block;
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1.06;
+    letter-spacing: -0.03em;
+    text-shadow: 0 6px 30px rgba(0, 0, 0, 0.48);
+    transform-origin: 50% 62%;
+    white-space: nowrap;
+  }
+  .w.last { color: #FFD400; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="words">
+    <span class="w" id="w0"></span><span class="w" id="w1"></span><span class="w" id="w2"></span><span class="w" id="w3"></span><span class="w" id="w4"></span><span class="w" id="w5"></span><span class="w" id="w6"></span><span class="w" id="w7"></span><span class="w" id="w8"></span><span class="w" id="w9"></span><span class="w" id="w10"></span><span class="w" id="w11"></span>
+  </div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.4;
+
+  var DEFAULTS = {
+    text: "Ogni parola arriva a tempo",
+    accent: "#FFD400",
+    stagger: 0.13,
+    caps: "none"
+  };
+
+  var stage = document.getElementById("stage");
+  var words = document.getElementById("words");
+  var slots = [];
+  var i;
+  for (i = 0; i < 12; i++) {
+    slots.push(document.getElementById("w" + i));
+  }
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function splitWords(text) {
+    var out = [];
+    var buf = "";
+    var index;
+    var ch;
+    for (index = 0; index < text.length; index++) {
+      ch = text.charAt(index);
+      if (ch === " " || ch === "," || ch === "\n" || ch === "\t" || ch === "/") {
+        if (buf) { out.push(buf); buf = ""; }
+      } else {
+        buf += ch;
+      }
+    }
+    if (buf) { out.push(buf); }
+    return out;
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var parts = splitWords(String(p.text));
+    if (parts.length > slots.length) { parts = parts.slice(0, slots.length); }
+    if (!parts.length) { parts = [" "]; }
+
+    var fontSize = Math.round(h * 0.075);
+    var gap = Math.round(w * 0.026);
+    var stagger = Number(p.stagger);
+    var out = easeOutCubic(span(t, DURATION - 0.42, DURATION - 0.04));
+
+    words.style.paddingLeft = Math.round(w * 0.08) + "px";
+    words.style.paddingRight = Math.round(w * 0.08) + "px";
+
+    var index;
+    var node;
+    var has;
+    var start;
+    var local;
+    var grow;
+    var settle;
+    var scale;
+    var alpha;
+    for (index = 0; index < slots.length; index++) {
+      node = slots[index];
+      has = index < parts.length;
+      node.style.fontSize = fontSize + "px";
+      node.style.marginLeft = index === 0 ? "0px" : Math.round(gap * 0.5) + "px";
+      node.style.marginRight = Math.round(gap * 0.5) + "px";
+      node.style.textTransform = p.caps === "upper" ? "uppercase" : "none";
+      node.style.color = index === parts.length - 1 ? p.accent : "#ffffff";
+
+      if (!has) {
+        node.textContent = "";
+        node.style.opacity = "0";
+        node.style.transform = "scale(0.5)";
+        continue;
+      }
+
+      node.textContent = parts[index];
+
+      start = 0.14 + index * stagger;
+      local = span(t, start, start + 0.34);
+      grow = easeOutQuint(clamp01(local / 0.68));
+      settle = easeOutCubic(clamp01((local - 0.68) / 0.32));
+      scale = 0.52 + 0.60 * grow - 0.12 * settle;
+      alpha = clamp01(local * 3.2) * (1 - out);
+
+      node.style.transform = "scale(" + scale.toFixed(5) + ")";
+      node.style.opacity = String(alpha);
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-split",
+  "fps": 30,
+  "duration": 2.6,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 96,
+      "default": "Meta in alto meta in basso respira"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "inset": {
+      "type": "number",
+      "min": 0.10,
+      "max": 0.34,
+      "default": 0.15
+    },
+    "casing": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    }
+  }
+}

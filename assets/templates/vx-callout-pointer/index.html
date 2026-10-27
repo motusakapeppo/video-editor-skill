@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-callout-pointer</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #dot {
+    position: absolute;
+    border-radius: 999px;
+    transform-origin: 50% 50%;
+  }
+  #line {
+    position: absolute;
+    height: 3px;
+    transform-origin: 0 50%;
+    border-radius: 999px;
+  }
+  #box {
+    position: absolute;
+    background: #0b0d12;
+    border-radius: 10px;
+    box-sizing: border-box;
+  }
+  #label {
+    color: #ffffff;
+    font-weight: 600;
+    line-height: 1.24;
+    letter-spacing: 0.005em;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="line"></div>
+  <div id="box"><div id="label"></div></div>
+  <div id="dot"></div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.2;
+
+  var DEFAULTS = {
+    anchor_x: 64,
+    anchor_y: 40,
+    label: "Dettaglio chiave",
+    accent: "#FFD400"
+  };
+
+  var stage = document.getElementById("stage");
+  var el = {
+    dot: document.getElementById("dot"),
+    line: document.getElementById("line"),
+    box: document.getElementById("box"),
+    label: document.getElementById("label")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var ax = clamp(Number(p.anchor_x) / 100 * w, w * 0.10, w * 0.90);
+    var ay = clamp(Number(p.anchor_y) / 100 * h, h * 0.12, h * 0.88);
+    var dirX = ax < w * 0.5 ? 1 : -1;
+    var dirY = ay < h * 0.5 ? 1 : -1;
+
+    var dotSize = Math.round(h * 0.0135);
+    var pad = Math.round(h * 0.019);
+    var labelPx = Math.round(h * 0.0205);
+    var boxW = Math.round(w * 0.34);
+
+    var bx = clamp(ax + dirX * w * 0.215, w * 0.06 + boxW / 2, w * 0.94 - boxW / 2);
+    var by = clamp(ay + dirY * h * 0.145, h * 0.08 + h * 0.045, h * 0.92 - h * 0.045);
+
+    var dx = bx - ax;
+    var dy = by - ay;
+    var length = Math.sqrt(dx * dx + dy * dy);
+    var angle = Math.atan2(dy, dx) * 180 / Math.PI;
+
+    el.label.style.fontSize = labelPx + "px";
+    el.label.textContent = p.label;
+    el.box.style.width = boxW + "px";
+    el.box.style.padding = pad + "px " + Math.round(pad * 1.15) + "px";
+    el.box.style.borderLeft = Math.round(h * 0.0034) + "px solid " + p.accent;
+
+    var dotIn = easeOutQuint(span(t, 0.08, 0.34));
+    var lineIn = easeOutQuint(span(t, 0.22, 0.66));
+    var boxIn = easeOutCubic(span(t, 0.50, 0.94));
+    var out = easeOutCubic(span(t, DURATION - 0.34, DURATION - 0.03));
+
+    var dotScale = dotIn <= 0 ? 0 : (1.16 - 0.16 * dotIn) * dotIn;
+
+    el.dot.style.width = dotSize + "px";
+    el.dot.style.height = dotSize + "px";
+    el.dot.style.left = ax + "px";
+    el.dot.style.top = ay + "px";
+    el.dot.style.background = p.accent;
+    el.dot.style.transform = "translate(-50%,-50%) scale(" + dotScale.toFixed(5) + ")";
+    el.dot.style.opacity = String(1 - out);
+    el.dot.style.boxShadow = "0 0 0 " + Math.round(dotSize * 0.55) + "px rgba(9,11,15,0.35)";
+
+    el.line.style.left = ax + "px";
+    el.line.style.top = (ay - 1.5) + "px";
+    el.line.style.width = Math.round(length * lineIn) + "px";
+    el.line.style.background = p.accent;
+    el.line.style.transform = "rotate(" + angle.toFixed(3) + "deg)";
+    el.line.style.opacity = String(clamp01(lineIn * 4) * (1 - out));
+
+    el.box.style.left = bx + "px";
+    el.box.style.top = by + "px";
+    el.box.style.opacity = String(boxIn * (1 - out));
+    el.box.style.transform = "translate(-50%,-50%) scale(" +
+      (0.94 + 0.06 * boxIn).toFixed(5) + ")";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

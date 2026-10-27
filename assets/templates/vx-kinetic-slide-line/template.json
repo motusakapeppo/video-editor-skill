@@ -1,0 +1,28 @@
+{
+  "name": "vx-kinetic-slide-line",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "line1": {
+      "type": "string",
+      "max_length": 38,
+      "default": "Apro la scena"
+    },
+    "line2": {
+      "type": "string",
+      "max_length": 38,
+      "default": "Il ritmo sale"
+    },
+    "line3": {
+      "type": "string",
+      "max_length": 38,
+      "default": "Chiudo il cerchio"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#7CFF6B"
+    }
+  }
+}

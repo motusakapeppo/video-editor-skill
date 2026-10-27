@@ -1,0 +1,24 @@
+{
+  "name": "vx-transition-wipe",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "fill": {
+      "type": "color",
+      "values": ["#0E0E12", "#101A17", "#141026", "#1A1010"],
+      "default": "#0E0E12"
+    },
+    "edge": {
+      "type": "color",
+      "values": ["#FFFFFF", "#FFD400", "#38E1FF", "#FF4D4D"],
+      "default": "#FFFFFF"
+    },
+    "edgeWidth": {
+      "type": "number",
+      "min": 2,
+      "max": 30,
+      "default": 8
+    }
+  }
+}

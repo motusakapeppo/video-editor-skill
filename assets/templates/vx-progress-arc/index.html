@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-progress-arc</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #gauge { position: absolute; transform-origin: 50% 62%; }
+  #gauge svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  #readout {
+    position: absolute;
+    text-align: center;
+    transform-origin: 50% 0;
+  }
+  #valueRow {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+  }
+  #number {
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.045em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  #unit {
+    color: rgba(255, 255, 255, 0.52);
+    font-weight: 700;
+    margin-left: 0.07em;
+  }
+  #caption {
+    color: rgba(255, 255, 255, 0.5);
+    font-weight: 600;
+    letter-spacing: 0.20em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    margin-top: 0.55em;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="gauge">
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <circle id="bed" cx="50" cy="50" r="42" fill="none"
+              stroke="rgba(255,255,255,0.13)" stroke-width="6.5"
+              stroke-dasharray="197.92 65.97"
+              transform="rotate(135 50 50)"></circle>
+      <circle id="arc" cx="50" cy="50" r="42" fill="none"
+              stroke-width="6.5"
+              transform="rotate(135 50 50)"></circle>
+      <g id="ticks" stroke-linecap="round">
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(225.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(252.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(279.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(306.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(333.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(360.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(387.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(414.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(441.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(468.00 50 50)"></line>
+        <line y1="31" y2="36.5" x1="50" x2="50" transform="rotate(495.00 50 50)"></line>
+      </g>
+      <g id="needle">
+        <line x1="50" y1="50" x2="76" y2="50"
+              stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></line>
+      </g>
+      <circle id="hub" cx="50" cy="50" r="3.4" fill="#ffffff"></circle>
+      <circle id="hubCore" cx="50" cy="50" r="1.5" fill="#0b0b0b"></circle>
+    </svg>
+  </div>
+  <div id="readout">
+    <div id="valueRow"><div id="number"></div><div id="unit"></div></div>
+    <div id="caption"></div>
+  </div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 62,
+    caption: "Load average",
+    unit: "%",
+    accent: "#FF4D4D"
+  };
+
+  var TIMELINE = {
+    gauge: [0.02, 0.32],
+    arc: [0.12, 0.80],
+    needle: [0.14, 0.86],
+    readout: [0.34, 0.70]
+  };
+
+  var RADIUS = 42;
+  var CIRC = 2 * Math.PI * RADIUS;
+  var ARC_LEN = CIRC * 0.75;
+
+  var el = {
+    stage: document.getElementById("stage"),
+    gauge: document.getElementById("gauge"),
+    arc: document.getElementById("arc"),
+    needle: document.getElementById("needle"),
+    ticks: document.getElementById("ticks"),
+    hub: document.getElementById("hub"),
+    hubCore: document.getElementById("hubCore"),
+    readout: document.getElementById("readout"),
+    number: document.getElementById("number"),
+    unit: document.getElementById("unit"),
+    caption: document.getElementById("caption")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function build() {
+    var i;
+    for (i = 0; i < el.ticks.children.length; i += 1) {
+      el.ticks.children[i].setAttribute("stroke", "rgba(255,255,255,0.24)");
+      el.ticks.children[i].setAttribute("stroke-width", "0.8");
+    }
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var size = Math.round(Math.min(w * 0.80, h * 0.355));
+    var top = Math.round(h * 0.295);
+
+    el.gauge.style.left = Math.round((w - size) / 2) + "px";
+    el.gauge.style.top = top + "px";
+    el.gauge.style.width = size + "px";
+    el.gauge.style.height = size + "px";
+
+    el.readout.style.left = "0px";
+    el.readout.style.width = w + "px";
+    el.readout.style.top = Math.round(top + size * 0.80) + "px";
+
+    el.number.style.fontSize = Math.round(h * 0.082) + "px";
+    el.unit.style.fontSize = Math.round(h * 0.030) + "px";
+    el.caption.style.fontSize = Math.round(h * 0.0185) + "px";
+
+    el.hub.setAttribute("r", "3.4");
+    el.hubCore.setAttribute("r", "1.5");
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    layout();
+
+    var value = Math.max(0, Math.min(100, finite(params.value, DEFAULTS.value)));
+    var gauge = easeOutQuint(span(t, TIMELINE.gauge));
+    var arc = easeOutCubic(span(t, TIMELINE.arc));
+    var needle = easeOutCubic(span(t, TIMELINE.needle));
+    var readout = easeOutCubic(span(t, TIMELINE.readout));
+    var frac = (value / 100) * arc;
+
+    el.arc.style.stroke = params.accent;
+    el.arc.style.strokeDasharray = (ARC_LEN * frac).toFixed(3) + " " + CIRC.toFixed(3);
+    el.arc.style.strokeDashoffset = "0";
+
+    el.needle.setAttribute("transform",
+      "rotate(" + (135 + 270 * needle * (value / 100)).toFixed(3) + " 50 50)");
+
+    var i;
+    for (i = 0; i < el.ticks.children.length; i += 1) {
+      var item = el.ticks.children[i];
+      var f = i / (el.ticks.children.length - 1);
+      item.setAttribute("stroke",
+        f <= frac ? params.accent : "rgba(255,255,255,0.24)");
+      item.setAttribute("stroke-width", f <= frac ? "1.1" : "0.8");
+    }
+
+    el.hub.setAttribute("fill", "#ffffff");
+    el.hubCore.setAttribute("fill", params.accent);
+
+    el.gauge.style.opacity = String(clamp01(gauge * 1.5));
+    el.gauge.style.transform = "scale(" + (0.95 + gauge * 0.05).toFixed(5) + ")";
+
+    el.readout.style.opacity = String(readout);
+    el.readout.style.transform = "translate3d(0," +
+      Math.round((1 - readout) * window.innerHeight * 0.020) + "px,0)";
+
+    el.number.textContent = String(Math.round(value * arc));
+    el.unit.textContent = params.unit;
+    el.caption.textContent = params.caption;
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  build();
+  apply(0);
+})();
+</script>
+</body>
+</html>

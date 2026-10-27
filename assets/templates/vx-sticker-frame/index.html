@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-sticker-frame</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    overflow: hidden;
+  }
+  .bar {
+    position: absolute;
+    background: #FFFFFF;
+    border-radius: 999px;
+  }
+  #caption {
+    position: absolute;
+    transform-origin: 0 100%;
+  }
+  #kicker {
+    color: rgba(255, 255, 255, 0.74);
+    font-weight: 700;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  }
+  #title {
+    color: #FFFFFF;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    line-height: 1.02;
+    text-shadow: 0 3px 22px rgba(0, 0, 0, 0.55);
+  }
+  #tag {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.60);
+    font-weight: 700;
+    letter-spacing: 0.30em;
+    text-transform: uppercase;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="bar" id="barTop"></div>
+  <div class="bar" id="barRight"></div>
+  <div class="bar" id="barBottom"></div>
+  <div class="bar" id="barLeft"></div>
+  <div id="caption">
+    <div id="kicker"></div>
+    <div id="title"></div>
+  </div>
+  <div id="tag"></div>
+</div>
+<script>
+/* vx-sticker-frame: a thick frame drawing itself around the canvas edge,
+   segment by segment, then a caption rising inside it. */
+(function () {
+  "use strict";
+
+  var DUR = 2.4;
+  var DEFAULTS = {
+    title: "Capitolo Uno",
+    kicker: "serie",
+    tag: "SPAZIO 13",
+    accent: "#FFFFFF",
+    thickness: 26
+  };
+
+  var stage = document.getElementById("stage");
+  var bars = {
+    top: document.getElementById("barTop"),
+    right: document.getElementById("barRight"),
+    bottom: document.getElementById("barBottom"),
+    left: document.getElementById("barLeft")
+  };
+  var caption = document.getElementById("caption");
+  var kicker = document.getElementById("kicker");
+  var title = document.getElementById("title");
+  var tag = document.getElementById("tag");
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var inset = Math.round(w * 0.042);
+    var thick = Math.round(Math.max(8, Number(p.thickness)));
+    var lenX = w - inset * 2;
+    var lenY = h - inset * 2;
+
+    var pTop = easeOutQuint(span(t, 0.02 * DUR, 0.12 * DUR));
+    var pRight = easeOutQuint(span(t, 0.11 * DUR, 0.21 * DUR));
+    var pBottom = easeOutQuint(span(t, 0.20 * DUR, 0.30 * DUR));
+    var pLeft = easeOutQuint(span(t, 0.29 * DUR, 0.39 * DUR));
+    var cap = easeOutCubic(span(t, 0.31 * DUR, 0.47 * DUR));
+    var exit = easeOutCubic(span(t, 0.88 * DUR, 1.0 * DUR));
+
+    bars.top.style.left = inset + "px";
+    bars.top.style.top = inset + "px";
+    bars.top.style.width = lenX + "px";
+    bars.top.style.height = thick + "px";
+    bars.top.style.transformOrigin = "0% 50%";
+    bars.top.style.transform = "scaleX(" + pTop.toFixed(5) + ")";
+
+    bars.right.style.left = inset + lenX - thick + "px";
+    bars.right.style.top = inset + "px";
+    bars.right.style.width = thick + "px";
+    bars.right.style.height = lenY + "px";
+    bars.right.style.transformOrigin = "50% 0%";
+    bars.right.style.transform = "scaleY(" + pRight.toFixed(5) + ")";
+
+    bars.bottom.style.left = inset + "px";
+    bars.bottom.style.top = inset + lenY - thick + "px";
+    bars.bottom.style.width = lenX + "px";
+    bars.bottom.style.height = thick + "px";
+    bars.bottom.style.transformOrigin = "100% 50%";
+    bars.bottom.style.transform = "scaleX(" + pBottom.toFixed(5) + ")";
+
+    bars.left.style.left = inset + "px";
+    bars.left.style.top = inset + "px";
+    bars.left.style.width = thick + "px";
+    bars.left.style.height = lenY + "px";
+    bars.left.style.transformOrigin = "50% 100%";
+    bars.left.style.transform = "scaleY(" + pLeft.toFixed(5) + ")";
+
+    var keys = ["top", "right", "bottom", "left"];
+    var phases = [pTop, pRight, pBottom, pLeft];
+    for (var i = 0; i < keys.length; i++) {
+      var el = bars[keys[i]];
+      el.style.background = p.accent === "#FFFFFF"
+        ? "linear-gradient(90deg, #FFFFFF, rgba(255,255,255,0.88))"
+        : p.accent;
+      el.style.opacity = String(clamp01(phases[i] * 6));
+      el.style.boxShadow = "0 " + Math.round(h * 0.004) + "px " +
+        Math.round(h * 0.020) + "px rgba(0,0,0,0.42)";
+    }
+
+    var pad = inset + thick + Math.round(w * 0.045);
+    caption.style.left = pad + "px";
+    caption.style.bottom = Math.round(h * 0.10) + "px";
+    caption.style.maxWidth = Math.round(w - pad * 2) + "px";
+    kicker.textContent = p.kicker;
+    kicker.style.fontSize = Math.round(h * 0.0165) + "px";
+    kicker.style.marginBottom = Math.round(h * 0.014) + "px";
+    kicker.style.opacity = String(cap);
+    kicker.style.transform = "translate3d(0," + Math.round((1 - cap) * h * 0.014) + "px,0)";
+
+    title.textContent = p.title;
+    title.style.fontSize = Math.round(h * 0.042) + "px";
+    title.style.opacity = String(cap);
+    caption.style.opacity = String(1 - exit);
+    caption.style.transform = "translate3d(0," +
+      Math.round(cap * 0 + (1 - cap) * h * 0.028 + exit * h * 0.012) + "px,0)";
+
+    tag.textContent = "1080 × 1920";
+    tag.style.fontSize = Math.round(h * 0.0135) + "px";
+    tag.style.top = Math.round(inset + thick + h * 0.020) + "px";
+    tag.style.right = Math.round(pad * 0.72) + "px";
+    tag.style.textAlign = "right";
+    tag.style.opacity = String(cap * 0.72);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

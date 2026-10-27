@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-card-stat</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: transparent;
+    overflow: hidden;
+  }
+  #rule {
+    position: absolute;
+    transform-origin: 0% 50%;
+  }
+  #label {
+    position: absolute;
+    color: rgba(255, 255, 255, 0.74);
+    font-weight: 700;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.5);
+  }
+  #value {
+    position: absolute;
+    color: #FFFFFF;
+    font-weight: 800;
+    letter-spacing: -0.045em;
+    line-height: 0.92;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 6px 40px rgba(0, 0, 0, 0.55);
+  }
+  #value i {
+    font-style: normal;
+    font-size: 0.62em;
+    letter-spacing: -0.01em;
+  }
+  #chip {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    transform-origin: 0% 50%;
+  }
+  #chipBox {
+    display: inline-block;
+    border-radius: 999px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+  #chipNote {
+    color: rgba(255, 255, 255, 0.62);
+    font-weight: 600;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="rule"></div>
+  <div id="label"></div>
+  <div id="value"></div>
+  <div id="chip">
+    <span id="chipBox"></span>
+    <span id="chipNote"></span>
+  </div>
+</div>
+<script>
+/* vx-card-stat: one oversized number, a spaced label over an accent hairline
+   and a small delta chip underneath. */
+(function () {
+  "use strict";
+
+  var DUR = 2.2;
+  var DEFAULTS = {
+    label: "Ascoltatori mensili",
+    value: 1284,
+    delta: 12.4,
+    note: "vs mese scorso",
+    accent: "#7CFF6B"
+  };
+
+  var stage = document.getElementById("stage");
+  var rule = document.getElementById("rule");
+  var label = document.getElementById("label");
+  var value = document.getElementById("value");
+  var chip = document.getElementById("chip");
+  var chipBox = document.getElementById("chipBox");
+  var chipNote = document.getElementById("chipNote");
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function easeOutBack(x) {
+    var c1 = 2.0, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
+
+  function grouped(n) {
+    var text = String(Math.round(n));
+    var out = "";
+    var count = 0;
+    for (var i = text.length - 1; i >= 0; i--) {
+      out = text.charAt(i) + out;
+      count += 1;
+      if (count % 3 === 0 && i > 0) { out = " " + out; }
+    }
+    return out;
+  }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var left = Math.round(w * 0.088);
+    var rp = easeOutQuint(span(t, 0.02 * DUR, 0.20 * DUR));
+    var lp = easeOutCubic(span(t, 0.06 * DUR, 0.24 * DUR));
+    var vp = easeOutQuint(span(t, 0.10 * DUR, 0.34 * DUR));
+    var cp = easeOutBack(span(t, 0.26 * DUR, 0.42 * DUR));
+    var np = easeOutCubic(span(t, 0.32 * DUR, 0.46 * DUR));
+    var exit = easeOutCubic(span(t, 0.90 * DUR, 1.0 * DUR));
+
+    rule.style.left = left + "px";
+    rule.style.top = Math.round(h * 0.300) + "px";
+    rule.style.width = Math.round(w * 0.30) + "px";
+    rule.style.height = Math.max(3, Math.round(h * 0.0028)) + "px";
+    rule.style.background = p.accent;
+    rule.style.opacity = String(rp);
+    rule.style.transform = "scaleX(" + rp.toFixed(4) + ")";
+
+    label.textContent = p.label;
+    label.style.left = left + "px";
+    label.style.top = Math.round(h * 0.330) + "px";
+    label.style.fontSize = Math.round(h * 0.0172) + "px";
+    label.style.opacity = String(lp);
+    label.style.transform = "translate3d(0," + Math.round((1 - lp) * h * 0.014) + "px,0)";
+
+    var size = h * 0.152;
+    var body = grouped(Number(p.value));
+    value.innerHTML = "";
+    value.appendChild(document.createTextNode(body));
+    var mark = document.createElement("i");
+    mark.textContent = " \u2191";
+    mark.style.color = p.accent;
+    value.appendChild(mark);
+    value.style.left = left + "px";
+    value.style.top = Math.round(h * 0.368) + "px";
+    value.style.fontSize = Math.round(size) + "px";
+    value.style.opacity = String(clamp01(vp * 1.3) * (1 - exit));
+    value.style.transform = "translate3d(0," +
+      Math.round((1 - vp) * h * 0.042 + exit * h * 0.02) + "px,0)";
+
+    var up = Number(p.delta) >= 0;
+    var chipText = (up ? "\u25B2 " : "\u25BC ") + Math.abs(Number(p.delta)).toFixed(1) + "%";
+    chipBox.textContent = chipText;
+    chipBox.style.padding = Math.round(h * 0.0105) + "px " + Math.round(h * 0.019) + "px";
+    chipBox.style.fontSize = Math.round(h * 0.0185) + "px";
+    chipBox.style.background = up ? p.accent : "rgba(255, 77, 109, 0.92)";
+    chipBox.style.color = "#0C0D12";
+    chipBox.style.boxShadow = "0 10px 30px rgba(0,0,0,0.32)";
+
+    chipNote.textContent = p.note;
+    chipNote.style.fontSize = Math.round(h * 0.0152) + "px";
+    chipNote.style.marginLeft = Math.round(w * 0.030) + "px";
+    chipNote.style.opacity = String(np);
+
+    chip.style.left = left + "px";
+    chip.style.top = Math.round(h * 0.560) + "px";
+    chip.style.opacity = String(clamp01(cp * 1.6) * (1 - exit));
+    chip.style.transform = "translate3d(0,0,0) scale(" +
+      (0.72 + 0.28 * cp).toFixed(4) + ")";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

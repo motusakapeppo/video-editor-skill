@@ -1,0 +1,28 @@
+{
+  "name": "vx-intro-curtain",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "title": {
+      "type": "string",
+      "max_length": 22,
+      "default": "Atto primo"
+    },
+    "eyebrow": {
+      "type": "string",
+      "max_length": 20,
+      "default": "Cortina"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#F2C14E", "#FF4D4D", "#38E1FF", "#FFFFFF"],
+      "default": "#F2C14E"
+    },
+    "panel": {
+      "type": "color",
+      "values": ["#0B0B0F", "#141026", "#101A17", "#1A1010"],
+      "default": "#0B0B0F"
+    }
+  }
+}

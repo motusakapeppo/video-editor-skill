@@ -1,0 +1,16 @@
+{
+  "name": "vx-counter-ticker",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "value": { "type": "number", "min": 0, "max": 99999, "default": 12840 },
+    "label": { "type": "string", "max_length": 24, "default": "Subscribers" },
+    "digits": { "type": "int", "min": 3, "max": 6, "default": 5 },
+    "accent": {
+      "type": "color",
+      "values": ["#38E1FF", "#FFD400", "#FF4D4D", "#7CFF6B", "#FFFFFF"],
+      "default": "#38E1FF"
+    }
+  }
+}

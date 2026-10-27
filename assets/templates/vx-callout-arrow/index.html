@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-callout-arrow</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #arrow { position: absolute; transform-origin: 0 50%; }
+  #shaft { position: absolute; left: 0; top: 50%; width: 100%; border-radius: 999px; }
+  #head { position: absolute; right: 0; top: 50%; }
+  #label {
+    position: absolute;
+    color: #ffffff;
+    font-weight: 600;
+    line-height: 1.24;
+    letter-spacing: 0.005em;
+    text-align: center;
+    text-shadow: 0 3px 18px rgba(0, 0, 0, 0.55);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="arrow">
+    <div id="shaft"></div>
+    <div id="head"></div>
+  </div>
+  <div id="label"></div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.4;
+
+  var DEFAULTS = {
+    anchor_x: 52,
+    anchor_y: 56,
+    label: "Qui succede tutto",
+    angle: 205,
+    accent: "#FF4D4D"
+  };
+
+  var stage = document.getElementById("stage");
+  var el = {
+    arrow: document.getElementById("arrow"),
+    shaft: document.getElementById("shaft"),
+    head: document.getElementById("head"),
+    label: document.getElementById("label")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var ax = clamp(Number(p.anchor_x) / 100 * w, w * 0.12, w * 0.88);
+    var ay = clamp(Number(p.anchor_y) / 100 * h, h * 0.14, h * 0.86);
+    var rad = Number(p.angle) * Math.PI / 180;
+    var ux = Math.cos(rad);
+    var uy = Math.sin(rad);
+
+    var headW = Math.round(h * 0.032);
+    var headH = Math.round(h * 0.046);
+    var shaftH = Math.max(5, Math.round(h * 0.0034));
+
+    var maxL = h * 0.28;
+    var limit;
+    if (ux > 0.0001) {
+      limit = (w * 0.93 - ax) / ux;
+      if (limit < maxL) { maxL = limit; }
+    } else if (ux < -0.0001) {
+      limit = (w * 0.07 - ax) / ux;
+      if (limit < maxL) { maxL = limit; }
+    }
+    if (uy > 0.0001) {
+      limit = (h * 0.92 - ay) / uy;
+      if (limit < maxL) { maxL = limit; }
+    } else if (uy < -0.0001) {
+      limit = (h * 0.08 - ay) / uy;
+      if (limit < maxL) { maxL = limit; }
+    }
+    if (maxL < h * 0.08) { maxL = h * 0.08; }
+
+    var tailX = ax + ux * maxL;
+    var tailY = ay + uy * maxL;
+    var rot = Number(p.angle) + 180;
+
+    var grow = easeOutQuint(span(t, 0.12, 0.64));
+    var headIn = clamp01((grow - 0.18) / 0.14);
+    var labelIn = easeOutCubic(span(t, 0.42, 0.92));
+    var out = easeOutCubic(span(t, DURATION - 0.38, DURATION - 0.03));
+
+    el.arrow.style.left = Math.round(tailX) + "px";
+    el.arrow.style.top = Math.round(tailY - headH / 2) + "px";
+    el.arrow.style.height = headH + "px";
+    el.arrow.style.width = Math.round(maxL * grow) + "px";
+    el.arrow.style.transform = "rotate(" + rot.toFixed(3) + "deg)";
+    el.arrow.style.opacity = String(1 - out);
+
+    el.shaft.style.height = shaftH + "px";
+    el.shaft.style.marginTop = Math.round(-shaftH / 2) + "px";
+    el.shaft.style.background = p.accent;
+
+    el.head.style.width = headW + "px";
+    el.head.style.height = headH + "px";
+    el.head.style.marginTop = Math.round(-headH / 2) + "px";
+    el.head.style.background = p.accent;
+    el.head.style.clipPath = "polygon(0% 0%, 100% 50%, 0% 100%)";
+    el.head.style.opacity = String(headIn);
+
+    var per = h * 0.046;
+    var nx = -uy;
+    var ny = ux;
+    var side = 1;
+    var probe;
+    var sx;
+    var sy;
+    var score;
+    var best = -1e9;
+    var signs = [1, -1];
+    var k;
+    for (k = 0; k < 2; k++) {
+      probe = signs[k];
+      sx = tailX + nx * per * probe;
+      sy = tailY + ny * per * probe;
+      score = Math.min(
+        sx - w * 0.20,
+        w * 0.80 - sx,
+        sy - h * 0.10,
+        h * 0.90 - sy
+      );
+      if (score > best) { best = score; side = probe; }
+    }
+    var lx = tailX + nx * per * side;
+    var ly = tailY + ny * per * side;
+    lx = clamp(lx, w * 0.23, w * 0.77);
+    ly = clamp(ly, h * 0.11, h * 0.89);
+
+    el.label.style.fontSize = Math.round(h * 0.0205) + "px";
+    el.label.style.maxWidth = Math.round(w * 0.36) + "px";
+    el.label.textContent = p.label;
+    el.label.style.left = Math.round(lx) + "px";
+    el.label.style.top = Math.round(ly) + "px";
+    el.label.style.transform = "translate(-50%,-50%) translateY(" +
+      Math.round((1 - labelIn) * h * 0.012 * side) + "px)";
+    el.label.style.opacity = String(labelIn * (1 - out));
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

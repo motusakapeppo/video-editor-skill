@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-chart-donut</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #caption {
+    position: absolute;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.58);
+    font-weight: 700;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  #dial { position: absolute; }
+  #dial svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  #core {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #total {
+    color: #ffffff;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  #of {
+    color: rgba(255, 255, 255, 0.42);
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-top: 0.5em;
+  }
+  #legend { position: absolute; }
+  .row {
+    position: absolute;
+    display: flex;
+    align-items: center;
+  }
+  .dot { border-radius: 50%; flex: 0 0 auto; }
+  .name {
+    flex: 1 1 auto;
+    color: rgba(255, 255, 255, 0.80);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .share {
+    flex: 0 0 auto;
+    color: rgba(255, 255, 255, 0.45);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="caption"></div>
+  <div id="dial">
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <circle cx="50" cy="50" r="38" fill="none"
+              stroke="rgba(255,255,255,0.09)" stroke-width="13"></circle>
+      <circle id="seg0" cx="50" cy="50" r="38" fill="none" stroke-width="13"></circle>
+      <circle id="seg1" cx="50" cy="50" r="38" fill="none" stroke-width="13"></circle>
+      <circle id="seg2" cx="50" cy="50" r="38" fill="none" stroke-width="13"></circle>
+      <circle id="seg3" cx="50" cy="50" r="38" fill="none" stroke-width="13"></circle>
+    </svg>
+  </div>
+  <div id="core">
+    <div id="total"></div>
+    <div id="of">of 100</div>
+  </div>
+  <div id="legend"></div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    value: 88,
+    segments: "38,27,21,14",
+    labels: "Direct,Search,Social,Referral",
+    caption: "Traffic mix",
+    accent: "#FFD400"
+  };
+
+  var RADIUS = 38;
+  var CIRC = 2 * Math.PI * RADIUS;
+
+  var TIMELINE = {
+    head: [0.02, 0.26],
+    draw: [0.10, 0.80],
+    legend: [0.28, 0.62]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    caption: document.getElementById("caption"),
+    dial: document.getElementById("dial"),
+    core: document.getElementById("core"),
+    total: document.getElementById("total"),
+    of: document.getElementById("of"),
+    legend: document.getElementById("legend"),
+    segs: [
+      document.getElementById("seg0"),
+      document.getElementById("seg1"),
+      document.getElementById("seg2"),
+      document.getElementById("seg3")
+    ]
+  };
+
+  var rows = [];
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+  function finite(v, fallback) {
+    var n = Number(v);
+    return isFinite(n) ? n : fallback;
+  }
+  function trimText(raw) {
+    var text = String(raw == null ? "" : raw);
+    while (text.length && text.charAt(0) === " ") { text = text.slice(1); }
+    while (text.length && text.charAt(text.length - 1) === " ") {
+      text = text.slice(0, text.length - 1);
+    }
+    return text;
+  }
+  function parseList(raw, fallback) {
+    var out = [];
+    var parts = String(raw == null ? "" : raw).split(",");
+    var i;
+    for (i = 0; i < parts.length; i += 1) {
+      var n = Number(trimText(parts[i]));
+      if (isFinite(n) && n > 0) { out.push(n); }
+    }
+    if (!out.length) { out = fallback.slice(0); }
+    return out;
+  }
+
+  function build() {
+    var i;
+    for (i = 0; i < 4; i += 1) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var dot = document.createElement("div");
+      dot.className = "dot";
+      var name = document.createElement("div");
+      name.className = "name";
+      var share = document.createElement("div");
+      share.className = "share";
+      row.appendChild(dot);
+      row.appendChild(name);
+      row.appendChild(share);
+      el.legend.appendChild(row);
+      rows.push({ row: row, dot: dot, name: name, share: share });
+    }
+  }
+
+  function layout() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var size = Math.round(Math.min(w * 0.60, h * 0.315));
+    var top = Math.round(h * 0.248);
+    var left = Math.round((w - size) / 2);
+
+    el.caption.style.left = "0px";
+    el.caption.style.width = w + "px";
+    el.caption.style.top = Math.round(h * 0.190) + "px";
+    el.caption.style.fontSize = Math.round(h * 0.0185) + "px";
+
+    el.dial.style.left = left + "px";
+    el.dial.style.top = top + "px";
+    el.dial.style.width = size + "px";
+    el.dial.style.height = size + "px";
+
+    el.core.style.left = left + "px";
+    el.core.style.top = top + "px";
+    el.core.style.width = size + "px";
+    el.core.style.height = size + "px";
+
+    el.total.style.fontSize = Math.round(size * 0.200) + "px";
+    el.of.style.fontSize = Math.round(size * 0.048) + "px";
+
+    var colW = Math.round(w * 0.335);
+    var legendW = colW * 2;
+    var legendLeft = Math.round((w - legendW) / 2);
+    var legendTop = top + size + Math.round(h * 0.055);
+    var pitch = Math.round(h * 0.058);
+
+    el.legend.style.left = legendLeft + "px";
+    el.legend.style.top = legendTop + "px";
+    el.legend.style.width = legendW + "px";
+    el.legend.style.height = (pitch * 2) + "px";
+
+    var i;
+    for (i = 0; i < rows.length; i += 1) {
+      var col = i % 2;
+      var line = Math.floor(i / 2);
+      rows[i].row.style.left = (col * colW) + "px";
+      rows[i].row.style.top = (line * pitch) + "px";
+      rows[i].row.style.width = (colW - Math.round(w * 0.030)) + "px";
+      rows[i].row.style.height = Math.round(h * 0.030) + "px";
+      rows[i].dot.style.width = Math.round(h * 0.0098) + "px";
+      rows[i].dot.style.height = Math.round(h * 0.0098) + "px";
+      rows[i].dot.style.marginRight = Math.round(w * 0.014) + "px";
+      rows[i].name.style.fontSize = Math.round(h * 0.0185) + "px";
+      rows[i].share.style.fontSize = Math.round(h * 0.0175) + "px";
+    }
+
+    return { size: size, legendW: legendW, colW: colW };
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var box = layout();
+
+    var value = Math.max(0, Math.min(100, finite(params.value, DEFAULTS.value)));
+    var head = easeOutCubic(span(t, TIMELINE.head));
+    var draw = easeOutCubic(span(t, TIMELINE.draw));
+    var legend = easeOutCubic(span(t, TIMELINE.legend));
+
+    var parts = parseList(params.segments, [38, 27, 21, 14]).slice(0, 4);
+    var names = String(params.labels || "").split(",");
+    var sum = 0;
+    var i;
+    for (i = 0; i < parts.length; i += 1) { sum += parts[i]; }
+
+    var visible = draw * (value / 100) * CIRC;
+    var cum = 0;
+    var tones = [params.accent, "rgba(255,255,255,0.62)", "rgba(255,255,255,0.34)", "rgba(255,255,255,0.16)"];
+
+    for (i = 0; i < el.segs.length; i += 1) {
+      var seg = el.segs[i];
+      var share = i < parts.length ? parts[i] / sum : 0;
+      var length = share * CIRC;
+      var drawn = Math.max(0, Math.min(length, visible - cum * CIRC));
+      seg.setAttribute("stroke", tones[i]);
+      seg.setAttribute("stroke-dasharray", drawn.toFixed(2) + " " + (CIRC + 2).toFixed(2));
+      seg.setAttribute("transform",
+        "rotate(" + (-90 + (cum * 360)).toFixed(3) + " 50 50)");
+      seg.setAttribute("opacity", String(clamp01(draw * 4)));
+      cum += share;
+    }
+
+    el.caption.textContent = params.caption;
+    el.caption.style.opacity = String(head);
+
+    el.total.textContent = String(Math.round(value * draw)) + "%";
+    el.of.textContent = "of 100";
+    el.core.style.opacity = String(clamp01(draw * 2.6));
+
+    for (i = 0; i < rows.length; i += 1) {
+      var appear = clamp01((legend - i * 0.09) * 2.4);
+      rows[i].row.style.opacity = String(appear);
+      rows[i].row.style.transform = "translate3d(" +
+        Math.round((1 - appear) * box.legendW * 0.10) + "px,0,0)";
+      rows[i].dot.style.background = tones[i];
+      rows[i].name.textContent = trimText(names[i] || "");
+      rows[i].share.textContent = i < parts.length
+        ? String(Math.round((parts[i] / sum) * 100)) + "%"
+        : "";
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void el.stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  build();
+  apply(0);
+})();
+</script>
+</body>
+</html>

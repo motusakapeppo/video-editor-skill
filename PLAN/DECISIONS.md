@@ -249,3 +249,39 @@ F2-T04 o F2-T05, avrebbero richiesto di rifare il compilatore.
 Conseguenza sul registro: ogni voce dichiara **se** è animabile e **come**
 (espressione, `sendcmd`, `zoompan`/`scale2ref`, Chromium, frame per frame). Un
 effetto che non sa dichiarare il proprio meccanismo non entra nel registro.
+
+## D013 - La libreria e un catalogo misurato, non un campione (2026-10-27)
+
+Il piano chiedeva «almeno 40 template» ed elencava le famiglie: lower third,
+titoli cinetici, callout agganciati a un soggetto, barre di avanzamento, contatori,
+grafici, sfondi animati, sticker, card, intro e outro, transizioni a forma, e dieci
+stili di sottotitoli animati. Quaranta non bastano a coprire quell'elenco: quattro
+layout per ciascuna delle undici famiglie, piu dieci sottotitoli, fanno **54**. Il
+numero non e un vezzo: un elenco con una famiglia a due layout e un elenco non
+finito.
+
+Quattro regole rendono la libreria un catalogo e non un campione.
+
+1. **La famiglia e il nome.** Il linter ammette nel 	emplate.json solo cinque
+   chiavi (
+ame, ps, duration, size, params), quindi categoria e titolo
+   non si dichiarano: si derivano dal nome. La famiglia e il primo segmento dopo
+   x- (x-title-* -> 	itle, x-intro-* -> intro). Un template nuovo entra
+   nella famiglia giusta per costruzione, non per disciplina.
+2. **La distinzione si misura.** Il gate cattura ogni template una volta e confronta
+   lo sha256 del frame centrale: 54 hash tutti diversi, e 4 diversi dentro ogni
+   famiglia. Quattro varianti di colore dello stesso layout non passano.
+3. **Il dominio si dichiara.** Ogni template ha almeno tre parametri e almeno uno
+   con un dominio chiuso (alues, min/max o max_length). Il gate chiama
+   alidate_call con un valore fuori dominio e pretende PARAM_RANGE con il nome
+   del parametro: non basta che il template sia bello, deve saper dire di no.
+4. **Un solo frame shape.** I quattro sfondi sono opachi per contratto, e Chromium
+   per un'immagine senza trasparenza scrive un PNG a tre canali. Il frame viene
+   normalizzato a RGBA in capture, dove viene scritto, cosi cache, ormat=rgba
+   e manifest golden vedono sempre la stessa forma. Il costo e nullo per chi ha
+   gia l'alfa: i byte restano identici.
+
+Costo misurato: il gate vale 405 assert e 174 secondi. E il prezzo di un controllo
+che non si puo aggirare: senza le catture reali, 54 template potrebbero essere 54
+file HTML che non renderizzano nulla.
+

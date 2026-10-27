@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-intro-glitch</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; overflow: hidden; }
+  #col {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  #stack {
+    position: relative;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.030em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: #ffffff;
+  }
+  #stack > div { white-space: nowrap; }
+  #word { position: relative; }
+  .ghost, .slice { position: absolute; left: 0; top: 0; }
+  .ghost { mix-blend-mode: screen; }
+  #ghostR { color: #FF2D55; }
+  #ghostB { color: #38E1FF; }
+  #slice0, #slice1, #slice2, #slice3 { mix-blend-mode: screen; }
+  #rule { height: 3px; transform-origin: 50% 50%; }
+  #caption {
+    color: rgba(255, 255, 255, 0.72);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.36em;
+    white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="col">
+    <div id="stack">
+      <div id="word"></div>
+      <div class="ghost" id="ghostR"></div>
+      <div class="ghost" id="ghostB"></div>
+      <div class="slice" id="slice0"></div>
+      <div class="slice" id="slice1"></div>
+      <div class="slice" id="slice2"></div>
+      <div class="slice" id="slice3"></div>
+    </div>
+    <div id="rule"></div>
+    <div id="caption"></div>
+  </div>
+</div>
+<script>
+/* Clock contract: the harness writes window.__vxParams, then calls
+   window.__vxSeek(t) for each frame. Everything below is a pure function of t
+   and the params; nothing reads a clock. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    word: "Motion",
+    caption: "Studio 13",
+    accent: "#FF2D55",
+    intensity: 7
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    stack: document.getElementById("stack"),
+    word: document.getElementById("word"),
+    ghostR: document.getElementById("ghostR"),
+    ghostB: document.getElementById("ghostB"),
+    rule: document.getElementById("rule"),
+    caption: document.getElementById("caption"),
+    slices: [
+      document.getElementById("slice0"),
+      document.getElementById("slice1"),
+      document.getElementById("slice2"),
+      document.getElementById("slice3")
+    ]
+  };
+
+  var BANDS = [
+    [10, 9],
+    [33, 7],
+    [57, 12],
+    [78, 8]
+  ];
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var word = String(p.word == null ? "" : p.word);
+    var caption = String(p.caption == null ? "" : p.caption);
+    var accent = String(p.accent || DEFAULTS.accent);
+    var intensity = Number(p.intensity);
+
+    if (!(intensity >= 0)) { intensity = 0; }
+    if (intensity > 12) { intensity = 12; }
+
+    var wordPx = Math.round(h * 0.115);
+    if (word.length > 7) {
+      wordPx = Math.max(48, Math.round(wordPx * 7 / word.length));
+    }
+    el.stack.style.fontSize = wordPx + "px";
+    el.stack.style.width = Math.round(w * 0.90) + "px";
+    el.stack.style.textAlign = "center";
+    el.word.textContent = word;
+    var i;
+    var band;
+    var top;
+    var heightPct;
+    var dx;
+    for (i = 0; i < 4; i += 1) {
+      el.slices[i].textContent = word;
+      el.slices[i].style.color = accent;
+      el.slices[i].style.left = "0px";
+      el.slices[i].style.width = "100%";
+      el.slices[i].style.textAlign = "center";
+    }
+    el.ghostR.textContent = word;
+    el.ghostB.textContent = word;
+    el.ghostR.style.left = "0px";
+    el.ghostB.style.left = "0px";
+    el.ghostR.style.width = "100%";
+    el.ghostB.style.width = "100%";
+    el.ghostR.style.textAlign = "center";
+    el.ghostB.style.textAlign = "center";
+
+    el.rule.style.width = Math.round(w * 0.180) + "px";
+    el.rule.style.marginTop = Math.round(h * 0.028) + "px";
+    el.rule.style.background = accent;
+    el.caption.style.fontSize = Math.round(h * 0.019) + "px";
+    el.caption.style.marginTop = Math.round(h * 0.020) + "px";
+    el.caption.textContent = caption;
+
+    var settle = easeOutCubic(span(t, 1.52, 2.06));
+    var loud = 1 - settle;
+    var base = easeOutQuint(span(t, 0.05, 0.55));
+
+    el.stack.style.opacity = String(base);
+    el.stack.style.transform = "translate3d(0," + Math.round((1 - base) * h * 0.012) +
+      "px,0) scale(" + (0.94 + 0.06 * base).toFixed(4) + ")";
+
+    var dxR = -loud * intensity * 1.7 * Math.cos(t * 41.0);
+    var dyR = loud * intensity * 0.30 * Math.sin(t * 53.0);
+    var dxB = loud * intensity * 1.7 * Math.cos(t * 41.0 + 1.9);
+    var dyB = -loud * intensity * 0.30 * Math.sin(t * 53.0 + 1.1);
+
+    el.ghostR.style.transform = "translate3d(" + dxR.toFixed(2) + "px," +
+      dyR.toFixed(2) + "px,0)";
+    el.ghostR.style.opacity = String(loud * 0.92);
+    el.ghostB.style.transform = "translate3d(" + dxB.toFixed(2) + "px," +
+      dyB.toFixed(2) + "px,0)";
+    el.ghostB.style.opacity = String(loud * 0.92);
+
+    for (i = 0; i < 4; i += 1) {
+      band = BANDS[i];
+      top = band[0];
+      heightPct = band[1];
+      dx = loud * intensity * 2.4 * Math.sin(t * 67.0 + i * 2.35);
+      el.slices[i].style.clipPath = "inset(" + top + "% 0px " +
+        (100 - top - heightPct) + "% 0px)";
+      el.slices[i].style.transform = "translate3d(" + dx.toFixed(2) + "px,0,0)";
+      el.slices[i].style.opacity = String(loud * 0.95);
+    }
+
+    var rl = easeOutQuint(span(t, 0.42, 0.98));
+    el.rule.style.opacity = rl > 0 ? "1" : "0";
+    el.rule.style.transform = "scaleX(" + rl.toFixed(4) + ")";
+    el.caption.style.opacity = String(easeOutCubic(span(t, 0.58, 1.10)) * 0.9);
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

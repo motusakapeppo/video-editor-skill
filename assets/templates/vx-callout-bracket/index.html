@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-callout-bracket</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #fill { position: absolute; }
+  .corner {
+    position: absolute;
+    box-sizing: border-box;
+    border-top-style: solid;
+    border-left-style: solid;
+    transform-origin: 50% 50%;
+  }
+  #label {
+    position: absolute;
+    color: #ffffff;
+    font-weight: 600;
+    line-height: 1.24;
+    text-align: center;
+    transform: translateX(-50%);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="fill"></div>
+  <div class="corner" id="c0"></div>
+  <div class="corner" id="c1"></div>
+  <div class="corner" id="c2"></div>
+  <div class="corner" id="c3"></div>
+  <div id="label"></div>
+</div>
+<script>
+/* Pure function of t and the params. No clock, no timers, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.2;
+
+  var DEFAULTS = {
+    anchor_x: 50,
+    anchor_y: 44,
+    region_w: 30,
+    label: "Zona da osservare",
+    accent: "#38E1FF"
+  };
+
+  var stage = document.getElementById("stage");
+  var corners = [];
+  var i;
+  for (i = 0; i < 4; i++) {
+    corners.push(document.getElementById("c" + i));
+  }
+  var el = {
+    fill: document.getElementById("fill"),
+    label: document.getElementById("label")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var bw = Math.round(w * Number(p.region_w) / 100);
+    var bh = Math.round(bw * 0.66);
+    var cx = clamp(Number(p.anchor_x) / 100 * w, w * 0.06 + bw / 2, w * 0.94 - bw / 2);
+    var cy = clamp(Number(p.anchor_y) / 100 * h, h * 0.08 + bh / 2, h * 0.88 - bh / 2);
+
+    var x0 = Math.round(cx - bw / 2);
+    var y0 = Math.round(cy - bh / 2);
+    var arm = Math.round(Math.min(bw, bh) * 0.32);
+    var thick = Math.max(4, Math.round(h * 0.0032));
+    var out = easeOutCubic(span(t, DURATION - 0.34, DURATION - 0.03));
+
+    var fillIn = easeOutCubic(span(t, 0.26, 0.78));
+    el.fill.style.left = x0 + "px";
+    el.fill.style.top = y0 + "px";
+    el.fill.style.width = bw + "px";
+    el.fill.style.height = bh + "px";
+    el.fill.style.background = p.accent;
+    el.fill.style.opacity = String(0.10 * fillIn * (1 - out));
+
+    var labelPx = Math.round(h * 0.0195);
+    el.label.style.fontSize = labelPx + "px";
+    el.label.style.left = Math.round(cx) + "px";
+    el.label.style.top = Math.round(y0 + bh + h * 0.028) + "px";
+    el.label.style.width = Math.round(bw * 1.9) + "px";
+    el.label.textContent = p.label;
+
+    var labelIn = easeOutCubic(span(t, 0.55, 0.96));
+    el.label.style.opacity = String(labelIn * (1 - out));
+    el.label.style.transform = "translateX(-50%) translateY(" +
+      Math.round((1 - labelIn) * h * 0.012) + "px)";
+
+    var offsets = [
+      [-1, -1], [1, -1], [1, 1], [-1, 1]
+    ];
+    var angles = [0, 90, 180, 270];
+    var spots = [
+      [x0, y0],
+      [x0 + bw - arm, y0],
+      [x0 + bw - arm, y0 + bh - arm],
+      [x0, y0 + bh - arm]
+    ];
+    var index;
+    var node;
+    var ease;
+    var drift;
+    for (index = 0; index < 4; index++) {
+      node = corners[index];
+      node.style.width = arm + "px";
+      node.style.height = arm + "px";
+      node.style.borderTopWidth = thick + "px";
+      node.style.borderLeftWidth = thick + "px";
+      node.style.borderTopColor = p.accent;
+      node.style.borderLeftColor = p.accent;
+      node.style.left = spots[index][0] + "px";
+      node.style.top = spots[index][1] + "px";
+
+      ease = easeOutQuint(span(t, 0.12 + index * 0.05, 0.62 + index * 0.05));
+      drift = (1 - ease) * arm * 0.55;
+
+      node.style.transform = "translate(" +
+        Math.round(offsets[index][0] * drift) + "px," +
+        Math.round(offsets[index][1] * drift) + "px) rotate(" + angles[index] + "deg)";
+      node.style.opacity = String(clamp01(ease * 2.6) * (1 - out));
+    }
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

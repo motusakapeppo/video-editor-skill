@@ -1,0 +1,35 @@
+{
+  "name": "vx-sticker-arrow-loop",
+  "fps": 30,
+  "duration": 2.1,
+  "size": [1080, 1920],
+  "params": {
+    "label": {
+      "type": "string",
+      "max_length": 18,
+      "default": "ANCORA"
+    },
+    "note": {
+      "type": "string",
+      "max_length": 26,
+      "default": "loop it"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#38E1FF", "#FFD400", "#FF4D6D", "#7CFF6B", "#FFFFFF"],
+      "default": "#38E1FF"
+    },
+    "thickness": {
+      "type": "number",
+      "min": 10,
+      "max": 40,
+      "default": 24
+    },
+    "turns": {
+      "type": "number",
+      "min": 0.8,
+      "max": 2.2,
+      "default": 1.16
+    }
+  }
+}

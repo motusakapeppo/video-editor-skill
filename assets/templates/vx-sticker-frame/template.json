@@ -1,0 +1,34 @@
+{
+  "name": "vx-sticker-frame",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "title": {
+      "type": "string",
+      "max_length": 42,
+      "default": "Capitolo Uno"
+    },
+    "kicker": {
+      "type": "string",
+      "max_length": 28,
+      "default": "serie"
+    },
+    "tag": {
+      "type": "string",
+      "max_length": 24,
+      "default": "SPAZIO 13"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFFFFF", "#FFD400", "#38E1FF", "#FF4D6D"],
+      "default": "#FFFFFF"
+    },
+    "thickness": {
+      "type": "number",
+      "min": 8,
+      "max": 48,
+      "default": 26
+    }
+  }
+}

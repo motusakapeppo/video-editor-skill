@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-background-bokeh</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: #0A0710;
+    overflow: hidden;
+  }
+  #pool {
+    position: absolute;
+    inset: 0;
+  }
+  .orb {
+    position: absolute;
+    border-radius: 50%;
+  }
+  #wash {
+    position: absolute;
+    inset: 0;
+  }
+  #grain {
+    position: absolute;
+    inset: 0;
+    opacity: 0.09;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.13) 0px, rgba(255,255,255,0.13) 1px, rgba(0,0,0,0) 1px, rgba(0,0,0,0) 3px);
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="pool"></div>
+  <div id="wash"></div>
+  <div id="grain"></div>
+</div>
+<script>
+/* vx-background-bokeh: eighteen soft discs on lissajous paths derived from
+   their index. No randomness: every position is a closed-form function of t. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    palette: "warm",
+    count: 18,
+    speed: 1.0
+  };
+
+  var PALETTES = {
+    warm: ["#FFB44D", "#FF7A4D", "#FFE6A8", "#FF5C7A"],
+    cool: ["#5CC8FF", "#8A7CFF", "#B6FFF2", "#3D8DFF"],
+    gold: ["#FFD98A", "#FFB347", "#FFF3C4", "#E8892B"],
+    rose: ["#FF9BC8", "#FF6FA0", "#FFD6E8", "#C24BFF"]
+  };
+
+  var MAX_ORBS = 24;
+  var stage = document.getElementById("stage");
+  var pool = document.getElementById("pool");
+  var wash = document.getElementById("wash");
+  var orbs = [];
+
+  function hexToRgb(hex) {
+    var s = String(hex).replace("#", "");
+    if (s.length === 3) {
+      s = s.charAt(0) + s.charAt(0) + s.charAt(1) + s.charAt(1) + s.charAt(2) + s.charAt(2);
+    }
+    return [
+      parseInt(s.slice(0, 2), 16),
+      parseInt(s.slice(2, 4), 16),
+      parseInt(s.slice(4, 6), 16)
+    ];
+  }
+
+  for (var i = 0; i < MAX_ORBS; i++) {
+    var node = document.createElement("div");
+    node.className = "orb";
+    pool.appendChild(node);
+    orbs.push(node);
+  }
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var min = Math.min(w, h);
+    var palette = PALETTES[p.palette] || PALETTES.warm;
+    var count = Math.max(1, Math.min(MAX_ORBS, Math.round(Number(p.count))));
+    var speed = Number(p.speed);
+    var reveal = easeOutCubic(clamp01(t / 0.7));
+
+    for (var i = 0; i < MAX_ORBS; i++) {
+      var el = orbs[i];
+      if (i >= count) {
+        el.style.opacity = "0";
+        el.style.width = "0px";
+        el.style.height = "0px";
+        continue;
+      }
+      var tint = hexToRgb(palette[i % palette.length]);
+      var phase = i * 1.618;
+      var radius = min * (0.021 + 0.052 * (((i * 7) % 5) / 4));
+      var x = w * (0.5 + 0.40 * Math.sin(t * speed * (0.22 + i * 0.021) + phase));
+      var y = h * (0.5 + 0.41 * Math.cos(t * speed * (0.17 + i * 0.017) + phase * 1.4));
+      var swell = 0.86 + 0.14 * Math.sin(t * speed * 0.9 + i * 0.7);
+      var alpha = (0.20 + 0.30 * (((i * 3) % 4) / 3)) * reveal;
+      var r = radius * swell;
+      el.style.width = Math.round(r * 2) + "px";
+      el.style.height = Math.round(r * 2) + "px";
+      el.style.left = Math.round(x - r) + "px";
+      el.style.top = Math.round(y - r) + "px";
+      el.style.opacity = "1";
+      el.style.background =
+        "radial-gradient(circle at 50% 50%, rgba(" + tint[0] + "," + tint[1] + "," + tint[2] +
+        "," + (alpha * 0.38).toFixed(4) + ") 0%, rgba(" + tint[0] + "," + tint[1] + "," + tint[2] +
+        "," + (alpha * 0.42).toFixed(4) + ") 56%, rgba(" + tint[0] + "," + tint[1] + "," +
+        tint[2] + "," + alpha.toFixed(4) + ") 86%, rgba(" + tint[0] + "," + tint[1] + "," +
+        tint[2] + ",0) 100%)";
+    }
+
+    wash.style.background =
+      "radial-gradient(80% 55% at 50% 34%, rgba(90,60,45,0.30) 0%, rgba(8,6,14,0) 64%), " +
+      "radial-gradient(72% 52% at 20% 84%, rgba(34,36,96,0.34) 0%, rgba(8,6,14,0) 62%), " +
+      "linear-gradient(to bottom, rgba(8,6,14,0) 40%, rgba(4,3,9,0.55) 100%)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "vx-intro-glitch",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "word": {
+      "type": "string",
+      "max_length": 12,
+      "default": "Motion"
+    },
+    "caption": {
+      "type": "string",
+      "max_length": 24,
+      "default": "Studio 13"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FF2D55", "#00E5A0", "#38E1FF", "#FFD400"],
+      "default": "#FF2D55"
+    },
+    "intensity": {
+      "type": "number",
+      "min": 0,
+      "max": 12,
+      "default": 7
+    }
+  }
+}

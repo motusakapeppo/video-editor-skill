@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-subtitle-typewriter</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Cascadia Mono", "Consolas", "Courier New", monospace;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #wrap {
+    position: absolute;
+    text-align: left;
+    color: #ffffff;
+    font-weight: 600;
+    line-height: 1.34;
+    letter-spacing: 0.005em;
+    text-shadow: 0 3px 18px rgba(0, 0, 0, 0.55), 0 1px 3px rgba(0, 0, 0, 0.45);
+  }
+  #typed { white-space: pre-wrap; }
+  #caret {
+    display: inline-block;
+    width: 0.54em;
+    height: 1.02em;
+    vertical-align: -0.14em;
+    margin-left: 0.06em;
+    border-radius: 2px;
+    will-change: opacity;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="wrap"><span id="typed"></span><span id="caret"></span></div>
+</div>
+<script>
+/* The caret phase and the character count are both derived from t, so the same
+   seek always paints the same frame. No wall clock, no CSS animation. */
+(function () {
+  "use strict";
+
+  var DURATION = 2.6;
+
+  var DEFAULTS = {
+    text: "Il tempo non aspetta nessuno",
+    accent: "#7CFF6B",
+    speed: 1.0,
+    casing: "none"
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    wrap: document.getElementById("wrap"),
+    typed: document.getElementById("typed"),
+    caret: document.getElementById("caret")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, a, b) { return clamp01((t - a) / (b - a)); }
+
+  function apply(t) {
+    var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var text = String(p.text);
+    var speed = Number(p.speed);
+    var fontPx;
+    var finish;
+    var q;
+    var shown;
+    var phase;
+    var exit;
+
+    if (!isFinite(speed) || speed <= 0) { speed = 1.0; }
+    if (p.casing === "upper") { text = text.toUpperCase(); }
+
+    fontPx = Math.round(h * 0.034);
+    finish = 0.16 + 0.72 / speed;
+
+    el.wrap.style.left = Math.round(w * 0.07) + "px";
+    el.wrap.style.width = Math.round(w * 0.86) + "px";
+    el.wrap.style.right = "auto";
+    el.wrap.style.bottom = Math.round(h * 0.108) + "px";
+    el.wrap.style.fontSize = fontPx + "px";
+
+    q = span(t, 0.16, finish);
+    shown = q >= 1 ? text.length : Math.floor(text.length * q);
+    el.typed.textContent = text.slice(0, shown);
+
+    phase = Math.floor(t * 4) % 2 === 0;
+    exit = 1 - span(t, DURATION * 0.86, DURATION * 0.99);
+
+    el.caret.style.background = p.accent;
+    el.caret.style.opacity = String((phase ? 1 : 0.08) * exit);
+    el.wrap.style.opacity = String(clamp01(span(t, 0.04, 0.28)) * exit);
+    el.wrap.style.transform = "translate3d(0,0,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-pop",
+  "fps": 30,
+  "duration": 2.4,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 90,
+      "default": "Ogni istante conta davvero"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "casing": {
+      "type": "string",
+      "values": ["none", "upper"],
+      "default": "none"
+    },
+    "emphasis": {
+      "type": "int",
+      "min": 0,
+      "max": 8,
+      "default": 2
+    }
+  }
+}

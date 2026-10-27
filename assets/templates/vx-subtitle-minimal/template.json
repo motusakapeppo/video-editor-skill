@@ -1,0 +1,29 @@
+{
+  "name": "vx-subtitle-minimal",
+  "fps": 30,
+  "duration": 2.2,
+  "size": [1080, 1920],
+  "params": {
+    "text": {
+      "type": "string",
+      "max_length": 90,
+      "default": "Poche parole, scelte bene"
+    },
+    "colour": {
+      "type": "color",
+      "values": ["#F2EFE6", "#FFFFFF", "#D8DEE9", "#FFE9A8"],
+      "default": "#F2EFE6"
+    },
+    "rise": {
+      "type": "int",
+      "min": 6,
+      "max": 64,
+      "default": 26
+    },
+    "tracking": {
+      "type": "string",
+      "values": ["normal", "wide"],
+      "default": "normal"
+    }
+  }
+}
