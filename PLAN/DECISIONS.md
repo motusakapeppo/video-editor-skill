@@ -285,3 +285,36 @@ Costo misurato: il gate vale 405 assert e 174 secondi. E il prezzo di un control
 che non si puo aggirare: senza le catture reali, 54 template potrebbero essere 54
 file HTML che non renderizzano nulla.
 
+---
+
+## D014 - Il ripiego e una rasterizzazione dichiarata, non un motore sostitutivo (2026-10-27)
+
+Senza Chromium il Motion Studio non deve sparire, ma non deve nemmeno mentire. La
+decisione sta in una funzione pura, `resolve_engine(declared, probe, properties)`,
+che riceve tre cose e restituisce un verdetto: il motore dichiarato dalla clip, la
+sonda reale del browser, e l'insieme delle proprieta che l'effetto richiede.
+
+Tre esiti, e nessun quarto:
+
+* **chromium**, quando il motore c'e e la clip lo ha chiesto o lo ha lasciato ad
+  `auto`;
+* **pillow**, quando `auto` incontra un host senza browser e le proprieta richieste
+  sono un sottoinsieme di `{layout}`, cioe quando il disegno e impaginazione e non
+  dipende dal testo renderizzato dal browser;
+* **unavailable**, per tutto il resto. `backdrop_filter`, `blend_animated` e
+  `reflow` sono proprieta che solo il motore sa fare: un ripiego che le fingesse
+  produrrebbe un frame plausibile e sbagliato, che e peggio di un errore.
+
+Il ripiego non legge l'HTML e non lo interpreta: rasterizza i parametri risolti in
+una card leggibile, con la stessa griglia di frame, lo stesso fps e la stessa
+dimensione del percorso Chromium, e dichiara `engine: pillow`, `fallback: true` e
+`degraded: [html, layout, effects]`. Chi legge il referto sa esattamente cosa ha
+perso. Non potra mai soddisfare un golden Chromium: il sigillo fallisce se
+`engine != chromium`, perche un frame di ripiego non e una prova di regressione del
+browser.
+
+Misura: 54 template, 243 frame, 9,8 secondi in totale, 66 ms/frame nel caso
+peggiore, zero dipendenze da Playwright nel modulo (verificato importando il modulo
+in un interprete pulito). Il tempo e misurato con lo stesso campo del percorso
+principale, cosi i due numeri si possono confrontare.
+
