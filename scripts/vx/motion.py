@@ -24,9 +24,13 @@ Tre invarianti, ognuna con la sua verifica:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import os
+import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -34,6 +38,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from . import ffmpeg as ff
+from .contract import VxError
 
 __all__ = [
     "Word",
@@ -48,6 +53,17 @@ __all__ = [
     "PillowRenderer",
     "renderer_for",
     "render_video",
+    # F3 - Motion Studio (Chromium, virtual time)
+    "MotionError",
+    "available",
+    "load_template",
+    "validate_params",
+    "capture",
+    "to_video",
+    "templates_root",
+    "MOTION_FRAME_TIMEOUT_S",
+    "MOTION_CAPTURE_TIMEOUT_S",
+    "FREEZE_CSS",
 ]
 
 # Lo scale non supera MAI 1.0: il pop parte dal 95% e atterra al 100%. Un pop che
@@ -103,9 +119,15 @@ class Element:
         return (int(cx - nw / 2), int(cy - nh / 2), int(nw), int(nh))
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "path": self.path, "box": list(self.box),
-                "kind": self.kind, "z": self.z, "pulse": self.pulse,
-                "max_box": list(self.max_box())}
+        return {
+            "name": self.name,
+            "path": self.path,
+            "box": list(self.box),
+            "kind": self.kind,
+            "z": self.z,
+            "pulse": self.pulse,
+            "max_box": list(self.max_box()),
+        }
 
 
 @dataclass
@@ -231,8 +253,11 @@ def build_payload(
     while size > 24:
         font = ImageFont.truetype(str(font_path), size)
         widest = max(
-            (probe.textlength(" ".join(w.text for w in line), font=font)
-             for cue in built for line in cue.lines),
+            (
+                probe.textlength(" ".join(w.text for w in line), font=font)
+                for cue in built
+                for line in cue.lines
+            ),
             default=0.0,
         )
         if widest <= avail:
@@ -247,11 +272,18 @@ def build_payload(
     if st.get("bottom_limit"):
         bottom_limit = int(st["bottom_limit"])
     payload = MotionPayload(
-        width=int(width), height=int(height), fps=float(fps), aspect=str(aspect),
-        font_path=str(font_path), font_px=size, margin_lr=int(margin_lr),
+        width=int(width),
+        height=int(height),
+        fps=float(fps),
+        aspect=str(aspect),
+        font_path=str(font_path),
+        font_px=size,
+        margin_lr=int(margin_lr),
         # L'ombra sfocata dipinge oltre il glifo: il limite del testo la riserva
         # dentro di se', altrimenti il box massimo sfonda la fascia grafica.
-        bottom_limit=int(bottom_limit) - pad, cues=built, style=st,
+        bottom_limit=int(bottom_limit) - pad,
+        cues=built,
+        style=st,
     )
     return payload
 
@@ -263,11 +295,19 @@ def expected_frames(video: str | Path) -> Tuple[int, float, float]:
     nel container, e `nb_frames` spesso non c'e' affatto. Senza questi fallback la
     sonda legge 0.00s e il render muore su ogni .webm (trovato dal corpus reale).
     """
-    proc = ff.run_fp([
-        "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=nb_frames,r_frame_rate,duration:format=duration",
-        "-of", "json", str(video),
-    ])
+    proc = ff.run_fp(
+        [
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_frames,r_frame_rate,duration:format=duration",
+            "-of",
+            "json",
+            str(video),
+        ]
+    )
     fps, dur, frames = 25.0, 0.0, 0
     try:
         payload = json.loads(proc.stdout)
@@ -283,9 +323,20 @@ def expected_frames(video: str | Path) -> Tuple[int, float, float]:
     if frames <= 0 and dur > 0:
         frames = int(round(dur * fps))
     if dur <= 0 or frames <= 0:
-        counted = ff.run_fp(["-v", "error", "-select_streams", "v:0", "-count_frames",
-                             "-show_entries", "stream=nb_read_frames,duration:format=duration",
-                             "-of", "json", str(video)])
+        counted = ff.run_fp(
+            [
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-count_frames",
+                "-show_entries",
+                "stream=nb_read_frames,duration:format=duration",
+                "-of",
+                "json",
+                str(video),
+            ]
+        )
         try:
             payload = json.loads(counted.stdout)
             stream = payload["streams"][0]
@@ -293,8 +344,11 @@ def expected_frames(video: str | Path) -> Tuple[int, float, float]:
             if read > 0:
                 frames = read
             if dur <= 0:
-                dur = float(stream.get("duration")
-                            or (payload.get("format") or {}).get("duration") or 0.0)
+                dur = float(
+                    stream.get("duration")
+                    or (payload.get("format") or {}).get("duration")
+                    or 0.0
+                )
             if dur <= 0 and frames > 0:
                 dur = frames / fps
         except Exception:  # noqa: BLE001
@@ -429,9 +483,9 @@ def render_layer(
     else:
         dy = dx = 0.0
     if effect == "typeon":
-        visible_chars = int(round(ease * 10 ** 6))
+        visible_chars = int(round(ease * 10**6))
     else:
-        visible_chars = 10 ** 6
+        visible_chars = 10**6
     if not rows:
         return layer
     ys = [y for _, _, y, _ in rows]
@@ -459,7 +513,11 @@ def render_layer(
 
     if style.get("ink"):
         c = style["ink"]
-        ink = (int(c[0]), int(c[1]), int(c[2]), 255) if isinstance(c, (list, tuple)) else ink
+        ink = (
+            (int(c[0]), int(c[1]), int(c[2]), 255)
+            if isinstance(c, (list, tuple))
+            else ink
+        )
     else:
         ink = (16, 16, 16, 255) if light_bg else (255, 255, 255, 255)
     if not isinstance(ink, tuple) or len(ink) != 4:
@@ -505,7 +563,9 @@ def render_layer(
             word_text = word_text[:visible_chars]
         if not word_text:
             continue
-        d.text((cx + dx, y + dy), word_text, font=f, fill=(*colour[:3], alpha), anchor="ma")
+        d.text(
+            (cx + dx, y + dy), word_text, font=f, fill=(*colour[:3], alpha), anchor="ma"
+        )
 
     mask = text.split()[3].filter(ImageFilter.GaussianBlur(SHADOW_BLUR))
     shadow = Image.new("RGBA", (payload.width, payload.height), (0, 0, 0, 0))
@@ -778,15 +838,24 @@ def render_video(
     renderer = renderer_for(payload, engine)
     try:
         from . import grade as grade_mod  # noqa: PLC0415
+
         node = grade_mod.parse(grade) if grade else None
         if getattr(renderer, "name", "") == "pillow":
-            info = composite(master, payload, out, crf=crf, preset=preset,
-                             grade_node=node, lossless=lossless)
+            info = composite(
+                master,
+                payload,
+                out,
+                crf=crf,
+                preset=preset,
+                grade_node=node,
+                lossless=lossless,
+            )
         else:
             from .motion_browser import composite_browser  # noqa: PLC0415
 
-            info = composite_browser(master, payload, out, renderer,
-                                     crf=crf, preset=preset)
+            info = composite_browser(
+                master, payload, out, renderer, crf=crf, preset=preset
+            )
         info["engine"] = getattr(renderer, "name", engine)
         return info
     finally:
@@ -794,3 +863,792 @@ def render_video(
             renderer.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+# --------------------------------------------------------------------------- #
+# F3 - Motion Studio: HTML template capture on virtual time (Chromium)
+# --------------------------------------------------------------------------- #
+#
+# The Pillow engine above renders an existing payload. This second entry point
+# starts from an authored template instead: a directory with `index.html` and
+# `template.json`. The harness owns time - it asks the page for one instant at a
+# time through `window.__vxSeek(t)` and screenshots only after that promise has
+# resolved - so a wall-clock CSS animation can never make two runs differ.
+#
+# The browser is the system Chrome/Edge via Playwright's channel, never a
+# downloaded build and never an absolute path.
+
+MOTION_FRAME_TIMEOUT_S = 10.0
+MOTION_CAPTURE_TIMEOUT_S = 300.0
+
+FREEZE_CSS = (
+    "*{animation-play-state:paused!important;"
+    "transition:none!important;"
+    "animation-delay:0s!important}"
+)
+
+_BROWSER_ARGS = [
+    "--force-color-profile=srgb",
+    "--disable-lcd-text",
+    "--font-render-hinting=none",
+    "--disable-features=PaintHolding",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--hide-scrollbars",
+]
+
+_ENGINE_ORDER = ("chrome", "msedge")
+
+_ENGINE_LOCATIONS: Dict[str, Tuple[Tuple[str, str], ...]] = {
+    "chrome": (
+        ("PROGRAMFILES", "Google/Chrome/Application/chrome.exe"),
+        ("PROGRAMW6432", "Google/Chrome/Application/chrome.exe"),
+        ("PROGRAMFILES(X86)", "Google/Chrome/Application/chrome.exe"),
+        ("LOCALAPPDATA", "Google/Chrome/Application/chrome.exe"),
+        ("/Applications/Google Chrome.app/Contents/MacOS", "Google Chrome"),
+        ("/opt/google/chrome", "chrome"),
+    ),
+    "msedge": (
+        ("PROGRAMFILES(X86)", "Microsoft/Edge/Application/msedge.exe"),
+        ("PROGRAMFILES", "Microsoft/Edge/Application/msedge.exe"),
+        ("PROGRAMW6432", "Microsoft/Edge/Application/msedge.exe"),
+        ("LOCALAPPDATA", "Microsoft/Edge/Application/msedge.exe"),
+    ),
+}
+
+_ENGINE_COMMANDS: Dict[str, Tuple[str, ...]] = {
+    "chrome": ("chrome", "chrome.exe", "google-chrome", "chrome-linux"),
+    "msedge": ("msedge", "msedge.exe", "microsoft-edge"),
+}
+
+_ALLOWED_SCHEMES = ("file:", "data:", "about:", "blob:")
+
+_PARAM_TYPES = frozenset({"string", "number", "int", "color", "bool"})
+
+
+class MotionError(VxError):
+    """A declared Motion Studio failure: every branch carries a stable code."""
+
+    def __init__(self, code: str, message: str, **payload: Any) -> None:
+        self.code = code
+        self.payload: Dict[str, Any] = {"code": code, **payload}
+        detail = f"{code}: {message}"
+        self.payload["message"] = message
+        super().__init__(detail)
+
+    def __str__(self) -> str:
+        return str(self.args[0]) if self.args else self.payload["code"]
+
+
+def templates_root() -> Path:
+    """`assets/templates/` of the skill, resolved from this file, never a literal path."""
+    return Path(__file__).resolve().parents[2] / "assets" / "templates"
+
+
+def _engine_installed(engine: str) -> bool:
+    for env_name, relative in _ENGINE_LOCATIONS.get(engine, ()):
+        if not env_name.startswith("/"):
+            base = os.environ.get(env_name)
+            if not base:
+                continue
+            candidate = Path(base) / relative
+        else:
+            candidate = Path(env_name) / relative
+        if candidate.is_file():
+            return True
+    for command in _ENGINE_COMMANDS.get(engine, ()):
+        if shutil.which(command):
+            return True
+    return False
+
+
+def available() -> Dict[str, Any]:
+    """Probe the import and the system browsers. Never launches anything."""
+    report: Dict[str, Any] = {
+        "available": False,
+        "engine": None,
+        "reason": None,
+        "candidates": [],
+    }
+    try:
+        import playwright.sync_api  # noqa: F401,PLC0415
+    except ImportError as exc:
+        report["reason"] = f"PLAYWRIGHT_MISSING: {exc}"
+        return report
+    installed = [name for name in _ENGINE_ORDER if _engine_installed(name)]
+    if not installed:
+        report["reason"] = (
+            "ENGINE_NOT_FOUND: neither Chrome nor Edge is installed; "
+            "no downloaded browser is permitted"
+        )
+        return report
+    report.update(
+        {
+            "available": True,
+            "engine": installed[0],
+            "reason": "ok",
+            "candidates": installed,
+        }
+    )
+    return report
+
+
+def _resolve_template_dir(template_dir: str | Path) -> Path:
+    given = Path(template_dir)
+    if given.is_dir():
+        return given
+    named = templates_root() / str(template_dir)
+    if named.is_dir():
+        return named
+    raise MotionError(
+        "TEMPLATE_MISSING",
+        f"no template directory at {given} nor under {templates_root()}",
+        template=str(template_dir),
+    )
+
+
+def load_template(template_dir: str | Path) -> Dict[str, Any]:
+    """Read `index.html` + `template.json` and refuse anything malformed."""
+    root = _resolve_template_dir(template_dir)
+    html = root / "index.html"
+    meta_path = root / "template.json"
+    for required in (html, meta_path):
+        if not required.is_file():
+            raise MotionError(
+                "TEMPLATE_MISSING",
+                f"{required.name} missing in {root.name}",
+                template=root.name,
+                file=required.name,
+            )
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MotionError(
+            "TEMPLATE_INVALID",
+            f"template.json is not readable JSON: {exc}",
+            template=root.name,
+        ) from exc
+    if not isinstance(meta, dict):
+        raise MotionError(
+            "TEMPLATE_INVALID", "template.json must be an object", template=root.name
+        )
+
+    name = meta.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise MotionError(
+            "TEMPLATE_INVALID",
+            "template.json needs a non-empty 'name'",
+            template=root.name,
+        )
+    fps = meta.get("fps")
+    if not isinstance(fps, (int, float)) or isinstance(fps, bool) or fps <= 0:
+        raise MotionError(
+            "TEMPLATE_INVALID",
+            f"'fps' must be a positive number, got {fps!r}",
+            template=name,
+            field="fps",
+        )
+    duration = meta.get("duration")
+    if (
+        not isinstance(duration, (int, float))
+        or isinstance(duration, bool)
+        or duration <= 0
+    ):
+        raise MotionError(
+            "TEMPLATE_INVALID",
+            f"'duration' must be a positive number of seconds, got {duration!r}",
+            template=name,
+            field="duration",
+        )
+    size = meta.get("size")
+    if (
+        not isinstance(size, (list, tuple))
+        or len(size) != 2
+        or not all(
+            isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in size
+        )
+    ):
+        raise MotionError(
+            "TEMPLATE_INVALID",
+            f"'size' must be [width, height] positive integers, got {size!r}",
+            template=name,
+            field="size",
+        )
+    params = meta.get("params")
+    if not isinstance(params, dict):
+        raise MotionError(
+            "TEMPLATE_INVALID",
+            "'params' must be an object of declarations",
+            template=name,
+            field="params",
+        )
+    for param_name, declaration in params.items():
+        if not isinstance(declaration, dict):
+            raise MotionError(
+                "TEMPLATE_INVALID",
+                f"parameter {param_name!r} must declare an object",
+                template=name,
+                param=param_name,
+            )
+        kind = declaration.get("type")
+        if kind not in _PARAM_TYPES:
+            raise MotionError(
+                "TEMPLATE_INVALID",
+                f"parameter {param_name!r} declares unknown type {kind!r}; "
+                f"known: {sorted(_PARAM_TYPES)}",
+                template=name,
+                param=param_name,
+            )
+        if "default" not in declaration:
+            raise MotionError(
+                "TEMPLATE_INVALID",
+                f"parameter {param_name!r} has no 'default'",
+                template=name,
+                param=param_name,
+            )
+    return {
+        "name": name,
+        "dir": str(root),
+        "html": str(html),
+        "params": params,
+        "fps": float(fps),
+        "duration": float(duration),
+        "size": (int(size[0]), int(size[1])),
+    }
+
+
+def _describe_domain(declaration: Dict[str, Any]) -> str:
+    values = declaration.get("values")
+    if isinstance(values, (list, tuple)) and values:
+        return "one of " + ", ".join(repr(v) for v in values)
+    low, high = declaration.get("min"), declaration.get("max")
+    if low is not None and high is not None:
+        return f"between {low} and {high}"
+    if low is not None:
+        return f">= {low}"
+    if high is not None:
+        return f"<= {high}"
+    return "the declared domain"
+
+
+def _coerce_param(name: str, declaration: Dict[str, Any], value: Any) -> Any:
+    kind = declaration["type"]
+    if kind in ("number", "int"):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise MotionError(
+                "PARAM_TYPE",
+                f"parameter {name!r} expects a number, got {type(value).__name__}",
+                param=name,
+                expected=kind,
+                got=type(value).__name__,
+            )
+        if kind == "int":
+            if float(value) != int(value):
+                raise MotionError(
+                    "PARAM_TYPE",
+                    f"parameter {name!r} expects an integer, got {value!r}",
+                    param=name,
+                    expected=kind,
+                    got=value,
+                )
+            return int(value)
+        return float(value)
+    if kind == "bool":
+        if not isinstance(value, bool):
+            raise MotionError(
+                "PARAM_TYPE",
+                f"parameter {name!r} expects a boolean, got {type(value).__name__}",
+                param=name,
+                expected=kind,
+                got=type(value).__name__,
+            )
+        return value
+    if not isinstance(value, str):
+        raise MotionError(
+            "PARAM_TYPE",
+            f"parameter {name!r} expects a string, got {type(value).__name__}",
+            param=name,
+            expected=kind,
+            got=type(value).__name__,
+        )
+    if kind == "color" and not (declaration.get("values") or []):
+        if not (value.startswith("#") and len(value) in (4, 7, 9)):
+            raise MotionError(
+                "PARAM_RANGE",
+                f"parameter {name!r} expects a hex colour (#rgb, #rrggbb or #rrggbbaa), "
+                f"got {value!r}",
+                param=name,
+                domain="#rgb, #rrggbb, #rrggbbaa",
+                got=value,
+            )
+    return value
+
+
+def validate_params(
+    template: Dict[str, Any] | str | Path, params: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Resolve `params` against the template declarations, or refuse with a code."""
+    declared_source = (
+        template if isinstance(template, dict) else load_template(template)
+    )
+    if "params" not in declared_source:
+        raise MotionError(
+            "TEMPLATE_INVALID",
+            "template mapping has no 'params' key",
+            template=str(template),
+        )
+    declared: Dict[str, Dict[str, Any]] = declared_source["params"]
+    given = {} if params is None else dict(params)
+    for key in given:
+        if key not in declared:
+            raise MotionError(
+                "PARAM_UNKNOWN",
+                f"unknown parameter {key!r}; the template declares {sorted(declared)}",
+                param=key,
+                known=sorted(declared),
+            )
+    resolved: Dict[str, Any] = {}
+    for name, declaration in declared.items():
+        value = _coerce_param(
+            name, declaration, given[name] if name in given else declaration["default"]
+        )
+        values = declaration.get("values")
+        if isinstance(values, (list, tuple)) and values:
+            if value not in values:
+                raise MotionError(
+                    "PARAM_RANGE",
+                    f"parameter {name!r} = {value!r} outside {_describe_domain(declaration)}",
+                    param=name,
+                    domain=list(values),
+                    got=value,
+                )
+        else:
+            kind = declaration["type"]
+            if kind in ("number", "int"):
+                low, high = declaration.get("min"), declaration.get("max")
+                if (low is not None and value < low) or (
+                    high is not None and value > high
+                ):
+                    raise MotionError(
+                        "PARAM_RANGE",
+                        f"parameter {name!r} = {value!r} outside {_describe_domain(declaration)}",
+                        param=name,
+                        min=low,
+                        max=high,
+                        got=value,
+                    )
+            elif kind in ("string", "color"):
+                limit = declaration.get("max_length", declaration.get("max"))
+                if isinstance(limit, int) and len(value) > limit:
+                    raise MotionError(
+                        "PARAM_RANGE",
+                        f"parameter {name!r} is {len(value)} characters, "
+                        f"the ceiling is {limit}",
+                        param=name,
+                        max_length=limit,
+                        got=len(value),
+                    )
+        resolved[name] = value
+    return resolved
+
+
+_SEEK_JS = """
+async (spec) => {
+  let fn = window;
+  for (const part of spec.path.split('.')) {
+    if (fn === null || fn === undefined) return {status: 'SEEK_MISSING'};
+    fn = fn[part];
+  }
+  if (typeof fn !== 'function') return {status: 'SEEK_MISSING'};
+  let timer = 0;
+  try {
+    const painted = Promise.resolve()
+      .then(() => fn(spec.t))
+      .then(() => ({status: 'OK'}))
+      .catch((err) => ({status: 'SEEK_ERROR',
+                        message: String((err && err.message) || err)}));
+    const guard = new Promise((resolve) => {
+      timer = setTimeout(() => resolve({status: 'TIMEOUT'}), spec.timeoutMs);
+    });
+    return await Promise.race([painted, guard]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+"""
+
+_FREEZE_INIT = """
+(() => {
+  const css = %s;
+  const install = () => {
+    if (document.querySelector('style[data-vx-freeze]')) return;
+    const style = document.createElement('style');
+    style.setAttribute('data-vx-freeze', '1');
+    style.textContent = css;
+    (document.head || document.documentElement).appendChild(style);
+  };
+  install();
+  document.addEventListener('DOMContentLoaded', install, {once: true});
+})();
+""" % json.dumps(FREEZE_CSS)
+
+
+def _seek_path(seek_js: str) -> str:
+    path = (seek_js or "").strip()
+    if path.startswith("window."):
+        path = path[len("window.") :]
+    if not path:
+        raise MotionError("SEEK_MISSING", "seek_js is empty", seek=seek_js)
+    return path
+
+
+def _launch(candidates: Sequence[str]) -> Tuple[Any, Any, str]:
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+
+    failures: List[str] = []
+    for engine in candidates:
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(
+                channel=engine, headless=True, args=list(_BROWSER_ARGS)
+            )
+        except Exception as exc:  # noqa: BLE001 - reported with a code, never swallowed
+            failures.append(f"{engine}: {exc}")
+            pw.stop()
+            continue
+        return pw, browser, engine
+    raise MotionError(
+        "ENGINE_LAUNCH_FAILED",
+        "no system browser would start: " + " | ".join(failures),
+        engines=list(candidates),
+        failures=failures,
+    )
+
+
+def _close_quietly(page: Any, context: Any, browser: Any, pw: Any) -> None:
+    for handle in (page, context, browser):
+        if handle is None:
+            continue
+        try:
+            handle.close()
+        except Exception:  # noqa: BLE001 - cleanup must not mask the real error
+            pass
+    if pw is not None:
+        try:
+            pw.stop()
+        except Exception:  # noqa: BLE001 - cleanup must not mask the real error
+            pass
+
+
+def capture(
+    template_dir: str | Path,
+    params: Optional[Dict[str, Any]],
+    out_dir: str | Path,
+    *,
+    fps: Optional[float] = None,
+    size: Optional[Sequence[int]] = None,
+    seek_js: str = "window.__vxSeek",
+    frame_timeout_s: Optional[float] = None,
+    capture_timeout_s: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Render one frame per 1/fps of virtual time and write RGBA PNGs."""
+    template = load_template(template_dir)
+    resolved = validate_params(template, params)
+    rate = float(fps if fps is not None else template["fps"])
+    if rate <= 0:
+        raise MotionError(
+            "PARAM_RANGE", f"fps must be > 0, got {rate}", param="fps", got=rate
+        )
+    if size is None:
+        width, height = template["size"]
+    else:
+        if len(tuple(size)) != 2:
+            raise MotionError(
+                "PARAM_RANGE",
+                f"size must be [width, height], got {size!r}",
+                param="size",
+            )
+        width, height = int(size[0]), int(size[1])
+        if width <= 0 or height <= 0:
+            raise MotionError(
+                "PARAM_RANGE",
+                f"size must be positive, got {width}x{height}",
+                param="size",
+            )
+    frame_limit = float(
+        MOTION_FRAME_TIMEOUT_S if frame_timeout_s is None else frame_timeout_s
+    )
+    capture_limit = float(
+        MOTION_CAPTURE_TIMEOUT_S if capture_timeout_s is None else capture_timeout_s
+    )
+    if frame_limit <= 0 or capture_limit <= 0:
+        raise MotionError(
+            "PARAM_RANGE",
+            "frame_timeout_s and capture_timeout_s must be > 0",
+            frame_timeout_s=frame_limit,
+            capture_timeout_s=capture_limit,
+        )
+
+    probe = available()
+    if not probe["available"]:
+        raise MotionError("MOTION_UNAVAILABLE", str(probe["reason"]))
+
+    duration = template["duration"]
+    count = max(1, int(round(duration * rate)))
+    destination = Path(out_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    for stale in destination.glob("frame_*.png"):
+        stale.unlink()
+
+    seek_path = _seek_path(seek_js)
+    blocked: List[str] = []
+    paths: List[str] = []
+    digests: List[str] = []
+
+    pw = browser = context = page = None
+    started = time.perf_counter()
+    deadline = started + capture_limit
+    engine = ""
+    try:
+        pw, browser, engine = _launch(probe["candidates"])
+        context = browser.new_context(
+            viewport={"width": width, "height": height}, device_scale_factor=1
+        )
+        page = context.new_page()
+        page.set_default_timeout(int(frame_limit * 1000))
+
+        def _route(route: Any) -> None:
+            url = route.request.url
+            if url.startswith(_ALLOWED_SCHEMES):
+                route.continue_()
+                return
+            blocked.append(url)
+            route.abort()
+
+        page.route("**/*", _route)
+        page.add_init_script(script=_FREEZE_INIT)
+        try:
+            page.goto(
+                Path(template["html"]).as_uri(),
+                wait_until="load",
+                timeout=int(min(frame_limit, capture_limit) * 1000),
+            )
+        except Exception as exc:  # noqa: BLE001 - declared, not swallowed
+            raise MotionError(
+                "TEMPLATE_LOAD_FAILED",
+                f"{template['name']}: the page did not load: {exc}",
+                template=template["name"],
+            ) from exc
+        page.add_style_tag(content=FREEZE_CSS)
+        page.evaluate("(payload) => { window.__vxParams = payload; }", resolved)
+
+        for index in range(count):
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise MotionError(
+                    "CAPTURE_TIMEOUT",
+                    f"frame {index} not reached within {capture_limit}s "
+                    f"(whole-capture ceiling)",
+                    frame=index,
+                    timeout_s=capture_limit,
+                    frames_done=len(paths),
+                )
+            budget_ms = int(min(frame_limit, remaining) * 1000)
+            moment = index / rate
+            try:
+                outcome = page.evaluate(
+                    _SEEK_JS,
+                    {"path": seek_path, "t": moment, "timeoutMs": budget_ms},
+                )
+            except Exception as exc:  # noqa: BLE001 - declared, not swallowed
+                raise MotionError(
+                    "SEEK_FAILED",
+                    f"frame {index} at t={moment:.4f}s: the browser refused the seek: {exc}",
+                    frame=index,
+                    time=moment,
+                ) from exc
+            status = (outcome or {}).get("status")
+            if status == "SEEK_MISSING":
+                raise MotionError(
+                    "SEEK_MISSING",
+                    f"template {template['name']!r} does not expose {seek_js}()",
+                    template=template["name"],
+                    frame=index,
+                )
+            if status == "SEEK_ERROR":
+                raise MotionError(
+                    "SEEK_FAILED",
+                    f"frame {index} at t={moment:.4f}s: {outcome.get('message')}",
+                    frame=index,
+                    time=moment,
+                )
+            if status == "TIMEOUT":
+                code = "CAPTURE_TIMEOUT" if remaining < frame_limit else "FRAME_TIMEOUT"
+                raise MotionError(
+                    code,
+                    f"frame {index} at t={moment:.4f}s did not paint within "
+                    f"{budget_ms / 1000.0:.2f}s",
+                    frame=index,
+                    time=moment,
+                    timeout_s=budget_ms / 1000.0,
+                )
+            png = page.screenshot(omit_background=True, type="png")
+            path = destination / f"frame_{index:05d}.png"
+            path.write_bytes(png)
+            paths.append(str(path))
+            digests.append(hashlib.sha256(png).hexdigest())
+    finally:
+        _close_quietly(page, context, browser, pw)
+
+    elapsed = time.perf_counter() - started
+    return {
+        "template": template["name"],
+        "engine": engine,
+        "frames": paths,
+        "frame_count": len(paths),
+        "fps": rate,
+        "size": [width, height],
+        "duration": duration,
+        "params": resolved,
+        "blocked_requests": blocked,
+        "elapsed_s": round(elapsed, 3),
+        "seconds_per_frame": round(elapsed / max(1, len(paths)), 4),
+        "frame_sha256": digests,
+        "frame_timeout_s": frame_limit,
+        "capture_timeout_s": capture_limit,
+    }
+
+
+def _probe_video(path: Path, *, decoder: Optional[str] = None) -> Dict[str, Any]:
+    argv: List[str] = []
+    if decoder:
+        argv += ["-c:v", decoder]
+    argv += [
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,pix_fmt:stream_tags=alpha_mode",
+        "-of",
+        "json",
+        str(path),
+    ]
+    proc = ff.run_fp(argv)
+    if not proc.ok:
+        raise MotionError(
+            "PROBE_FAILED",
+            f"ffprobe could not read {path.name}: {proc.tail(4)}",
+            path=str(path),
+        )
+    try:
+        streams = json.loads(proc.stdout or "{}").get("streams") or []
+    except json.JSONDecodeError as exc:
+        raise MotionError(
+            "PROBE_FAILED",
+            f"ffprobe emitted non-JSON for {path.name}: {exc}",
+            path=str(path),
+        ) from exc
+    if not streams:
+        raise MotionError(
+            "PROBE_FAILED", f"no video stream in {path.name}", path=str(path)
+        )
+    stream = streams[0]
+    tags = stream.get("tags") or {}
+    return {
+        "codec": stream.get("codec_name"),
+        "pix_fmt": stream.get("pix_fmt"),
+        "alpha_mode": tags.get("alpha_mode"),
+    }
+
+
+def to_video(
+    frames_dir: str | Path,
+    out: str | Path,
+    *,
+    fps: float,
+    alpha: bool = False,
+    crf: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Encode the PNG sequence. Alpha keeps VP9/WebM, otherwise H.264/MP4."""
+    source = Path(frames_dir)
+    destination = Path(out)
+    frames = sorted(source.glob("frame_*.png"))
+    if not frames:
+        raise MotionError(
+            "FRAMES_MISSING", f"no frame_*.png in {source}", frames_dir=str(source)
+        )
+    if float(fps) <= 0:
+        raise MotionError("PARAM_RANGE", f"fps must be > 0, got {fps}", param="fps")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    argv: List[str] = [
+        ff.ffmpeg(),
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-loglevel",
+        "error",
+        "-framerate",
+        str(fps),
+        "-i",
+        str(source / "frame_%05d.png"),
+    ]
+    if alpha:
+        argv += [
+            "-c:v",
+            "libvpx-vp9",
+            "-pix_fmt",
+            "yuva420p",
+            "-auto-alt-ref",
+            "0",
+            "-b:v",
+            "0",
+            "-crf",
+            str(24 if crf is None else crf),
+        ]
+    else:
+        argv += [
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            str(18 if crf is None else crf),
+            "-preset",
+            "medium",
+            "-movflags",
+            "+faststart",
+        ]
+    argv.append(str(destination))
+
+    started = time.perf_counter()
+    proc = ff.run(argv, step="render")
+    if not proc.ok:
+        raise MotionError(
+            "ENCODE_FAILED",
+            f"ffmpeg refused {destination.name}: {proc.tail(6)}",
+            path=str(destination),
+            encoder="libvpx-vp9" if alpha else "libx264",
+        )
+    info = _probe_video(destination)
+    if alpha:
+        # WebM carries the VP9 alpha as a side layer, and the native parser
+        # reports the base stream (yuv420p) plus `alpha_mode=1`. Asking ffprobe
+        # for the libvpx decoder, which honours the layer, resolves yuva420p.
+        layered = _probe_video(destination, decoder="libvpx-vp9")
+        info["container_pix_fmt"] = info.get("pix_fmt")
+        info["codec"] = layered.get("codec") or info.get("codec")
+        info["pix_fmt"] = layered.get("pix_fmt")
+    info.update(
+        {
+            "path": str(destination),
+            "frames": len(frames),
+            "fps": float(fps),
+            "alpha_requested": bool(alpha),
+            "alpha_detected": bool(
+                info.get("pix_fmt") == "yuva420p" or info.get("alpha_mode") == "1"
+            ),
+            "requested_pix_fmt": "yuva420p" if alpha else "yuv420p",
+            "elapsed_s": round(time.perf_counter() - started, 3),
+        }
+    )
+    return info

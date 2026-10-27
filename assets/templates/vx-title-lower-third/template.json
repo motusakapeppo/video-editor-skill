@@ -1,0 +1,28 @@
+{
+  "name": "vx-title-lower-third",
+  "fps": 30,
+  "duration": 2.0,
+  "size": [1080, 1920],
+  "params": {
+    "title": {
+      "type": "string",
+      "max_length": 60,
+      "default": "Nome Cognome"
+    },
+    "subtitle": {
+      "type": "string",
+      "max_length": 80,
+      "default": "Ruolo, Citta"
+    },
+    "accent": {
+      "type": "color",
+      "values": ["#FFD400", "#FF4D4D", "#38E1FF", "#7CFF6B", "#FFFFFF"],
+      "default": "#FFD400"
+    },
+    "position": {
+      "type": "string",
+      "values": ["bottom-left", "bottom-center", "bottom-right"],
+      "default": "bottom-left"
+    }
+  }
+}

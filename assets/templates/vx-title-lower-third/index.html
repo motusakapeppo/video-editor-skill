@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>vx-title-lower-third</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+  }
+  body {
+    -webkit-font-smoothing: antialiased;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  #stage { position: absolute; inset: 0; background: transparent; }
+  #group {
+    position: absolute;
+    display: flex;
+    align-items: stretch;
+    transform-origin: 0 100%;
+  }
+  #rail { flex: 0 0 auto; border-radius: 999px; transform-origin: 50% 100%; }
+  #column { display: flex; flex-direction: column; min-width: 0; }
+  #title {
+    color: #ffffff;
+    font-weight: 800;
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    text-shadow: 0 3px 22px rgba(0, 0, 0, 0.42);
+    transform-origin: 0 100%;
+  }
+  #rule { height: 6px; border-radius: 3px; transform-origin: 0 50%; }
+  #subtitle {
+    color: rgba(255, 255, 255, 0.88);
+    font-weight: 500;
+    line-height: 1.22;
+    letter-spacing: 0.01em;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.42);
+    transform-origin: 0 50%;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="group">
+    <div id="rail"></div>
+    <div id="column">
+      <div id="title"></div>
+      <div id="rule"></div>
+      <div id="subtitle"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* Contract for every Motion Studio template (see vx.motion.capture):
+   the harness writes window.__vxParams, then calls window.__vxSeek(t) for each
+   frame and waits for the returned promise. Nothing here may read the clock or
+   animate on its own: the picture is a pure function of t and the params. */
+(function () {
+  "use strict";
+
+  var DEFAULTS = {
+    title: "Nome Cognome",
+    subtitle: "Ruolo, Citta",
+    accent: "#FFD400",
+    position: "bottom-left"
+  };
+
+  var TIMELINE = {
+    rail: [0.10, 0.55],
+    title: [0.22, 0.68],
+    rule: [0.58, 1.00],
+    subtitle: [0.50, 1.02]
+  };
+
+  var el = {
+    stage: document.getElementById("stage"),
+    group: document.getElementById("group"),
+    rail: document.getElementById("rail"),
+    column: document.getElementById("column"),
+    title: document.getElementById("title"),
+    rule: document.getElementById("rule"),
+    subtitle: document.getElementById("subtitle")
+  };
+
+  function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function span(t, pair) { return clamp01((t - pair[0]) / (pair[1] - pair[0])); }
+  function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+  function easeOutQuint(x) { return 1 - Math.pow(1 - x, 5); }
+
+  function layout(params) {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var pad = Math.round(h * 0.058);
+    var bottom = Math.round(h * 0.130);
+    var railW = Math.max(6, Math.round(h * 0.0057));
+    var gap = Math.round(h * 0.018);
+    var titlePx = Math.round(h * 0.048);
+    var subPx = Math.round(h * 0.025);
+
+    el.group.style.bottom = bottom + "px";
+    el.group.style.maxWidth = Math.round(w * 0.84) + "px";
+    el.group.style.marginLeft = "0px";
+
+    if (params.position === "bottom-center") {
+      el.group.style.left = "0px";
+      el.group.style.right = "0px";
+      el.group.style.justifyContent = "center";
+      el.group.style.flexDirection = "row";
+      el.column.style.textAlign = "center";
+    } else if (params.position === "bottom-right") {
+      el.group.style.left = "auto";
+      el.group.style.right = pad + "px";
+      el.group.style.justifyContent = "flex-end";
+      el.group.style.flexDirection = "row-reverse";
+      el.column.style.textAlign = "right";
+    } else {
+      el.group.style.left = pad + "px";
+      el.group.style.right = "auto";
+      el.group.style.justifyContent = "flex-start";
+      el.group.style.flexDirection = "row";
+      el.column.style.textAlign = "left";
+    }
+
+    el.rail.style.width = railW + "px";
+    el.rail.style.marginLeft = params.position === "bottom-right" ? gap + "px" : "0px";
+    el.rail.style.marginRight = params.position === "bottom-right" ? "0px" : gap + "px";
+
+    el.title.style.fontSize = titlePx + "px";
+    el.subtitle.style.fontSize = subPx + "px";
+    el.rule.style.marginTop = Math.round(h * 0.012) + "px";
+    el.rule.style.marginBottom = Math.round(h * 0.016) + "px";
+  }
+
+  function apply(t) {
+    var params = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    layout(params);
+
+    el.title.textContent = params.title;
+    el.subtitle.textContent = params.subtitle;
+    el.rail.style.background = params.accent;
+    el.rule.style.background = params.accent;
+
+    var rail = easeOutQuint(span(t, TIMELINE.rail));
+    var title = easeOutCubic(span(t, TIMELINE.title));
+    var rule = easeOutQuint(span(t, TIMELINE.rule));
+    var sub = easeOutCubic(span(t, TIMELINE.subtitle));
+    var rise = Math.round(window.innerHeight * 0.018);
+    var slide = Math.round(window.innerHeight * 0.030);
+
+    el.rail.style.opacity = String(clamp01(rail * 1.6));
+    el.rail.style.transform = "scaleY(" + rail.toFixed(5) + ")";
+
+    el.title.style.opacity = String(title);
+    el.title.style.transform = "translate3d(0," +
+      Math.round((1 - title) * rise) + "px,0)";
+
+    el.rule.style.opacity = String(rule > 0 ? 1 : 0);
+    el.rule.style.transform = "scaleX(" + rule.toFixed(5) + ")";
+
+    el.subtitle.style.opacity = String(sub);
+    el.subtitle.style.transform = "translate3d(" +
+      Math.round((1 - sub) * -slide) + "px,0,0)";
+  }
+
+  window.__vxSeek = function (t) {
+    apply(t);
+    void el.stage.offsetHeight;
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          void el.stage.offsetHeight;
+          resolve();
+        });
+      });
+    });
+  };
+
+  apply(0);
+})();
+</script>
+</body>
+</html>
