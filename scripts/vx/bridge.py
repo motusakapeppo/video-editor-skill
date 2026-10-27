@@ -5,7 +5,7 @@ pipeline: it takes a validated ``EDLPlan`` plus the audio analyses of its
 sources and returns a **new** plan (the input is never mutated) and a
 ``BridgeReport`` that declares what was applied and what was not.
 
-Two blocks live here:
+Three blocks live here:
 
 * **A5, silence cuts.** Every layer-0 clip is cut against the non-speech spans
   of its own source. The spans come from the VAD ``speech_regions`` complement
@@ -17,6 +17,13 @@ Two blocks live here:
   gain is ``target_lufs - measured_i``; when that gain falls outside
   ``[-60, 24]`` it is clamped and the shortfall is declared (``shortfall_lu``),
   never absorbed.
+* **A4, transcript anchors.** Words above the confidence floor become
+  ``word_span`` anchors with source time; consecutive anchors are grouped into
+  captions, and each caption is remapped from source time to destination time
+  through the kept fragments of its source. A caption that spans a cut splits
+  into one entry per surviving piece. Every b-roll entry cites the anchors its
+  destination window covers, and :func:`caption_ass` turns the captions into the
+  ASS the renderer burns.
 
 ``not_applied`` is always present in the report, even when empty: a report with
 nothing declared means the bridge did not look, not that nothing happened.
@@ -31,7 +38,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import edl_plan
-from .contract import THRESHOLDS, VxError
+from .contract import THRESHOLDS, Cue, VxError
 
 BRIDGE_SCHEMA = "vx.bridge_report/1.0"
 
@@ -56,6 +63,9 @@ GAIN_LIMITS_DB = (-60.0, 24.0)
 MEASURED_I_LIMITS = (-70.0, 0.0)
 
 _EPS = 1e-9
+
+_HARD_BREAK = ".!?…"
+_TRAILING = "\"'”’»)]}"
 
 
 @dataclass(frozen=True)
@@ -392,6 +402,321 @@ def _media_duration(plan: edl_plan.EDLPlan, source_id: str, fallback: float) -> 
 
 
 # --------------------------------------------------------------------------- #
+# A4: transcript anchors -> captions
+# --------------------------------------------------------------------------- #
+
+
+def _word_field(item: Any, name: str) -> Any:
+    """``subs.transcribe`` emits dicts; a stand-in transcript may emit attributes."""
+    if isinstance(item, Mapping):
+        return item.get(name)
+    return getattr(item, name, None)
+
+
+def _ends_hard(text: str) -> bool:
+    stripped = str(text).rstrip(_TRAILING)
+    return bool(stripped) and stripped[-1] in _HARD_BREAK
+
+
+def _midpoint(anchor: Anchor) -> float:
+    last = float(anchor.t0 if anchor.t1 is None else anchor.t1)
+    return (float(anchor.t0) + last) / 2.0
+
+
+def _remap_span(
+    t0: float,
+    t1: float,
+    fragments: Sequence[Tuple[float, float, float, float]],
+) -> List[Tuple[float, float, float, float]]:
+    """Clip a source window to each kept fragment and shift it to destination time.
+
+    Each result is ``(src0, src1, dst0, dst1)``; a window that crosses a cut comes
+    back as more than one piece, and a window that falls entirely inside a removed
+    interval comes back empty.
+    """
+    pieces: List[Tuple[float, float, float, float]] = []
+    for src0, src1, dst0, _ in fragments:
+        first = max(float(t0), float(src0))
+        last = min(float(t1), float(src1))
+        if last - first <= _EPS:
+            continue
+        pieces.append(
+            (first, last, float(dst0) + (first - src0), float(dst0) + (last - src0))
+        )
+    return pieces
+
+
+def _anchor_ids_for(
+    dst_in: float,
+    dst_out: float,
+    anchor_dst: Mapping[str, Sequence[Tuple[float, float]]],
+) -> List[str]:
+    """The anchors whose destination span overlaps the window, in declaration order."""
+    found: List[str] = []
+    for anchor_id, spans in anchor_dst.items():
+        if any(end > dst_in + _EPS and start < dst_out - _EPS for start, end in spans):
+            found.append(anchor_id)
+    return found
+
+
+def _caption_style(overrides: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Live thresholds, with per-job overrides validated on top of them."""
+    style: Dict[str, Any] = {
+        "min_confidence": float(THRESHOLDS["bridge_caption_min_confidence"]),
+        "gap_sec": float(THRESHOLDS["bridge_caption_gap_ms"]) / 1000.0,
+        "max_chars": int(THRESHOLDS["bridge_caption_max_chars"]),
+        "bottom_inset_ratio": float(THRESHOLDS["bridge_caption_bottom_inset_ratio"]),
+        "style": "clean",
+    }
+    if not overrides:
+        return style
+    for key in ("min_confidence", "gap_ms", "max_chars", "bottom_inset_ratio"):
+        if overrides.get(key) is None:
+            continue
+        try:
+            number = float(overrides[key])
+        except (TypeError, ValueError) as exc:
+            raise VxError(f"bridge: caption_style.{key} must be numeric") from exc
+        if not math.isfinite(number):
+            raise VxError(f"bridge: caption_style.{key} must be finite")
+        if key == "gap_ms":
+            style["gap_sec"] = number / 1000.0
+        elif key == "max_chars":
+            style["max_chars"] = int(number)
+        else:
+            style[key] = number
+    if overrides.get("style") is not None:
+        style["style"] = str(overrides["style"])
+    if not 0.0 <= style["min_confidence"] <= 1.0:
+        raise VxError("bridge: caption_style.min_confidence outside [0, 1]")
+    if style["gap_sec"] < 0.0:
+        raise VxError("bridge: caption_style.gap_ms must not be negative")
+    if style["max_chars"] < 1:
+        raise VxError("bridge: caption_style.max_chars must be positive")
+    if not 0.0 <= style["bottom_inset_ratio"] <= 1.0:
+        raise VxError("bridge: caption_style.bottom_inset_ratio outside [0, 1]")
+    if style["style"] not in ("clean", "karaoke"):
+        raise VxError("bridge: caption_style.style must be clean or karaoke")
+    return style
+
+
+def _caption_anchors(
+    report: BridgeReport,
+    transcripts: Mapping[str, Any],
+    source_order: Sequence[str],
+    fragments_by_source: Mapping[str, Sequence[Tuple[float, float, float, float]]],
+    style: Mapping[str, Any],
+    anchor_dst: Dict[str, List[Tuple[float, float]]],
+) -> None:
+    """Word anchors for every source, then captions remapped on the kept fragments.
+
+    The rejected words are counted per source; a caption that crosses a cut is
+    emitted once per surviving piece with the anchors of its own words; a caption
+    that falls inside a removed interval is declared with its word count. The
+    count of words lost to a cut travels on the first surviving piece.
+    """
+    min_confidence = float(style["min_confidence"])
+    gap_sec = float(style["gap_sec"])
+    max_chars = int(style["max_chars"])
+    word_seq = 0
+    caption_seq = 0
+
+    for source_id in source_order:
+        transcript = transcripts.get(source_id)
+        if isinstance(transcript, BaseException):
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "source_id": source_id,
+                    "reason": f"transcript_failed: {transcript}",
+                }
+            )
+            continue
+        if transcript is None:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "source_id": source_id,
+                    "reason": f"transcript_failed: no transcript for {source_id}",
+                }
+            )
+            continue
+
+        fragments = fragments_by_source.get(source_id) or []
+        rejected = 0
+        group: List[Anchor] = []
+        groups: List[List[Anchor]] = []
+        source_anchors: List[Anchor] = []
+        for item in getattr(transcript, "words", None) or ():
+            token = str(_word_field(item, "word") or "").strip()
+            if not token:
+                continue
+            start = _word_field(item, "start")
+            end = _word_field(item, "end")
+            if not (_finite(start) and _finite(end)):
+                continue
+            raw = _word_field(item, "probability")
+            confidence = float(raw) if _finite(raw) else 0.0
+            if confidence < min_confidence - _EPS:
+                rejected += 1
+                continue
+            anchor = Anchor(
+                anchor_id=f"a_word_{word_seq:04d}",
+                kind="word_span",
+                source_id=source_id,
+                t0=float(start),
+                t1=max(float(end), float(start)),
+                text=token,
+                confidence=round(confidence, 4),
+            )
+            word_seq += 1
+            source_anchors.append(anchor)
+            report.anchors.append(anchor)
+            anchor_dst[anchor.anchor_id] = [
+                (piece[2], piece[3])
+                for piece in _remap_span(anchor.t0, anchor.t1, fragments)
+            ]
+            if group:
+                gap = anchor.t0 - float(group[-1].t1)
+                text = " ".join([word.text for word in group] + [anchor.text])
+                if gap > gap_sec + _EPS or len(text) > max_chars:
+                    groups.append(group)
+                    group = []
+            group.append(anchor)
+            if _ends_hard(anchor.text):
+                groups.append(group)
+                group = []
+        if group:
+            groups.append(group)
+
+        if rejected:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "source_id": source_id,
+                    "reason": "word_below_min_confidence",
+                    "count": rejected,
+                    "min_confidence": min_confidence,
+                }
+            )
+        outside = sum(
+            1 for anchor in source_anchors if not anchor_dst.get(anchor.anchor_id)
+        )
+        if outside:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "source_id": source_id,
+                    "reason": "word_outside_timeline",
+                    "count": outside,
+                }
+            )
+
+        for group in groups:
+            first = float(group[0].t0)
+            last = float(group[-1].t0 if group[-1].t1 is None else group[-1].t1)
+            surviving: List[Tuple[Tuple[float, float, float, float], List[Anchor]]] = []
+            for piece in _remap_span(first, last, fragments):
+                src0, src1 = piece[0], piece[1]
+                assigned = [
+                    anchor
+                    for anchor in group
+                    if src0 - _EPS <= _midpoint(anchor) <= src1 + _EPS
+                ]
+                if assigned:
+                    surviving.append((piece, assigned))
+            if not surviving:
+                report.not_applied.append(
+                    {
+                        "anchor_id": None,
+                        "source_id": source_id,
+                        "caption_id": f"cap_{caption_seq:04d}",
+                        "reason": "caption_in_silence",
+                        "text": " ".join(anchor.text for anchor in group),
+                        "words_dropped": len(group),
+                    }
+                )
+                caption_seq += 1
+                continue
+            dropped = len(group) - sum(len(words) for _, words in surviving)
+            for index, (piece, words) in enumerate(surviving):
+                src0, src1, dst0, _ = piece
+                head, tail = words[0], words[-1]
+                tail_end = float(tail.t0 if tail.t1 is None else tail.t1)
+                dst_in = dst0 + max(0.0, float(head.t0) - src0)
+                dst_out = dst0 + min(src1 - src0, tail_end - src0)
+                if dst_out - dst_in <= _EPS:
+                    continue
+                report.captions.append(
+                    {
+                        "caption_id": f"cap_{caption_seq:04d}",
+                        "dst_in": round(dst_in, 3),
+                        "dst_out": round(dst_out, 3),
+                        "text": " ".join(anchor.text for anchor in words).strip(),
+                        "anchor_ids": [anchor.anchor_id for anchor in words],
+                        "words_dropped": dropped if index == 0 else 0,
+                    }
+                )
+                caption_seq += 1
+
+
+def caption_ass(
+    captions: Sequence[Mapping[str, Any]],
+    dst: str | Path,
+    *,
+    aspect: str = "9:16",
+    out_w: int = 1080,
+    out_h: int = 1920,
+    caption_style: Optional[Mapping[str, Any]] = None,
+) -> Optional[Path]:
+    """Write the ASS burned by the EDL render; ``None`` when no caption survives.
+
+    The look comes from :func:`vx.subs.write_ass` unchanged: same font, size,
+    outline and colours as every other subtitle this engine burns. Only
+    ``MarginV`` is set here, from the canvas and not from the source geometry or
+    the platform safe zone: ``round(out_h * ratio)`` clamped to
+    ``[24, out_h // 4]``.
+    """
+    from . import subs
+
+    style = _caption_style(caption_style)
+    cues: List[Cue] = []
+    for item in captions or ():
+        text = " ".join(str(item.get("text") or "").split())
+        start, end = item.get("dst_in"), item.get("dst_out")
+        if not text or not (_finite(start) and _finite(end)):
+            continue
+        if float(end) - float(start) <= _EPS:
+            continue
+        cues.append(
+            Cue(
+                start=float(start),
+                end=float(end),
+                text=text,
+                words=[],
+                style=str(style["style"]),
+                line_count=1,
+            )
+        )
+    if not cues:
+        return None
+    margin_v = min(
+        int(out_h) // 4,
+        max(24, int(round(float(out_h) * float(style["bottom_inset_ratio"])))),
+    )
+    path = subs.write_ass(
+        cues,
+        dst,
+        aspect=aspect,
+        style=str(style["style"]),
+        out_w=int(out_w),
+        out_h=int(out_h),
+        margin_v=margin_v,
+    )
+    return Path(path)
+
+
+# --------------------------------------------------------------------------- #
 # build
 # --------------------------------------------------------------------------- #
 
@@ -402,6 +727,8 @@ def build(
     *,
     target_lufs: float,
     loudness_spans: Callable[[str, Sequence[Sequence[float]]], Mapping[str, Any]],
+    transcripts: Optional[Mapping[str, Any]] = None,
+    caption_style: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[edl_plan.EDLPlan, BridgeReport]:
     """Cut the a_roll chain on measured silence and gain it per used segment.
 
@@ -409,11 +736,17 @@ def build(
     ``contract.AudioAnalysis``, its ``to_dict()`` form, or the exception that
     prevented the analysis. A failed analysis never crashes the bridge: the clip
     stays whole, un-gained, and the failure is declared in ``not_applied``.
+
+    ``transcripts`` maps ``source_id`` to a ``contract.Transcript`` or to the
+    exception that prevented the transcription; ``None`` means captions are off
+    and the report says so. ``caption_style`` overrides the live
+    ``bridge_caption_*`` thresholds for this run only.
     """
     if not isinstance(plan, edl_plan.EDLPlan):
         raise VxError("bridge.build expects an EDLPlan")
     if not _finite(target_lufs):
         raise VxError("bridge.build: target_lufs must be finite")
+    style = _caption_style(caption_style)
     min_fragment = float(THRESHOLDS["bridge_min_fragment_ms"]) / 1000.0
     if min_fragment <= 0.0:
         raise VxError("bridge: bridge_min_fragment_ms must be positive")
@@ -453,12 +786,17 @@ def build(
     failed_sources: set = set()
     mirror: Dict[Tuple[str, float, float], List[Dict[str, Any]]] = {}
     layer0_by_track: Dict[int, List[edl_plan.ClipSegment]] = {}
+    fragments_by_source: Dict[str, List[Tuple[float, float, float, float]]] = {}
+    anchor_dst: Dict[str, List[Tuple[float, float]]] = {}
+    source_order: List[str] = []
     anchor_seq = 0
     cursor = 0.0
 
     for track_index, clip in chain:
         analysis = analyses.get(clip.source_id) if analyses else None
         fragments: List[Tuple[float, float]]
+        clip_removals: List[Dict[str, Any]] = []
+        clip_applied: set = set()
         if isinstance(analysis, BaseException):
             failed_sources.add(clip.source_id)
             report.not_applied.append(
@@ -523,6 +861,8 @@ def build(
                 clip,
             )
             applied = {removal["anchor_id"] for removal in removals}
+            clip_removals = all_removals
+            clip_applied = applied
             for removal in all_removals:
                 report.anchors.append(
                     Anchor(
@@ -554,6 +894,7 @@ def build(
                 raise VxError(f"bridge: clip {clip.clip_id!r} lost every frame")
 
         records: List[Dict[str, Any]] = []
+        clip_fragments: List[Tuple[float, float, float, float]] = []
         for index, (first, last) in enumerate(fragments):
             length = last - first
             clip_id = f"{clip.clip_id}_{index}"
@@ -581,6 +922,14 @@ def build(
                 gain_db=0.0,
             )
             layer0_by_track.setdefault(track_index, []).append(new_clip)
+            clip_fragments.append(
+                (
+                    float(first),
+                    float(last),
+                    float(new_clip.dst_in),
+                    float(new_clip.dst_out),
+                )
+            )
             records.append(
                 {
                     "src_in": first,
@@ -597,10 +946,32 @@ def build(
                 round(float(clip.dst_out), 6),
             )
         ] = records
+        fragments_by_source.setdefault(clip.source_id, []).extend(clip_fragments)
+        if clip.source_id not in source_order:
+            source_order.append(clip.source_id)
+        for removal in clip_removals:
+            anchor_dst[removal["anchor_id"]] = (
+                []
+                if removal["anchor_id"] in clip_applied
+                else [
+                    (piece[2], piece[3])
+                    for piece in _remap_span(
+                        removal["t0"], removal["t1"], clip_fragments
+                    )
+                ]
+            )
 
     duration = cursor
     if duration <= 1e-6:
         raise VxError("bridge: the a_roll chain is empty after the cuts")
+
+    # -- A4: word anchors and captions, remapped on the kept fragments ------ #
+    if transcripts is None:
+        report.not_applied.append({"anchor_id": None, "reason": "captions_disabled"})
+    else:
+        _caption_anchors(
+            report, transcripts, source_order, fragments_by_source, style, anchor_dst
+        )
 
     # -- dialogue: 1:1 mirror of the video fragments + A3 gain ------------- #
     audio_tracks: List[edl_plan.Track] = []
@@ -667,7 +1038,7 @@ def build(
     # -- b_roll: anchored dst kept, uniform only when it no longer fits ---- #
     video_tracks: List[edl_plan.Track] = []
     for track_index, track in enumerate(plan.video_tracks):
-        overlaid = _rebuild_broll(plan, track, duration, report)
+        overlaid = _rebuild_broll(plan, track, duration, report, anchor_dst=anchor_dst)
         layer0 = layer0_by_track.get(track_index, [])
         clips = tuple(layer0) + tuple(overlaid)
         if not clips:
@@ -924,13 +1295,21 @@ def _rebuild_broll(
     track: edl_plan.Track,
     duration: float,
     report: BridgeReport,
+    *,
+    anchor_dst: Optional[Mapping[str, Sequence[Tuple[float, float]]]] = None,
 ) -> List[edl_plan.ClipSegment]:
     """Keep or re-place b_roll, declaring every drop and every mutated field.
 
     An existing ``dst_in`` that still fits after the cut is the anchor the
     payload bridge already honoured, so it is kept; only a clip that no longer
     fits falls back to the uniform placement of ``payload_to_edl_plan``.
+
+    Every entry carries ``anchor_ids``: the word and silence anchors whose
+    destination span overlaps the clip window. An accepted clip that covers no
+    anchor is declared as ``broll_without_anchor``; a rejected one has no window
+    to cite and is already declared for the reason that dropped it.
     """
+    spans = anchor_dst or {}
     sources = [clip for clip in track.clips if int(getattr(clip, "layer", 0)) >= 1]
     if not sources:
         return []
@@ -956,6 +1335,7 @@ def _rebuild_broll(
         )
         at = duration * (index + 1) / (count + 1)
         dst_in = float(clip.dst_in) if anchored else _clamp(at, 0.0, max_start)
+        anchor_ids = _anchor_ids_for(dst_in, dst_in + length, spans)
         fade = clip.transition_in
         fade_cap = _transition_cap(length)
         fade_clamped = fade is not None and float(fade.duration_sec) > fade_cap + 1e-6
@@ -967,6 +1347,7 @@ def _rebuild_broll(
                     "asset_id": clip.source_id,
                     "at": round(dst_in, 3),
                     "anchor_id": None,
+                    "anchor_ids": anchor_ids,
                     "accepted": False,
                 }
             )
@@ -1021,7 +1402,18 @@ def _rebuild_broll(
                 "asset_id": clip.source_id,
                 "at": round(dst_in, 3),
                 "anchor_id": None,
+                "anchor_ids": anchor_ids,
                 "accepted": True,
             }
         )
+        if not anchor_ids:
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "clip_id": clip.clip_id,
+                    "asset_id": clip.source_id,
+                    "reason": "broll_without_anchor",
+                    "at": round(dst_in, 3),
+                }
+            )
     return kept

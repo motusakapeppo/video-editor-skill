@@ -554,6 +554,7 @@ def write_ass(
     back_colour: str = BACK_COLOUR,
     animate: bool = ANIMATE,
     beats: Optional[Sequence[float]] = None,
+    margin_v: Optional[int] = None,
 ) -> str:
     """Write an ASS file and return its absolute path (plain UTF-8, no BOM).
 
@@ -564,9 +565,13 @@ def write_ass(
     `beats` are absolute times (seconds). Every beat falling inside a cue produces a
     short colour flash on the text, so the caption pulses with the metric instead of
     being a static plate. Off by default: it is a look, not a rule.
+
+    `margin_v` replaces the computed bottom margin; the bridge uses it to anchor the
+    captions to the canvas instead of to the platform safe zone.
     """
     target = Path(dst)
     target.parent.mkdir(parents=True, exist_ok=True)
+    margin_override = margin_v
 
     vertical = aspect not in ("16:9", "4:3")
     if vertical:
@@ -614,6 +619,9 @@ def write_ass(
         # visivo sfonda il limite pur con il testo dentro (misurato: 1212 vs 1207).
         plate = int(outline) if int(border_style) == 3 else 0
         margin_v = max(0, int(out_h) - int(bottom_limit_px) + plate)
+
+    if margin_override is not None:
+        margin_v = max(0, int(margin_override))
 
     margin_lr = 60 if margin_lr is None else int(margin_lr)
     wrapped: List[List[str]] = [wrap_text(c.text, chars) for c in cues]

@@ -46,6 +46,12 @@ RANGES: Dict[str, tuple[float, float]] = {
     "silence_min": (0.01, 600.0),
     "silence_dbfs": (-120.0, 0.0),
     "bridge_min_fragment_ms": (50.0, 5000.0),
+    "bridge_caption_min_confidence": (0.0, 1.0),
+    "bridge_caption_gap_ms": (0.0, 5000.0),
+    "bridge_caption_max_chars": (4.0, 200.0),
+    # The renderer clamps MarginV to [24, out_h // 4]; the ratio cannot exceed
+    # a quarter of the canvas without being clamped anyway.
+    "bridge_caption_bottom_inset_ratio": (0.0, 0.25),
     "clip_pct": (0.0, 100.0),
     "lra_wide": (0.0, 60.0),
     "speech_wpm_fast": (10.0, 600.0),

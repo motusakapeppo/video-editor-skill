@@ -79,6 +79,7 @@ def _cli(args: list) -> subprocess.CompletedProcess:
 
 
 def _auto(prompt: str, assets: Path, out: Path, work: Path, *extra: str):
+    """``--no-subs`` keeps the e2e hermetic: no transcript, no whisper, no model."""
     return _cli(
         [
             "auto",
@@ -90,6 +91,7 @@ def _auto(prompt: str, assets: Path, out: Path, work: Path, *extra: str):
             str(out),
             "--workdir",
             str(work),
+            "--no-subs",
             *extra,
             "--json",
         ]

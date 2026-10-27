@@ -77,6 +77,12 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "silence_min": 0.35,
     "silence_dbfs": -70.0,
     "bridge_min_fragment_ms": 700,
+    # A4: word anchors -> captions. A word below the confidence floor never
+    # becomes an anchor; it is counted and declared, not dropped silently.
+    "bridge_caption_min_confidence": 0.45,
+    "bridge_caption_gap_ms": 420,
+    "bridge_caption_max_chars": 42,
+    "bridge_caption_bottom_inset_ratio": 0.08,
     "clip_pct": 0.01,
     "lra_wide": 12.0,
     # speech / subtitles

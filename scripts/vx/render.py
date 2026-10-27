@@ -1044,6 +1044,7 @@ def build_edl_filtergraph(
     *,
     has_audio: Optional[bool] = None,
     fill: str = "fit",
+    subtitles: Optional[str] = None,
 ) -> str:
     """A-Roll is concatenated; audio is split into dialogue and music buses; B-roll is overlaid.
 
@@ -1163,7 +1164,13 @@ def build_edl_filtergraph(
         )
         base = f"[base{index}]"
 
-    parts.append(f"{base}null[vout]")
+    if subtitles:
+        parts.append(
+            f"{base}subtitles={ass_filter_path(subtitles)}:"
+            f"fontsdir={fonts_mod.fontsdir_arg()},null[vout]"
+        )
+    else:
+        parts.append(f"{base}null[vout]")
     return ";".join(parts)
 
 
@@ -1221,6 +1228,7 @@ def render_edl(
     loudness: Optional[Tuple[float, float]] = None,
     progress_file: Optional[str] = None,
     fill: str = "fit",
+    subtitles: Optional[str] = None,
 ) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -1233,7 +1241,11 @@ def render_edl(
         raise RenderFailure("loudness requested but the EDL has no audio")
     mapping = edl_input_map(staged_sources)
     graph = build_edl_filtergraph(
-        plan, mapping, has_audio=has_audio, fill=_fill_policy(fill)
+        plan,
+        mapping,
+        has_audio=has_audio,
+        fill=_fill_policy(fill),
+        subtitles=subtitles,
     )
     script = write_script(graph, work / "edl_graph.txt")
     out = Path(output_path)

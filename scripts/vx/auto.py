@@ -350,23 +350,42 @@ def _a_roll_sources(plan: Any) -> List[str]:
     return seen
 
 
-def _bridge_plan(plan: Any) -> Any:
-    """Run the bridge: one audio analysis per a_roll source, failures declared, never fatal."""
-    from . import audio, bridge
+def _bridge_plan(plan: Any, *, captions: bool = True) -> Any:
+    """Run the bridge: analyses and transcripts per a_roll source, failures declared.
+
+    A transcription is attempted only when ``captions`` is on. ``subs.transcribe``
+    never raises, but it reports a skip as ``skipped_reason``; both that and any
+    exception are handed to ``bridge.build`` as a value, which turns them into a
+    ``transcript_failed`` declaration instead of a dead run.
+    """
+    from . import audio, bridge, subs
 
     analyses: Dict[str, Any] = {}
-    for source_id in _a_roll_sources(plan):
+    transcripts: Dict[str, Any] = {}
+    sources = _a_roll_sources(plan)
+    for source_id in sources:
         ref = plan.sources.get(source_id)
         path = str(getattr(ref, "path", "") or "")
         try:
             analyses[source_id] = audio.analyze_audio(path)
         except Exception as exc:  # noqa: BLE001 - the bridge turns it into a declaration
             analyses[source_id] = exc
+        if not captions:
+            continue
+        try:
+            transcript = subs.transcribe(path)
+            reason = str(getattr(transcript, "skipped_reason", "") or "")
+            if reason:
+                raise RuntimeError(reason)
+            transcripts[source_id] = transcript
+        except Exception as exc:  # noqa: BLE001 - the bridge declares it
+            transcripts[source_id] = exc
     return bridge.build(
         plan,
         analyses,
         target_lufs=TARGET_LUFS,
         loudness_spans=audio.loudness_spans,
+        transcripts=transcripts if captions else None,
     )
 
 
@@ -429,16 +448,31 @@ def _run_locked(
         "cuts": 0,
         "gained_clips": 0,
         "not_applied": 0,
+        "captions": 0,
+        "subtitles": None,
         "report": None,
     }
+    captions_ass: Optional[str] = None
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge")
-        plan, bridge_report = _bridge_plan(plan)
+        subs_enabled = not bool(getattr(args, "no_subs", False))
+        plan, bridge_report = _bridge_plan(plan, captions=subs_enabled)
         bridged_errors = plan.validate()
         if bridged_errors:
             raise contract.VxError(
                 "EDL dopo il ponte non valido: " + "; ".join(bridged_errors)
             )
+        if bridge_report.captions:
+            from . import bridge as bridge_mod
+
+            written = bridge_mod.caption_ass(
+                bridge_report.captions,
+                workdir / "captions.ass",
+                aspect=str(plan.aspect_ratio),
+                out_w=int(plan.resolution[0]),
+                out_h=int(plan.resolution[1]),
+            )
+            captions_ass = str(written) if written is not None else None
         report_path = (workdir / "bridge_report.json").resolve()
         bridge_report.write(report_path)
         bridge_summary = {
@@ -446,11 +480,14 @@ def _run_locked(
             "cuts": len(bridge_report.cuts),
             "gained_clips": len(bridge_report.audio),
             "not_applied": len(bridge_report.not_applied),
+            "captions": len(bridge_report.captions),
+            "subtitles": captions_ass,
             "report": str(report_path),
         }
         _log(
             f"[auto] bridge: {len(bridge_report.cuts)} tagli, "
             f"{len(bridge_report.audio)} gain, "
+            f"{len(bridge_report.captions)} caption, "
             f"{len(bridge_report.not_applied)} non applicati"
         )
 
@@ -489,6 +526,7 @@ def _run_locked(
         ),
         progress_file=progress_file,
         fill=fill_mode,
+        subtitles=captions_ass,
     )
     _notify(progress, 92.0, "render_done")
 
