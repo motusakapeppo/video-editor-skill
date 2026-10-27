@@ -178,13 +178,13 @@ intatta; 200 file di fuzz senza errori non gestiti.
 
 | ID | Task | Accettazione binaria | Stato |
 |---|---|---|---|
-| F17-T01 | Marcatore di proprietà `.vx-owned` per radice di lavoro | un percorso senza marcatore non viene mai cancellato; il test prova una directory esca e verifica che resti intatta | WIP |
-| F17-T02 | Quarantena a sette giorni con dry-run | `--dry-run` elenca e non tocca nulla; `apply` sposta in `.quarantine/<data>/`; la pulizia cancella solo oltre i sette giorni | WIP |
-| F17-T03 | Controllo dello spazio prima del render | spazio insufficiente = errore dichiarato con i numeri, nessun render avviato | WIP |
-| F17-T04 | Giornale write-ahead degli artefatti | dopo un crash si riconosce un artefatto a metà: il giornale dice cosa doveva esistere e l'hash atteso | WIP |
-| F17-T05 | Verifica sha256 e bit rot, originali immutabili | un byte alterato in un nostro artefatto viene segnalato; il sorgente ricontrollato resta identico | WIP |
-| F17-T06 | Limiti ai sottoprocessi | un ffmpeg che non finisce viene terminato al tempo massimo, con errore dichiarato | WIP |
-| F17-T07 | Fuzz con file ostili e catena dei modelli | 200 file ostili danno errori dichiarati e nessun traceback non gestito; un modello con hash diverso da quello atteso viene rifiutato | WIP |
+| F17-T01 | Marcatore di proprietà `.vx-owned` per radice di lavoro | un percorso senza marcatore non viene mai cancellato; il test prova una directory esca e verifica che resti intatta | DONE `853a306` — `.vx-owned`, directory esca rifiutata (prova con junction reale) |
+| F17-T02 | Quarantena a sette giorni con dry-run | `--dry-run` elenca e non tocca nulla; `apply` sposta in `.quarantine/<data>/`; la pulizia cancella solo oltre i sette giorni | DONE `853a306` — quarantena con dry-run di default, 57 controlli |
+| F17-T03 | Controllo dello spazio prima del render | spazio insufficiente = errore dichiarato con i numeri, nessun render avviato | DONE `853a306` — `ensure_space` con i tre numeri nel payload |
+| F17-T04 | Giornale write-ahead degli artefatti | dopo un crash si riconosce un artefatto a metà: il giornale dice cosa doveva esistere e l'hash atteso | DONE `58df879` — `artifacts.py`, 47 controlli, cache a 64 |
+| F17-T05 | Verifica sha256 e bit rot, originali immutabili | un byte alterato in un nostro artefatto viene segnalato; il sorgente ricontrollato resta identico | DONE `853a306` — `verify` segnala byte alterati senza toccare i non posseduti |
+| F17-T06 | Limiti ai sottoprocessi | un ffmpeg che non finisce viene terminato al tempo massimo, con errore dichiarato | DONE `0b9c8a4` — `ProcessTimeout` con stadio, tempo e testa del comando |
+| F17-T07 | Fuzz con file ostili e catena dei modelli | 200 file ostili danno errori dichiarati e nessun traceback non gestito; un modello con hash diverso da quello atteso viene rifiutato | DONE `0b9c8a4` — 200 casi: 110 errori dichiarati, 0 non gestiti; 3 modelli con hash fissato |
 
 
 Codifica per titolo con VMAF, gestione colore, torneo a coppie con ordine
