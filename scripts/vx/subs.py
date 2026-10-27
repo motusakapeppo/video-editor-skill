@@ -555,6 +555,7 @@ def write_ass(
     animate: bool = ANIMATE,
     beats: Optional[Sequence[float]] = None,
     margin_v: Optional[int] = None,
+    font_family: Optional[str] = None,
 ) -> str:
     """Write an ASS file and return its absolute path (plain UTF-8, no BOM).
 
@@ -568,6 +569,10 @@ def write_ass(
 
     `margin_v` replaces the computed bottom margin; the bridge uses it to anchor the
     captions to the canvas instead of to the platform safe zone.
+
+    `font_family` is the ASS `Fontname`: when given it replaces `font` verbatim, so
+    the renderer can burn the family `typography.apply` actually copied into the
+    job's fonts dir. When `None`, `font` is used exactly as before.
     """
     target = Path(dst)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -644,7 +649,7 @@ def write_ass(
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Vx,{font},{size},&H00FFFFFF,&H0000D7FF,&H00000000,"
+        f"Style: Vx,{font_family or font},{size},&H00FFFFFF,&H0000D7FF,&H00000000,"
         f"{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,"
         f"{margin_lr},{margin_lr},{margin_v},1\n"
         "\n"

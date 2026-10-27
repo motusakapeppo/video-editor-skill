@@ -1467,6 +1467,7 @@ def build_edl_filtergraph(
     reframe: Optional[Mapping[str, Any]] = None,
     restore: Optional[Mapping[str, Any]] = None,
     ceiling_dbtp: Optional[float] = None,
+    fonts_dir: Optional[str] = None,
 ) -> str:
     """A-Roll is concatenated; audio is split into dialogue and music buses; B-roll is overlaid.
 
@@ -1483,6 +1484,9 @@ def build_edl_filtergraph(
     ``None`` — the default — emits the graph this engine shipped, unchanged.
     ``ceiling_dbtp`` appends the true-peak limiter to the mixed audio bus, for
     the single-pass delivery path; ``None`` leaves the graph byte-identical.
+    ``fonts_dir`` points libass at this job's font directory (chosen font plus the
+    bundled one, see ``typography.apply``); ``None`` keeps the bundled
+    ``assets/fonts`` and the graph this engine shipped.
     """
     width, height = (int(value) for value in plan.resolution)
     policy = _fill_policy(fill)
@@ -1605,9 +1609,14 @@ def build_edl_filtergraph(
         base = f"[base{index}]"
 
     if subtitles:
+        libass_fonts = (
+            fonts_mod.fontsdir_arg()
+            if fonts_dir is None
+            else ass_filter_path(fonts_dir)
+        )
         parts.append(
             f"{base}subtitles={ass_filter_path(subtitles)}:"
-            f"fontsdir={fonts_mod.fontsdir_arg()},null[vout]"
+            f"fontsdir={libass_fonts},null[vout]"
         )
     else:
         parts.append(f"{base}null[vout]")
@@ -1673,6 +1682,7 @@ def render_edl(
     restore: Optional[Mapping[str, Any]] = None,
     ceiling_dbtp: Optional[float] = None,
     cache_report: Optional[Dict[str, Any]] = None,
+    fonts_dir: Optional[str] = None,
 ) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -1696,6 +1706,7 @@ def render_edl(
         reframe=reframe,
         restore=restore,
         ceiling_dbtp=ceiling_dbtp if loudness is None else None,
+        fonts_dir=fonts_dir,
     )
     script = write_script(graph, work / "edl_graph.txt")
     out = Path(output_path)
