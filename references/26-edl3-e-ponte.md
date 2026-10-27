@@ -492,6 +492,10 @@ attraversa un taglio viene spezzato, e le parole cadute dentro un silenzio
 rimosso vengono contate sul sottotitolo. L'ASS e bruciato sulla tela, non dentro
 una fascia di piattaforma: `margin_v = round(out_h * 0.08)` con clamp a
 [24, out_h/4]. Il ponte e in `bridge.py`, le primitive ASS in `subs.py`.
+Le stesse voci producono anche il file SRT consegnato accanto al master:
+l'ASS e l'SRT escono dalla stessa funzione, quindi non possono dire cose diverse.
+Prima non era cosi e il master usciva con i sottotitoli impressi e con un SRT che
+dichiarava "no speech".
 
 **A6. Reframe dalle tracce volto.** Il reframe usa
 `autoframe.build_crop_plan`, lo stesso pianificatore gia esistente. I keyframe
