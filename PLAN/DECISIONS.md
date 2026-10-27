@@ -204,3 +204,27 @@ Tre trappole decise prima di scrivere il compilatore, non scoperte dentro:
   non una sorpresa nel renderer.
 - **Reverse e freeze** hanno un tetto di durata dichiarato, perché decodificano
   l'intera clip in memoria.
+
+## D012 — Quattro cose che la fetta verticale ha insegnato, e che cambiano il piano di F2 (2026-10-27)
+
+La fetta è costata poco e ha già pagato: quattro fatti misurati che, scoperti in
+F2-T04 o F2-T05, avrebbero richiesto di rifare il compilatore.
+
+1. **`sendcmd` comanda con un frame di ritardo se sta dopo il filtro.** Va emesso
+   *prima* del filtro a cui si riferisce. Era un errore silenzioso: il video
+   usciva, l'effetto arrivava in ritardo di un frame, e nessuno se ne accorgeva
+   senza guardare i pixel.
+2. **`scale` non ha una variabile temporale.** Non esiste modo di animarlo con una
+   semplice espressione; per questo la fetta **rifiuta** la scala animata con
+   `UNSUPPORTED_KEYFRAME`. Nel registro effetti la scala animata entra solo quando
+   passa da `zoompan` o `scale2ref`, e la voce deve dichiararlo.
+3. **La luminanza è a intervallo limitato**: `Y = 16 + 219·α`. Qualsiasi attesa di
+   collaudo basata su `255·α` è sbagliata di ~7%. I test visivi confrontano
+   luminanze misurate, non valori teorici.
+4. **Il costo di `geq` è O(pixel × frame) e i comandi `sendcmd` inline crescono con
+   durata × fps.** Oltre una soglia dichiarata si passa a `sendcmd=f=file`, con
+   l'escape dei percorsi Windows che quello strumento richiede.
+
+Conseguenza sul registro: ogni voce dichiara **se** è animabile e **come**
+(espressione, `sendcmd`, `zoompan`/`scale2ref`, Chromium, frame per frame). Un
+effetto che non sa dichiarare il proprio meccanismo non entra nel registro.
