@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import subprocess
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -29,7 +30,8 @@ PASS = 0
 FAIL = 0
 SKIP = 0
 
-WINDOWS_FONTS = Path("C:/Windows/Fonts")
+_SYSTEM_ROOT = os.environ.get("WINDIR") or os.environ.get("SystemRoot") or ""
+WINDOWS_FONTS = Path(_SYSTEM_ROOT) / "Fonts" if _SYSTEM_ROOT else Path("")
 SERIF_PREFERENCE = (
     "georgia.ttf",
     "times.ttf",
@@ -455,7 +457,7 @@ def main() -> int:
 
     system, family = _system_serif()
     if not system.is_file():
-        skip("(c) font di sistema", "nessun .ttf leggibile in C:/Windows/Fonts")
+        skip("(c) font di sistema", f"nessun .ttf leggibile in {WINDOWS_FONTS}")
         check("font di sistema disponibile", False, WINDOWS_FONTS)
         return 1
 

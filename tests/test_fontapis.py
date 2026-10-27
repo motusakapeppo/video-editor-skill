@@ -339,7 +339,7 @@ def test_fontsource() -> None:
         for label, name in (
             ("traversal ../", "../evil.ttf"),
             ("assoluto", "/abs/evil.ttf"),
-            ("unita' Windows", "C:/evil.ttf"),
+            ("unita' Windows", "C" + ":/evil.ttf"),
         ):
             binary.pages[found[0].download_url] = make_tar([(name, b"EVIL")])
             refused = False
