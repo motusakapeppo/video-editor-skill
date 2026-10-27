@@ -331,6 +331,7 @@ def parse_and_decide(
     *,
     asset_pool: Optional[Sequence[Any]] = None,
     force_mode: Optional[str] = None,
+    montage: bool = False,
 ) -> Dict[str, Any]:
     """Classify the request, then either execute (strict) or choose (autonomous).
 
@@ -469,7 +470,9 @@ def parse_and_decide(
         # import here would risk a cycle.
         from . import asset_triage
 
-        triage = asset_triage.triage_assets(asset_pool, (spec["w"], spec["h"]))
+        triage = asset_triage.triage_assets(
+            asset_pool, (spec["w"], spec["h"]), montage=montage
+        )
         payload["asset_triage"] = triage.payload_block()
     return payload
 

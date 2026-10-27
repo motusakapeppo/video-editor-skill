@@ -90,6 +90,62 @@ def _inside(child: Path, parent: Path) -> bool:
         return False
 
 
+def fill_upscale(src_size: Sequence[int], target_size: Sequence[int]) -> float:
+    """How far the source has to grow to cover the canvas, declared in the report.
+
+    The cover scale needs ``max(width ratio, height ratio)``; a source that
+    already covers the target needs no upscale at all, so the value is clamped
+    to exactly ``1.0`` instead of being reported as a fraction below it. The
+    arithmetic is pure Python: no probe, no subprocess, no invented number.
+    """
+    src_w, src_h = (int(value) for value in src_size)
+    target_w, target_h = (int(value) for value in target_size)
+    if src_w <= 0 or src_h <= 0:
+        raise contract.VxError("fill: geometria sorgente non positiva")
+    factor = max(target_w / float(src_w), target_h / float(src_h))
+    if factor <= 1.0:
+        return 1.0
+    return round(factor, 3)
+
+
+def _fill_declaration(
+    plan: Any, media_info_map: Mapping[str, Mapping[str, Any]], mode: str
+) -> List[Dict[str, Any]]:
+    """One entry per layer-0 (a_roll) clip: policy, geometry, declared upscale."""
+    target = [int(value) for value in plan.resolution]
+    entries: List[Dict[str, Any]] = []
+    for track in getattr(plan, "video_tracks", ()):
+        for clip in getattr(track, "clips", ()):
+            if int(getattr(clip, "layer", 0)) != 0:
+                continue
+            media = media_info_map.get(clip.source_id)
+            if media is None:
+                raise contract.VxError(
+                    f"fill: nessun media_info per {clip.source_id!r}"
+                )
+            src = [int(media.get("width") or 0), int(media.get("height") or 0)]
+            entries.append(
+                {
+                    "clip_id": clip.clip_id,
+                    "mode": mode,
+                    "src_size": src,
+                    "target_size": list(target),
+                    "upscale": fill_upscale(src, target),
+                }
+            )
+    return entries
+
+
+def _fill_mode(value: Any) -> str:
+    """A usage error (exit 2), not a render failure: the flag is wrong, not ffmpeg."""
+    mode = str(value or "fit").strip().lower()
+    if mode not in render.FILL_POLICIES:
+        raise contract.VxError(
+            f"--fill {mode!r} non in {'/'.join(render.FILL_POLICIES)}"
+        )
+    return mode
+
+
 def _resolve_workdir(args: Any) -> Path:
     explicit = getattr(args, "workdir", None)
     if explicit:
@@ -288,16 +344,21 @@ def _run_locked(
     *,
     progress: Optional[Callable[[float, str], None]] = None,
     progress_file: Optional[str] = None,
+    montage: bool = False,
+    fill: str = "fit",
 ) -> Dict[str, Any]:
     assets = _discover(args)
     assets_by_id = {asset.asset_id: asset for asset in assets}
     source_sha = _source_hashes(assets)
+    fill_mode = _fill_mode(fill)
+    montage_mode = bool(montage)
 
     try:
         payload = decide.parse_and_decide(
             args.prompt,
             asset_pool=assets,
             force_mode="autonomous" if getattr(args, "autonomous", False) else None,
+            montage=montage_mode,
         )
     except decide.AmbiguousContractError as exc:
         raise contract.VxError(f"prompt ambiguo in STRICT: {exc}") from exc
@@ -364,6 +425,7 @@ def _run_locked(
             getattr(args, "preset", None) or settings.get("render.preset", "medium")
         ),
         progress_file=progress_file,
+        fill=fill_mode,
     )
     _notify(progress, 92.0, "render_done")
 
@@ -374,6 +436,14 @@ def _run_locked(
     _notify(progress, 100.0, "deliverables")
 
     _assert_sources_unchanged(assets, source_sha)
+
+    a_roll_indices: Dict[str, int] = {}
+    for entry in selected:
+        if entry.get("role") != "a_roll":
+            continue
+        asset_id = entry.get("asset_id")
+        if isinstance(asset_id, str) and asset_id not in a_roll_indices:
+            a_roll_indices[asset_id] = len(a_roll_indices)
 
     report: Dict[str, Any] = {
         "ok": True,
@@ -386,6 +456,11 @@ def _run_locked(
             "selected": len(selected),
             "rejected": len(rejected),
         },
+        "montage": {
+            "mode": "montage" if montage_mode else "single",
+            "a_roll_count": len(a_roll_indices),
+        },
+        "fill": _fill_declaration(plan, media_info_map, fill_mode),
         "selected": [
             {
                 "asset_id": entry.get("asset_id"),
@@ -393,6 +468,7 @@ def _run_locked(
                 "type": entry.get("type"),
                 "target_duration_sec": entry.get("target_duration_sec"),
                 "treatment": entry.get("treatment"),
+                "a_roll_index": a_roll_indices.get(entry.get("asset_id")),
             }
             for entry in selected
         ],
@@ -427,11 +503,24 @@ def run(
     *,
     progress: Optional[Callable[[float, str], None]] = None,
     progress_file: Optional[str] = None,
+    montage: Optional[bool] = None,
+    fill: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Execute the whole pipeline under the workdir lock and return the report."""
+    """Execute the whole pipeline under the workdir lock and return the report.
+
+    ``montage`` and ``fill`` default to ``None``: the flags on ``args`` win
+    unless a caller passes an explicit value, so an existing caller that only
+    has ``args`` keeps the single-a_roll and ``fit`` behaviour unchanged.
+    """
     out = Path(args.out)
     assets_dir = Path(args.assets)
     workdir = _resolve_workdir(args)
+    montage_mode = (
+        bool(getattr(args, "montage", False)) if montage is None else bool(montage)
+    )
+    fill_mode = (
+        str(getattr(args, "fill", "fit") or "fit") if fill is None else str(fill)
+    )
 
     if _inside(out, assets_dir):
         raise contract.VxError(
@@ -450,7 +539,12 @@ def run(
     )
     try:
         return _run_locked(
-            args, workdir, progress=progress, progress_file=progress_file
+            args,
+            workdir,
+            progress=progress,
+            progress_file=progress_file,
+            montage=montage_mode,
+            fill=fill_mode,
         )
     finally:
         lock.release(beat)

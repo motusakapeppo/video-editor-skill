@@ -2154,6 +2154,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="forza la modalita autonoma: nessuna domanda, i default sono registrati",
     )
+    p.add_argument(
+        "--montage",
+        action="store_true",
+        help="montaggio sequenziale: ogni video che supera i cancelli diventa a_roll, "
+        "in ordine di scoperta; default: un solo a_roll",
+    )
+    p.add_argument(
+        "--fill",
+        choices=("crop", "fit", "blur"),
+        default="fit",
+        help="riempimento della tela: crop (copri e taglia), fit (bande, default), "
+        "blur (sfondo sfocato, primo piano integro)",
+    )
     p.add_argument("--crf", type=int, default=None)
     p.add_argument("--preset", default=None)
     p.add_argument("--json", action="store_true")

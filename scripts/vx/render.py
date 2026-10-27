@@ -26,6 +26,7 @@ import copy
 import json
 import math
 import os
+import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -976,12 +977,64 @@ def _edl_bus(
     return parts
 
 
-def _edl_normalise(clip: Any, index: int, width: int, height: int) -> str:
-    return (
+FILL_POLICIES = ("crop", "fit", "blur")
+
+
+def _fill_policy(value: Any) -> str:
+    """Validate the fill policy: an unknown value is a failure, never a silent fit."""
+    policy = str(value or "fit").strip().lower()
+    if policy not in FILL_POLICIES:
+        raise RenderFailure(f"fill policy {policy!r} not in {'/'.join(FILL_POLICIES)}")
+    return policy
+
+
+def _label_safe(value: str) -> str:
+    """A filter-pad label may only carry alphanumerics and underscores."""
+    return re.sub(r"[^0-9A-Za-z_]", "_", str(value)) or "clip"
+
+
+def _edl_normalise(
+    clip: Any, index: int, width: int, height: int, *, fill: str = "fit"
+) -> str:
+    """Trim, normalise geometry and hand back an *unlabelled* chain.
+
+    The caller appends the output pad, so the last filter of this chain must
+    stay unlabelled. Three fill policies, each a distinct graph shape:
+
+    * ``fit`` (default) — letterbox/pillarbox: scale to fit, pad the rest;
+    * ``crop`` — cover and centre-crop, no bands, source pixels thrown away;
+    * ``blur`` — blurred cover background under the whole fitted foreground.
+    """
+    policy = _fill_policy(fill)
+    head = (
         f"[{index}:v]trim=start={float(clip.src_in):.6f}:"
         f"end={float(clip.src_out):.6f},setpts=PTS-STARTPTS,"
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p"
+    )
+    if policy == "fit":
+        return (
+            head + f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p"
+        )
+    if policy == "crop":
+        return (
+            head + f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height}:(iw-{width})/2:(ih-{height})/2,"
+            f"setsar=1,format=yuv420p"
+        )
+    tag = _label_safe(f"{clip.clip_id}_{index}")
+    background, foreground, cover, fitted = (
+        f"fbg_{tag}",
+        f"ffg_{tag}",
+        f"fbc_{tag}",
+        f"fbf_{tag}",
+    )
+    return (
+        head + f"split=2[{background}][{foreground}];"
+        f"[{background}]scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},gblur=sigma={FIT_BLUR_SIGMA}[{cover}];"
+        f"[{foreground}]scale={width}:{height}:"
+        f"force_original_aspect_ratio=decrease[{fitted}];"
+        f"[{cover}][{fitted}]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p"
     )
 
 
@@ -990,6 +1043,7 @@ def build_edl_filtergraph(
     source_to_index: Mapping[str, int],
     *,
     has_audio: Optional[bool] = None,
+    fill: str = "fit",
 ) -> str:
     """A-Roll is concatenated; audio is split into dialogue and music buses; B-roll is overlaid.
 
@@ -1001,6 +1055,7 @@ def build_edl_filtergraph(
     keeps older plans working unchanged.
     """
     width, height = (int(value) for value in plan.resolution)
+    policy = _fill_policy(fill)
     video_clips = _edl_clips(plan, layers={0})
     audio_clips = _edl_audio_clips(plan)
     audio = bool(audio_clips) if has_audio is None else bool(has_audio)
@@ -1018,7 +1073,9 @@ def build_edl_filtergraph(
     parts: List[str] = []
     for index, clip in enumerate(video_clips):
         index_in = source_to_index[clip.source_id]
-        parts.append(_edl_normalise(clip, index_in, width, height) + f"[v{index}]")
+        parts.append(
+            _edl_normalise(clip, index_in, width, height, fill=policy) + f"[v{index}]"
+        )
 
     if audio:
         dialogue_clips, music_clips = _edl_audio_buses(plan)
@@ -1088,7 +1145,7 @@ def build_edl_filtergraph(
     for index, clip in enumerate(overlay_clips):
         index_in = source_to_index[clip.source_id]
         duration = float(clip.dst_out) - float(clip.dst_in)
-        chain = _edl_normalise(clip, index_in, width, height)
+        chain = _edl_normalise(clip, index_in, width, height, fill=policy)
         if clip.transition_in is not None and clip.transition_in.duration_sec > 0:
             fade_in = min(float(clip.transition_in.duration_sec), duration)
             chain += f",fade=t=in:st=0:d={fade_in:.6f}"
@@ -1163,6 +1220,7 @@ def render_edl(
     preset: str = "fast",
     loudness: Optional[Tuple[float, float]] = None,
     progress_file: Optional[str] = None,
+    fill: str = "fit",
 ) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -1174,7 +1232,9 @@ def render_edl(
     if loudness is not None and not audio:
         raise RenderFailure("loudness requested but the EDL has no audio")
     mapping = edl_input_map(staged_sources)
-    graph = build_edl_filtergraph(plan, mapping, has_audio=has_audio)
+    graph = build_edl_filtergraph(
+        plan, mapping, has_audio=has_audio, fill=_fill_policy(fill)
+    )
     script = write_script(graph, work / "edl_graph.txt")
     out = Path(output_path)
 

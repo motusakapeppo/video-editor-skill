@@ -474,20 +474,34 @@ def measure_asset(asset: AssetInfo) -> Dict[str, Any]:
 
 
 def _assign_roles(
-    assets: Sequence[AssetInfo], *, from_manifest: bool
+    assets: Sequence[AssetInfo], *, from_manifest: bool, montage: bool = False
 ) -> Dict[str, str]:
+    """Assign one role per asset.
+
+    Default: exactly one dialogue-carrying video is the a_roll, everything else
+    falls to b_roll or music. ``montage`` lifts the uniqueness rule only: every
+    video eligible for the a_roll (it carries audio) keeps that role, in the
+    order the triage iterates the pool. The quality gates that reject an asset
+    run later and are untouched, so a montage candidate is still refused with
+    its own rejection code when it is too short, too small or too noisy.
+    """
     roles: Dict[str, str] = {}
     if from_manifest:
         for asset in assets:
             if asset.role is not None:
                 roles[asset.asset_id] = asset.role
     claimed = set(roles.values()) & {"a_roll"}
+    take_all = bool(montage)
     for asset in assets:
         if asset.asset_id in roles:
             continue
         if asset.kind == "audio":
             roles[asset.asset_id] = "music"
-        elif asset.kind == "video" and asset.has_audio and "a_roll" not in claimed:
+        elif (
+            asset.kind == "video"
+            and asset.has_audio
+            and (take_all or "a_roll" not in claimed)
+        ):
             roles[asset.asset_id] = "a_roll"
             claimed.add("a_roll")
         else:
@@ -597,6 +611,7 @@ def triage_assets(
     require_anchor: bool = False,
     measure: Optional[Callable[[AssetInfo], Mapping[str, Any]]] = measure_asset,
     role_source: Optional[str] = None,
+    montage: bool = False,
 ) -> TriageResult:
     thresholds = _effective_thresholds()
     target_w, target_h = _target_size(target_resolution)
@@ -694,7 +709,9 @@ def triage_assets(
         deduped.append(asset)
     alive = deduped
 
-    roles = _assign_roles(alive, from_manifest=role_source == "manifest")
+    roles = _assign_roles(
+        alive, from_manifest=role_source == "manifest", montage=montage
+    )
     not_evaluated: set[str] = set()
     candidates: List[TriageDecision] = []
 
