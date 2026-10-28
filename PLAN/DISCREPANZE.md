@@ -15,6 +15,7 @@ Data: 27/10/2026.
 | D-7 | «sezione 5 livello D» | Non esiste un «livello D»: i livelli sono **L0, L1, L2** | `PLAN/MASTER_PLAN.md:209` | Nessuna correzione necessaria per quel motivo |
 | D-8 | «la dissolvenza incrociata è una transizione disponibile» | `TRANSITION_KINDS` elenca `crossfade`, ma il compilatore la rifiuta: `implemented: ['fade_in', 'fade_out']` | montaggio del vivo: `UNSUPPORTED_TRANSITION: transition kind 'crossfade' is not implemented (clips[27])` | o si implementa o si toglie dal contratto; intanto il montaggio usa tagli secchi |
 | D-9 | «la dimensione del canvas si legge dal file» | `ffprobe` riporta la dimensione **codificata** (1920x1080), ma i file dei live hanno un display matrix che li ruota: il contenuto e' **1080x1920** | primo render a 1920x1080: contenuto verticale con bande nere laterali; misurato sui tre file, poi rifatto a 1080x1920 e il contenuto riempie il fotogramma | la rotazione va letta prima di scegliere il canvas: task per F6 (comprensione del materiale) |
+| D-10 | «un effetto geometrico puo' cambiare il canvas, il palco lo riporta» | `zoompan` e `dolly_zoom` emettono **1280x720** (default hd720) su qualunque input: su un canvas verticale 1080x1920 il palco riscala 720 pixel a 1920 e l'immagine risulta molle | montaggio del coro, frame a 26,8 s visibilmente sfocato rispetto ai vicini; i template non dichiarano `s=` | servono `{canvas_w}`/`{canvas_h}` nell'emettitore e i due template aggiornati; i due fixture di riferimento vanno ri-benedetti |
 
 ## Sulla D-6, la decisione che propongo
 
