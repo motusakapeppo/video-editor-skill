@@ -375,18 +375,18 @@ e conta il giudizio dell'utente, non solo le metriche.
 
 | ID | Task | Stato |
 |---|---|---|
-| F32 (AF4/F20) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F33 (AF4/F21) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F34 (AF4/F22) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F35 (AF4/F23) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F36 (AF4/F24) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F37 (AF4/F25) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F38 (AF4/F26) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F39 (AF4/F27) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F40 (AF4/F28) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F41 (AF4/F29) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F42 (AF4/F30) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
-| F43 (AF4/F31) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F32 (AF4/F20) Vincoli, affetti, autonomia | registro dei vincoli e compilatore dal prompt; 200 prompt coperti, zero vincoli duri violati; autonomia 0-5 senza violare linee rosse; cartolina d'intenzione prima di ogni montaggio | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F33 (AF4/F21) Atlante e genoma | schema che rifiuta una voce senza proxy o implementazione; genoma a 16 famiglie; 10.000 genomi producono EDL validi; almeno 5.000 voci con 2.500 validate; contatore esatto; mappa navigabile | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F34 (AF4/F22) Divergenza | 12 operatori creativi; 8-12 concept distanti con motivazione; 3 analogie da altri domini; rilevatore di cliche' | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F35 (AF4/F23) Esploratore qualita'-diversita' | vedi PLAN/ANNEX_F.md | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F36 (AF4/F24) Pannello dei critici | rubriche per ruolo, misure parallele, avvocato del diavolo, torneo a coppie con ordine scambiato; distingue difettosi e buoni nel 90% dei casi | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F37 (AF4/F25) Modello del gusto | Bradley-Terry con incertezza; passaporto esportabile e cancellabile; deriva e sovradattamento; accuratezza sopra il caso dopo 20 coppie | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F38 (AF4/F26) Ricerca e curiosita' | 3-5 domande per brief; analogie con le regole dell'Allegato D; voci proposte solo con 3 fonti indipendenti o verifica a vista | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F39 (AF4/F27) Memoria e riflessione | memoria episodica, dimenticanza regolata, intenzione e post-mortem; una lezione cambia un lavoro successivo, misurato A/B | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F40 (AF4/F28) Stili e originalita' | impronte in coordinate del genoma; algebra degli stili; guardia di originalita' con blocco sotto soglia; nessun frame ne' audio dei riferimenti conservato | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F41 (AF4/F29) Meta-creativita' | bandit sugli operatori; sandbox di invenzione con linter e prova; promozione solo se il benchmark non peggiora; 5 invenzioni, 2 promosse | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F42 (AF4/F30) Dialogo e interfaccia | max 3 domande solo a costo d'errore alto, sempre con default; spiegazioni di una riga; critica dell'utente come vincolo persistente | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
+| F43 (AF4/F31) Banco di prova ed esame | 12 brief x 3 modalita'; metriche; test ciechi; regressioni automatiche; FINAL_REPORT creativo | TODO: dipendenze aperte (F4 transizioni/PiP, F7, F8, F9, F14, F19, E1, E5); dettaglio dei task in `PLAN/ANNEX_F.md` |
 
 ## Esame finale (sezione 6 + A5 del piano)
 
