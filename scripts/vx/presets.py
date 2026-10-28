@@ -38,6 +38,7 @@ is ``PARAM_OUT_OF_RANGE`` (never rounded into it), and a value of the wrong kind
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
@@ -54,6 +55,8 @@ __all__ = [
     "merge",
     "effect_for",
     "difference",
+    "variants",
+    "describe",
     "by_category",
     "check",
     "check_all",
@@ -79,6 +82,11 @@ class PresetParam:
     a use that does not override the parameter therefore returns the declared
     base, never a second, drifting default. ``unit`` is ``""`` when the value has
     no unit (a zoom factor, a curve point), and a display unit otherwise.
+
+    ``values`` is the closed set a ``color`` or ``string`` parameter may take: a
+    variation has to pick one of them, so the declared set is the domain, the
+    same way ``minimum``/``maximum`` is the domain of a number. It is empty for
+    kinds with a numeric or boolean domain, and no declared preset uses it yet.
     """
 
     name: str
@@ -87,6 +95,7 @@ class PresetParam:
     maximum: Optional[float]
     default: ParamValue
     unit: str = ""
+    values: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -481,6 +490,187 @@ def difference(name: str, overrides: Mapping[str, Any]) -> Dict[str, Any]:
         for key, value in preset.base.items()
         if effective[key] != value
     }
+
+
+def _format_value(value: Any) -> str:
+    """One value as it reads in a report: ``1.31``, ``7200``, ``True``, ``#d94b2a``."""
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        return f"{value:g}"
+    return str(value)
+
+
+def _can_vary(preset: Preset, param: PresetParam) -> bool:
+    """Whether ``param`` admits at least one value different from the base.
+
+    A number needs a real interval ``minimum < maximum`` (or a bound that is not
+    the base), a boolean needs a boolean base to invert, and a colour/string
+    needs at least one declared value besides the base. Anything else cannot be
+    moved and must not pretend to be a knob.
+    """
+    if param.name not in preset.base:
+        return False
+    base_value = preset.base[param.name]
+    if param.kind == "number":
+        if param.minimum is None or param.maximum is None:
+            return False
+        if param.minimum > param.maximum:
+            return False
+        return not (
+            param.minimum == param.maximum
+            and float(base_value) == float(param.minimum)
+        )
+    if param.kind == "bool":
+        return isinstance(base_value, bool)
+    if param.kind in ("color", "string"):
+        return any(value != base_value for value in param.values)
+    return False
+
+
+def _sample(
+    param: PresetParam, base_value: ParamValue, rng: random.Random
+) -> Optional[ParamValue]:
+    """One value of ``param`` inside its domain and different from ``base_value``.
+
+    ``None`` only when the parameter cannot be moved at all. Numbers are drawn
+    uniformly from the exposed ``[minimum, maximum]`` and kept to four decimals
+    for readable reports; nothing is ever pushed back into range, a draw that
+    lands on the base is simply redrawn, and the last resort is the bound the
+    base is not, so the caller always gets a value it can merge.
+    """
+    if param.kind == "number":
+        low, high = param.minimum, param.maximum
+        if low is None or high is None or low > high:
+            return None
+        if low == high:
+            return None if float(base_value) == float(low) else low
+        for _ in range(64):
+            value = rng.uniform(low, high)
+            rounded = round(value, 4)
+            if low <= rounded <= high:
+                value = rounded
+            if value != base_value:
+                return value
+        return low if float(low) != float(base_value) else high
+    if param.kind == "bool":
+        if not isinstance(base_value, bool):
+            return None
+        return not base_value
+    if param.kind in ("color", "string"):
+        options = [value for value in param.values if value != base_value]
+        if not options:
+            return None
+        return rng.choice(options)
+    return None
+
+
+def _one_variant(
+    preset: Preset, variable: List[PresetParam], rng: random.Random
+) -> Dict[str, Any]:
+    """One override dict: one or more movable keys, each moved off the base.
+
+    The keys are chosen by the seeded generator and emitted in the preset's own
+    exposed order, so the dict is stable and never carries an unchanged value.
+    At least one key always survives, because a variant with no difference is
+    not a variant.
+    """
+    names = [
+        param.name
+        for param in rng.sample(variable, rng.randint(1, len(variable)))
+    ]
+    variant: Dict[str, Any] = {}
+    for param in preset.exposed:
+        if param.name not in names:
+            continue
+        value = _sample(param, preset.base[param.name], rng)
+        if value is None or value == preset.base[param.name]:
+            continue
+        variant[param.name] = value
+    if not variant:
+        param = variable[0]
+        variant[param.name] = _sample(param, preset.base[param.name], rng)
+    return variant
+
+
+def variants(
+    name: Union[str, Preset], seed: int, count: int = 3
+) -> Tuple[Dict[str, Any], ...]:
+    """``count`` deterministic override dicts for one preset (D034 #3).
+
+    ``name`` is the preset id; a built :class:`Preset` is accepted too, so a row
+    that is not registered (a test's ``dataclasses.replace`` copy) can still be
+    varied. Each dict carries only the keys that moved off the base, so it is
+    exactly what :func:`difference` records and what :func:`merge` accepts. A
+    number stays inside its exposed range, a boolean is the base's opposite, and
+    a colour or string is one of its declared values -- always different from the
+    base. The variants of one call are distinct from each other while the
+    parameter space allows it, without ever repeating an override dict.
+
+    The generator is a private ``random.Random(seed)``: no module-level
+    ``random`` state, no clock, no ``hash()`` of a name or an object, so the same
+    seed prints the same variants whatever ``PYTHONHASHSEED`` is. Neither
+    :data:`PRESETS` nor any base dict is read mutably or written.
+    """
+    preset = name if isinstance(name, Preset) else resolve(name)
+    if count < 1:
+        raise EDLError(
+            "VARIANT_COUNT",
+            f"preset {preset.id!r} needs at least one variant, got count={count!r}",
+            "count",
+        )
+    if not preset.exposed:
+        raise EDLError(
+            "PRESET_NOT_VARIABLE",
+            f"preset {preset.id!r} exposes no parameter, so it cannot be varied",
+            "exposed",
+        )
+    variable = [param for param in preset.exposed if _can_vary(preset, param)]
+    if not variable:
+        raise EDLError(
+            "PRESET_NOT_VARIABLE",
+            f"preset {preset.id!r} exposes no parameter that can take a value "
+            f"other than its base, so it cannot be varied",
+            "exposed",
+        )
+
+    rng = random.Random(seed)
+    produced: List[Dict[str, Any]] = []
+    seen: List[Tuple[Tuple[str, Any], ...]] = []
+    attempts = 0
+    cap = max(64, count * 32)
+    while len(produced) < count and attempts < cap:
+        attempts += 1
+        variant = _one_variant(preset, variable, rng)
+        token = tuple(sorted(variant.items()))
+        if token in seen:
+            continue
+        seen.append(token)
+        produced.append(variant)
+    # A space smaller than ``count`` (one boolean, one narrow set) still owes
+    # the caller ``count`` usable variants; they repeat instead of growing.
+    while len(produced) < count:
+        produced.append(_one_variant(preset, variable, rng))
+    return tuple(produced)
+
+
+def describe(name: str, overrides: Mapping[str, Any]) -> str:
+    """One line naming the preset and every key ``overrides`` moved off its base.
+
+    ``describe("slow_push", {"zoom": 1.31})`` reads ``slow_push: zoom 1.12 ->
+    1.31``. The merge's validation applies unchanged, so an unexposed key or an
+    out-of-range value is refused here rather than missing from the summary; an
+    override equal to the base is not a change and is not shown.
+    """
+    preset = resolve(name)
+    changed = difference(preset.id, overrides)
+    if not changed:
+        return f"{preset.id}: base unchanged"
+    moves = ", ".join(
+        f"{key} {_format_value(preset.base[key])} -> {_format_value(value)}"
+        for key, value in changed.items()
+    )
+    return f"{preset.id}: {moves}"
 
 
 def by_category() -> Dict[str, Tuple[Preset, ...]]:
