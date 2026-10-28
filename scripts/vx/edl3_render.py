@@ -159,6 +159,10 @@ HARD_CODES = frozenset(
     {
         "SCHEMA_VERSION",
         "PROFILE_UNKNOWN",
+        "STRUCTURE_DURATION",
+        "STRUCTURE_DENSITY",
+        "STRUCTURE_HOOK",
+        "STRUCTURE_INTERVIEW",
         "FPS_INVALID",
         "SIZE_INVALID",
         "TIMELINE_EMPTY",
@@ -200,6 +204,10 @@ HARD_CODES = frozenset(
         "GENERATOR_TIME_FX",
         "GENERATOR_ALPHA_LAYER",
         "GENERATOR_SOURCE_CONFLICT",
+        "TEMPLATE_UNKNOWN",
+        "PARAM_NOT_EXPOSED",
+        "PARAM_TYPE",
+        "PARAM_OUT_OF_RANGE",
     }
 )
 
@@ -923,8 +931,9 @@ def _clip_plan(
     fps: int,
 ) -> Dict[str, Any]:
     duration = clip.timeline_duration
+    generator = clip.generator_declaration
     generator_alpha = bool(
-        isinstance(clip.generator, Mapping) and clip.generator.get("alpha") is True
+        isinstance(generator, Mapping) and generator.get("alpha") is True
     )
     if generator_alpha and clip.layer < 1:
         raise CompileError(
@@ -1055,10 +1064,10 @@ def _clip_plan(
         "compose_fragment": compose_fragment,
         "generator": (
             None
-            if not isinstance(clip.generator, Mapping)
+            if not isinstance(generator, Mapping)
             else {
-                "template": clip.generator.get("template"),
-                "engine": clip.generator.get("engine"),
+                "template": generator.get("template"),
+                "engine": generator.get("engine"),
                 "alpha": generator_alpha,
             }
         ),
@@ -1309,7 +1318,7 @@ def _route_effects(
     }
     for where, effect, clip in scopes:
         entry = select_backend(effect, settings=settings)
-        generator = None if clip is None else clip.generator
+        generator = None if clip is None else clip.generator_declaration
         if entry["rule"] == RULE_QUALIFIED:
             if generator is None:
                 raise CompileError(
@@ -1418,14 +1427,18 @@ def _generator_table(
 
     table: Dict[int, Dict[str, Any]] = {}
     for index, clip in enumerate(timeline.clips):
-        if clip.generator is None:
+        declaration = clip.generator_declaration
+        if declaration is None:
             continue
-        where = f"clips[{index}].generator"
-        declaration = clip.generator
-        if not isinstance(declaration, Mapping):
+        where = (
+            f"clips[{index}].generator"
+            if clip.generator is not None
+            else f"clips[{index}].template_ref"
+        )
+        if clip.generator is not None and not isinstance(clip.generator, Mapping):
             raise CompileError(
                 "GENERATOR_SHAPE",
-                f"generator must be an object, got {type(declaration).__name__}",
+                f"generator must be an object, got {type(clip.generator).__name__}",
                 where,
             )
         entry = None if generator_paths is None else generator_paths.get(clip.id)
@@ -1590,7 +1603,7 @@ def compile_timeline(
     for clip_index, clip in enumerate(timeline.clips):
         clip_where = f"clips[{clip_index}]"
         source = sources.get(clip_index, clip.source)
-        if clip.generator is None and not Path(source).exists():
+        if clip.generator_declaration is None and not Path(source).exists():
             raise CompileError(
                 "MISSING_SOURCE",
                 f"source file not found: {source}",
@@ -1711,7 +1724,7 @@ def compile_timeline(
 
     input_args: List[str] = []
     for clip_index, clip in enumerate(timeline.clips):
-        if clip.generator is not None:
+        if clip_index in generators:
             # The capture directory is a numbered image sequence: same input
             # ordinal as the clip index, no -ss, and the timeline's own clock.
             entry = generators[clip_index]
@@ -1963,7 +1976,7 @@ def _materialize_generators(
     """
     from . import motion, motion_cache, motion_fallback  # noqa: PLC0415 - render only
 
-    clips = [clip for clip in timeline.clips if clip.generator is not None]
+    clips = [clip for clip in timeline.clips if clip.generator_declaration is not None]
     if not clips:
         return {}
     required: set = set()
@@ -1977,10 +1990,14 @@ def _materialize_generators(
     root.mkdir(parents=True, exist_ok=True)
     paths: Dict[str, str] = {}
     for index, clip in enumerate(timeline.clips):
-        if clip.generator is None:
+        declaration = clip.generator_declaration
+        if declaration is None:
             continue
-        declaration = clip.generator
-        where = f"clips[{index}].generator"
+        where = (
+            f"clips[{index}].generator"
+            if clip.generator is not None
+            else f"clips[{index}].template_ref"
+        )
         meta = motion.load_template(declaration.get("template"))
         resolved = motion.validate_params(meta, declaration.get("params") or {})
         decision = motion_fallback.resolve_engine(

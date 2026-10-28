@@ -274,6 +274,7 @@ __all__ = [
     "NestedSequence",
     "Timeline3",
     "param_domain_problem",
+    "exposed_param_value",
     "select_backend",
     "check_effect_density",
     "sample",
@@ -484,6 +485,78 @@ def param_domain_problem(kind: str, name: str, value: float) -> Optional[str]:
                 f"[{declared.lo:g}, {declared.hi:g}]"
             )
     return None
+
+
+def _param_type_problem(
+    declaration: Mapping[str, Any], value: Any
+) -> Optional[str]:
+    """Return a human detail when ``value`` is not of the declared param type.
+
+    The vocabulary is the template's own (``string``, ``number``, ``int``,
+    ``color``, ``bool``). A colour is a string here and its domain is checked
+    separately; ``bool`` is never a number, even though Python says it is.
+    """
+    kind = declaration.get("type")
+    if kind in ("number", "int"):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"expects a number, got {type(value).__name__}"
+        if not math.isfinite(float(value)):
+            return f"expects a finite number, got {value!r}"
+        if kind == "int" and float(value) != int(value):
+            return f"expects an integer, got {value!r}"
+        return None
+    if kind == "bool":
+        if isinstance(value, bool):
+            return None
+        return f"expects a boolean, got {type(value).__name__}"
+    if kind == "color":
+        if isinstance(value, str):
+            return None
+        return f"expects a colour string, got {type(value).__name__}"
+    if kind == "string":
+        if isinstance(value, str):
+            return None
+        return f"expects a string, got {type(value).__name__}"
+    return None
+
+
+def _param_range_problem(
+    declaration: Mapping[str, Any], value: Any
+) -> Optional[str]:
+    """Return a human detail when ``value`` is outside the template's domain.
+
+    ``values`` is the enumerated domain and applies to every type (a colour out
+    of its palette is out of range, like a string out of a position list);
+    ``min``/``max`` bound the numeric types only.
+    """
+    values = declaration.get("values")
+    if isinstance(values, (list, tuple)) and values:
+        if value in values:
+            return None
+        return f"{value!r} is not one of {list(values)}"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    low, high = declaration.get("min"), declaration.get("max")
+    if low is not None and value < low:
+        return f"{value!r} is below the declared minimum {low!r}"
+    if high is not None and value > high:
+        return f"{value!r} is above the declared maximum {high!r}"
+    return None
+
+
+def _declared_template_names() -> List[str]:
+    """Every template name declared under ``assets/templates/``."""
+    from . import motion  # noqa: PLC0415 - validation stays cheap without it
+
+    try:
+        root = motion.templates_root()
+        return sorted(
+            entry.name
+            for entry in root.iterdir()
+            if (entry / "template.json").is_file()
+        )
+    except OSError:
+        return []
 
 
 def select_backend(kind: str, keyframe_count: int = 0, duration: float = 0.0) -> str:
@@ -907,6 +980,19 @@ def _records(value: Any) -> Tuple[Dict[str, Any], ...]:
     return tuple(dict(item) for item in items if isinstance(item, Mapping))
 
 
+def exposed_param_value(exposure: Any) -> Any:
+    """The value an exposure sets: a declaration's ``default``, or the value itself.
+
+    The 1.1 contract documents an exposure as ``{type, default, ...}``; a preset
+    override on disk is the bare value, so both shapes are read here and a mapping
+    contributes its ``default``. A mapping without one is already refused by
+    ``EXPOSED_PARAM_SHAPE``, so it never reaches a render.
+    """
+    if isinstance(exposure, Mapping):
+        return exposure.get("default")
+    return exposure
+
+
 @dataclass
 class Clip3:
     """One segment on the timeline.
@@ -1024,6 +1110,37 @@ class Clip3:
             if item.kind == kind:
                 return item
         return None
+
+    @property
+    def generator_declaration(self) -> Optional[Dict[str, Any]]:
+        """The generator this clip materializes, with ``template_ref`` folded in.
+
+        A clip that names ``template_ref`` and declares no picture of its own
+        (``source`` empty and no ``sequence``) is a generator clip built from that
+        template, and one that also carries ``generator`` renders the template
+        ``template_ref`` names; the parameters returned are the template's
+        declared defaults, then ``generator.params``, then ``exposed_params``
+        (last wins), so only the overrides are carried here and
+        :func:`vx.motion.validate_params` applies the defaults.
+        """
+        raw = self.generator
+        if raw is not None and not isinstance(raw, Mapping):
+            return None
+        declaration: Dict[str, Any] = {} if raw is None else dict(raw)
+        if raw is None:
+            if not self.template_ref or self.source or self.sequence is not None:
+                return None
+            declaration = {"engine": "auto", "alpha": False}
+        if self.template_ref:
+            declaration["template"] = self.template_ref
+        params: Dict[str, Any] = {}
+        declared = declaration.get("params")
+        if isinstance(declared, Mapping):
+            params.update(declared)
+        for name, exposure in (self.exposed_params or {}).items():
+            params[str(name)] = exposed_param_value(exposure)
+        declaration["params"] = params
+        return declaration
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {
@@ -1498,7 +1615,7 @@ def check_effect_density(
         return []
     anchored: List[Tuple[float, str]] = []
     for start, clip in zip(_clip_start_times(timeline), timeline.clips):
-        if not clip.source and clip.generator is None:
+        if not clip.source and clip.generator_declaration is None:
             continue
         for effect in clip.effects:
             spec = EFFECT_REGISTRY.get(effect.kind)
@@ -1645,9 +1762,11 @@ class Timeline3:
             )
 
         self._validate_header(add)
+        self._validate_template_params(add)
         self._validate_clips(add, depth, problems)
         self._validate_effect_density(add)
         self._validate_extras(add)
+        self._validate_structure(add)
         self._validate_adjustments(add)
         self._validate_text(add)
         self._validate_captions(add)
@@ -1699,10 +1818,9 @@ class Timeline3:
                 if value is not None and not value.strip():
                     add("PRESET_REF_SHAPE", f"{where}.{name}", "empty reference")
             for name, declaration in (clip.exposed_params or {}).items():
-                spot = f"{where}.exposed_params.{name}"
                 if not isinstance(declaration, Mapping):
-                    add("EXPOSED_PARAM_SHAPE", spot, "declaration is not an object")
                     continue
+                spot = f"{where}.exposed_params.{name}"
                 if declaration.get("type") not in EXPOSED_TYPES:
                     add(
                         "EXPOSED_PARAM_SHAPE",
@@ -1768,6 +1886,83 @@ class Timeline3:
         except EDLError as exc:
             add("PROFILE_UNKNOWN", "profile_ref", exc.detail)
 
+    def _validate_template_params(self, add) -> None:
+        """The clip's template and the values it exposes, resolved against it.
+
+        Judged only for a clip that declares ``template_ref`` or
+        ``exposed_params``: ``TEMPLATE_UNKNOWN`` when the reference resolves to
+        no template, ``PARAM_NOT_EXPOSED`` when the template declares no such
+        parameter, ``PARAM_TYPE`` when a value does not match the declared type,
+        and ``PARAM_OUT_OF_RANGE`` when a number falls outside ``[min, max]`` or
+        a value falls outside the declared ``values``.
+        """
+        for index, clip in enumerate(self.clips):
+            if clip.template_ref is None and not clip.exposed_params:
+                continue
+            where = f"clips[{index}]"
+            name = clip.template_ref
+            if name is None:
+                generator = clip.generator_declaration
+                declared_name = None if generator is None else generator.get("template")
+                if isinstance(declared_name, str) and declared_name.strip():
+                    name = declared_name
+            if name is None:
+                add(
+                    "TEMPLATE_UNKNOWN",
+                    f"{where}.exposed_params",
+                    "the clip exposes parameters but names no template, so none of "
+                    "them can be declared",
+                )
+                continue
+            spot = f"{where}.template_ref" if clip.template_ref else where
+            from . import motion  # noqa: PLC0415 - validation stays cheap without it
+
+            try:
+                meta = motion.load_template(name)
+            except Exception:  # noqa: BLE001 - every failure is one named finding
+                add(
+                    "TEMPLATE_UNKNOWN",
+                    spot,
+                    f"template {name!r} does not resolve; declared templates are "
+                    f"{_declared_template_names()}",
+                )
+                continue
+            for param, exposure in (clip.exposed_params or {}).items():
+                param_where = f"{where}.exposed_params.{param}"
+                declaration = meta["params"].get(param)
+                if declaration is None:
+                    add(
+                        "PARAM_NOT_EXPOSED",
+                        param_where,
+                        f"template {meta['name']!r} declares no parameter {param!r} "
+                        f"(declared: {sorted(meta['params'])})",
+                    )
+                    continue
+                if (
+                    isinstance(exposure, Mapping)
+                    and exposure.get("type") is not None
+                    and exposure.get("type") != declaration.get("type")
+                ):
+                    add(
+                        "PARAM_TYPE",
+                        param_where,
+                        f"exposed as {exposure.get('type')!r} but {meta['name']!r} "
+                        f"declares {param!r} as {declaration.get('type')!r}",
+                    )
+                    continue
+                value = exposed_param_value(exposure)
+                problem = _param_type_problem(declaration, value)
+                if problem is not None:
+                    add(
+                        "PARAM_TYPE",
+                        param_where,
+                        f"parameter {param!r} of {meta['name']!r} {problem}",
+                    )
+                    continue
+                problem = _param_range_problem(declaration, value)
+                if problem is not None:
+                    add("PARAM_OUT_OF_RANGE", param_where, problem)
+
     def _validate_clips(self, add, depth: int, problems: List[Dict[str, str]]) -> None:
         declared = [
             clip
@@ -1809,7 +2004,11 @@ class Timeline3:
                         f"{clip_where}.sequence",
                         f"no nested sequence {clip.sequence!r} on this timeline",
                     )
-            elif clip.generator is None and not clip.source:
+            elif (
+                clip.generator is None
+                and clip.generator_declaration is None
+                and not clip.source
+            ):
                 add("CLIP_RANGE", f"{clip_where}.source", "source is empty")
 
             if not math.isfinite(clip.src_in) or clip.src_in < 0.0:
@@ -1916,10 +2115,8 @@ class Timeline3:
         of being applied twice.
         """
         raw = clip.generator
-        if raw is None:
-            return
         field_where = f"{where}.generator"
-        if not isinstance(raw, Mapping):
+        if raw is not None and not isinstance(raw, Mapping):
             add(
                 "GENERATOR_SHAPE",
                 field_where,
@@ -1927,29 +2124,47 @@ class Timeline3:
                 f"got {type(raw).__name__}",
             )
             return
-        missing = sorted(GENERATOR_KEYS - set(raw))
-        unknown = sorted(set(raw) - GENERATOR_KEYS)
-        if missing:
-            add(
-                "GENERATOR_SHAPE",
-                field_where,
-                f"generator is missing {missing}",
-            )
-        if unknown:
-            add(
-                "GENERATOR_SHAPE",
-                field_where,
-                f"generator declares unknown key(s) {unknown} "
-                f"(declared: {sorted(GENERATOR_KEYS)})",
-            )
+        declaration = clip.generator_declaration
+        if declaration is None:
+            return
+        if raw is not None:
+            missing = sorted(GENERATOR_KEYS - set(raw))
+            unknown = sorted(set(raw) - GENERATOR_KEYS)
+            if missing:
+                add(
+                    "GENERATOR_SHAPE",
+                    field_where,
+                    f"generator is missing {missing}",
+                )
+            if unknown:
+                add(
+                    "GENERATOR_SHAPE",
+                    field_where,
+                    f"generator declares unknown key(s) {unknown} "
+                    f"(declared: {sorted(GENERATOR_KEYS)})",
+                )
 
-        if clip.source or clip.sequence is not None:
-            add(
-                "GENERATOR_SOURCE_CONFLICT",
-                where,
-                "a generator clip renders a captured template: it cannot also "
-                "declare a source file or a nested sequence",
-            )
+            if clip.source or clip.sequence is not None:
+                add(
+                    "GENERATOR_SOURCE_CONFLICT",
+                    where,
+                    "a generator clip renders a captured template: it cannot also "
+                    "declare a source file or a nested sequence",
+                )
+            declared_template = raw.get("template")
+            if (
+                clip.template_ref
+                and isinstance(declared_template, str)
+                and declared_template.strip()
+                and declared_template != clip.template_ref
+            ):
+                add(
+                    "GENERATOR_SHAPE",
+                    f"{field_where}.template",
+                    f"generator.template {declared_template!r} contradicts "
+                    f"template_ref {clip.template_ref!r}: template_ref names the "
+                    "template the clip renders",
+                )
         if clip.speed is not None:
             add(
                 "GENERATOR_TIME_FX",
@@ -1977,7 +2192,7 @@ class Timeline3:
                 f"be 0, got {clip.src_in}",
             )
 
-        template = raw.get("template")
+        template = declaration.get("template")
         if not isinstance(template, str) or not template.strip():
             add(
                 "GENERATOR_TEMPLATE",
@@ -1985,14 +2200,14 @@ class Timeline3:
                 f"template must be a non-empty name or directory, got {template!r}",
             )
             return
-        engine = raw.get("engine")
+        engine = declaration.get("engine")
         if engine not in GENERATOR_ENGINES:
             add(
                 "GENERATOR_SHAPE",
                 f"{field_where}.engine",
                 f"engine {engine!r} not in {sorted(GENERATOR_ENGINES)}",
             )
-        alpha = raw.get("alpha")
+        alpha = declaration.get("alpha")
         if not isinstance(alpha, bool):
             add(
                 "GENERATOR_SHAPE",
@@ -2006,19 +2221,24 @@ class Timeline3:
                 "an alpha generator is composited over the layer below, so it "
                 f"needs layer >= 1; this clip sits on layer {clip.layer}",
             )
-        params = raw.get("params")
-        if params is not None and not isinstance(params, Mapping):
+        raw_params = None if raw is None else raw.get("params")
+        if raw_params is not None and not isinstance(raw_params, Mapping):
             add(
                 "GENERATOR_PARAMS",
                 f"{field_where}.params",
-                f"params must be an object, got {type(params).__name__}",
+                f"params must be an object, got {type(raw_params).__name__}",
             )
+            params: Optional[Mapping[str, Any]] = None
+        else:
+            params = raw_params if isinstance(raw_params, Mapping) else None
 
         from . import motion  # noqa: PLC0415 - validation stays cheap without it
 
         try:
             meta = motion.load_template(template)
         except Exception as exc:  # noqa: BLE001 - every failure is a named finding
+            if clip.template_ref:
+                return  # TEMPLATE_UNKNOWN already names the reference
             add(
                 "GENERATOR_TEMPLATE",
                 f"{field_where}.template",
@@ -2026,9 +2246,7 @@ class Timeline3:
             )
             return
         try:
-            motion.validate_params(
-                meta, params if isinstance(params, Mapping) else None
-            )
+            motion.validate_params(meta, params)
         except Exception as exc:  # noqa: BLE001 - every failure is a named finding
             add(
                 "GENERATOR_PARAMS",
@@ -2050,6 +2268,35 @@ class Timeline3:
     def _validate_effect_density(self, add) -> None:
         for detail in check_effect_density(self):
             add("EFFECT_DENSITY", "clips", detail)
+
+    def _validate_structure(self, add) -> None:
+        """A declared profile is measured against the edit the document declares.
+
+        The grammar in :mod:`vx.profiles` is only judged when the document also
+        declares its *timeline*: every clip carries ``dst_in``/``dst_out``. With
+        no placement the length and the cut instants are the concatenation
+        fallback that :attr:`duration` documents as a convenience, not a declared
+        edit, so there is nothing to measure the profile against. A document
+        without ``profile_ref`` is untouched, exactly as before.
+        """
+        if self.profile_ref is None:
+            return
+        if not self.clips:
+            return
+        if any(clip.dst_in is None or clip.dst_out is None for clip in self.clips):
+            return
+        if self.version != "vx.edl3/1.2":
+            return
+
+        from . import profiles, structure  # noqa: PLC0415 - read only, never imported
+
+        try:
+            profile = profiles.resolve(self.profile_ref)
+        except EDLError:
+            return
+        for detail in structure.check_structure(self, profile):
+            code, _, text = detail.partition(": ")
+            add(code, "structure", text)
 
     def _validate_placement(self, add) -> None:
         """Layer 0 must tile the timeline: no gap, no overlap.
