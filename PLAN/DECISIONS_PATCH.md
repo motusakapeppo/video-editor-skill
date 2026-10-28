@@ -462,3 +462,29 @@ con verifica di byte e hash). Le parti non modificate sono identiche per costruz
 perche' sono lo stesso file. Nessun `-c copy` su una selezione, in nessun percorso. La
 prova e' sulla cucitura, non sulla porzione: timestamp monotoni, numero di fotogrammi
 uguale alla somma dei segmenti, e i tre fotogrammi ai lati di ogni giunto confrontati.
+
+## D033 - Il motore e' universale, il regista e' per profilo (2026-10-28)
+
+**Stato: in attuazione in F26.**
+
+Contesto. Il motore EDL 3 non ha un formato: accetta canvas, fps e durata
+qualunque, e lo dimostra il fatto che gli stessi filtri hanno reso un verticale
+320x568 e un orizzontale 1280x720. Il limite e' altrove: `auto.py` ha un solo
+bersaglio di loudness (-14 LUFS, quello delle piattaforme social) e `decide.py`
+conosce i preset `reel`, `reels`, `shorts`. Un documentario, un videoclip o un
+film non sono varianti di un reel: hanno un bersaglio di loudness diverso, una
+grammatica diversa, consegne diverse.
+
+Si decide:
+
+1. Il motore non conosce il genere. Nessun ramo `if genere == ...` nel renderer,
+   nel compilatore o negli effetti.
+2. Il genere e' un **profilo dichiarato**: un dato con canvas, fps, durata,
+   loudness e true peak, colore, consegne e grammatica strutturale (hook, atti,
+   beat, interviste, banda di densita' dei tagli). Il regista legge il profilo e
+   sceglie; il motore esegue.
+3. I profili coprono almeno: reel e short, videoclip musicale, documentario,
+   film narrativo, spot, tutorial, evento lungo, trailer. La lista e' un registro
+   aperto: aggiungere un profilo e' aggiungere un dato e la sua prova, non un ramo.
+4. Un profilo senza prova end-to-end non e' dichiarato: la matrice delle consegne
+   e il fotogramma di prova sono parte della definizione, non un extra.

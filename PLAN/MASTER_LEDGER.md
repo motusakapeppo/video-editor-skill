@@ -262,6 +262,27 @@ versioni annullabili, ispezione e cancellazione.
 
 ---
 
+## F26 - Profili di genere: un motore, ogni tipo di video
+
+Il motore EDL 3 e' gia' indipendente dal formato: accetta qualunque
+canvas, fps, durata e numero di tracce. Il limite e' nel regista: `auto.py`
+punta a -14 LUFS e `decide.py` conosce solo `reel`/`reels`/`shorts` come preset.
+Un profilo e' un **dato** dichiarato, non un ramo di codice: il renderer non
+cambia, cambia cio' che il regista sceglie e come giudica.
+
+### Decomposizione F26 (registrata 2026-10-28)
+
+| ID | Task | Accettazione binaria | Stato |
+|---|---|---|---|
+| F26-T01 | Registro dei profili: genere, canvas, fps, durata, loudness, colore, consegne, grammatica; risolto da un riferimento nel documento | ogni profilo dichiarato si risolve; un profilo ignoto e' rifiutato con codice proprio; il renderer non cambia comportamento su un documento senza profilo | TODO |
+| F26-T02 | Loudness per profilo con misura reale | quattro profili (-14, -16, -23, -24 LUFS) resi e misurati: ogni uscita sta entro 0,5 LU del bersaglio e sotto il true peak dichiarato | TODO |
+| F26-T03 | Canvas e fps per profilo | 9:16, 16:9, 1:1, 4:5 e 2.39:1 a 23.976, 24, 25, 29.97, 30, 50, 60: ogni combinazione resa con numero di fotogrammi e durata misurati | TODO |
+| F26-T04 | Grammatica strutturale dichiarata per profilo | ogni profilo dichiara hook/atti/beat/interviste e la banda di densita' dei tagli; un documento che la viola lo dice, e la misura viene dal documento, non da una costante | TODO |
+| F26-T05 | Colore: 10 bit e HDR dichiarati, SDR predefinito | un profilo HDR esce a 10 bit dichiarati e un profilo SDR resta 8 bit; il cambio non tocca i 34 frame di riferimento | TODO |
+| F26-T06 | Lungometraggio: timeline lunga senza esaurire la memoria | una timeline da due ore compila e dieci minuti reali rendono con checkpoint, tempo e picco di memoria misurati | TODO |
+| F26-T07 | Matrice delle consegne per profilo | ogni profilo dichiara i suoi contenitori e codec; ognuno viene prodotto e verificato con ffprobe (codec, bit depth, loudness, sottotitoli, capitoli) | TODO |
+| F26-T08 | Prova end-to-end per ogni profilo | un minuto reale per ogni profilo reso dal percorso pubblico, con referto misurato e un fotogramma di prova | TODO |
+
 ## Esame finale (sezione 6 + A5 del piano)
 
 19 incarichi, tre esecuzioni coerenti, `PLAN/FINAL_REPORT.md` con ogni task
