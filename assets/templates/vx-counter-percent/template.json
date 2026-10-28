@@ -6,8 +6,9 @@
   "params": {
     "font": {
       "type": "string",
-      "values": ["antonio", "inter"],
-      "default": "antonio"
+      "values": ["antonio", "inter", "bebasneue", "montserrat", "playfairdisplay", "jetbrainsmono"],
+      "default": "antonio",
+      "note": "Six bundled OFL-1.1 families: antonio (condensed display), inter (neutral text), bebasneue (poster), montserrat (geometric), playfairdisplay (editorial serif), jetbrainsmono (mono/tech)."
     },
     "value": { "type": "number", "min": 0, "max": 100, "default": 87 },
     "caption": { "type": "string", "max_length": 36, "default": "Conversion rate" },

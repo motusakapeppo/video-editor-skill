@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <title>vx-subtitle-split</title>
 <style>
-  /* Bundled OFL fonts (assets/fonts), shared by every Motion Studio template. */
+  /* Bundled OFL fonts (assets/fonts), shared by every Motion Studio template.
+     Six selectable families; each bundled file gets one face declaration. */
   @font-face {
     font-family: "VX Antonio";
     src: url("../../fonts/Antonio-Regular.ttf") format("truetype");
@@ -26,10 +27,42 @@
     font-style: normal;
     font-display: block;
   }
+  @font-face {
+    font-family: "VX Bebas Neue";
+    src: url("../../fonts/BebasNeue.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "VX Montserrat";
+    src: url("../../fonts/Montserrat.ttf") format("truetype");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "VX Playfair Display";
+    src: url("../../fonts/PlayfairDisplay.ttf") format("truetype");
+    font-weight: 400 900;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "VX JetBrains Mono";
+    src: url("../../fonts/JetBrainsMono.ttf") format("truetype");
+    font-weight: 100 800;
+    font-style: normal;
+    font-display: block;
+  }
   :root {
-    --vx-font-display: "VX Antonio", "VX Inter", sans-serif;
-    --vx-font-text: "VX Inter", "VX Antonio", sans-serif;
-    --vx-font-family: var(--vx-font-display);
+    --vx-font-antonio: "VX Antonio", "VX Inter", sans-serif;
+    --vx-font-inter: "VX Inter", "VX Antonio", sans-serif;
+    --vx-font-bebasneue: "VX Bebas Neue", "VX Antonio", sans-serif;
+    --vx-font-montserrat: "VX Montserrat", "VX Inter", sans-serif;
+    --vx-font-playfairdisplay: "VX Playfair Display", "VX Inter", serif;
+    --vx-font-jetbrainsmono: "VX JetBrains Mono", "VX Inter", monospace;
+    --vx-font-family: var(--vx-font-antonio);
   }
   html, body {
     margin: 0;
@@ -72,6 +105,11 @@
    bottom, leaving an empty centre. Both halves and both rules are driven by t. */
 (function () {
   "use strict";
+
+  var VX_FONT_IDS = [
+    "antonio", "inter", "bebasneue",
+    "montserrat", "playfairdisplay", "jetbrainsmono"
+  ];
 
   var DURATION = 2.6;
 
@@ -116,7 +154,11 @@
     return Promise.all([
       document.fonts.load('400 40px "VX Antonio"'),
       document.fonts.load('700 40px "VX Antonio"'),
-      document.fonts.load('400 40px "VX Inter"')
+      document.fonts.load('400 40px "VX Inter"'),
+      document.fonts.load('400 40px "VX Bebas Neue"'),
+      document.fonts.load('400 40px "VX Montserrat"'),
+      document.fonts.load('400 40px "VX Playfair Display"'),
+      document.fonts.load('400 40px "VX JetBrains Mono"')
     ]).catch(function () {}).then(function () {
       return document.fonts.ready;
     });
@@ -124,8 +166,9 @@
 
   function apply(t) {
     var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    var vxFontId = VX_FONT_IDS.indexOf(p.font) >= 0 ? p.font : DEFAULTS.font;
     document.documentElement.style.setProperty("--vx-font-family",
-      p.font === "inter" ? "var(--vx-font-text)" : "var(--vx-font-display)");
+      "var(--vx-font-" + vxFontId + ")");
     var w = window.innerWidth;
     var h = window.innerHeight;
     var text = String(p.text);

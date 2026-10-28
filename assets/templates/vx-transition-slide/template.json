@@ -6,8 +6,9 @@
   "params": {
     "font": {
       "type": "string",
-      "values": ["antonio", "inter"],
-      "default": "inter"
+      "values": ["antonio", "inter", "bebasneue", "montserrat", "playfairdisplay", "jetbrainsmono"],
+      "default": "inter",
+      "note": "Six bundled OFL-1.1 families: antonio (condensed display), inter (neutral text), bebasneue (poster), montserrat (geometric), playfairdisplay (editorial serif), jetbrainsmono (mono/tech)."
     },
     "fill": {
       "type": "color",
