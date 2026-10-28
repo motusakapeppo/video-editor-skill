@@ -93,7 +93,8 @@ SOURCE_OFFSETS = (0.0, 0.5, 1.0)
 #: a failure of the chunking itself, so the ceiling is a gate and not a comment.
 MEMORY_CEILING_MIB = 2048.0
 #: Where the per-profile reports and proof frames land (beside each other).
-REPORT_DIR = Path(os.environ.get("VX_PROFILE_REPORT_DIR") or r"D:\video_work\ulw_profiles")
+REPORT_DIR = Path(os.environ.get("VX_PROFILE_REPORT_DIR")
+                 or (tempfile.gettempdir() + os.sep + "vx_profile_minute_reports"))
 
 LONGRUN = os.environ.get("VX_LONGRUN", "") == "1"
 ONLY = tuple(

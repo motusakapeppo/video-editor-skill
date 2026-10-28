@@ -29,12 +29,12 @@ percorso normale).
 | mediapipe | 1.1.1 | Apache-2.0 | metadati del pacchetto (classifier Apache 2.0) | libreria |
 | psutil | non installato | BSD-3-Clause | non presente in questo ambiente; import opzionale in `bench.py`, il picco di memoria viene dichiarato assente | opzionale |
 | Antonio (Regular + Bold, font incluso) | 2 TTF, Regular sha256 27f419ff2c909c2f... | OFL-1.1 | `assets/fonts/OFL.txt`, da Google Fonts | libreria |
-| Inter (variabile, font incluso) | 1 TTF variabile, sha256 29160a80ff49ddca... | OFL-1.1 | `assets/fonts/Inter-OFL.txt`, da github.com/google/fonts/ofl/inter, verificato 28/10/2026 | libreria |
+| Inter (variabile, font incluso) | 1 TTF variabile, sha256 29160a80ff49ddca... | OFL-1.1 | `assets/fonts/Inter-OFL.txt`, letto da github.com/google/fonts/ofl/inter | libreria |
 | Playfair Display (variabile, font incluso) | 1 TTF variabile | OFL-1.1 | `assets/fonts/PlayfairDisplay-OFL.txt`, google/fonts/ofl/playfairdisplay | libreria |
 | Montserrat (variabile, font incluso) | 1 TTF variabile | OFL-1.1 | `assets/fonts/Montserrat-OFL.txt`, google/fonts/ofl/montserrat | libreria |
 | JetBrains Mono (variabile, font incluso) | 1 TTF variabile | OFL-1.1 | `assets/fonts/JetBrainsMono-OFL.txt`, google/fonts/ofl/jetbrainsmono | libreria |
 | Bebas Neue (font incluso) | 1 TTF, Regular | OFL-1.1 | `assets/fonts/BebasNeue-OFL.txt`, google/fonts/ofl/bebasneue | libreria |
-| Catalogo google/fonts (indice, non pesi) | 2.065 famiglie, 414 KB | OFL-1.1 / Apache-2.0 / Ubuntu-1.0 per famiglia | `assets/fonts/catalogue.json`, generato il 28/10/2026 da github.com/google/fonts | opzionale |
+| Catalogo google/fonts (indice, non pesi) | 2.065 famiglie, 414 KB | OFL-1.1 / Apache-2.0 / Ubuntu-1.0 per famiglia | `assets/fonts/catalogue.json`, generato da github.com/google/fonts | opzionale |
 
 ## Da verificare prima dell'integrazione
 

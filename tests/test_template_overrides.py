@@ -277,6 +277,7 @@ def merge_order_checks() -> None:
         "a. the defaults are the template's own, once resolved",
         resolved
         == {
+            "font": "antonio",
             "title": "Il Momento",
             "subtitle": "Una storia in due atti",
             "accent": "#FFD400",
@@ -558,6 +559,7 @@ def run(work: Path) -> None:
         "f. generator.params are the values the frame was drawn with",
         legacy_params
         == {
+            "font": "antonio",
             "title": "Ciao Mondo",
             "subtitle": "Una storia in due atti",
             "accent": "#7CFF6B",
