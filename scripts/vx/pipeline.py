@@ -22,7 +22,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import contract, decide, ffmpeg as ff, gates, grade as grade_mod, layout, motion
+from . import (
+    contract,
+    decide,
+    ffmpeg as ff,
+    fontfetch,
+    gates,
+    grade as grade_mod,
+    layout,
+    motion,
+)
 
 __all__ = ["Plan", "Overlay", "plan", "run"]
 
@@ -355,6 +364,11 @@ def run(
     report["render"] = {
         k: info[k] for k in ("frames_written", "frames_declared", "frames_match")
     }
+    # Which font drew these frames, under which licence, from where, with which
+    # bytes. Read-only: annotate() never fetches, so a render stays offline (D002).
+    fontfetch.annotate(
+        report, [payload.style.get("font_path") or getattr(payload, "font_path", "")]
+    )
 
     _frames, _dur, _fps = motion.expected_frames(graded)
     res = gates.post_render(

@@ -1,0 +1,19 @@
+{
+  "families": [
+    {
+      "directory": "ofl/abrilfatface",
+      "family": "abrilfatface",
+      "fetched_utc": "2026-10-28T19:57:48+00:00",
+      "files": [
+        {
+          "bytes": 67364,
+          "name": "AbrilFatface-Regular.ttf",
+          "sha256": "5971d4a3758a922a9fedc7f6fb825a96341a2e718c45a4b2c9a6b417c8c4dbe9"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    }
+  ],
+  "schema": "vx.fontfetch/1"
+}
