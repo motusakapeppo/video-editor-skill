@@ -55,3 +55,4 @@ A-D) e' la fonte del lavoro in corso. Confronto con `PLAN/MASTER_LEDGER.md`:
 | 4 | Ricalibrare i kill di F17 sulla durata reale | correttiva | F17-T10 | nuova |
 | 5 | Livelli L0-L2 e doctor che li dichiara | additiva | F0-T12 | nuova |
 | 6 | Allegato F: Atlante 5.000+ voci, Genoma 16 famiglie, strato aperto, 16 moduli, 12 fasi, esame cieco 26-33 | additiva | F32-F43 (AF4/F20-F31) | bloccata: il testo dell'artefatto non e' leggibile da qui |
+| 7 | Passo di ripristino per il materiale da telefonino: correzione colore e nitidezza dichiarate, invece di scartare la clip | additiva | F4-T15 | nuova |

@@ -26,6 +26,7 @@ Data: 27/10/2026.
 | D-18 | intestazioni vecchie: Versione 1, «due parti», «F0-F12», «12 incarichi» | 32 fasi, 27 incarichi, sei addendum | `PLAN/ANNEX_F.md` conteggi; `PLAN/DOC_VS_REPO.md` riga 5 |
 | D-19 | testo superato ancora scritto (sezione 9 punto 7, Allegato C3), sostituito solo da una frase di precedenza | le sei frasi sono marcate `SUPERATO` con il sostituto accanto | `PLAN/PRECEDENCE.md`, commit `6c68390`, `PLAN/DOC_VS_REPO.md` riga 6 |
 | D-20 | l'analisi Higgsfield e il modulo T09 non sono nel documento | T09 e' un file esterno e blocca F0-T09; Higgsfield non e' registrato da nessuna parte | `PLAN/DOC_VS_REPO.md` riga 7 |
+| D-21 | «la nitidezza misura la nitidezza» | Su un fotogramma scuro la varianza del laplaciano **sale** anche se l'immagine e' sfocata: c01 giudicata sfocata misura 2,32, piu' di c03 (1,92) giudicata buona | PLAN/T09_CALIBRATION.md, tabella del campione; luma di c01 = 40 | calcolare la nitidezza solo sopra una soglia di luminosita' o normalizzarla; finche' non e' corretto, resta descrittiva |
 
 ## Sulla D-6, la decisione che propongo
 
