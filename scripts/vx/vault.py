@@ -24,6 +24,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -272,7 +273,129 @@ def register(
         raise VxError(f"no usable ownership manifest at {root_res}")
     data["entries"][relative] = record
     _write_data(root_res, data)
+    if str(kind) == "original":
+        protect_original(target)
     return {"path": relative, **record}
+
+
+FILE_ATTRIBUTE_READONLY = 0x01
+
+
+def _current_sid() -> Optional[str]:
+    """The SID of the running user, or None off Windows."""
+    if os.name != "nt":
+        return None
+    try:
+        proc = subprocess.run(
+            ["whoami", "/user"], capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    fields = (proc.stdout or "").split()
+    return fields[-1] if fields and fields[-1].startswith("S-1-") else None
+
+
+def _win_attributes(target: Path) -> Optional[int]:
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    value = ctypes.windll.kernel32.GetFileAttributesW(str(target))
+    return None if value == -1 else int(value)
+
+
+def _set_win_attributes(target: Path, value: int) -> bool:
+    if os.name != "nt":
+        return False
+    import ctypes
+
+    return bool(ctypes.windll.kernel32.SetFileAttributesW(str(target), int(value)))
+
+
+def _deny_ace(target: Path, *, add: bool) -> bool:
+    if os.name != "nt":
+        return False
+    sid = _current_sid()
+    if not sid:
+        return False
+    flag = "/deny" if add else "/remove:d"
+    trustee = f"*{sid}:(WD,AD)" if add else f"*{sid}"
+    try:
+        proc = subprocess.run(
+            ["icacls", str(target), flag, trustee],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _has_deny_ace(target: Path) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        proc = subprocess.run(
+            ["icacls", str(target)], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and "DENY" in (proc.stdout or "").upper()
+
+
+def protect_original(path: Union[str, Path]) -> Dict[str, Any]:
+    """Make an original read-only with the operating system's own mechanisms.
+
+    Windows gets both a deny-write ACE for the current user and the read-only
+    attribute, because either one alone is one ``attrib -R`` away from gone;
+    POSIX gets mode 0444. A hash check tells you the file changed, after it
+    changed; this stops the write. Returns :func:`protection_of` so the caller
+    can record what was applied.
+    """
+    target = Path(path)
+    if not target.is_file():
+        raise VxError(f"cannot protect a missing file: {target}")
+    if os.name == "nt":
+        _deny_ace(target, add=True)
+        attrs = _win_attributes(target)
+        if attrs is not None:
+            _set_win_attributes(target, attrs | FILE_ATTRIBUTE_READONLY)
+    else:
+        os.chmod(target, 0o444)
+    return protection_of(target)
+
+
+def protection_of(path: Union[str, Path]) -> Dict[str, Any]:
+    """What protects ``path`` right now: read-only flag, deny ACE, mode."""
+    target = Path(path)
+    mode = target.stat().st_mode & 0o777
+    attrs = _win_attributes(target)
+    if attrs is not None:
+        readonly = bool(attrs & FILE_ATTRIBUTE_READONLY)
+    else:
+        readonly = (mode & 0o200) == 0
+    return {
+        "readonly": readonly,
+        "deny_ace": _has_deny_ace(target),
+        "mode": oct(mode),
+        "attributes": None if attrs is None else f"0x{attrs:03X}",
+    }
+
+
+def release_original(path: Union[str, Path]) -> Dict[str, Any]:
+    """Undo :func:`protect_original`, so a file can be replaced or deleted."""
+    target = Path(path)
+    if os.name == "nt":
+        attrs = _win_attributes(target)
+        if attrs is not None:
+            _set_win_attributes(target, attrs & ~FILE_ATTRIBUTE_READONLY)
+        _deny_ace(target, add=False)
+    else:
+        os.chmod(target, 0o644)
+    return protection_of(target)
 
 
 def is_owned(root: Union[str, Path], path: Union[str, Path]) -> bool:
