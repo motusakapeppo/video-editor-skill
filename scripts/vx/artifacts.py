@@ -45,6 +45,7 @@ JOURNAL_SCHEMA = "vx.artifacts/1"
 JOURNAL_NAME = ".vx-writes.jsonl"
 EVENT_PLAN = "plan"
 EVENT_COMPLETE = "complete"
+EVENT_ABANDON = "abandon"
 
 _LOCK = threading.Lock()
 _LAST_ID = 0
@@ -147,6 +148,7 @@ def _tally(
     planned: List[Dict[str, Any]] = []
     completed: List[Dict[str, Any]] = []
     done: set[str] = set()
+    abandoned: set[str] = set()
     for record in _records(root):
         ident = record.get("id")
         event = record.get("event")
@@ -158,7 +160,14 @@ def _tally(
         elif event == EVENT_COMPLETE:
             done.add(key)
             completed.append(record)
-    open_intents = [record for record in planned if str(record.get("id")) not in done]
+        elif event == EVENT_ABANDON:
+            abandoned.add(key)
+    open_intents = [
+        record
+        for record in planned
+        if str(record.get("id")) not in done
+        and str(record.get("id")) not in abandoned
+    ]
     return planned, open_intents, completed
 
 
@@ -246,6 +255,60 @@ def is_pending(root: str | Path, path: str | Path) -> bool:
     return pending_for(root, path) is not None
 
 
+def abandon(
+    root: str | Path,
+    intent_id: str,
+    path: str | Path,
+    *,
+    reason: str = "superseded",
+) -> Dict[str, Any]:
+    """Close an intent whose write will never complete, and say why.
+
+    A crash leaves the intent open forever; without this record nothing can tell
+    a dead write from one still in flight, and every reader of that path stays a
+    permanent miss.  The reason travels with the record so the journal keeps
+    telling the truth: the bytes may be half-written, the intent is not pending.
+    """
+    record: Dict[str, Any] = {
+        "schema": JOURNAL_SCHEMA,
+        "event": EVENT_ABANDON,
+        "id": str(intent_id),
+        "path": str(path),
+        "path_key": _normalise(path),
+        "reason": str(reason),
+        "ts": _now(),
+    }
+    _append(root, record)
+    return dict(record)
+
+
+def abandon_pending(
+    root: str | Path,
+    path: str | Path,
+    *,
+    reason: str = "superseded",
+) -> int:
+    """Close every open intent that targets ``path``; return how many were closed.
+
+    The caller must be the only writer of ``path``: it is about to write the
+    same destination, so an intent still open on it can only be debris.
+    """
+    if not journal_path(root).is_file():
+        return 0
+    wanted = _normalise(path)
+    if not wanted:
+        return 0
+    closed = 0
+    for record in _tally(root)[1]:
+        known = record.get("path_key")
+        if not isinstance(known, str):
+            known = _normalise(record.get("path"))
+        if known == wanted:
+            abandon(root, str(record.get("id")), record.get("path", path), reason=reason)
+            closed += 1
+    return closed
+
+
 def classify(root: str | Path) -> Dict[str, Any]:
     """The journal's story: completed writes, open intents, possible debris.
 
@@ -308,7 +371,9 @@ def write_bytes_atomic(
     file or the whole new one, never a prefix.  When ``root`` is given the
     destination must live strictly below it; anything else raises
     :class:`ValueError` before a byte is written.  On any failure the temp file
-    is removed and the destination is left untouched.
+    is removed and the destination is left untouched.  A temp file left by a
+    killed writer is removed here before the new write starts: the destination
+    has a single writer, so a sibling temp can only be debris.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError("data must be bytes")
@@ -316,6 +381,11 @@ def write_bytes_atomic(
     if root is not None:
         _require_inside(root, target)
     target.parent.mkdir(parents=True, exist_ok=True)
+    for stale in target.parent.glob(target.name + ".*.tmp"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     fd, raw = tempfile.mkstemp(
         prefix=target.name + ".", suffix=".tmp", dir=str(target.parent)
     )

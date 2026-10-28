@@ -248,6 +248,9 @@ def record(
     if artifacts.journal_path(workroot).is_file() and artifacts.inside(
         workroot, artifact
     ):
+        artifacts.abandon_pending(
+            workroot, artifact, reason="superseded_by_new_record"
+        )
         intent = artifacts.plan(
             workroot,
             artifact,

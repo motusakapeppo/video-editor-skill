@@ -1,0 +1,656 @@
+{
+  "kills": [
+    {
+      "delay_ms": 88,
+      "exit_code": 1,
+      "index": 0,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 110,
+      "exit_code": 1,
+      "index": 1,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 194,
+      "exit_code": 1,
+      "index": 2,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 203,
+      "exit_code": 1,
+      "index": 3,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 272,
+      "exit_code": 1,
+      "index": 4,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 325,
+      "exit_code": 1,
+      "index": 5,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 370,
+      "exit_code": 1,
+      "index": 6,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 420,
+      "exit_code": 1,
+      "index": 7,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 464,
+      "exit_code": 1,
+      "index": 8,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 523,
+      "exit_code": 1,
+      "index": 9,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 558,
+      "exit_code": 1,
+      "index": 10,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 633,
+      "exit_code": 1,
+      "index": 11,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 661,
+      "exit_code": 1,
+      "index": 12,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 708,
+      "exit_code": 1,
+      "index": 13,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 771,
+      "exit_code": 1,
+      "index": 14,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 824,
+      "exit_code": 1,
+      "index": 15,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 856,
+      "exit_code": 1,
+      "index": 16,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 917,
+      "exit_code": 1,
+      "index": 17,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 932,
+      "exit_code": 1,
+      "index": 18,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 981,
+      "exit_code": 1,
+      "index": 19,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1077,
+      "exit_code": 1,
+      "index": 20,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1105,
+      "exit_code": 1,
+      "index": 21,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1155,
+      "exit_code": 1,
+      "index": 22,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1216,
+      "exit_code": 1,
+      "index": 23,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1258,
+      "exit_code": 1,
+      "index": 24,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1284,
+      "exit_code": 1,
+      "index": 25,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1343,
+      "exit_code": 1,
+      "index": 26,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1413,
+      "exit_code": 1,
+      "index": 27,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1432,
+      "exit_code": 1,
+      "index": 28,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1512,
+      "exit_code": 1,
+      "index": 29,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1539,
+      "exit_code": 1,
+      "index": 30,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1593,
+      "exit_code": 1,
+      "index": 31,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1661,
+      "exit_code": 1,
+      "index": 32,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1687,
+      "exit_code": 1,
+      "index": 33,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1751,
+      "exit_code": 1,
+      "index": 34,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1783,
+      "exit_code": 1,
+      "index": 35,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1838,
+      "exit_code": 1,
+      "index": 36,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1907,
+      "exit_code": 1,
+      "index": 37,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1959,
+      "exit_code": 1,
+      "index": 38,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 1997,
+      "exit_code": 1,
+      "index": 39,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2020,
+      "exit_code": 1,
+      "index": 40,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2068,
+      "exit_code": 1,
+      "index": 41,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2114,
+      "exit_code": 1,
+      "index": 42,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2159,
+      "exit_code": 1,
+      "index": 43,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2247,
+      "exit_code": 1,
+      "index": 44,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2258,
+      "exit_code": 1,
+      "index": 45,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2315,
+      "exit_code": 1,
+      "index": 46,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2399,
+      "exit_code": 1,
+      "index": 47,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2427,
+      "exit_code": 1,
+      "index": 48,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    },
+    {
+      "delay_ms": 2487,
+      "exit_code": 1,
+      "index": 49,
+      "invariants": {
+        "journal_readable": true,
+        "no_stray_files": true,
+        "resume_completes": true,
+        "sources_sha_unchanged": true,
+        "sweep_removes_leftovers": true
+      },
+      "passed": true
+    }
+  ],
+  "schema": "vx.f17b.kill_matrix/1",
+  "seed": 1717
+}
