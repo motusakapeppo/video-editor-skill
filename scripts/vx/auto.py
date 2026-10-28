@@ -38,6 +38,8 @@ from . import (
     ingest,
     lock,
     probe,
+    profile_master,
+    profiles,
     qc,
     render,
     settings,
@@ -46,6 +48,24 @@ from . import (
 # The delivery spec the renderer is asked to hit and the QC gate re-measures.
 TARGET_LUFS = -14.0
 TARGET_TP = -1.0
+
+
+def loudness_target(document: Any = None) -> tuple[float, float]:
+    """(LUFS, dBTP) declared by ``document.profile_ref``, else the -14/-1 default.
+
+    The document is the payload the pipeline was built from (a mapping) or a
+    ``Timeline3``-like object. An unknown id is not swallowed: ``profiles.resolve``
+    refuses it with ``PROFILE_UNKNOWN``, the same code the document validator
+    uses, so a typo can never silently fall back to the social target.
+    """
+    ref = None
+    if isinstance(document, Mapping):
+        ref = document.get("profile_ref")
+    elif document is not None:
+        ref = getattr(document, "profile_ref", None)
+    if ref is None or not str(ref).strip():
+        return float(TARGET_LUFS), float(TARGET_TP)
+    return profile_master.target_for(str(ref))
 
 
 def _log(msg: str) -> None:
@@ -403,6 +423,7 @@ def _bridge_plan(
     *,
     captions: bool = True,
     media: Optional[Mapping[str, Any]] = None,
+    target_lufs: float = TARGET_LUFS,
 ) -> Any:
     """Run the bridge: analyses, transcripts, faces and motion per a_roll source.
 
@@ -463,7 +484,7 @@ def _bridge_plan(
     new_plan, report = bridge.build(
         plan,
         analyses,
-        target_lufs=TARGET_LUFS,
+        target_lufs=float(target_lufs),
         loudness_spans=audio.loudness_spans,
         transcripts=transcripts if captions else None,
         faces=face_tracks,
@@ -621,6 +642,7 @@ def _run_locked(
         raise contract.VxError("payload senza asset_triage: triage non eseguito")
     selected = list(block.get("selected_assets") or [])
     rejected = list(block.get("rejected_assets") or [])
+    target_lufs, target_tp = loudness_target(payload)
     _notify(progress, 5.0, "triage", log=log)
 
     fps = _fps(args, selected, assets_by_id)
@@ -668,7 +690,10 @@ def _run_locked(
         _notify(progress, 22.0, "bridge", log=log, status="start")
         subs_enabled = not bool(getattr(args, "no_subs", False))
         plan, bridge_report, analyses = _bridge_plan(
-            plan, captions=subs_enabled, media=media_by_source
+            plan,
+            captions=subs_enabled,
+            media=media_by_source,
+            target_lufs=target_lufs,
         )
         reframe_map, restore_map = _render_effects(bridge_report)
         bridge_gains_applied = any("gain_db" in item for item in bridge_report.audio)
@@ -757,14 +782,14 @@ def _run_locked(
         ),
     )
     _notify(progress, 25.0, "render", log=log, status="start")
-    ceiling_dbtp = qc.true_peak_ceiling(TARGET_TP) if bridge_gains_applied else None
+    ceiling_dbtp = qc.true_peak_ceiling(target_tp) if bridge_gains_applied else None
     render_cache: Dict[str, Any] = {}
     render.render_edl(
         plan,
         staged_paths,
         out,
         workdir=workdir / "render",
-        loudness=(TARGET_LUFS, TARGET_TP),
+        loudness=(target_lufs, target_tp),
         crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
         preset=str(
             getattr(args, "preset", None) or settings.get("render.preset", "medium")
@@ -780,7 +805,7 @@ def _run_locked(
     estimate.finish(render_estimate)
     _notify(progress, 92.0, "render_done", log=log, detail="master scritto")
 
-    qc_result = qc.audit_master(out, target_lufs=TARGET_LUFS, target_tp=TARGET_TP)
+    qc_result = qc.audit_master(out, target_lufs=target_lufs, target_tp=target_tp)
     _notify(progress, 96.0, "qc", log=log)
 
     produced = deliverables.produce(
@@ -807,6 +832,7 @@ def _run_locked(
         "payload_version": str(payload.get("contract_version") or contract.VERSION),
         "edl_version": str(plan.contract_version),
         "fps": float(fps),
+        "loudness_target": {"lufs": target_lufs, "true_peak_db": target_tp},
         "timeline_sec": float(plan.duration_sec),
         "assets": {
             "total": len(assets),
