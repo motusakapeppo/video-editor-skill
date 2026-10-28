@@ -24,6 +24,7 @@ Tre invarianti, ognuna con la sua verifica:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -39,7 +40,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from . import ffmpeg as ff
-from . import motion_cache, motion_lint
+from . import fontresolve, motion_cache, motion_lint
 from .contract import VxError
 
 __all__ = [
@@ -1359,6 +1360,47 @@ def _as_rgba_png(png: bytes) -> bytes:
     return buffer.getvalue()
 
 
+_LOAD_FACE_JS = """
+async (family) => {
+  try { await document.fonts.load('400 40px "' + family + '"'); } catch (e) {}
+  try { await document.fonts.ready; } catch (e) {}
+}
+"""
+
+
+def _resolved_face_css(
+    record: Dict[str, Any], slot_id: str
+) -> Tuple[str, str, str]:
+    """Register a resolved font file in the page as one data-URI face.
+
+    Returns ``(css, family, sha256)``. The bytes travel inside the stylesheet
+    because a `file://` document cannot fetch a neighbouring file: the page
+    route only admits `file:`, `data:`, `about:` and `blob:`, and `data:` needs no
+    origin at all. No request leaves the process.
+    """
+    path = Path(str(record.get("path") or ""))
+    data = path.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    suffix = path.suffix.lower()
+    fmt = "opentype" if suffix == ".otf" else "truetype"
+    mime = "font/otf" if suffix == ".otf" else "font/ttf"
+    family = "VX Resolved " + digest[:8]
+    css = (
+        '@font-face{font-family:"%s";src:url("data:%s;base64,%s") format("%s");'
+        'font-weight:100 900;font-style:normal;font-display:block;}'
+        ':root{--vx-font-%s:"%s",sans-serif;}'
+        % (
+            family,
+            mime,
+            base64.b64encode(data).decode("ascii"),
+            fmt,
+            slot_id,
+            family,
+        )
+    )
+    return css, family, digest
+
+
 def capture(
     template_dir: str | Path,
     params: Optional[Dict[str, Any]],
@@ -1382,11 +1424,38 @@ def capture(
     `<workdir>/.motion-cache`. Without it the cache is off, nothing extra is
     written, and the result declares `cache: {"status": "disabled", ...}` --
     there is no global cache to fall back to.
+
+    The `font` parameter is resolved by :mod:`vx.fontresolve` before the page is
+    touched: a bundled id is handed over unchanged; a resolved non-bundled file
+    is registered in the page as a data-URI `@font-face` and the default id's
+    stack is pointed at it, so the page always receives a bundled id and the
+    result always carries the licence record.
     """
     if not skip_lint:
         motion_lint.lint_or_raise(template_dir, runtime_check=False)
     template = load_template(template_dir)
     resolved = validate_params(template, params)
+    font_default = fontresolve.template_default(template)
+    font_record = fontresolve.resolve(
+        resolved.get("font"), template_default=font_default, allow_network=False
+    )
+    page_params = dict(resolved)
+    page_font = str(font_record.get("page_font") or font_default)
+    font_css = ""
+    registered_family = ""
+    if not font_record.get("id") and font_record.get("path"):
+        # A face the pages do not ship: register the bytes, then borrow the
+        # default id's stack. `page_font` stays a bundled id, and the CSS `:root`
+        # rule (later in the cascade) wins over the page's own declaration.
+        page_font = font_default
+        font_css, registered_family, digest = _resolved_face_css(font_record, page_font)
+        font_record["registered_family"] = registered_family
+        font_record["sha256"] = digest
+    font_record["page_font"] = page_font
+    page_params["font"] = page_font
+    cache_params = dict(page_params)
+    if registered_family:
+        cache_params["__vx_font"] = str(font_record.get("sha256") or registered_family)
     cache = motion_cache.Cache(workdir)
     rate = float(fps if fps is not None else template["fps"])
     if rate <= 0:
@@ -1483,7 +1552,10 @@ def capture(
                 template=template["name"],
             ) from exc
         page.add_style_tag(content=FREEZE_CSS)
-        page.evaluate("(payload) => { window.__vxParams = payload; }", resolved)
+        if font_css:
+            page.add_style_tag(content=font_css)
+            page.evaluate(_LOAD_FACE_JS, registered_family)
+        page.evaluate("(payload) => { window.__vxParams = payload; }", page_params)
 
         for index in range(count):
             moment = index / rate
@@ -1492,7 +1564,7 @@ def capture(
             if cache.enabled:
                 frame_key = cache.key(
                     template["dir"],
-                    resolved,
+                    cache_params,
                     fps=rate,
                     size=(width, height),
                     engine=engine,
@@ -1586,6 +1658,7 @@ def capture(
         "size": [width, height],
         "duration": duration,
         "params": resolved,
+        "font": font_record,
         "blocked_requests": blocked,
         "elapsed_s": round(elapsed, 3),
         "seconds_per_frame": round(elapsed / max(1, len(paths)), 4),

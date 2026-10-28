@@ -1931,6 +1931,20 @@ def compile_timeline(
                 "trimmed to that declared duration"
             )
 
+    clips_report = [
+        {
+            key: value
+            for key, value in plans[index].items()
+            if key not in {"chains", "compose_fragment"}
+        }
+        for index in range(len(timeline.clips))
+    ]
+    for index, entry in generators.items():
+        record = entry["capture"].get("font")
+        generator_entry = clips_report[index].get("generator")
+        if record and isinstance(generator_entry, dict):
+            generator_entry["font"] = record
+
     return {
         "version": timeline.version,
         "backend": backend,
@@ -1943,14 +1957,7 @@ def compile_timeline(
         "map": f"[{base_label}]",
         "audio_map": f"[{audio_label}]" if audio_label else None,
         "overlays": len(overlay_clips),
-        "clips": [
-            {
-                key: value
-                for key, value in plans[index].items()
-                if key not in {"chains", "compose_fragment"}
-            }
-            for index in range(len(timeline.clips))
-        ],
+        "clips": clips_report,
         "backends": table,
         "chromium": chromium,
         "generators": [
@@ -1959,6 +1966,7 @@ def compile_timeline(
                 "index": index,
                 "template": entry["capture"].get("template"),
                 "engine": entry["capture"].get("engine"),
+                "font": entry["capture"].get("font"),
                 "fallback": bool(entry["capture"].get("fallback")),
                 "degraded": list(entry["capture"].get("degraded") or []),
                 "frames": entry["capture"].get("frame_count"),
@@ -2251,6 +2259,7 @@ def _materialize_generators(
             "template": result["template"],
             "template_digest": motion_cache.template_digest(meta["dir"]),
             "params": resolved,
+            "font": result.get("font"),
             "fps": result["fps"],
             "size": [int(result["size"][0]), int(result["size"][1])],
             "frame_count": result["frame_count"],

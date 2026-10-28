@@ -48,7 +48,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
-from . import motion, motion_cache, motion_lint
+from . import fontresolve, motion, motion_cache, motion_lint
 
 __all__ = [
     "ENGINE_ONLY_PROPERTIES",
@@ -609,6 +609,15 @@ def capture(
         "size": [width, height],
         "duration": duration,
         "params": resolved,
+        "font": fontresolve.fallback_record(
+            resolved.get("font"),
+            template_default="antonio",
+            code="FONT_FALLBACK",
+            reason=(
+                "the Pillow fallback raster paints the bundled Antonio Bold face "
+                "only; the requested face is not registered on this engine"
+            ),
+        ),
         "blocked_requests": [],
         "elapsed_s": round(elapsed, 3),
         "seconds_per_frame": round(elapsed / max(1, len(paths)), 4),
