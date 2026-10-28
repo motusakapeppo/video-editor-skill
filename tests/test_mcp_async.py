@@ -15,10 +15,12 @@ python tests/test_mcp_async.py
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -180,11 +182,29 @@ def _poll(job_id: str, root: Path) -> tuple:
     return last, samples, False
 
 
+@contextlib.contextmanager
+def _temp_dir(prefix: str):
+    """A temp dir whose cleanup cannot fail the run.
+
+    Python 3.10's ``TemporaryDirectory`` recurses on ``PermissionError`` while
+    deleting a tree that Windows still holds for a moment after a child exits,
+    which turns a successful job into a ``RecursionError``. The directory is
+    removed here with bounded retries and the result never decides the verdict.
+    """
+    path = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield path
+    finally:
+        for _ in range(20):
+            shutil.rmtree(path, ignore_errors=True)
+            if not os.path.exists(path):
+                break
+            time.sleep(0.1)
+
+
 def main() -> int:
     started = time.time()
-    with tempfile.TemporaryDirectory(
-        prefix="vx-mcp-async-", ignore_cleanup_errors=True
-    ) as raw:
+    with _temp_dir("vx-mcp-async-") as raw:
         tmp = Path(raw)
         pool = tmp / "pool"
         pool.mkdir()
