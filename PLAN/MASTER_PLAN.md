@@ -525,6 +525,7 @@ Dove una voce dell'allegato ha bisogno di un campo dell'EDL 3, usa uno di quelli
 
 ### E0. Regole comuni e perimetro
 
+
 Ogni voce E1-E11 dichiara sette campi, senza eccezioni: **innesco** (quando parte, chi lo spegne), **schema dei parametri** (nomi, domini, default), **tetto** (il limite oltre il quale la voce rifiuta invece di degradare), **implementazione** (dove vive e quale primitiva usa), **ripiego** (cosa succede quando la primitiva manca, dichiarato e mai silenzioso), **prova visiva** (quale frame o quale foglio si guarda), **test** (l'accettazione binaria).
 
 Tre regole valgono per tutte:
@@ -538,6 +539,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 ---
 
 ### E1. Look Deck (dopo F4)
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 **Innesco.** Il brief dichiara un look, un'emozione, un profilo di camera o un riferimento; in alternativa parte quando il Creative Brief sceglie una palette o quando il critico segnala «look piatto» o «movimento assente» su un asse. Spegnibile con il flag `look_deck`, e in quel caso il referto dice che il look è rimasto al grading di base.
 
@@ -564,6 +567,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 
 ### E2. Prima i keyframe (F7, F9)
 
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
+
 **Innesco.** Ogni render completo. Non il proxy, non l'animatic: quelli sono il modo con cui i keyframe si producono. Il cancello si riapre quando cambia l'hash dei keyframe approvati, cioè quando una modifica successiva li rende non più rappresentativi.
 
 **Schema dei parametri.** Blocco `keyframe_gate` nel brief e nell'EDL: `count` (3..6), `times` (gli istanti scelti), `approved_by`, `approved_at`, `hash` (sha256 dell'insieme dei frame approvati), `autonomous` (booleano con motivazione).
@@ -583,6 +588,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 ---
 
 ### E3. Brand Connect (F10)
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 **Innesco.** Il brief porta un URL di brand, oppure l'utente dice «usa il mio sito». Mai automatico su un URL che non sia stato dato dall'utente.
 
@@ -604,6 +611,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 
 ### E4. Template per compito (F3, F19)
 
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
+
 **Innesco.** Il compito dichiarato nel Creative Brief (lower third, prezzo, titolo, endcard, confronto, elenco, citazione, testimonianza) più il formato di uscita. Il template si propone, non si impone: entra nell'EDL come `template_ref` con i suoi `exposed_params`.
 
 **Schema dei parametri.** Ogni template dichiara: `slots` (da uno a otto, ciascuno con tipo `testo` | `immagine` | `video` | `logo` | `colore` e con il ruolo che lo riempie), `exposed_params` (i valori che l'utente o l'ispettore possono cambiare, con dominio), `layouts` (una voce per ogni proporzione supportata), `trigger` (quando il template è adatto), `family`, `version`.
@@ -623,6 +632,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 ---
 
 ### E5. Clonazione della struttura (F8, F13)
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 **Innesco.** L'utente fornisce un riferimento e chiede «come questo». Nessuna analisi di riferimento senza un file dell'utente o una fonte lecita della sezione 5.
 
@@ -644,6 +655,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 
 ### E6. Identità fra clip (F6, F13)
 
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
+
 **Innesco.** Solo con consenso esplicito dell'utente, dichiarato nel brief. Serve a tre cose: scegliere l'A-roll della persona giusta, riframe per persona quando in campo ci sono più persone, sfocare chi non è il soggetto.
 
 **Schema dei parametri.** `identity`: `enabled` (default falso), `backend` (`sface` o equivalente), `model_sha256`, `consent` (`{by, at, scope}`), `store` (sempre `project_only`), `subjects` (lista di etichette scelte dall'utente, mai nomi dedotti).
@@ -663,6 +676,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 ---
 
 ### E7. Uscita modificabile (F14)
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 **Innesco.** L'utente apre la Review Room e tocca un campo. Il campo esiste solo se il template o l'effetto lo ha esposto.
 
@@ -684,6 +699,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 
 ### E8. Montaggio a parole (vibe editing, F7, F9)
 
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
+
 **Innesco.** Richieste come «più dinamico», «più emotivo», «più calmo», «più moderno». La tabella si applica quando la richiesta è un intento, non quando è un'istruzione misurabile («taglia 3 secondi» è un'altra cosa e va in EDL).
 
 **Schema dei parametri.** Tabella versionata `vibe_table`: ogni riga ha `intent`, `axis` (uno degli assi della rubrica di F9 più gli assi tecnici: densità di taglio, velocità media delle inquadrature, densità di transizioni, energia di movimento, saturazione, temperatura, BPM, densità di SFX), `direction` (`su` | `giù`), `target_delta` (quanto, «da calibrare»), `measured` e `verdict`.
@@ -703,6 +720,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 ---
 
 ### E9. Varianti e pianificazione (F10, F11)
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 **Innesco.** Varianti: quando il critico o l'utente chiede più hook o più proporzioni dallo stesso progetto. Pianificazione: quando il brief dichiara una produzione ricorrente.
 
@@ -724,6 +743,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 
 ### E10. Memoria di progetto visibile (F14)
 
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
+
 **Innesco.** Apertura della Review Room su un progetto che ha più di una versione.
 
 **Schema dei parametri.** `project_history`: voci `{kind (edl | asset | brief), version, hash, at, author, summary, patch_ref}`. La storia è quella di F0-T06 (journal append-only con checkpoint), letta e mostrata, non riscritta.
@@ -743,6 +764,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 ---
 
 ### E11. Inserti generativi (facoltativa, solo L2 con GPU)
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 **Innesco.** Mai automatico. Si attiva solo se il doctor dichiara L2 con GPU, se l'utente lo chiede, e se il modello scelto passa il controllo di licenza e di requisiti.
 
@@ -764,6 +787,8 @@ Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abboname
 
 ### E12. Esame esteso (incarichi 20-25)
 
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
+
 I criteri comuni restano quelli della sezione 6: controlli automatici verdi, punteggio del critico sopra la soglia fissata in F0, deliverable presenti con sha256, nulla di dichiarato e non eseguito, tre esecuzioni con esito coerente. Gli incarichi 20-25 si aggiungono ai 19 esistenti e non li sostituiscono: l'esame passa a 25 incarichi.
 
 20. Look Deck: spot di 15 secondi con 6 movimenti di camera nominati, palette presa dal registro, due esecuzioni con frame identici.
@@ -774,6 +799,8 @@ I criteri comuni restano quelli della sezione 6: controlli automatici verdi, pun
 25. Varianti: 5 varianti di hook in batch, con la cache riusata e contata.
 
 ### E13. Tracciamento, dipendenze e ordine
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 | voce | fase | verdetto | dipendenze |
 |---|---|---|---|
@@ -792,5 +819,7 @@ I criteri comuni restano quelli della sezione 6: controlli automatici verdi, pun
 Ordine consigliato, senza spostare nulla di già pianificato: E1 subito dopo F4, perché è la voce che si vede di più e quella che costa meno in dipendenze; E2 dopo F7, perché senza l'approvazione non ha senso; E4 dopo E1, perché i template per compito e i look condividono il registro; E3 dopo F10; E5 ed E6 dopo F13; E7 ed E10 con F14; E8 con F9; E9 con F11; E11 per ultima e solo se resta hardware.
 
 ### E14. Addendum al prompt (da incollare in coda alla sezione 9)
+
+**Motivazione.** `references/27-studio-higgsfield.md` - studio documentale del prodotto, con fonti datate e limiti dichiarati; non e' una prova del prodotto.
 
 L'Allegato E aggiunge F25 con le voci E1-E11 e gli incarichi 20-25, senza rinumerare F0-F24 né gli incarichi 1-19. Applica il Look Deck dopo F4 (almeno 40 movimenti di camera costruiti da ritaglio, scala e keyframe, pila massima di 3, profili 35mm, 8mm e DV, lenti, almeno 50 palette LUT, ruota di 8 emozioni versionata), il cancello dei keyframe prima di ogni render completo (3-6 frame approvati, eccezione solo con modalità autonoma dichiarata), il Brand Connect dal sito dell'utente (robots.txt, nessun login, una pagina più gli asset collegati, cache, `brand.json` con provenienza per ogni campo), i template per compito con slot, la clonazione della sola struttura (mai testo, musica, immagini o parlato del riferimento, cancellazione verificata), l'identità fra clip solo con consenso esplicito e vettori cancellati a fine job, l'ispettore della Review Room con patch e render incrementale, la tabella versionata del montaggio a parole, le varianti con cache e la pianificazione che si ferma per l'approvazione, la memoria di progetto visibile con ripristino, e gli inserti generativi solo se gratuiti, locali, con licenza verificata e sempre marcati sintetici. Crediti, abbonamenti, MCP o API a pagamento, clonazione o generazione di volti di persone reali non si adottano in nessun caso. Ogni voce dichiara innesco, parametri, tetto, implementazione, ripiego, prova visiva e test; ciò che non si applica va in `not_applied` con il motivo, e nessun numero di qualità si inventa: se manca la calibrazione si scrive «da calibrare» e si dice su quale corpus.
