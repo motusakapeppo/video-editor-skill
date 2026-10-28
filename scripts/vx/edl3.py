@@ -61,7 +61,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .edl3_time import AudioPolicy
 
-EDL3_VERSION = "vx.edl3/1"
+EDL3_VERSION = "vx.edl3/1.1"
+#: Accepted schema versions: an additive minor keeps every previous document valid.
+EDL3_VERSIONS = ("vx.edl3/1", "vx.edl3/1.1")
+#: Declared types a template parameter may expose.
+EXPOSED_TYPES = ("string", "number", "int", "color", "bool")
+#: What a provenance record may point at.
+PROVENANCE_KINDS = ("finding", "opportunity")
 
 #: Deeper nesting is rejected with ``NESTING_TOO_DEEP``.
 MAX_NESTING_DEPTH = 2
@@ -770,6 +776,14 @@ def _generator_value(raw: Any) -> Any:
     return dict(raw)
 
 
+def _records(value: Any) -> Tuple[Dict[str, Any], ...]:
+    """A tuple of plain dicts out of a list of mappings; anything else is dropped."""
+    if value is None:
+        return ()
+    items = value if isinstance(value, (list, tuple)) else (value,)
+    return tuple(dict(item) for item in items if isinstance(item, Mapping))
+
+
 @dataclass
 class Clip3:
     """One segment on the timeline.
@@ -811,6 +825,22 @@ class Clip3:
     #: ``{"template", "params", "engine", "alpha"}``: a captured Motion Studio
     #: template as the clip's picture, instead of ``source`` or ``sequence``.
     generator: Optional[Dict[str, Any]] = None
+    #: Named preset resolved from a registry: camera move, profile, lens, palette, light.
+    preset_ref: Optional[str] = None
+    #: Up to three camera movements composed on this shot, in order.
+    stack: Tuple[Dict[str, Any], ...] = ()
+    #: The clip is generated content, not captured material.
+    synthetic: bool = False
+    #: Evidence records behind the clip's creative choices.
+    provenance: Tuple[Dict[str, Any], ...] = ()
+    #: Named Motion Studio template, resolved against its declared parameters.
+    template_ref: Optional[str] = None
+    #: The values this document sets; the rest come from the template's defaults.
+    exposed_params: Dict[str, Any] = field(default_factory=dict)
+    #: Licence, author, source and URL for third-party audio or pictures.
+    attribution: Tuple[Dict[str, Any], ...] = ()
+    #: Unknown ``x-`` fields, preserved verbatim across a round trip.
+    ext: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.id = str(self.id)
@@ -837,6 +867,16 @@ class Clip3:
             None if self.audio_policy is None else str(self.audio_policy)
         )
         self.generator = _generator_value(self.generator)
+        self.preset_ref = None if self.preset_ref is None else str(self.preset_ref)
+        self.template_ref = (
+            None if self.template_ref is None else str(self.template_ref)
+        )
+        self.stack = _records(self.stack)
+        self.provenance = _records(self.provenance)
+        self.attribution = _records(self.attribution)
+        self.synthetic = bool(self.synthetic)
+        self.exposed_params = dict(self.exposed_params or {})
+        self.ext = dict(self.ext or {})
 
     @property
     def duration(self) -> float:
@@ -863,7 +903,7 @@ class Clip3:
         return None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "id": self.id,
             "source": self.source,
             "sequence": self.sequence,
@@ -892,6 +932,22 @@ class Clip3:
                 else None
             ),
         }
+        if self.preset_ref:
+            data["preset_ref"] = self.preset_ref
+        if self.template_ref:
+            data["template_ref"] = self.template_ref
+        if self.stack:
+            data["stack"] = [dict(item) for item in self.stack]
+        if self.synthetic:
+            data["synthetic"] = True
+        if self.provenance:
+            data["provenance"] = [dict(item) for item in self.provenance]
+        if self.exposed_params:
+            data["exposed_params"] = dict(self.exposed_params)
+        if self.attribution:
+            data["attribution"] = [dict(item) for item in self.attribution]
+        data.update(self.ext)
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Clip3":
@@ -899,6 +955,10 @@ class Clip3:
             raise EDLError("CLIP_SHAPE", f"clip is not an object: {data!r}")
         raw_transition = data.get("transition_in")
         raw_transition_out = data.get("transition_out")
+        ext = dict(data.get("ext") or {})
+        for key, value in data.items():
+            if isinstance(key, str) and key.startswith("x-"):
+                ext[key] = value
         return cls(
             id=str(data.get("id", "")),
             source=str(data.get("source") or ""),
@@ -929,6 +989,14 @@ class Clip3:
             compose=data.get("compose"),
             audio_policy=data.get("audio_policy"),
             generator=data.get("generator"),
+            preset_ref=data.get("preset_ref"),
+            stack=data.get("stack"),
+            synthetic=data.get("synthetic", False),
+            provenance=data.get("provenance"),
+            template_ref=data.get("template_ref"),
+            exposed_params=data.get("exposed_params"),
+            attribution=data.get("attribution"),
+            ext=ext,
         )
 
 
@@ -1275,6 +1343,12 @@ class Timeline3:
     captions: List[CaptionTrack] = field(default_factory=list)
     audio: List[AudioTrack3] = field(default_factory=list)
     ducking: Optional[Ducking3] = None
+    #: Reference to the project's brand.json.
+    brand_ref: Optional[str] = None
+    #: ``{"id", "source_project", "axis"}`` for an A/B variant of a project.
+    variant: Optional[Dict[str, Any]] = None
+    #: Unknown ``x-`` fields, preserved verbatim across a round trip.
+    ext: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.version = str(self.version)
@@ -1324,6 +1398,11 @@ class Timeline3:
         ]
         if isinstance(self.ducking, Mapping):
             self.ducking = Ducking3.from_dict(self.ducking)
+        self.brand_ref = None if self.brand_ref is None else str(self.brand_ref)
+        self.variant = (
+            dict(self.variant) if isinstance(self.variant, Mapping) else None
+        )
+        self.ext = dict(self.ext or {})
 
     @property
     def width(self) -> int:
@@ -1356,6 +1435,7 @@ class Timeline3:
 
         self._validate_header(add)
         self._validate_clips(add, depth, problems)
+        self._validate_extras(add)
         self._validate_adjustments(add)
         self._validate_text(add)
         self._validate_captions(add)
@@ -1363,7 +1443,7 @@ class Timeline3:
         return problems
 
     def _validate_header(self, add) -> None:
-        if self.version != EDL3_VERSION:
+        if self.version not in EDL3_VERSIONS:
             add("SCHEMA_VERSION", "version", f"unsupported version {self.version!r}")
         if self.fps <= 0:
             add("FPS_INVALID", "fps", f"fps must be positive, got {self.fps}")
@@ -1385,6 +1465,68 @@ class Timeline3:
                     f"sequences.{key}.id",
                     f"sequence id {sequence.id!r} does not match its key {key!r}",
                 )
+
+    def _validate_extras(self, add) -> None:
+        for index, clip in enumerate(self.clips):
+            where = f"clips[{index}]"
+            if len(clip.stack) > 3:
+                add(
+                    "STACK_TOO_DEEP",
+                    f"{where}.stack",
+                    f"{len(clip.stack)} movements, at most 3",
+                )
+            for position, movement in enumerate(clip.stack):
+                if not str(movement.get("kind") or "").strip():
+                    add(
+                        "STACK_SHAPE",
+                        f"{where}.stack[{position}]",
+                        "a movement needs a kind",
+                    )
+            for name in ("preset_ref", "template_ref"):
+                value = getattr(clip, name)
+                if value is not None and not value.strip():
+                    add("PRESET_REF_SHAPE", f"{where}.{name}", "empty reference")
+            for name, declaration in (clip.exposed_params or {}).items():
+                spot = f"{where}.exposed_params.{name}"
+                if not isinstance(declaration, Mapping):
+                    add("EXPOSED_PARAM_SHAPE", spot, "declaration is not an object")
+                    continue
+                if declaration.get("type") not in EXPOSED_TYPES:
+                    add(
+                        "EXPOSED_PARAM_SHAPE",
+                        spot,
+                        f"unknown type {declaration.get('type')!r}",
+                    )
+                if "default" not in declaration:
+                    add("EXPOSED_PARAM_SHAPE", spot, "no default value")
+            for position, record in enumerate(clip.provenance):
+                spot = f"{where}.provenance[{position}]"
+                if record.get("kind") not in PROVENANCE_KINDS:
+                    add(
+                        "PROVENANCE_SHAPE",
+                        spot,
+                        f"unknown kind {record.get('kind')!r}",
+                    )
+                for key in ("id", "source"):
+                    if not str(record.get(key) or "").strip():
+                        add("PROVENANCE_SHAPE", spot, f"missing {key}")
+            for position, record in enumerate(clip.attribution):
+                spot = f"{where}.attribution[{position}]"
+                for key in ("licence", "author", "source", "url"):
+                    if not str(record.get(key) or "").strip():
+                        add("ATTRIBUTION_SHAPE", spot, f"missing {key}")
+            for key in clip.ext:
+                if not str(key).startswith("x-"):
+                    add("EXT_KEY", f"{where}.ext", f"{key!r} must start with x-")
+        if self.brand_ref is not None and not self.brand_ref.strip():
+            add("BRAND_REF_SHAPE", "brand_ref", "empty reference")
+        if self.variant is not None:
+            for key in ("id", "source_project", "axis"):
+                if not str(self.variant.get(key) or "").strip():
+                    add("VARIANT_SHAPE", "variant", f"missing {key}")
+        for key in self.ext:
+            if not str(key).startswith("x-"):
+                add("EXT_KEY", "ext", f"{key!r} must start with x-")
 
     def _validate_clips(self, add, depth: int, problems: List[Dict[str, str]]) -> None:
         declared = [
@@ -1890,7 +2032,7 @@ class Timeline3:
 
     # -- serialisation ----------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "version": self.version,
             "fps": self.fps,
             "size": [self.width, self.height],
@@ -1904,6 +2046,12 @@ class Timeline3:
             "audio": [track.to_dict() for track in self.audio],
             "ducking": self.ducking.to_dict() if self.ducking is not None else None,
         }
+        if self.brand_ref:
+            data["brand_ref"] = self.brand_ref
+        if self.variant:
+            data["variant"] = dict(self.variant)
+        data.update(self.ext)
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Timeline3":
@@ -1916,6 +2064,10 @@ class Timeline3:
         else:
             values = list(raw_size) if isinstance(raw_size, Sequence) else [0, 0]
             width, height = (values + [0, 0])[:2]
+        ext = dict(data.get("ext") or {})
+        for key, value in data.items():
+            if isinstance(key, str) and key.startswith("x-"):
+                ext[key] = value
         return cls(
             fps=data.get("fps", 0),
             size=(int(_float(width)), int(_float(height))),
@@ -1938,4 +2090,7 @@ class Timeline3:
                 if data.get("ducking") is None
                 else Ducking3.from_dict(data["ducking"])
             ),
+            brand_ref=data.get("brand_ref"),
+            variant=data.get("variant"),
+            ext=ext,
         )
