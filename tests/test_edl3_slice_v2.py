@@ -191,6 +191,26 @@ def main() -> int:
                 and len(frame_first["sha256"]) == 64,
                 frame_first["sha256"][:16],
             )
+
+            print("\n-- (c) an old document still renders, to the same frame")
+            old = build(source)
+            old.version = "vx.edl3/1"
+            edl3_render.render(
+                old, work / "old.mp4", workdir=work / "old", settings=SETTINGS
+            )
+            old_frame = golden.capture(
+                work / "old.mp4", [FRAME_AT], work / "frames_old"
+            )["frames"][0]
+            check(
+                "a vx.edl3/1 document compiles and renders",
+                old.version == "vx.edl3/1" and (work / "old.mp4").stat().st_size > 0,
+                f"{old.version}, {(work / 'old.mp4').stat().st_size} bytes",
+            )
+            check(
+                "the oldest declared version yields the same frame bytes",
+                old_frame["sha256"] == frame_first["sha256"],
+                old_frame["sha256"][:16],
+            )
         except Exception:  # noqa: BLE001 - a crash is a failure, never a skip
             traceback.print_exc()
             check("test harness completed without an unexpected exception", False)

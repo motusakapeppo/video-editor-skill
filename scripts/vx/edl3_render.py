@@ -64,6 +64,7 @@ from . import ffmpeg
 from .edl3 import (
     BACKENDS,
     EDL3_VERSION,
+    EDL3_VERSIONS,
     EFFECT_REGISTRY,
     EffectSpec,
     Keyframe,
@@ -1527,7 +1528,7 @@ def compile_timeline(
     document with either cannot be compiled without that evidence, because a
     compile never runs ffmpeg and never launches a browser.
     """
-    if timeline.version != EDL3_VERSION:
+    if timeline.version not in EDL3_VERSIONS:
         raise CompileError(
             "SCHEMA_VERSION",
             f"unsupported document version {timeline.version!r}",
