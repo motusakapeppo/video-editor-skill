@@ -57,6 +57,7 @@ script, runs ffmpeg with ``-filter_complex_script`` and returns the report.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -156,6 +157,9 @@ AUDIO_BITRATE = "192k"
 AUDIO_RATE = 48000
 #: Dialogue joint fade, mirroring the house 12 ms cut fade.
 DIALOGUE_FADE_SEC = 0.012
+#: ffmpeg's ``-benchmark`` line on this build: Windows omits utime/stime/rtime,
+#: so the peak RSS is the whole measurement it offers.
+BENCH = re.compile(r"bench: maxrss=(\d+)KiB")
 
 #: The SDR delivery: the 8-bit picture this engine has always produced, and the
 #: one a document without a profile (or with an SDR profile) gets. Byte identity
@@ -282,6 +286,7 @@ REFUSAL_CODES = frozenset(
         "CHROMIUM_NEEDS_GENERATOR",
         "GENERATOR_EFFECT",
         "GENERATOR_CAPTURE",
+        "CHUNK_UNSUPPORTED",
     }
 )
 
@@ -2036,14 +2041,26 @@ def delivery_colour(profile_ref: Optional[str]) -> Dict[str, Any]:
     }
 
 
+def _bench_maxrss(stderr: str) -> Optional[int]:
+    """The encoder's own peak RSS in KiB, from ffmpeg's ``-benchmark`` line."""
+    found = BENCH.findall(stderr or "")
+    return int(found[-1]) if found else None
+
+
 def _encode(
-    plan: Mapping[str, Any], destination: Path, script_dir: Path, timeout: Optional[int]
+    plan: Mapping[str, Any],
+    destination: Path,
+    script_dir: Path,
+    timeout: Optional[int],
+    *,
+    benchmark: bool = False,
 ) -> Tuple[ffmpeg.Proc, Path]:
     script_path = script_dir / "filter_complex.txt"
     script_path.write_text(plan["filter_script"], encoding="utf-8", newline="\n")
 
     colour = plan["color"]
-    args = list(plan["input_args"])
+    args = ["-benchmark"] if benchmark else []
+    args.extend(plan["input_args"])
     args.extend(["-filter_complex_script", str(script_path), "-map", plan["map"]])
     if plan["audio_map"]:
         args.extend(
@@ -2090,7 +2107,14 @@ def _encode(
     if colour["x264_params"]:
         args.extend(["-x264-params", colour["x264_params"]])
     args.append(str(destination))
-    proc = ffmpeg.run_ff(args, loglevel="error", timeout=timeout, step="render")
+    # -benchmark prints its own ``bench: maxrss=...KiB`` line, and this ffmpeg
+    # build emits it at info level only, so asking for it also opens the log.
+    proc = ffmpeg.run_ff(
+        args,
+        loglevel="info" if benchmark else "error",
+        timeout=timeout,
+        step="render",
+    )
     if not proc.ok:
         raise CompileError("RENDER_FAILED", proc.tail(), str(destination))
     if not destination.exists() or destination.stat().st_size == 0:
@@ -2221,8 +2245,17 @@ def render(
     timeout: Optional[int] = None,
     audio: str = "refuse",
     settings: Optional[Mapping[str, Any]] = None,
+    chunks: Optional[int] = None,
+    benchmark: bool = False,
 ) -> Dict[str, Any]:
-    """Render ``timeline`` to ``output`` and return the compile/run report."""
+    """Render ``timeline`` to ``output`` and return the compile/run report.
+
+    ``chunks`` selects the resumable path: at least two chunks are rendered and
+    recorded by :mod:`vx.edl3_chunks`, which skips a chunk whose recorded inputs
+    still match. The default ``None`` is the single ffmpeg process this engine
+    has always run, and its graph is untouched. ``benchmark`` asks ffmpeg for its
+    own ``-benchmark`` line, reported under ``benchmark``.
+    """
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     script_dir = Path(workdir) if workdir is not None else destination.parent
@@ -2235,6 +2268,21 @@ def render(
         settings_source = "probe"
     else:
         settings_source = "declared"
+    if chunks is not None and int(chunks) > 1:
+        from . import edl3_chunks  # noqa: PLC0415 - the resumable path only
+
+        report = edl3_chunks.render_chunked(
+            timeline,
+            destination,
+            workdir=script_dir,
+            timeout=timeout,
+            audio=audio,
+            settings=settings,
+            chunks=int(chunks),
+            benchmark=benchmark,
+        )
+        report["settings_source"] = settings_source
+        return report
     nested = _render_nested(timeline, script_dir, timeout, audio, settings)
     generators = _materialize_generators(timeline, script_dir, probe)
     plan = compile_timeline(
@@ -2244,7 +2292,9 @@ def render(
         nested_paths=nested,
         generator_paths=generators,
     )
-    proc, script_path = _encode(plan, destination, script_dir, timeout)
+    proc, script_path = _encode(
+        plan, destination, script_dir, timeout, benchmark=benchmark
+    )
 
     report: Dict[str, Any] = {
         "version": plan["version"],
@@ -2272,5 +2322,6 @@ def render(
         "warnings": plan["warnings"],
         "command": proc.args,
         "stderr_tail": proc.tail(5),
+        "benchmark": {"encode_kib": _bench_maxrss(proc.stderr)},
     }
     return report
