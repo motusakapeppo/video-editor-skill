@@ -141,6 +141,21 @@ respinti.
 60+ voci con innesco, parametri, tetto, implementazione, fallback, prova visiva;
 anti-arlecchino (tetto di effetti visibili ogni 10 s).
 
+### Decomposizione F4 (registrata 2026-10-28)
+
+| ID | Task | Accettazione binaria | Stato |
+|---|---|---|---|
+| F4-T01 | Schema dichiarativo: `ParamSpec`, template di filtro, innesco, tetto, ripiego; caricamento per famiglie | le 5 voci esistenti restano identiche e i 34 frame non cambiano; un tipo nuovo si dichiara senza toccare il validatore | TODO |
+| F4-T02 | Famiglia geometria (12 voci) | 12 voci nuove con parametri validati e un frame reso | TODO |
+| F4-T03 | Famiglia colore (12 voci) | 12 voci nuove con parametri validati e un frame reso | TODO |
+| F4-T04 | Famiglia glitch e tempo (12 voci) | 12 voci nuove con parametri validati e un frame reso | TODO |
+| F4-T05 | Famiglia pellicola e luce (12 voci) | 12 voci nuove con parametri validati e un frame reso | TODO |
+| F4-T06 | Famiglia composizione e testo (10 voci) | 10 voci nuove, le tre di testo dichiarano di essere composte e non filtrate | TODO |
+| F4-T07 | Innesco, tetto e ripiego dichiarati per ogni voce, con rifiuto del parametro fuori intervallo | nessuna voce senza innesco, tetto e ripiego; il fuori intervallo ha un codice proprio | TODO |
+| F4-T08 | Anti-arlecchino: tetto di effetti visibili ogni 10 s, applicato al percorso automatico | 4 effetti visibili in 10 s vengono rifiutati dal controllo, un EDL esplicito resta intatto | TODO |
+| F4-T09 | Prova visiva: un frame di riferimento per ogni voce, byte-identico su due giri | 60+ frame confrontati byte per byte, due giri consecutivi identici | TODO |
+| F4-T10 | Documentazione della libreria e chiusura di fase | ogni voce compare in un indice con innesco, parametri, tetto, ripiego; suite verde; SKILL.md sotto 250 righe | TODO |
+
 ## F5 — Audio e musica
 Catena voce (denoise, EQ, de-esser, compressore), ducking con keyframe, SFX,
 musica con beat/downbeat/sezioni, tagli sul beat, loudness per bus, limiter,
@@ -197,6 +212,17 @@ da profondità, ponte opzionale Blender, rendering software come ripiego.
 ## F16 — Prestazioni
 Render a segmenti paralleli, smart render con test di identità, encoder hardware
 scelto per prova, intermedi lossless, benchmark ufficiale.
+
+### Decomposizione F16 (registrata 2026-10-28)
+
+| ID | Task | Accettazione binaria | Stato |
+|---|---|---|---|
+| F16-T01 | Banco di misura ufficiale: un comando che misura e scrive numeri, non stime | il referto contiene tempi, byte e picco di memoria misurati sullo stesso input, con data e versione | TODO |
+| F16-T02 | Render a segmenti paralleli | lo stesso documento reso in parallelo e in serie produce frame identici byte per byte, con tempo misurato | TODO |
+| F16-T03 | Smart render con test di identita' | uno span identico viene coperto senza ricodifica solo se il test lo prova; un taglio non lo e' mai | TODO |
+| F16-T04 | Encoder hardware scelto per prova | il candidato viene accettato solo se il frame decodificato resta entro la soglia dichiarata; altrimenti si ripiega e lo si dice | TODO |
+| F16-T05 | Intermedi lossless per i passaggi multipli | due passaggi lossless danno lo stesso sha256 del singolo passaggio, e il peso e' dichiarato | TODO |
+| F16-T06 | Referto di prestazioni e chiusura di fase | il referto elenca ogni misura con il comando che l'ha prodotta; suite verde | TODO |
 
 ## F17 — Vault e sicurezza dei dati
 Priorità: subito dopo F0. Sola lettura sugli originali, marcatore `.vx-owned`,
