@@ -506,3 +506,281 @@ L'incarico 10 dell'esame (reel per una palestra) passa con un TrendSnapshot data
 ### D8. Addendum al prompt (da incollare in coda alla sezione 9)
 
 L'Allegato D sostituisce ogni uso di API di Instagram o TikTok e di fornitori a pagamento. Tutto è gratuito. Per YouTube Shorts usa youtube\_data e gemini\_video con le sonde di salute; per TikTok e Instagram usa solo la ricerca testuale descritta in D3, con tetto di confidenza S0-S1 e dichiarazione del ritardo. Nessun login, nessun account della skill, nessun aggiramento dei controlli anti-bot, nessun testo copiato, nessuna conservazione di frame o audio di terzi. Con trends uguale a off non deve partire nessuna chiamata di rete. Verifica tutto D7 prima di chiudere la fase.
+
+## Allegato E. Look Deck, verifica a keyframe e memoria di progetto
+
+Precedenza: questo allegato aggiunge, non sostituisce. Le sezioni 1-9, l'Allegato A (fasi F13-F19, incarichi 13-19) e gli Allegati B, C, D restano validi per intero. Nessuna fase e nessun incarico esistente cambia numero: F0-F24 restano quelle che sono, gli incarichi 1-19 restano dove sono, e l'Allegato E occupa la coda con F25, con le voci E1-E11 e con gli incarichi 20-25.
+
+Dove una voce dell'allegato ha bisogno di un campo dell'EDL 3, usa uno di quelli già introdotti da F2-T10 e non ne inventa un altro: `preset_ref` (preset con nome risolto da registro), `stack` (massimo 3 movimenti di camera), `template_ref` con `exposed_params`, `synthetic`, `provenance` per ogni scelta, `attribution` per le risorse di terzi, `brand_ref`, `variant` (id, progetto di origine, asse variato), `ext` per i campi `x-`. Se un campo manca davvero, si aggiunge in F25 con la stessa regola additiva di F2-T11: nessun migratore, i documenti `/1` e `/1.1` restano validi, i golden restano identici byte per byte.
+
+### E0. Regole comuni e perimetro
+
+Ogni voce E1-E11 dichiara sette campi, senza eccezioni: **innesco** (quando parte, chi lo spegne), **schema dei parametri** (nomi, domini, default), **tetto** (il limite oltre il quale la voce rifiuta invece di degradare), **implementazione** (dove vive e quale primitiva usa), **ripiego** (cosa succede quando la primitiva manca, dichiarato e mai silenzioso), **prova visiva** (quale frame o quale foglio si guarda), **test** (l'accettazione binaria).
+
+Tre regole valgono per tutte:
+
+1. Nessuna voce duplica un meccanismo che esiste già. La geometria della camera è ffmpeg (`crop`, `scale`, `sendcmd`, i keyframe dell'EDL 3); il colore è `lut3d` con le LUT 3D; ciò che non è geometria né colore è Chromium di F3; la cache è quella di F0-T04 e il re-render parziale quello di F0-T05; la cancellazione è quella di F17; la storia dell'EDL è quella di F0-T06.
+2. Un numero che misura la qualità è «da calibrare» e dice su quale corpus. Un numero che limita il prodotto (quanti movimenti in pila, quante varianti per progetto) è una decisione di prodotto: sta qui, con il motivo, e si rivede in DECISIONS senza toccare le soglie.
+3. Ciò che non si applica finisce in `not_applied` con il motivo, come da sezione 3 regola 2 e da A6.
+
+Fuori perimetro, in nessun caso e nemmeno come opzione spenta: crediti, abbonamenti, MCP o API a pagamento, clonazione o generazione di volti di persone reali. Valgono la Carta del gratuito (A1) e il perimetro di rete di D1.
+
+---
+
+### E1. Look Deck (dopo F4)
+
+**Innesco.** Il brief dichiara un look, un'emozione, un profilo di camera o un riferimento; in alternativa parte quando il Creative Brief sceglie una palette o quando il critico segnala «look piatto» o «movimento assente» su un asse. Spegnibile con il flag `look_deck`, e in quel caso il referto dice che il look è rimasto al grading di base.
+
+**Schema dei parametri.** Quattro sotto-schemi, tutti risolti per nome da registro versionato:
+
+- `camera_movement`: `id` (nome dal registro), `intensita` 0..100, `rampa` (`in` | `out` | `both`), `ancora` (`centro` | `volto` | `saliency`), `durata`, `stack` (1..3 voci, l'ordine è significativo: si compongono da sinistra a destra).
+- `camera_profile`: `id` (`35mm` | `8mm` | `dv`), `grain`, `gate_weave`, `halation`, `ratio`. I quattro parametri sono indipendenti dal profilo scelto, così un 8mm con halation bassa resta possibile.
+- `lens`: `id` (`vignette` | `chromatic_aberration` | `fake_bokeh` | `distortion`), con il dominio proprio di ciascuna.
+- `palette`: `id` dalla libreria LUT, `strength` 0..100, `protect_skin` booleano.
+
+**Tetto.** Tre movimenti in pila (il limite è già nel contratto di F2-T10: il quarto è rifiutato con `STACK_TOO_DEEP`). Un profilo di camera per clip e una palette per clip: sono gradi a livello di clip, impilarne due è il modo più diretto per ottenere fango. Al più due lenti insieme, e la seconda dichiara di essere un complemento della prima (una vignetta più una aberrazione sì, due distorsioni no, rifiutate con il nome).
+
+**Implementazione.** Quaranta movimenti almeno, tutti costruiti da ritaglio, scala e keyframe, nessuno da un filtro che pretende di simulare un movimento che non c'è: famiglia push e pull (scala con ancora), frusta (whip, spostamento rapido con blur direzionale), orbita finta (finestra di ritaglio su una circonferenza più una lieve rampa di scala), a mano (handheld, rumore deterministico dal seme applicato agli offset del ritaglio, non un filtro con seme casuale), gru finta (crane, ritaglio verticale più rampa di scala), più panoramiche, inclinazioni, rollio, snap zoom, deriva, parallasse 2.5D delle foto, rack focus finto, punch-in ritmico e micro-scatti sul beat. Ogni voce del registro dichiara nome, famiglia, parametri, tetto, innesco e prova visiva, come chiede F4 per gli effetti. I profili di camera sono una catena di grana (rumore a grana calibrata più `noise` ffmpeg), gate weave (jitter sub-pixel deterministico dal seme), halation (soglia sui highlights più blur additivo sul canale rosso) e `ratio` con bordi dichiarati. Le lenti sono `vignette`, `chromatic_aberration` (sfasamento dei canali in scala radiale), `fake_bokeh` (blur a disco mascherato; con la mappa di profondità di F15 diventa selettivo per piano) e `distortion` (`lenscorrection`). Le palette sono almeno 50 LUT 3D in formato `.cube`, ognuna con categoria, provenienza e licenza in `attribution`; `protect_skin` misura la distanza su una toppa di pelle e limita la forza della LUT se la supera. La ruota delle emozioni è una tabella versionata di otto voci (calma, tensione, gioia, malinconia, energia, intimità, meraviglia, urgenza) che mappa ogni emozione su quattro assi: ritmo (direzione della densità di taglio), grading (contrasto, saturazione, temperatura), musica (intervallo di BPM e modo) e SFX (densità e tipo). La tabella ha un numero di versione e ogni riga cita l'evidenza da cui nasce.
+
+**Ripiego.** I movimenti e i profili sono geometria e rumore, quindi girano anche senza Chromium, senza GPU e senza shader: nessun ripiego necessario, e il test lo prova a motore grafico spento. La LUT che manca dal disco non si inventa: `lut3d` è sostituito da una approssimazione `eq` più `colorbalance` e l'EDL registra `fallback=true` con la LUT richiesta nel referto. Il bokeh finto senza mappa di profondità è un blur mascherato, dichiarato.
+
+**Prova visiva.** Un frame di riferimento per ogni preset, e per i movimenti una striscia di tre istanti (inizio, metà, fine), perché un frame singolo non prova che la camera si sia mossa. Per la ruota delle emozioni, un foglio di otto riquadri con la stessa clip trattata nelle otto direzioni.
+
+**Test.** Per ogni preset: un test di innesco (il preset entra quando l'innesco dichiarato è vero, e non entra quando è falso) e un golden frame. Determinismo: lo stesso preset applicato due volte produce lo stesso frame, byte per byte, e due giri consecutivi dell'intero registro sono identici. Pila: tre movimenti compongono, quattro sono rifiutati. LUT: una LUT assente produce il ripiego dichiarato e non un errore non gestito.
+
+**Accettazione (E1).** Ogni preset ha un frame di riferimento e un test di innesco; lo stesso preset applicato due volte dà lo stesso frame. Soglie «da calibrare»: l'ampiezza dell'handheld, la durata della frusta e la tolleranza sulla pelle, tutte sul corpus con volti di F6.
+
+---
+
+### E2. Prima i keyframe (F7, F9)
+
+**Innesco.** Ogni render completo. Non il proxy, non l'animatic: quelli sono il modo con cui i keyframe si producono. Il cancello si riapre quando cambia l'hash dei keyframe approvati, cioè quando una modifica successiva li rende non più rappresentativi.
+
+**Schema dei parametri.** Blocco `keyframe_gate` nel brief e nell'EDL: `count` (3..6), `times` (gli istanti scelti), `approved_by`, `approved_at`, `hash` (sha256 dell'insieme dei frame approvati), `autonomous` (booleano con motivazione).
+
+**Tetto.** Da tre a sei keyframe. Sotto tre non c'è verifica, sopra sei non è più una revisione ma un altro montaggio: la richiesta di dodici frame viene rifiutata con il numero e il motivo, non accodata.
+
+**Implementazione.** Il renderer controlla il cancello prima del primo stadio del render completo. Gli istanti si scelgono dove il rischio è più alto, non a intervalli regolari: sul primo frame utile dell'hook, su ogni cambio di scena, sul primo e sull'ultimo frame di ogni testo, nel punto di massima densità di effetti. Il criterio di scelta è dichiarato nel referto insieme agli istanti.
+
+**Ripiego.** Senza approvazione e senza modalità autonoma dichiarata il render completo è rifiutato con `KEYFRAMES_NOT_APPROVED` e il numero di keyframe mancanti. La modalità autonoma non è un silenzio: va dichiarata nel brief, con il motivo, e il referto la ripete in chiaro. Con l'approvazione presente ma l'hash cambiato, il cancello torna chiuso.
+
+**Prova visiva.** I keyframe stessi, più un confronto al timecode fra il keyframe approvato e il frame reso dallo stesso istante: se i due divergono oltre la tolleranza dichiarata, l'approvazione non copriva quel render.
+
+**Test.** Quattro casi: senza approvazione rifiuto con il codice; con approvazione il render parte; con modalità autonoma dichiarata il render parte e il referto la nomina; keyframe modificati dopo l'approvazione riaprono il cancello.
+
+**Accettazione (E2).** Un render completo senza approvazione è rifiutato; con approvazione procede; l'eccezione esiste solo se la modalità autonoma è dichiarata nel documento e ripetuta nel referto.
+
+---
+
+### E3. Brand Connect (F10)
+
+**Innesco.** Il brief porta un URL di brand, oppure l'utente dice «usa il mio sito». Mai automatico su un URL che non sia stato dato dall'utente.
+
+**Schema dei parametri.** `brand.json`: `source_url`, `fetched_at`, `robots` (regola applicata e hash del file letto), `colors` (lista di `{hex, share, from}`), `logo` (`{path, sha256, source}`), `fonts` (lista di `{family, files, source}`), `texts` (lista di `{role, text, source}`), `prices` (lista di `{label, value, currency, source}`), `palette_lut_ref`. Ogni voce porta da dove viene: un selettore CSS, un file, o un blocco di dati strutturati. Un colore senza provenienza non entra.
+
+**Tetto.** Una pagina più gli asset che quella pagina collega direttamente, stesso dominio, profondità uno. Venti megabyte per job, che è una scelta di prodotto e non una soglia misurata: oltre, il job si ferma e dichiara quanto ha scaricato. Nessun login, nessun cookie conservato, nessuna esecuzione di JavaScript del sito: si legge l'HTML e il CSS come testo.
+
+**Implementazione.** Lettura di `robots.txt` prima di ogni altra cosa, con la regola applicata trascritta in `brand.json`; se il percorso è escluso, il job si ferma su quel dominio e passa al ripiego. Colori dai fogli di stile, dalle variabili CSS e dagli stili calcolati quando il foglio li espone; logo dall'immagine più grande citata nell'intestazione o nella navigazione, con `og:image` come candidato secondario; font da `@font-face` e dalle famiglie dichiarate; testi dai titoli e dai paragrafi con un ruolo dedotto; prezzi dai dati strutturati (`offers`) e, in mancanza, dai pattern visibili di prezzo. Cache per hash dell'URL con scadenza, così la seconda richiesta sullo stesso sito non fa richieste.
+
+**Ripiego.** Sito irraggiungibile, `robots.txt` che esclude, o nessun colore leggibile: il job prosegue con il brand kit manuale dell'utente o con il default, e il referto dichiara `brand_unavailable` con il motivo. Un `brand.json` parziale è meglio di un errore, purché ogni campo presente abbia provenienza.
+
+**Prova visiva.** Un foglio di brand: campioni di colore con la quota di superficie, il logo su fondo chiaro e scuro, i font applicati al testo reale del progetto, e un fotogramma del montaggio in cui il brand compare.
+
+**Test.** Pagine di prova locali, servite da un server di test: una pagina con brand completo, una con `robots.txt` che esclude il percorso, una che collega un asset su un altro dominio. Il registro delle richieste del server di test deve mostrare zero richieste fuori dal dominio; `brand.json` deve validare contro lo schema; la seconda esecuzione deve fare zero richieste per la cache.
+
+**Accettazione (E3).** Pagine di prova locali, nessuna richiesta fuori dal dominio, `brand.json` valido. Il cablaggio verso il render usa `brand_ref` nell'EDL e verifica con MAD che il logo e la palette siano davvero nel frame, non solo nel JSON.
+
+---
+
+### E4. Template per compito (F3, F19)
+
+**Innesco.** Il compito dichiarato nel Creative Brief (lower third, prezzo, titolo, endcard, confronto, elenco, citazione, testimonianza) più il formato di uscita. Il template si propone, non si impone: entra nell'EDL come `template_ref` con i suoi `exposed_params`.
+
+**Schema dei parametri.** Ogni template dichiara: `slots` (da uno a otto, ciascuno con tipo `testo` | `immagine` | `video` | `logo` | `colore` e con il ruolo che lo riempie), `exposed_params` (i valori che l'utente o l'ispettore possono cambiare, con dominio), `layouts` (una voce per ogni proporzione supportata), `trigger` (quando il template è adatto), `family`, `version`.
+
+**Tetto.** Circa cento template curati, con la qualità davanti alla quantità: un template entra nel registro solo con frame di riferimento, parametri esposti, linter verde e critico che lo approva. Un template che non passa il linter non entra nel conteggio, e il registro non gonfia il numero con varianti dello stesso disegno.
+
+**Implementazione.** Estensione del registro di F3 (che ne ha già 54 su 12 famiglie), non un secondo registro. Lo slot si riempie per ruolo dalla MaterialMap: l'asset che è un volto va nello slot volto, il logo nello slot logo, e un asset del tipo sbagliato è rifiutato nominando lo slot. Le proporzioni multiple nascono da `layouts` dichiarati, cioè da una ricomposizione disegnata, non da un ritaglio cieco: un template che esiste solo in orizzontale dichiara la degradazione invece di tagliare i lati in silenzio.
+
+**Ripiego.** Senza Chromium i template statici rendono con Pillow, come già in F3-T06, con `engine=pillow` e `fallback=true` dichiarati. Un template dinamico senza motore grafico viene sostituito da un template statico della stessa famiglia, e il referto dice quale.
+
+**Prova visiva.** Un frame di riferimento per template (tre istanti per quelli animati), più una tavola per famiglia che mostra i template della stessa famiglia affiancati, così un doppione si vede a occhio.
+
+**Test.** Per ogni template: frame di riferimento su disco, parametri esposti non vuoti, rifiuto di un valore fuori dominio con il nome del parametro, rifiuto di un asset nel tipo di slot sbagliato. Multi-proporzione: un progetto produce tre proporzioni e il test conta gli stadi eseguiti per provare che la cache condivisa è stata riusata.
+
+**Accettazione (E4).** Ogni template ha un frame di riferimento e parametri esposti; un template senza slot è rifiutato; da un progetto si ottengono più proporzioni con le cache condivise contate dal test.
+
+---
+
+### E5. Clonazione della struttura (F8, F13)
+
+**Innesco.** L'utente fornisce un riferimento e chiede «come questo». Nessuna analisi di riferimento senza un file dell'utente o una fonte lecita della sezione 5.
+
+**Schema dei parametri.** `structure_skeleton`: `beats` (lista di `{t0, t1, shot_type, text_slot, cta_slot}`), `cut_rhythm` (intervalli fra i tagli e loro varianza), `hook_window` (cosa succede nei primi istanti, come numeri e come nota), `fingerprint_ref` (l'impronta salvata), `distance` (la distanza calcolata dall'impronta). Ogni campo è un numero, un enum o una posizione: nel fingerprint non entra una parola del testo del riferimento, non entra un frame, non entra un campione audio.
+
+**Tetto.** Lo scheletro copre la durata del riferimento, non di più. Le note sono scritte con parole proprie e hanno un tetto di lunghezza per battuta, così il fingerprint non diventa una trascrizione mascherata.
+
+**Implementazione.** Il ciclo del ReferenceLab della sezione 5, con i campi della StyleFingerprint già elencati, più lo scheletro dei battiti ricavato dai tagli misurati e dai tipi di inquadratura di F6/F13. Lo scheletro si applica al girato dell'utente: i tagli vanno dove lo scheletro li mette, ma il contenuto di ogni battuta viene dal materiale dell'utente. Testi, musica, immagini e parlato del riferimento non vengono mai copiati, e non vengono nemmeno conservati: la cartella temporanea si cancella nel blocco `finally` con registro di file e byte eliminati, e lo spazzino all'avvio ripulisce ciò che è rimasto da un processo morto.
+
+**Ripiego.** Se il riferimento non è analizzabile (formato, licenza, durata), il job prosegue senza scheletro e lo dichiara. Se lo scheletro esiste ma il girato dell'utente non ha abbastanza inquadrature per riempire i battiti, il pianificatore accorpa i battiti e scrive nel referto quali ha accorpato: non inventa inquadrature.
+
+**Prova visiva.** Due affiancamenti: scheletro contro risultato (stessa cadenza di tagli, contenuto diverso) e un contact sheet del risultato dove si vede che i volti, i luoghi e i testi sono quelli dell'utente.
+
+**Test.** Il test che conta è l'anti-copia, e si fa su una fixture di riferimento che il test possiede: nessun flusso audio del riferimento arriva all'output (confronto delle impronte audio) e nessun frame dell'output coincide con un frame del riferimento oltre la tolleranza dichiarata. Secondo test: la distanza dall'impronta supera la soglia anti-copia. Terzo: la cartella temporanea non esiste più dopo il job e il registro della cancellazione riporta il numero di file e di byte.
+
+**Accettazione (E5).** Un test prova che nessun audio e nessun frame del riferimento arrivano all'output e che la distanza dall'impronta supera la soglia anti-copia. La soglia è «da calibrare» sul corpus di coppie riferimento-risultato che nasce in F20-T01.
+
+---
+
+### E6. Identità fra clip (F6, F13)
+
+**Innesco.** Solo con consenso esplicito dell'utente, dichiarato nel brief. Serve a tre cose: scegliere l'A-roll della persona giusta, riframe per persona quando in campo ci sono più persone, sfocare chi non è il soggetto.
+
+**Schema dei parametri.** `identity`: `enabled` (default falso), `backend` (`sface` o equivalente), `model_sha256`, `consent` (`{by, at, scope}`), `store` (sempre `project_only`), `subjects` (lista di etichette scelte dall'utente, mai nomi dedotti).
+
+**Tetto.** I vettori vivono quanto il job e non oltre: nessuna banca dati fra progetti, nessun file fuori dalla directory marcata `.vx-owned`, nessun vettore in un artefatto che sopravvive al job. La verifica della licenza del modello precede l'integrazione e la verifica dell'hash segue la catena di fornitura di F17-T07.
+
+**Implementazione.** Rilevamento e descrizione del volto per fotogramma campionato, clustering locale dentro il progetto, associazione alle etichette date dall'utente. Da qui: la scelta dell'A-roll preferisce la persona indicata; il riframe segue il volto della persona indicata e non il più grande del campo; la sfocatura colpisce i volti che non appartengono a nessun soggetto autorizzato.
+
+**Ripiego.** Senza il modello, o con l'opzione spenta, il riframe usa il tracciamento volti già esistente in F1 e non sa dire «stessa persona»: il referto dichiara `identity_unavailable` e la sfocatura dei terzi resta possibile solo per volto rilevato, non per identità. Nessuna funzione si rompe, una funzione si dichiara.
+
+**Prova visiva.** Un contact sheet con i volti raggruppati per soggetto e l'etichetta, più un frame con un terzo sfocato e il soggetto a fuoco.
+
+**Test.** Con l'opzione spenta non viene calcolato nessun vettore (contatore delle chiamate a zero, nessun file scritto). Con l'opzione accesa il vettore esiste durante il job e alla fine non esiste più (percorso assente più riga di audit). Un secondo progetto non riesce a leggere il magazzino del primo: il test ci prova e deve fallire.
+
+**Accettazione (E6).** Test di cancellazione dei vettori e test che con l'opzione spenta nessun vettore viene calcolato. Il consenso è nel documento, non in una variabile d'ambiente.
+
+---
+
+### E7. Uscita modificabile (F14)
+
+**Innesco.** L'utente apre la Review Room e tocca un campo. Il campo esiste solo se il template o l'effetto lo ha esposto.
+
+**Schema dei parametri.** `inspector_patch`: `{target (clip | layer | effect | text), field, from, to, anchor (timecode), evidence}`. La modifica è una patch dell'EDL, non una riscrittura del documento: stessa forma delle patch del critico in F9 e dello storico di F0-T06.
+
+**Tetto.** Si modificano solo i campi esposti: testo, font, colori, posizione, tempo, easing. Un campo non esposto è rifiutato con `FIELD_NOT_EXPOSED` e il nome del campo, invece di essere accettato e ignorato.
+
+**Implementazione.** L'ispettore è parte della pagina statica di F14 e scrive un JSON di patch; il render incrementale usa il re-render parziale di F0-T05 e la cache di F0-T04, quindi tocca solo gli stadi che dipendono dal campo cambiato. Il cambio di font passa dal `fontsdir` già in uso (FX-T05), il cambio di colore dal `brand_ref` o dal valore letterale, il cambio di tempo dall'ancora.
+
+**Ripiego.** Se il template non dichiara i campi, l'ispettore mostra il documento in sola lettura e lo dice. Se la patch non si applica (ancora fuori intervallo, valore fuori dominio), l'ispettore la rifiuta e non tocca il documento.
+
+**Prova visiva.** Prima e dopo affiancati al timecode dell'ancora, con il campo cambiato nominato sotto.
+
+**Test.** Una modifica dall'ispettore produce una patch e un render che esegue solo gli stadi dipendenti: il test conta gli stadi prima e dopo e asserisce l'insieme atteso, come F0-T05. Cinque campi diversi (testo, font, colore, posizione, tempo) producono cinque patch applicate e cinque render incrementali.
+
+**Accettazione (E7).** Una modifica dall'ispettore produce una patch e un render che tocca solo gli stadi dipendenti.
+
+---
+
+### E8. Montaggio a parole (vibe editing, F7, F9)
+
+**Innesco.** Richieste come «più dinamico», «più emotivo», «più calmo», «più moderno». La tabella si applica quando la richiesta è un intento, non quando è un'istruzione misurabile («taglia 3 secondi» è un'altra cosa e va in EDL).
+
+**Schema dei parametri.** Tabella versionata `vibe_table`: ogni riga ha `intent`, `axis` (uno degli assi della rubrica di F9 più gli assi tecnici: densità di taglio, velocità media delle inquadrature, densità di transizioni, energia di movimento, saturazione, temperatura, BPM, densità di SFX), `direction` (`su` | `giù`), `target_delta` (quanto, «da calibrare»), `measured` e `verdict`.
+
+**Tetto.** Ogni intento muove al più tre assi. Quattro assi insieme non si possono attribuire a un intento e il test lo rifiuta: senza questo tetto il critico non può dire quale asse ha risposto.
+
+**Implementazione.** La tabella è un file versionato con la sua provenienza, come la ruota delle emozioni di E1 con cui condivide la forma ma non il contenuto: la ruota parte dall'emozione e arriva al trattamento, la tabella parte dalla richiesta in lingua e arriva alla misura. Il critico misura prima e dopo e verifica che l'asse richiesto si sia mosso nella direzione chiesta; se non si è mosso, la patch è respinta e resta la versione precedente.
+
+**Ripiego.** Richiesta non presente in tabella: si chiede una volta sola, con una proposta di default e l'opzione «decidi tu», secondo la regola del costo dell'errore di F7. Nessuna interpretazione silenziosa.
+
+**Prova visiva.** Per ogni intento, la curva dell'asse prima e dopo sullo stesso grafico, con il numero misurato accanto.
+
+**Test.** Dieci richieste di intento, almeno otto nella direzione attesa. Le due che possono mancare sono quelle in cui l'asse è già al tetto: il test le ammette solo con la dichiarazione esplicita nel referto, non con un silenzio.
+
+**Accettazione (E8).** Dieci richieste di intento, almeno otto nella direzione attesa.
+
+---
+
+### E9. Varianti e pianificazione (F10, F11)
+
+**Innesco.** Varianti: quando il critico o l'utente chiede più hook o più proporzioni dallo stesso progetto. Pianificazione: quando il brief dichiara una produzione ricorrente.
+
+**Schema dei parametri.** `variant` (già in F2-T10: `id`, progetto di origine, asse variato) e `schedule` (`{cron, project_ref, approval: "required", notify}`). L'asse variato è uno solo per variante, così il confronto resta onesto.
+
+**Tetto.** Cinque varianti di hook per progetto, che è il numero dell'incarico 25: oltre, il confronto a coppie perde valore e costa più di quanto renda. Una produzione pianificata non pubblica mai senza approvazione, indipendentemente dal calendario.
+
+**Implementazione.** Le varianti condividono tutto ciò che non è l'asse variato, quindi la cache di F0-T04 restituisce gli stadi comuni e il test conta le esecuzioni. La pianificazione usa la coda di F11 (creazione, avanzamento, cancellazione, ripresa) e si ferma allo stato `waiting_approval` prima di qualunque consegna verso l'esterno.
+
+**Ripiego.** Senza coda disponibile, la pianificazione è un promemoria nel referto e non una promessa. Una variante che non riesce a divergere dall'originale sull'asse dichiarato viene scartata e dichiarata, non consegnata come variante.
+
+**Prova visiva.** Le cinque varianti affiancate sui primi due secondi, che è dove l'hook si gioca, più il grafico dell'asse variato per variante.
+
+**Test.** Cinque varianti riusano la cache: il test conta gli stadi e pretende il riuso. Un job pianificato di prova gira senza sorveglianza e si ferma in `waiting_approval`, con il file di approvazione assente e il job non consegnato.
+
+**Accettazione (E9).** Cinque varianti riusano la cache; un job pianificato di prova gira senza sorveglianza e si ferma per l'approvazione.
+
+---
+
+### E10. Memoria di progetto visibile (F14)
+
+**Innesco.** Apertura della Review Room su un progetto che ha più di una versione.
+
+**Schema dei parametri.** `project_history`: voci `{kind (edl | asset | brief), version, hash, at, author, summary, patch_ref}`. La storia è quella di F0-T06 (journal append-only con checkpoint), letta e mostrata, non riscritta.
+
+**Tetto.** Si mostrano le ultime N versioni con N dichiarato nella pagina, e lo storico completo resta nel journal. Il ripristino è sempre reversibile: ripristinare non cancella la versione da cui si è partiti.
+
+**Implementazione.** La pagina di F14 legge il journal, disegna la linea del tempo con i tre tipi di voce e offre il ripristino. Il ripristino scrive una nuova voce che punta alla versione scelta, secondo lo stesso schema dello snapshot di F17: nessuna scrittura distruttiva, nessun file di media copiato.
+
+**Ripiego.** Journal illeggibile o assente: la pagina mostra lo stato corrente e dichiara che la storia non è disponibile. Mai una storia ricostruita a memoria.
+
+**Prova visiva.** La linea del tempo con le versioni e, dopo il ripristino, il confronto prima e dopo al timecode.
+
+**Test.** Ripristinare una versione riproduce lo stesso render: stessi hash dei frame, non solo stessa EDL. Un ripristino seguito da un altro ripristino torna alla versione intermedia, e il journal conserva tutte e tre le voci.
+
+**Accettazione (E10).** Ripristinare una versione riproduce lo stesso render.
+
+---
+
+### E11. Inserti generativi (facoltativa, solo L2 con GPU)
+
+**Innesco.** Mai automatico. Si attiva solo se il doctor dichiara L2 con GPU, se l'utente lo chiede, e se il modello scelto passa il controllo di licenza e di requisiti.
+
+**Schema dei parametri.** `generative_insert`: `{model, model_sha256, licence_checked_at, prompt_own_words, duration, seed, synthetic: true, provenance}`. `synthetic` è già un campo dell'EDL 3 (F2-T10) e qui diventa obbligatorio.
+
+**Tetto.** Al più il 20% della durata del montaggio, che è una scelta di prodotto e non una soglia misurata: un inserto generato è un'assenza da dichiarare, non un montaggio da riempire. Un modello con licenza non commerciale non entra in un lavoro di committenza (stessa regola di FX-T06).
+
+**Implementazione.** Solo modelli open-weight, con licenza verificata e registrata in `LICENSES_MATRIX.md` alla data di integrazione e hash verificato secondo F17-T07. L'inserto entra nell'EDL con `synthetic=true` e nel file con un tag di container scritto dall'encoder, così il marcatore sopravvive all'export. C2PA non si adotta in questa versione: il referto lo dichiara come limite, invece di far passare un tag per una credenziale.
+
+**Ripiego.** Se il modello non c'è, se la GPU non c'è, se la licenza non è chiara o se i requisiti non sono soddisfatti, la voce va in `not_applied` con il motivo scritto. Non è un fallimento del piano: E11 è facoltativa per definizione.
+
+**Prova visiva.** Il frame dell'inserto con il marcatore letto dal file, non solo dal documento.
+
+**Test.** Se implementata: un inserto generato porta `synthetic=true` nell'EDL e il tag nel file, e un test rilegge entrambi dopo l'export. Se non implementata: il referto contiene `not_applied` con il motivo e il test verifica che la voce non sia vuota.
+
+**Accettazione (E11).** Non obbligatoria. Se non è realizzabile, va in `not_applied` con il motivo. Se è realizzabile, ogni inserto è marcato sintetico nell'EDL e nei metadati del file.
+
+---
+
+### E12. Esame esteso (incarichi 20-25)
+
+I criteri comuni restano quelli della sezione 6: controlli automatici verdi, punteggio del critico sopra la soglia fissata in F0, deliverable presenti con sha256, nulla di dichiarato e non eseguito, tre esecuzioni con esito coerente. Gli incarichi 20-25 si aggiungono ai 19 esistenti e non li sostituiscono: l'esame passa a 25 incarichi.
+
+20. Look Deck: spot di 15 secondi con 6 movimenti di camera nominati, palette presa dal registro, due esecuzioni con frame identici.
+21. Brand Connect: da un sito di prova locale a un montaggio con colori, logo e font corretti, nessuna richiesta fuori dal dominio.
+22. Clonazione della struttura: lo stesso scheletro applicato a due girati diversi, nessun contenuto del riferimento nell'output.
+23. Ispettore: 5 parametri di un titolo modificati dalla Review Room, con render incrementale che tocca solo gli stadi dipendenti.
+24. Montaggio a parole: 10 richieste di intento, misure nella direzione giusta su almeno 8.
+25. Varianti: 5 varianti di hook in batch, con la cache riusata e contata.
+
+### E13. Tracciamento, dipendenze e ordine
+
+| voce | fase | verdetto | dipendenze |
+|---|---|---|---|
+| E1 Look Deck | dopo F4 | da estendere (F4 ha il registro effetti, mancano movimenti, profili, lenti, LUT e ruota) | F4, F2-T10 (`preset_ref`, `stack`) |
+| E2 Prima i keyframe | F7, F9 | da creare | F7 (approvazione), F9 (proxy per produrre i frame) |
+| E3 Brand Connect | F10 | da creare | F10 (`brand_ref`), FX-T01..T06 per i font |
+| E4 Template per compito | F3, F19 | da estendere (F3 ha 54 template senza slot né multi-proporzione) | F3, F6 (ruoli degli asset) |
+| E5 Clonazione della struttura | F8, F13 | da estendere (F8 ha l'impronta, manca lo scheletro dei battiti) | F8, F13, F17 (cancellazione) |
+| E6 Identità fra clip | F6, F13 | da creare | F6, F13, F17 (`.vx-owned`), licenza del modello |
+| E7 Uscita modificabile | F14 | da estendere (F14 ha i commenti, manca l'ispettore) | F14, F0-T04, F0-T05 |
+| E8 Montaggio a parole | F7, F9 | da creare | F7 (intento), F9 (misura) |
+| E9 Varianti e pianificazione | F10, F11 | da estendere (F10 ha il multi-aspect, F11 la coda) | F10, F11, F0-T04 |
+| E10 Memoria di progetto | F14 | assorbito in parte (F0-T06 ha lo storico, F17 lo snapshot) | F0-T06, F14, F17 |
+| E11 Inserti generativi | facoltativa | da creare, non obbligatoria | L2 con GPU, licenza, F2-T10 (`synthetic`) |
+
+Ordine consigliato, senza spostare nulla di già pianificato: E1 subito dopo F4, perché è la voce che si vede di più e quella che costa meno in dipendenze; E2 dopo F7, perché senza l'approvazione non ha senso; E4 dopo E1, perché i template per compito e i look condividono il registro; E3 dopo F10; E5 ed E6 dopo F13; E7 ed E10 con F14; E8 con F9; E9 con F11; E11 per ultima e solo se resta hardware.
+
+### E14. Addendum al prompt (da incollare in coda alla sezione 9)
+
+L'Allegato E aggiunge F25 con le voci E1-E11 e gli incarichi 20-25, senza rinumerare F0-F24 né gli incarichi 1-19. Applica il Look Deck dopo F4 (almeno 40 movimenti di camera costruiti da ritaglio, scala e keyframe, pila massima di 3, profili 35mm, 8mm e DV, lenti, almeno 50 palette LUT, ruota di 8 emozioni versionata), il cancello dei keyframe prima di ogni render completo (3-6 frame approvati, eccezione solo con modalità autonoma dichiarata), il Brand Connect dal sito dell'utente (robots.txt, nessun login, una pagina più gli asset collegati, cache, `brand.json` con provenienza per ogni campo), i template per compito con slot, la clonazione della sola struttura (mai testo, musica, immagini o parlato del riferimento, cancellazione verificata), l'identità fra clip solo con consenso esplicito e vettori cancellati a fine job, l'ispettore della Review Room con patch e render incrementale, la tabella versionata del montaggio a parole, le varianti con cache e la pianificazione che si ferma per l'approvazione, la memoria di progetto visibile con ripristino, e gli inserti generativi solo se gratuiti, locali, con licenza verificata e sempre marcati sintetici. Crediti, abbonamenti, MCP o API a pagamento, clonazione o generazione di volti di persone reali non si adottano in nessun caso. Ogni voce dichiara innesco, parametri, tetto, implementazione, ripiego, prova visiva e test; ciò che non si applica va in `not_applied` con il motivo, e nessun numero di qualità si inventa: se manca la calibrazione si scrive «da calibrare» e si dice su quale corpus.

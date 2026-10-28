@@ -113,9 +113,9 @@ provvisorie (D010).
 | F2-T09 | W7 chiusura | suite golden per ogni effetto, documentazione, `SKILL.md` | ogni effetto ha un frame su disco; `SKILL.md` sotto 250 righe; suite verde | DONE `f028e1c` - 15 effetti, 34 frame, MAD 0.000 |
 | F2-T10 | W8 schema 1.1 | EDL 3 `vx.edl3/1.1`, campi nuovi tutti opzionali con default: `preset_ref` (preset con nome risolto da registro), `stack` (max 3 movimenti di camera con regola di composizione), `template_ref` + `exposed_params` (il documento salva solo i valori), `synthetic`, `provenance` per ogni scelta, `attribution` per le risorse di terzi (licenza, autore, fonte, URL), `brand_ref`, `variant` (id, progetto di origine, asse variato), `ext` per i campi `x-` conservati intatti | un test per ogni campo, comprese le violazioni: quattro movimenti nello `stack` rifiutati con codice, un parametro fuori intervallo rifiutato, `attribution` incompleta rifiutata in regime pubblico, un campo `x-` sconosciuto conservato al round-trip; i documenti `/1` restano validi; i 34 frame golden restano identici byte per byte | DONE - 16 assert in `tests/test_edl3_v11.py`: i nove campi validano e tornano dal round-trip, `x-` conservato a livello clip e documento, `/1` accettato e non aggiornato, sette codici di rifiuto esercitati (STACK_TOO_DEEP, STACK_SHAPE, EXPOSED_PARAM_SHAPE, PROVENANCE_SHAPE, ATTRIBUTION_SHAPE, EXT_KEY, VARIANT_SHAPE) |
 | F2-T11 | W8 compatibilita' additiva | nessun migratore: il lettore accetta `/1` e `/1.1`, conserva i campi `x-` sconosciuti, e i documenti `/1` reali restano validi | un documento `/1` reale valida e produce gli stessi frame di prima; un `/1.1` fa round-trip conservando un campo `x-sconosciuto`; i 34 frame golden restano **identici byte per byte** (se cambiano e' un bug, non una tolleranza); due giri consecutivi identici | DONE - il golden EDL 3 resta verde: **15 effetti, 34 frame, MAD 0.000 su ogni effetto**, 8,1 s; i documenti `/1` validano e il lettore accetta `/1` e `/1.1`. Nessun migratore: la modifica è additiva (D028) |
-| F2-T12 | W8 backend e regola di scelta | ogni voce del registro dichiara backend e regola per numero di keyframe e durata | un test generato da `EFFECT_REGISTRY` prova che nessuna voce resta senza regola: <=3 keyframe -> expr, oltre -> sendcmd, overlay per i testi; una voce senza regola fa fallire il test | TODO |
-| F2-T13 | W8 speed ramp e limiti | politica audio dello speed ramp nel contratto e tetto dichiarato per reverse e freeze | la politica (atempo a scalini, pitch mantenuto) e' in DECISIONS e il test prova che il picco spettrale resta entro la tolleranza dichiarata; reverse o freeze oltre il tetto falliscono con un codice che nomina il tetto | TODO |
-| F2-T14 | W8 fetta verticale v2 | un documento minimo con un effetto a 2 keyframe e una transizione, dal validatore al frame di riferimento | il documento valida, rende e produce un frame di riferimento byte-identico in due esecuzioni; nessuna ondata successiva parte prima che questo sia verde | TODO |
+| F2-T12 | W8 backend e regola di scelta | ogni voce del registro dichiara backend e regola per numero di keyframe e durata | un test generato da `EFFECT_REGISTRY` prova che nessuna voce resta senza regola: <=3 keyframe -> expr, oltre -> sendcmd, overlay per i testi; una voce senza regola fa fallire il test | DONE - `edl3.select_backend(kind, keyframe_count, duration)` è la regola unica; 46 assert in `tests/test_edl3_backend_rule.py` la confrontano con la scelta del renderer su ogni voce del registro (1, 2, 3, 4, 5 e 6 keyframe): nessuna divergenza, soglia 3 allineata a `SENDCMD_THRESHOLD`, testo → `overlay`, tipo ignoto → `EFFECT_UNKNOWN` |
+| F2-T13 | W8 speed ramp e limiti | politica audio dello speed ramp nel contratto e tetto dichiarato per reverse e freeze | la politica (atempo a scalini, pitch mantenuto) e' in DECISIONS e il test prova che il picco spettrale resta entro la tolleranza dichiarata; reverse o freeze oltre il tetto falliscono con un codice che nomina il tetto | DONE - D029 registrata: rampa = `atempo` a scalini con pitch mantenuto (4x → [2,2], 0,25x → [0.5,0.5]); tetti letti dal codice, 30,0 s per reverse e 300,0 s per freeze, rifiutati con `REVERSE_TOO_LONG`/`FREEZE_TOO_LONG` che nominano il tetto; 25 assert in `tests/test_edl3_ramp_policy.py` |
+| F2-T14 | W8 fetta verticale v2 | un documento minimo con un effetto a 2 keyframe e una transizione, dal validatore al frame di riferimento | il documento valida, rende e produce un frame di riferimento byte-identico in due esecuzioni; nessuna ondata successiva parte prima che questo sia verde | DONE - 12 assert in `tests/test_edl3_slice_v2.py`: un documento `/1.1` con un effetto a due keyframe e una transizione valida, rende, e lo stesso frame estratto da due render separati ha lo stesso sha256; il golden resta 15 effetti, 34 frame, MAD 0.000 |
 
 ## F3 — Motion Studio (Chromium)
 
@@ -252,3 +252,76 @@ all'utente e saper scegliere da sola quando nessuno risponde.
 | FX-T04 | Scelta autonoma: regola deterministica quando l'utente non risponde | brief aperto + nessuna risposta = font scelto dal profilo con motivazione dichiarata; licenza non commerciale mai scelta in autonomia | DONE `a67d03d` — decide() deterministico, solo commerciali, None con motivo |
 | FX-T05 | Integrazione nel Creative Brief e nel render ASS | il font scelto arriva a `fontsdir` e al `Fontname` senza sostituzioni; sostituzione = `QCFailure` | DONE `1deec1a` — `fonts_dir` nel render, MAD 5.2432 prova che il font e usato |
 | FX-T06 | Licenze: matrice e attribuzione | ogni font usato ha licenza, fonte e data in `LICENSES_MATRIX.md`; un font senza licenza commerciale non entra in un lavoro di committenza | DONE `1deec1a` — matrice generata, personal e unknown rifiutati |
+
+## F25 — Livello "wow" (Allegato E)
+
+Fase aggiunta, non sostituisce nulla: F0-F24 restano dove sono, come gli incarichi
+1-19. Le voci E1-E11 e gli incarichi 20-25 stanno in `PLAN/MASTER_PLAN.md`,
+Allegato E. L'esame passa da 19 a 25 incarichi: la riga «19 incarichi» della
+sezione Esame finale resta come storia e vale 25.
+
+Qui sono decomposte solo E1-E4, che sono conoscibili adesso. E5-E11 restano al
+livello della consegna con la loro accettazione, come vuole D003: decomporle senza
+avere in mano F8, F13, F14 e la licenza del modello di identità produrrebbe task
+inventati. Entrano nel dettaglio all'ingresso delle fasi che le costruiscono.
+
+| ID | Task | Accettazione binaria | Stato |
+|---|---|---|---|
+| F25-T01 | E1 registro dei movimenti di camera: 40+ preset nominati costruiti da `crop`, `scale` e keyframe (push, pull, frusta, orbita finta, a mano, gru finta e le altre famiglie), con famiglia, parametri, tetto, innesco e prova visiva per voce | il registro valida al 100% con 40 o più voci, ognuna con famiglia, schema dei parametri, tetto e innesco dichiarati; una voce senza innesco fa fallire il validatore; una pila di 4 movimenti è rifiutata con `STACK_TOO_DEEP`; un nome ignoto è rifiutato con il nome nel messaggio | TODO |
+| F25-T02 | E1 determinismo e frame di riferimento dei preset: `preset_ref` risolto da registro, golden per ogni preset, striscia di tre istanti per i movimenti | due esecuzioni consecutive danno lo stesso frame hash per ogni preset; il numero di golden su disco coincide con il numero di voci del registro; un preset senza golden fa fallire il test | TODO |
+| F25-T03 | E1 profili di camera 35mm, 8mm, DV con grana, gate weave, halation e ratio indipendenti | ogni profilo dichiara i quattro parametri con dominio e default; il gate weave è deterministico a parità di seme (due giri, hash identici); un `ratio` fuori dai valori ammessi è rifiutato con il valore; ogni profilo ha un golden frame | TODO |
+| F25-T04 | E1 lenti: vignetta, aberrazione cromatica, bokeh finto, distorsione, ognuna con schema, tetto e ripiego | ogni lente ha un test di innesco e un golden; una distorsione oltre il tetto è rifiutata con il numero; il bokeh senza mappa di profondità produce il blur mascherato dichiarato con `fallback=true` e non un errore non gestito; due lenti in pila passano, due distorsioni insieme sono rifiutate con il nome | TODO |
+| F25-T05 | E1 libreria di almeno 50 palette LUT 3D con categoria, provenienza e licenza | il registro conta 50 o più voci e ogni voce ha `attribution` completa (licenza, autore, fonte); una LUT assente dal disco produce il ripiego `eq` più `colorbalance` con `fallback=true`; `protect_skin` misura la distanza su una toppa di pelle e limita la forza, con la tolleranza «da calibrare» sul corpus con volti di F6; ogni palette ha un frame di riferimento | TODO |
+| F25-T06 | E1 ruota delle 8 emozioni come tabella versionata (ritmo, grading, musica, SFX) | la tabella ha un numero di versione e 8 voci; ogni voce dichiara i quattro assi; una voce con un asse mancante è rifiutata nominando l'asse; la versione usata è citata nel Creative Brief e nell'EDL; un foglio di 8 riquadri sulla stessa clip è su disco | TODO |
+| F25-T07 | E2 cancello dei keyframe prima di ogni render completo (3-6 frame approvati) | senza approvazione il render completo è rifiutato con `KEYFRAMES_NOT_APPROVED` e il numero mancante; con approvazione il render parte; una richiesta fuori da 3-6 è rifiutata con il numero; modificare i keyframe dopo l'approvazione riapre il cancello (hash diverso = cancello chiuso) | TODO |
+| F25-T08 | E2 modalità autonoma dichiarata nel brief come unica eccezione al cancello | con `autonomous` dichiarato e motivato il render parte e il referto ripete la dichiarazione in chiaro; senza dichiarazione e senza approvazione il render resta rifiutato; il test fallisce se l'eccezione si applica con `autonomous` assente dal documento | TODO |
+| F25-T09 | E3 lettore di brand con `robots.txt` rispettato, nessun login, una pagina più gli asset collegati, cache per hash dell'URL | con un server di prova locale il registro delle richieste mostra zero richieste fuori dal dominio; una pagina esclusa da `robots.txt` è rifiutata citando la regola; la seconda esecuzione fa zero richieste; una pagina irraggiungibile produce `brand_unavailable` con il motivo, non un traceback | TODO |
+| F25-T10 | E3 estrazione in `brand.json`: colori dominanti con quota, logo, font CSS, testi, prezzi, provenienza per ogni campo | `brand.json` valida contro lo schema; una pagina di prova nota produce i colori e i font attesi; ogni campo presente ha provenienza (selettore, file o dato strutturato); un colore senza provenienza fa fallire la validazione | TODO |
+| F25-T11 | E3 suite di pagine di prova e cablaggio al render con `brand_ref` | tre pagine di prova (brand completo, `robots.txt` che esclude, asset su altro dominio) danno tre esiti binari distinti; il render usa il logo e la palette e il test lo prova con MAD sul frame, non solo sul JSON; un `brand_ref` assente è rifiutato con il codice | TODO |
+| F25-T12 | E4 registro dei template per compito con slot (1..8) e `exposed_params` | ogni template dichiara slot con tipo e ruolo, parametri esposti con dominio, `layouts` per proporzione e una famiglia; un template senza slot è rifiutato; un valore fuori dominio è rifiutato con il nome del parametro; un template che non passa il linter non entra nel conteggio | TODO |
+| F25-T13 | E4 riempimento degli slot dai ruoli della MaterialMap | un progetto con 3 asset riempie 3 slot; un asset del tipo sbagliato è rifiutato nominando lo slot; il frame prova che l'asset dell'utente è davvero nel template (MAD sulla zona dello slot), non solo che il parametro è stato passato | TODO |
+| F25-T14 | E4 più proporzioni da un progetto con `layouts` dichiarati e cache condivisa | da un progetto escono 3 proporzioni; un template che esiste solo in orizzontale dichiara la degradazione invece di ritagliare in silenzio; il test conta gli stadi eseguiti e prova il riuso della cache fra le proporzioni | TODO |
+| F25-T15 | E4 cancello di curatela: un template entra solo con golden, parametri esposti, linter verde e critico che approva | un file di template non curato è rifiutato dal registro con il motivo; il validatore del registro riporta zero violazioni; il conteggio dichiarato non include varianti dello stesso disegno | TODO |
+
+### F25 al livello della consegna (D003): E5-E11
+
+Restano qui con la loro accettazione e vengono decomposte all'ingresso della fase
+che le costruisce. Nessuna riga `TODO` finché non sono conoscibili.
+
+- **E5 Clonazione della struttura (F8, F13).** Accettazione: un test prova che
+  nessun audio e nessun frame del riferimento arrivano all'output e che la distanza
+  dall'impronta supera la soglia anti-copia. Scheletro di battiti, durate, tipi di
+  inquadratura, posizioni di testo e CTA, cadenza dei tagli; nel fingerprint solo
+  numeri e note con parole proprie; cancellazione verificata della cartella
+  temporanea. Soglia «da calibrare» sul corpus di coppie riferimento-risultato di
+  F20-T01.
+- **E6 Identità fra clip (F6, F13).** Accettazione: test di cancellazione dei
+  vettori e test che con l'opzione spenta nessun vettore viene calcolato. SFace o
+  equivalente con licenza verificata; consenso nel documento; vettori solo dentro
+  il progetto, cancellati a fine job, nessuna banca dati fra progetti.
+- **E7 Uscita modificabile (F14).** Accettazione: una modifica dall'ispettore
+  produce una patch e un render che tocca solo gli stadi dipendenti. Campi esposti
+  soltanto; un campo non esposto è rifiutato con `FIELD_NOT_EXPOSED`.
+- **E8 Montaggio a parole (F7, F9).** Accettazione: 10 richieste di intento, almeno
+  8 nella direzione attesa. Tabella versionata richiesta → misura; al più 3 assi per
+  intento; il critico verifica la direzione e respinge la patch che non la muove.
+- **E9 Varianti e pianificazione (F10, F11).** Accettazione: 5 varianti riusano la
+  cache; un job pianificato di prova gira senza sorveglianza e si ferma in
+  `waiting_approval`. Una produzione pianificata non pubblica mai senza
+  approvazione.
+- **E10 Memoria di progetto visibile (F14).** Accettazione: ripristinare una
+  versione riproduce lo stesso render (hash dei frame, non solo EDL). Storia di
+  EDL, asset e brief con ripristino reversibile, sopra il journal di F0-T06.
+- **E11 Inserti generativi (facoltativa, solo L2 con GPU).** Accettazione: se non è
+  realizzabile va in `not_applied` con il motivo; se è realizzabile ogni inserto è
+  marcato sintetico nell'EDL e nei metadati del file. Solo modelli open-weight con
+  licenza e requisiti verificati; al più il 20% della durata; C2PA non adottato e
+  dichiarato come limite.
+
+### Esame e perimetro di F25
+
+L'esame passa a 25 incarichi: 20 Look Deck, 21 Brand Connect, 22 Clonazione della
+struttura, 23 Ispettore, 24 Montaggio a parole, 25 Varianti. Non si adottano
+crediti, abbonamenti, MCP o API a pagamento, clonazione o generazione di volti di
+persone reali: nessuna riga di F25 può chiudersi con una di queste dipendenze, e il
+test di curatela della fase lo verifica.
