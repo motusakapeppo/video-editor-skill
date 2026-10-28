@@ -255,7 +255,7 @@ Accettazione: raggiunti gli obiettivi di velocità del punto 5 di A3 (o ricalibr
 
 Consegna: originali aperti in sola lettura e mai scritti; scritture solo in directory con file marcatore .vx-owned e cancellazioni solo lì; cestino con quarantena di 7 giorni per i file della skill (il materiale di terzi del ReferenceLab si cancella subito); controllo dello spazio prima di ogni render, con rifiuto se non basta; journal write-ahead per EDL e ledger; snapshot periodico dello stato di progetto (EDL, MaterialMap, knowledge, senza i media); verifica degli sha256 all'apertura e prima della consegna per scoprire il bit-rot; dry-run per ogni operazione distruttiva; limiti di tempo, memoria e CPU per ogni sottoprocesso; test di fuzz con file multimediali corrotti o ostili; catena di fornitura con hash e checksum dei modelli.
 
-Accettazione: dopo 50 uccisioni casuali del processo (kill -9 durante render e scrittura) gli sha256 delle sorgenti sono invariati, nessun file di progetto è corrotto e il lavoro riprende dall'ultimo checkpoint; un test con una directory esca prova che nulla viene cancellato fuori dalle directory marcate; 200 file di fuzz non causano errori non gestiti.
+Accettazione: dopo 50 uccisioni casuali del processo (terminazione reale: `taskkill /F /T` su Windows, `SIGKILL` su POSIX, con l'albero dei figli, durante render e scrittura) gli sha256 delle sorgenti sono invariati, nessun file di progetto è corrotto e il lavoro riprende dall'ultimo checkpoint; un test con una directory esca prova che nulla viene cancellato fuori dalle directory marcate; 200 file di fuzz non causano errori non gestiti.
 
 #### F18. Qualità di consegna e torneo A/B
 
@@ -271,7 +271,7 @@ Accettazione: dopo 10 lavori valutati, il benchmark mostra che l'uso delle ricet
 
 ### A5. Esame esteso (incarichi 13-19)
 
-13. Prova di crash: kill -9 a metà render, ripresa, sorgenti intatti, nessun file orfano.
+13. Prova di crash: terminazione reale del processo a metà render (con i figli), ripresa, sorgenti intatti, nessun file orfano.
 14. Macchina senza GPU: gli incarichi 2 e 6 completano, e il referto indica i livelli usati.
 15. Montaggio a match cut su 20 clip, come da F13.
 16. Transizione scritta al volo in GLSL, come da F15.
@@ -302,6 +302,8 @@ Un modulo (research/trend\_radar) che parte da solo all'inizio di ogni lavoro qu
 
 ### B2. Fonti, distinte per tipo di segnale
 
+> **NON SEGUIRE: superato dall'Allegato D.** Il testo resta per memoria storica.
+
 Ogni fonte insegna una cosa diversa, e la skill deve saperlo:
 
 - Segnali di mercato (quali temi funzionano, durate tipiche, schemi dei titoli, hashtag, velocità di crescita): ricerca web (articoli, linee guida ufficiali, rapporti) e YouTube Data API v3. L'API restituisce metadati (titolo, durata, visualizzazioni, like, data, categoria, miniatura), non i file video: da lì non si ricava la struttura del montaggio.
@@ -322,6 +324,8 @@ Uno TrendSnapshot per piattaforma e genere: durate tipiche, schemi dei titoli, h
 
 ### B5. Passi automatici di ogni lavoro
 
+> **NON SEGUIRE: superato dall'Allegato D.** Il testo resta per memoria storica.
+
 1. Se esiste uno snapshot valido per piattaforma e genere, lo usa.
 2. Altrimenti lancia la ricerca (web, e API se c'è la chiave) con limite di tempo e di quota.
 3. Per la struttura di montaggio usa le impronte di stile già in knowledge base e, se servono, analizza in locale nel ReferenceLab video con licenza aperta, con cancellazione verificata.
@@ -330,6 +334,8 @@ Uno TrendSnapshot per piattaforma e genere: durate tipiche, schemi dei titoli, h
 
 ### B6. Accettazione (F8 bis) - SUPERATO da C
 
+> **NON SEGUIRE: superato dall'Allegato C.** Il testo resta per memoria storica.
+
 - Con un server API simulato: la quota viene rispettata, la cache funziona (la seconda richiesta non fa nessuna chiamata) e la chiave non compare in nessun file generato (test che la cerca nei log, nei referti e nel progetto).
 - Senza chiave: il lavoro si completa e il referto dichiara la fonte saltata.
 - Un test di rete con elenco dei domini consentiti prova che non parte nessuna richiesta verso Instagram o TikTok e che non avviene nessun login.
@@ -337,6 +343,8 @@ Uno TrendSnapshot per piattaforma e genere: durate tipiche, schemi dei titoli, h
 - I file transitori vengono cancellati con verifica.
 
 ### B7. Addendum al prompt (da incollare in coda alla sezione 9) - SUPERATO da C
+
+> **NON SEGUIRE: superato dall'Allegato C.** Il testo resta per memoria storica.
 
 Il Trend Radar (Allegato B) sostituisce ogni riferimento alla ricerca sui social. Nessun login, nessuna credenziale, nessun accesso automatizzato a Instagram o TikTok, nessun download da piattaforme che lo vietano. La YouTube Data API si usa solo con la chiave in VX\_YOUTUBE\_API\_KEY: la chiave non compare mai in repository, log, referti o prompt, e senza chiave si salta la fonte dichiarandolo. Il Trend Radar parte da solo a ogni lavoro con piattaforma, genere o tema, come descritto in B5. Implementalo in F8 e verifica tutto B6 prima di chiudere la fase.
 
@@ -359,6 +367,8 @@ Ogni fonte è un provider con una sonda di capacità. La skill non dà nulla per
 Ogni segnale porta fonte, data, livello e confidenza.
 
 ### C3. Mappa dei provider noti - SUPERATO IN PARTE da D (TikTok, Instagram, fornitori terzi) (da verificare dal vivo: è il compito della sonda)
+
+> **NON SEGUIRE: superato dall'Allegato D** per TikTok, Instagram e fornitori terzi.
 
 - YouTube. Data API: S2 e S1 (metadati e miniature). Gemini su URL pubblico: S4 approssimato, gratuito con un tetto giornaliero di ore di video, previa lettura dei termini del livello gratuito.
 - TikTok. Creative Center pubblico: S1 sugli hashtag (gli altri feed risultano ridotti in un aggiornamento recente e vanno verificati). oEmbed ufficiale su un URL di video: S3 (didascalia con hashtag, autore, miniatura, nome del suono), senza metriche e senza file. Commercial Content e Ad Library: annunci, non contenuti organici, con accesso all'API su domanda. Research API: riservata a istituzioni accademiche e non profit, quindi non disponibile.
