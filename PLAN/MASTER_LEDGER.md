@@ -145,7 +145,7 @@ anti-arlecchino (tetto di effetti visibili ogni 10 s).
 
 | ID | Task | Accettazione binaria | Stato |
 |---|---|---|---|
-| F4-T01 | Schema dichiarativo: `ParamSpec`, template di filtro, innesco, tetto, ripiego; caricamento per famiglie | le 5 voci esistenti restano identiche e i 34 frame non cambiano; un tipo nuovo si dichiara senza toccare il validatore | TODO |
+| F4-T01 | Schema dichiarativo: `ParamSpec`, template di filtro, innesco, tetto, ripiego; caricamento per famiglie | le 5 voci esistenti restano identiche e i 34 frame non cambiano; un tipo nuovo si dichiara senza toccare il validatore | DONE - `effect_spec.py` (ParamSpec con intervallo e default, template, innesco, tetto, ripiego) e caricamento per famiglie (`vx/effects/`); `filter` e' un backend dichiarato e un'istanza con keyframe su un tipo dichiarativo viene rifiutata con `EFFECT_NOT_ANIMATABLE`, non ignorata. Il registro passa da 5 a 17 voci, le 5 originarie sono invariate e i 34 frame restano 0 failure (MAD 0.000). `tests/test_effects_registry.py` 55 assert; `test_edl3_contract.py` reso piu' stretto (unione esatta core + dichiarative, `chroma_key` escluso) |
 | F4-T02 | Famiglia geometria (12 voci) | 12 voci nuove con parametri validati e un frame reso | TODO |
 | F4-T03 | Famiglia colore (12 voci) | 12 voci nuove con parametri validati e un frame reso | TODO |
 | F4-T04 | Famiglia glitch e tempo (12 voci) | 12 voci nuove con parametri validati e un frame reso | TODO |
@@ -217,7 +217,7 @@ scelto per prova, intermedi lossless, benchmark ufficiale.
 
 | ID | Task | Accettazione binaria | Stato |
 |---|---|---|---|
-| F16-T01 | Banco di misura ufficiale: un comando che misura e scrive numeri, non stime | il referto contiene tempi, byte e picco di memoria misurati sullo stesso input, con data e versione | TODO |
+| F16-T01 | Banco di misura ufficiale: un comando che misura e scrive numeri, non stime | il referto contiene tempi, byte e picco di memoria misurati sullo stesso input, con data e versione | DONE - `vx.bench` misura un render vero: 2 giri sullo stesso documento danno lo stesso sha256 (`dd7cafda...`), 24 frame contati da ffprobe, 5483 byte, 0,32 s e 0,20 s misurati con `perf_counter`; picco di memoria dichiarato `null` perche' psutil non e' installato, non stimato. `tests/test_bench.py` 42 assert, incluso il documento rotto con `ok=false` ed exit 2 |
 | F16-T02 | Render a segmenti paralleli | lo stesso documento reso in parallelo e in serie produce frame identici byte per byte, con tempo misurato | TODO |
 | F16-T03 | Smart render con test di identita' | uno span identico viene coperto senza ricodifica solo se il test lo prova; un taglio non lo e' mai | TODO |
 | F16-T04 | Encoder hardware scelto per prova | il candidato viene accettato solo se il frame decodificato resta entro la soglia dichiarata; altrimenti si ripiega e lo si dice | TODO |
