@@ -43,6 +43,8 @@ stage dipendenti (il test conta gli stage eseguiti); suite verde.
 
 ### F0-T09 BLOCKED: servono annotazioni umane
 
+**T09 - passata minima fatta (28/10/2026):** sei clip (c01..c06, copie in `D:\video_work\t09\clips`) giudicate tutte "abbastanza buone" dall'utente, con `D:\video_work\t09\giudizio_minimo.json` che accosta le sue parole alle misure. Il campione **non separa** (un solo giudizio per tutte), quindi nessuna soglia diventa non provvisoria; la conseguenza utile e' D036: la qualita' ordina, non scarta. Blocco ancora aperto per la taratura vera: servono almeno 20 clip con giudizi diversi.
+
 Il corpus esiste e la derivazione funziona: `tests/measure_corpus.py` misura 9 clip in
 `tests/fixtures/corpus_stats.json` con `corpus_hash`, e `registry._load_thresholds()`
 ne ricava i percentili per asse con provenienza. Quello che manca non è codice: è il

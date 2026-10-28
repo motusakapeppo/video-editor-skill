@@ -530,3 +530,25 @@ Si decide:
    finestra di 10 s, codice duro `EFFECT_DENSITY`.
 3. La differenza e' deliberata: il tetto nuovo misura **cio' che si vede nel montaggio**, non
    **quante varianti il piano ha immaginato**. Immaginare e' gratis; riempire lo schermo no.
+
+## D036 - La qualita' misura e ordina, non scarta (2026-10-28)
+
+**Stato: attuata nel significato delle soglie, non ancora nel codice.**
+
+Contesto. La passata minima di T09 ha dato sei clip su sei giudicate "abbastanza buone"
+dall'utente, mentre le misure si separavano nettamente: luminosita' media da 40 a 121, pixel
+sotto il nero dallo 0,06% al 50,7%, tremolio da 2,0 a 17,9 pixel per fotogramma, loudness su
+7,2 LU di escursione. La clip con meta' fotogramma schiacciato nel nero e quella che trema di
+diciotto pixel sono state giudicate entrambe accettabili.
+
+Si decide:
+
+1. Le misure di qualita' (esposizione, tremolio, rumore, loudness) **non respingono** una
+   clip. Servono a ordinarla, a scegliere fra due alternative e a motivare una scelta nel
+   referto.
+2. Il rifiuto automatico resta riservato ai difetti **strutturali**: file illeggibile, durata
+   zero, nessun fotogramma, sorgente mancante.
+3. Quando una clip e' tecnicamente debole ma l'utente l'ha giudicata buona, vince il giudizio:
+   si usa la clip e si dichiara la debolezza nel referto, invece di scartarla.
+4. Le soglie di qualita' restano **preliminari**: sei clip con un giudizio solo non separano
+   nulla. Servono almeno venti clip con giudizi diversi per dichiararle non provvisorie.
