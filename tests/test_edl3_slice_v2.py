@@ -110,10 +110,10 @@ def main() -> int:
 
         try:
             doc = build(source)
-            print("\n-- (a) the smallest /1.1 document")
+            print("\n-- (a) the smallest declarative document")
             check(
-                "the document declares vx.edl3/1.1",
-                doc.version == "vx.edl3/1.1",
+                "the document declares a version the reader accepts",
+                doc.version in edl3.EDL3_VERSIONS,
                 doc.version,
             )
             check(

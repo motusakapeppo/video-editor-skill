@@ -67,9 +67,9 @@ from .effect_spec import (
 )
 from .effects import family_entries
 
-EDL3_VERSION = "vx.edl3/1.1"
+EDL3_VERSION = "vx.edl3/1.2"
 #: Accepted schema versions: an additive minor keeps every previous document valid.
-EDL3_VERSIONS = ("vx.edl3/1", "vx.edl3/1.1")
+EDL3_VERSIONS = ("vx.edl3/1", "vx.edl3/1.1", "vx.edl3/1.2")
 #: Declared types a template parameter may expose.
 EXPOSED_TYPES = ("string", "number", "int", "color", "bool")
 #: What a provenance record may point at.
@@ -1549,6 +1549,10 @@ class Timeline3:
     ducking: Optional[Ducking3] = None
     #: Reference to the project's brand.json.
     brand_ref: Optional[str] = None
+    #: Named genre profile from :mod:`vx.profiles` (D033). Declared data: no
+    #: renderer, compiler or effect branches on it, and a document without it
+    #: behaves exactly as before.
+    profile_ref: Optional[str] = None
     #: ``{"id", "source_project", "axis"}`` for an A/B variant of a project.
     variant: Optional[Dict[str, Any]] = None
     #: Unknown ``x-`` fields, preserved verbatim across a round trip.
@@ -1603,6 +1607,9 @@ class Timeline3:
         if isinstance(self.ducking, Mapping):
             self.ducking = Ducking3.from_dict(self.ducking)
         self.brand_ref = None if self.brand_ref is None else str(self.brand_ref)
+        self.profile_ref = (
+            None if self.profile_ref is None else str(self.profile_ref)
+        )
         self.variant = (
             dict(self.variant) if isinstance(self.variant, Mapping) else None
         )
@@ -1725,6 +1732,7 @@ class Timeline3:
                     add("EXT_KEY", f"{where}.ext", f"{key!r} must start with x-")
         if self.brand_ref is not None and not self.brand_ref.strip():
             add("BRAND_REF_SHAPE", "brand_ref", "empty reference")
+        self._validate_profile_ref(add)
         if self.variant is not None:
             for key in ("id", "source_project", "axis"):
                 if not str(self.variant.get(key) or "").strip():
@@ -1732,6 +1740,33 @@ class Timeline3:
         for key in self.ext:
             if not str(key).startswith("x-"):
                 add("EXT_KEY", "ext", f"{key!r} must start with x-")
+
+    def _validate_profile_ref(self, add) -> None:
+        """A declared genre profile must resolve; nothing else reads it here.
+
+        The registry is imported on demand so a document without a profile never
+        loads it (D033: the engine stays genre-agnostic).
+        """
+        if self.profile_ref is None:
+            return
+        if not self.profile_ref.strip():
+            add("PROFILE_UNKNOWN", "profile_ref", "empty profile reference")
+            return
+
+        if self.version != "vx.edl3/1.2":
+            add(
+                "SCHEMA_VERSION",
+                "profile_ref",
+                f"profile_ref needs vx.edl3/1.2, the document declares {self.version!r}",
+            )
+            return
+
+        from . import profiles  # noqa: PLC0415 - the registry is read, never imported
+
+        try:
+            profiles.resolve(self.profile_ref)
+        except EDLError as exc:
+            add("PROFILE_UNKNOWN", "profile_ref", exc.detail)
 
     def _validate_clips(self, add, depth: int, problems: List[Dict[str, str]]) -> None:
         declared = [
@@ -2257,6 +2292,8 @@ class Timeline3:
         }
         if self.brand_ref:
             data["brand_ref"] = self.brand_ref
+        if self.profile_ref:
+            data["profile_ref"] = self.profile_ref
         if self.variant:
             data["variant"] = dict(self.variant)
         data.update(self.ext)
@@ -2300,6 +2337,7 @@ class Timeline3:
                 else Ducking3.from_dict(data["ducking"])
             ),
             brand_ref=data.get("brand_ref"),
+            profile_ref=data.get("profile_ref"),
             variant=data.get("variant"),
             ext=ext,
         )

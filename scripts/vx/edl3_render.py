@@ -157,6 +157,7 @@ DIALOGUE_FADE_SEC = 0.012
 HARD_CODES = frozenset(
     {
         "SCHEMA_VERSION",
+        "PROFILE_UNKNOWN",
         "FPS_INVALID",
         "SIZE_INVALID",
         "TIMELINE_EMPTY",

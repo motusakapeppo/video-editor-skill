@@ -94,8 +94,8 @@ def codes(doc: dict) -> list:
 def main() -> int:
     check(
         "0. the schema moved to an additive minor",
-        edl3.EDL3_VERSION == "vx.edl3/1.1"
-        and set(edl3.EDL3_VERSIONS) == {"vx.edl3/1", "vx.edl3/1.1"},
+        edl3.EDL3_VERSION in edl3.EDL3_VERSIONS
+        and {"vx.edl3/1", "vx.edl3/1.1"} <= set(edl3.EDL3_VERSIONS),
         edl3.EDL3_VERSION,
     )
     check("a. a /1 document validates", codes(document()) == [], codes(document()))
