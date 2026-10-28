@@ -13,6 +13,8 @@ Data: 27/10/2026.
 | D-5 | «Aggiungi il test per il modulo di lettura web» | Il modulo **non esiste**: F8 (Trend Radar) non è iniziata | nessun modulo di rete in `scripts/vx`; `tests/test_events.py` prova solo l'assenza di import di rete | Registrato come task di F8: il test nasce col modulo, non prima |
 | D-6 | «schema `vx.edl3/2`» e, nello stesso testo, «migratore 3.0 → 3.1» | Contraddizione: lo schema attuale è **`vx.edl3/1`**. La politica proposta dice «campi opzionali = aumento minore senza migratore» | `scripts/vx/edl3.py:3` dichiara `vx.edl3/1` | Proposta `vx.edl3/1.1`: additiva, il lettore accetta `/1` e `/1.1`, **nessun migratore** (vedi sotto) |
 | D-7 | «sezione 5 livello D» | Non esiste un «livello D»: i livelli sono **L0, L1, L2** | `PLAN/MASTER_PLAN.md:209` | Nessuna correzione necessaria per quel motivo |
+| D-8 | «la dissolvenza incrociata è una transizione disponibile» | `TRANSITION_KINDS` elenca `crossfade`, ma il compilatore la rifiuta: `implemented: ['fade_in', 'fade_out']` | montaggio del vivo: `UNSUPPORTED_TRANSITION: transition kind 'crossfade' is not implemented (clips[27])` | o si implementa o si toglie dal contratto; intanto il montaggio usa tagli secchi |
+| D-9 | «la dimensione del canvas si legge dal file» | `ffprobe` riporta la dimensione **codificata** (1920x1080), ma i file dei live hanno un display matrix che li ruota: il contenuto e' **1080x1920** | primo render a 1920x1080: contenuto verticale con bande nere laterali; misurato sui tre file, poi rifatto a 1080x1920 e il contenuto riempie il fotogramma | la rotazione va letta prima di scegliere il canvas: task per F6 (comprensione del materiale) |
 
 ## Sulla D-6, la decisione che propongo
 
