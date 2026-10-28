@@ -81,7 +81,9 @@ def run(*args: str) -> subprocess.CompletedProcess:
 
 def git(fmt: str) -> str:
     done = subprocess.run(
-        ["git", "show", "-s", f"--format={fmt}"],
+        ["git", "log", "-1", f"--format={fmt}", "--",
+         "PLAN/MASTER_PLAN.md", "PLAN/MASTER_LEDGER.md", "PLAN/ANNEX_F.md",
+         "PLAN/DECISIONS_PATCH.md", "PLAN/DISCREPANZE.md"],
         cwd=str(ROOT),
         capture_output=True,
         text=True,

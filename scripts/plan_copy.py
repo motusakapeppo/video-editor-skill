@@ -92,8 +92,23 @@ def header(commit: Optional[str]) -> List[str]:
     ]
 
 
+#: The files the document is generated FROM. The header must cite the commit that last
+#: changed one of them: citing HEAD would make the document stale the moment it is committed,
+#: because committing it moves HEAD.
+SOURCE_PATHS = (
+    "PLAN/MASTER_PLAN.md",
+    "PLAN/MASTER_LEDGER.md",
+    "PLAN/ANNEX_F.md",
+    "PLAN/DECISIONS_PATCH.md",
+    "PLAN/DISCREPANZE.md",
+)
+
+
 def git_show(fmt: str, commit: Optional[str] = None) -> str:
-    command = ["git", "show", "-s", f"--format={fmt}", commit or "HEAD"]
+    if commit:
+        command = ["git", "show", "-s", f"--format={fmt}", commit]
+    else:
+        command = ["git", "log", "-1", f"--format={fmt}", "--", *SOURCE_PATHS]
     try:
         done = subprocess.run(
             command,
