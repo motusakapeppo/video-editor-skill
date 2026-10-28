@@ -70,6 +70,10 @@ from .effects import family_entries
 EDL3_VERSION = "vx.edl3/1.2"
 #: Accepted schema versions: an additive minor keeps every previous document valid.
 EDL3_VERSIONS = ("vx.edl3/1", "vx.edl3/1.1", "vx.edl3/1.2")
+#: The version from which ``preset_ref`` is *applied*, not merely carried: before
+#: it the reference was an inert annotation, and an additive minor keeps such a
+#: document valid, so the renderer must not start applying it either.
+PRESET_APPLIED_VERSION = "vx.edl3/1.2"
 #: Declared types a template parameter may expose.
 EXPOSED_TYPES = ("string", "number", "int", "color", "bool")
 #: What a provenance record may point at.
@@ -238,6 +242,7 @@ RENDERABLE_TRANSITIONS = frozenset({"fade_in", "fade_out"})
 
 __all__ = [
     "EDL3_VERSION",
+    "PRESET_APPLIED_VERSION",
     "MAX_NESTING_DEPTH",
     "INTERPOLATIONS",
     "TRANSITION_KINDS",
@@ -2014,7 +2019,7 @@ class Timeline3:
                     add("PARAM_OUT_OF_RANGE", param_where, problem)
 
     def _validate_preset_ref(self, add) -> None:
-        """A declared look preset resolves, and every override fits its schema.
+        """A declared look preset resolves, and its effect does not collide.
 
         Judged for a ``vx.edl3/1.2`` document only: ``preset_ref`` entered the
         contract at 1.1 as an annotation nothing read, and an additive minor keeps
@@ -2023,8 +2028,14 @@ class Timeline3:
         names no template. The registry is imported on demand, so a document
         without a preset never loads it; each refusal carries the clip's ``where``
         and the code ``vx.presets.merge`` raised.
+
+        A preset instantiates exactly one effect, which the renderer prepends to
+        the clip's own effects. A clip that already declares an effect of that
+        kind would render the same kind twice with no declared order between the
+        two, so it is refused with ``PRESET_EFFECT_CONFLICT`` naming both -- the
+        code :mod:`vx.edl3_render` raises for the same document shape.
         """
-        if self.version != "vx.edl3/1.2":
+        if self.version != PRESET_APPLIED_VERSION:
             return
         if all(clip.preset_ref is None for clip in self.clips):
             return
@@ -2036,10 +2047,26 @@ class Timeline3:
                 continue
             where = f"clips[{index}]"
             try:
-                presets.merge(clip.preset_ref, clip.preset_overrides())
+                applied = presets.effect_for(
+                    clip.preset_ref, clip.preset_overrides()
+                )
             except EDLError as exc:
                 spot = f"{where}.{exc.where}" if exc.where else where
                 add(exc.code, spot, exc.detail)
+                continue
+            kind = str(applied["kind"])
+            for position, declared in enumerate(clip.effects):
+                if declared.kind != kind:
+                    continue
+                add(
+                    "PRESET_EFFECT_CONFLICT",
+                    f"{where}.preset_ref",
+                    f"preset {clip.preset_ref!r} instantiates the {kind!r} effect "
+                    f"and {where}.effects[{position}] declares its own {kind!r}: "
+                    "the preset applies first and the clip's effects after it, so "
+                    "the clip would carry that kind twice",
+                )
+                break
 
     def _validate_clips(self, add, depth: int, problems: List[Dict[str, str]]) -> None:
         declared = [

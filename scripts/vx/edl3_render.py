@@ -66,10 +66,13 @@ from .edl3 import (
     EDL3_VERSION,
     EDL3_VERSIONS,
     EFFECT_REGISTRY,
+    EDLError,
+    Effect,
     EffectSpec,
     Keyframe,
     KeyframeTrack,
     MAX_NESTING_DEPTH,
+    PRESET_APPLIED_VERSION,
     RENDERABLE_EFFECTS,
     RENDERABLE_TRANSITIONS,
     Transition,
@@ -205,6 +208,8 @@ HARD_CODES = frozenset(
         "GENERATOR_ALPHA_LAYER",
         "GENERATOR_SOURCE_CONFLICT",
         "TEMPLATE_UNKNOWN",
+        "PRESET_UNKNOWN",
+        "PRESET_EFFECT_CONFLICT",
         "PARAM_NOT_EXPOSED",
         "PARAM_TYPE",
         "PARAM_OUT_OF_RANGE",
@@ -717,6 +722,7 @@ def _effective_effects(
     clip: Any,
     where: str,
     routed: Mapping[str, Dict[str, Any]],
+    preset: Optional[Effect] = None,
 ) -> Tuple[Dict[str, List[Any]], Dict[str, str]]:
     """Adjustment layers first (track ascending), then the clip's own effects.
 
@@ -725,12 +731,18 @@ def _effective_effects(
     rects or two scales have no declared meaning here, so the compiler refuses
     instead of inventing one. The returned map is the mechanism actually chosen
     for each kind, which is the fallback when chromium was redirected.
+
+    ``preset`` is the single effect a ``preset_ref`` synthesized. It is the first
+    of the clip's own effects and the clip's declared ones follow it, so a look
+    is a starting point the rest of the chain grades over, never a replacement.
     """
     merged: List[Tuple[str, Any]] = []
     ordered = sorted(enumerate(timeline.adjustments), key=lambda item: item[1].track)
     for index, layer in ordered:
         for position, effect in enumerate(layer.effects):
             merged.append((f"adjustments[{index}].effects[{position}]", effect))
+    if preset is not None:
+        merged.append((f"{where}.preset_ref", preset))
     for position, effect in enumerate(clip.effects):
         scope = f"{where}.effects[{position}]"
         if routed.get(scope, {}).get("realized_by") == "generator":
@@ -1285,8 +1297,59 @@ def _refuse_unsupported(timeline: Timeline3, audio: str) -> None:
         )
 
 
+def _preset_effects(timeline: Timeline3) -> Dict[int, Effect]:
+    """One effect per clip that names a preset, materialized from the registry.
+
+    ``presets.effect_for`` is the whole synthesis: the preset's own effect kind
+    with its base values plus the clip's overrides, so the graph never invents a
+    value the registry did not declare. Materializing here, before routing, keeps
+    ``compile_timeline`` pure and puts the preset effect through the same backend
+    rule as a declared one; the clip's own effects are emitted after it.
+
+    A clip that already declares an effect of that kind is refused with
+    ``PRESET_EFFECT_CONFLICT`` instead of rendering the kind twice: two instances
+    have no declared order, and silently duplicating the look would hide the
+    document's mistake. An ``EDLError`` from the registry is propagated as the
+    same code, so a document that slipped past ``validate`` still never reaches
+    the encoder.
+    """
+    if timeline.version != PRESET_APPLIED_VERSION:
+        return {}
+    if all(clip.preset_ref is None for clip in timeline.clips):
+        return {}
+
+    from . import presets  # noqa: PLC0415 - the registry is read, never imported
+
+    applied: Dict[int, Effect] = {}
+    for index, clip in enumerate(timeline.clips):
+        if clip.preset_ref is None or not clip.preset_ref.strip():
+            continue
+        where = f"clips[{index}]"
+        try:
+            declared = presets.effect_for(clip.preset_ref, clip.preset_overrides())
+        except EDLError as exc:
+            spot = f"{where}.{exc.where}" if exc.where else where
+            raise CompileError(exc.code, exc.detail, spot) from exc
+        kind = str(declared["kind"])
+        for position, effect in enumerate(clip.effects):
+            if effect.kind != kind:
+                continue
+            raise CompileError(
+                "PRESET_EFFECT_CONFLICT",
+                f"preset {clip.preset_ref!r} instantiates the {kind!r} effect and "
+                f"{where}.effects[{position}] declares its own {kind!r}: the "
+                "preset applies first and the clip's effects after it, so the "
+                "clip would carry that kind twice",
+                f"{where}.preset_ref",
+            )
+        applied[index] = Effect(kind=kind, params=dict(declared["params"]))
+    return applied
+
+
 def _route_effects(
-    timeline: Timeline3, settings: Mapping[str, Any]
+    timeline: Timeline3,
+    settings: Mapping[str, Any],
+    preset_effects: Optional[Mapping[int, Effect]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Any]]:
     """Route every effect, and decide what a chromium qualifier is realized by.
 
@@ -1298,12 +1361,19 @@ def _route_effects(
     never discards a declaration. With the engine available and no generator the
     document is refused with CHROMIUM_NEEDS_GENERATOR; with the engine absent it
     stays BACKEND_UNAVAILABLE.
+
+    ``preset_effects`` carries the effect each preset clip synthesized, keyed by
+    clip index. Each is routed under ``clips[i].preset_ref`` so the report names
+    the mechanism it really uses, exactly like a declared effect.
     """
+    extras = preset_effects or {}
     scopes: List[Tuple[str, Any, Any]] = []
     for index, layer in enumerate(timeline.adjustments):
         for position, effect in enumerate(layer.effects):
             scopes.append((f"adjustments[{index}].effects[{position}]", effect, None))
     for index, clip in enumerate(timeline.clips):
+        if index in extras:
+            scopes.append((f"clips[{index}].preset_ref", extras[index], clip))
         for position, effect in enumerate(clip.effects):
             scopes.append((f"clips[{index}].effects[{position}]", effect, clip))
 
@@ -1584,7 +1654,8 @@ def compile_timeline(
 
     generators = _generator_table(timeline, generator_paths)
 
-    table, routed, chromium = _route_effects(timeline, resolved)
+    presets_applied = _preset_effects(timeline)
+    table, routed, chromium = _route_effects(timeline, resolved, presets_applied)
     _refuse_unsupported(timeline, audio)
 
     base_clips, overlay_clips = _split_layers(timeline)
@@ -1609,7 +1680,13 @@ def compile_timeline(
                 f"source file not found: {source}",
                 f"{clip_where}.source",
             )
-        effects, chosen = _effective_effects(timeline, clip, clip_where, routed)
+        effects, chosen = _effective_effects(
+            timeline,
+            clip,
+            clip_where,
+            routed,
+            presets_applied.get(clip_index),
+        )
         for slot, transition in (
             ("transition_in", clip.transition_in),
             ("transition_out", clip.transition_out),
@@ -1632,6 +1709,8 @@ def compile_timeline(
             timeline.height,
             timeline.fps,
         )
+        if clip_index in presets_applied:
+            plans[clip_index]["preset"] = clip.preset_provenance()
 
     chains: List[str] = []
     for index, _clip in base_clips:
