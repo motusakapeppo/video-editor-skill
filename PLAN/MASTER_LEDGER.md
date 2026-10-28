@@ -324,6 +324,70 @@ cambia, cambia cio' che il regista sceglie e come giudica.
 | F26-T07 | Matrice delle consegne per profilo | ogni profilo dichiara i suoi contenitori e codec; ognuno viene prodotto e verificato con ffprobe (codec, bit depth, loudness, sottotitoli, capitoli) | DONE - `scripts/vx/deliver.py` produce la consegna dichiarata dal profilo e la verifica con ffprobe sul file prodotto: contenitore, codec video, pix_fmt, profondita', dimensioni, fps, fotogrammi, durata, codec audio, loudness e true peak misurati sull'uscita, presenza di sottotitoli e capitoli. **18 consegne dichiarate su 9 profili, 18 prodotte e verificate, 0 mancanti**: H.264 e ProRes 422 a 10 bit (`yuv422p10le`), audio AAC e PCM. Un target non dichiarato e' rifiutato con `DELIVERY_UNKNOWN_TARGET`; un encoder assente sarebbe `DELIVERY_ENCODER_MISSING` col suo nome. I sottotitoli escono come `.srt` affiancato (3 battute, nessuno stream aggiunto al file), i capitoli come metadati dai confini di scena dichiarati. La loudness del file consegnato e' rimisurata: due master a 20 LU di distanza danno numeri diversi, e il numero del referto coincide con una misura indipendente. `tests/test_deliver.py` 40 assert, 20,7 s |
 | F26-T08 | Prova end-to-end per ogni profilo | un minuto reale per ogni profilo reso dal percorso pubblico, con referto misurato e un fotogramma di prova | DONE - nove profili resi **un minuto reale ciascuno** al canvas dichiarato, a chunk da 10 s: reel 1080x1920/30 = 1800 frame, short 1800, videoclip 1920x1080/24 = 1440, documentario 1500, film 2048x858/24 = 1440, spot 1500, tutorial 1800, evento 1500, trailer 1440; durata 60,0 s misurata su ognuno. Loudness rimisurata: da -14,01 a -24,01 LUFS, scarto massimo **0,01 LU** dal bersaglio. Consegne verificate con ffprobe (h264/mp4, h265/mp4). Memoria: picco per profilo **1.085-1.517 MB** contro i **5.848 MB** del grafo unico (D-12), quindi il percorso a chunk e' la risposta giusta. Un frame di prova per profilo con sha256. Film dichiara una finestra 4800-10800 s: i 60 s stanno fuori e il referto lo scrive come `STRUCTURE_DURATION` atteso, invece di allungare il render per far tornare il conto. `tests/test_profile_minute.py` 109 assert sempre attivi, la parte pesante dietro `VX_LONGRUN=1` che a porta chiusa dichiara in maiuscolo di non aver misurato nulla |
 
+## Allegato F - Creativita' come capacita' misurabile (registrato 28/10/2026, DETTAGLI MANCANTI)
+
+Stato della fonte: l'artefatto (`claude.ai/artifact/DHZ3qhWJ4Tj2C3JwFSFabu`) **non e'
+leggibile** da qui - la pagina e' resa da JavaScript e l'indirizzo pubblico restituisce solo
+il pie' di pagina. Quanto segue viene dal riassunto dell'utente, non dal testo: i task
+atomici di AF4 e gli incarichi 26-33 di AF5 vanno trascritti **dal documento**, non
+inventati.
+
+**Conflitto di numerazione da risolvere.** L'Allegato F chiama le sue dodici fasi F20-F31.
+Nel ledger quei numeri sono gia' occupati: F25 (Allegato E), F26 (profili di genere),
+F27 (preset), F28 (font). Proposta: le fasi dell'Allegato F prendono gli ID **F32-F43**,
+mantenendo la loro etichetta originale accanto (per esempio `F32 (AF4/F20)`), cosi' il
+documento dell'utente resta citabile senza rinominare nulla di gia' fatto.
+
+### Cosa dichiara l'Allegato F
+
+- **Tesi (AF1)**: la creativita' e' cio' che e' nuovo, sorprendente e di valore; il piano la
+  costruisce in tre capacita' - generare, valutare, imparare. La "coscienza" e' trattata come
+  equivalenti funzionali verificabili: intenzione, riflessione, gusto, curiosita', memoria.
+- **Tre strati di possibilita' (AF2)**: Atlante (almeno 5.000 voci in italiano e inglese, con
+  proxy misurabile e implementazione), Genoma (16 famiglie di scelte, circa 4x10^25
+  combinazioni prima dei parametri continui), strato aperto (l'agente inventa effetti,
+  template, operatori e voci in sandbox). Contatore delle possibilita' raggiungibili ed
+  esplorate, e mappa navigabile nella Review Room.
+- **Sedici moduli (AF3)**: compilatore dei vincoli, modello degli affetti, motore divergente,
+  esploratore qualita'-diversita', pannello dei critici, modello del gusto, memoria,
+  riflessione, laboratorio degli stili, meta-creativita', etica, e altri.
+- **Dodici fasi (AF4)**: da trascrivere.
+- **Esame cieco (AF5)**: incarichi 26-33; la modalita' creativa deve battere quella letterale
+  in almeno il 70% delle coppie, senza violazioni dei vincoli ne' cliche'.
+- **Prompt (AF7)**: da incollare, non ancora letto.
+
+### Dipendenze dichiarate
+
+Poggia su F4, F7, F8, F9, F14, F19, E1, E5. **Nessuna di queste e' chiusa**: F4 manca le
+transizioni (F4-T12) e il composito a due ingressi (F4-T13); F7, F8, F9, F14, F19 ed E1/E5
+non esistono ancora. Il documento stesso impone di chiuderle prima e di non scrivere
+sostituti provvisori.
+
+### Dipendenza umana
+
+Affetti, coppie di gusto e test ciechi richiedono il giudizio dell'utente: servono moduli
+`.xlsx` come quello di T09. Senza, quelle fasi restano bloccate e le soglie provvisorie.
+
+### Rischi dichiarati
+
+Ottimizzare il numero invece del risultato (legge di Goodhart). Per questo l'esame e' cieco
+e conta il giudizio dell'utente, non solo le metriche.
+
+| ID | Task | Stato |
+|---|---|---|
+| F32 (AF4/F20) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F33 (AF4/F21) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F34 (AF4/F22) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F35 (AF4/F23) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F36 (AF4/F24) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F37 (AF4/F25) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F38 (AF4/F26) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F39 (AF4/F27) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F40 (AF4/F28) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F41 (AF4/F29) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F42 (AF4/F30) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+| F43 (AF4/F31) | Da trascrivere dal documento | BLOCCATO: fonte non leggibile |
+
 ## Esame finale (sezione 6 + A5 del piano)
 
 19 incarichi, tre esecuzioni coerenti, `PLAN/FINAL_REPORT.md` con ogni task
