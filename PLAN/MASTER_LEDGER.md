@@ -89,6 +89,10 @@ Restano della fase: compress in auto, SNR e music ratio misurati, più musiche.
 | F1-T03 | SNR e music ratio nel referto | i due valori compaiono in `auto_report.json` con la soglia usata | DONE - `auto_report.audio` porta `snr_db` (sorgente peggiore) e `music_ratio` (sorgente piu musicale) accanto a `snr_threshold_db=12.0` e `music_ratio_threshold=0.5`; 13 assert unitari e 42 assert e2e in 44 s, con valori reali 0.13 e 0.071. Entrambi i numeri erano gia misurati (`noise_floor_and_speech`, `analyze_audio`) e venivano scartati prima del referto |
 | F1-T04 | Più musiche con più tracce | due tracce musicali mixate con ducking distinto e dichiarate | DONE - due letti con ruoli `music_a`/`music_b`, un bus e un `sidechaincompress` per letto (soglie 0.05 e 0.08), `amix=inputs=3`; il caso a un letto produce lo stesso grafo di prima, character for character; e2e `vx auto` con due musiche: 43 assert in 44 s, `report.music` con due voci, `track_id`, `sha256` e la soglia di ducking di ciascuna; il cap di triage passa a 2 e la terza traccia resta `REDUNDANT_MUSIC` |
 
+**Fase chiusa il 27/10/2026:** 4/4 task, tag `phase-F1-done`, suite completa
+114 runner / 3645 assert / 0 fail / 2 skip in 669 s. Decisione D027 registrata
+(`ducking_tracks` additiva; il secondo letto si abbassa di più).
+
 ## F2 — EDL 3 e renderer
 
 Accettazione di fase: un documento EDL per ogni funzione, tutti renderizzano; un
