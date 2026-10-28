@@ -295,7 +295,8 @@ METHODS: Dict[str, str] = {
         "REGOLE: (a) ms + ms non puo' superare l'intervallo fra onset, se le animazioni\n"
         "  insistono sulla stessa parola; (b) lo scale non deve MAI superare 1.0, altrimenti\n"
         "  il Gate 4 perde validita'; (c) PUOI variare per cue: alternare pop e slide_up su\n"
-        "  cue consecutive e' legittimo; (d) ANTI-ARLECCHINO: al massimo 2 trattamenti\n"
+        "  cue consecutive e' legittimo; (d) NESSUN tetto ai trattamenti: il limite e' cio'\n"
+        "  che si vede (3 look ogni 10 s), non quante varianti hai immaginato;\n"
         "  distinti per video, salvo richiesta esplicita; (e) se il materiale e' lento e\n"
         "  uniforme, 'none' e' una risposta corretta e va dichiarata come tale.\n"
         "  (f) se la richiesta nomina un'animazione, deve comparire nell'output."
@@ -432,9 +433,9 @@ def verify_animation(animation: Dict[str, Any], cues: Sequence[Dict[str, float]]
         amp = float(el.get("amp", 0))
         if amp < 0 or amp > 0.08:
             errs.append(f"elemento {el.get('name')}: ampiezza {amp} fuori da [0, 0.08]")
-    treatments = {str(c.get("in")) for c in animation.get("per_cue", []) or []}
-    if len(treatments) > 2:
-        errs.append(f"anti-arlecchino: {len(treatments)} trattamenti distinti (max 2)")
+    # D035: il numero di trattamenti distinti NON e' piu' un limite creativo. Il tetto
+    # anti-arlecchino vive nel compilatore (3 look ogni 10 s, `EFFECT_DENSITY`) e misura
+    # cio' che si vede, non quante varianti il piano ha immaginato.
     return errs
 
 

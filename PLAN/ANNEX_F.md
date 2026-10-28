@@ -27,6 +27,16 @@ F26 (profili), F27 (preset), F28 (font). Le fasi dell'allegato prendono quindi g
 | F42 | AF4/F30 | Dialogo e interfaccia (M14) |
 | F43 | AF4/F31 | Banco di prova ed esame (M15) |
 
+## Conteggi dichiarati dal documento (revisione 7)
+
+- 32 fasi: F0-F31. Nel nostro ledger la numerazione diverge: F25-F28 sono gia' usate per
+  Allegato E, profili, preset e font, quindi le fasi F20-F31 dell'allegato vivono qui come
+  **F32-F43**. Il totale delle fasi resta 32, cambia solo l'etichetta.
+- 27 incarichi d'esame: 1-19 (sezione 6 piu' A5) e 26-33 (AF5). La numerazione salta 20-25:
+  e' quella del documento, non un errore nostro.
+- 59 task in AF4 (7+7+5+5+5+4+4+5+4+4+4+5).
+- Sei addendum al prompt: sezione 9, A7, B7, C7, D8, AF7.
+
 ## AF1. Tesi
 
 1. Creativita' = cio' che e' nuovo, sorprendente **e di valore** (Boden). Senza il valore resta

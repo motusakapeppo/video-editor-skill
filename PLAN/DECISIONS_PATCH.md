@@ -512,3 +512,21 @@ Si decide:
    riprodurre.
 4. Ogni variante deve **differire visivamente** dalla base: una variazione che produce
    lo stesso frame e' un difetto, e il test lo prova byte per byte.
+
+## D035 - Il numero di trattamenti non e' piu' un limite creativo; resta il tetto di cio' che si vede (2026-10-28)
+
+**Supera:** il gate anti-arlecchino del board, che rifiutava piu' di 2 trattamenti distinti.
+
+Contesto. Il piano, riletto alla revisione 7, dice che il tetto dei trattamenti non esiste piu'
+come limite creativo e che resta solo il tetto di effetti visibili ogni 10 secondi in F4. Il
+board continuava a rifiutare una proposta con tre trattamenti: una regola nata per fermare
+l'arlecchinosita' e diventata un divieto di varieta'.
+
+Si decide:
+
+1. `board._animation_errors` non rifiuta piu' un numero alto di trattamenti. Una proposta puo'
+   alternare pop, slide e bounce se il brief lo chiede.
+2. Resta il tetto che misura il risultato: `check_effect_density`, 3 look che iniziano in una
+   finestra di 10 s, codice duro `EFFECT_DENSITY`.
+3. La differenza e' deliberata: il tetto nuovo misura **cio' che si vede nel montaggio**, non
+   **quante varianti il piano ha immaginato**. Immaginare e' gratis; riempire lo schermo no.
