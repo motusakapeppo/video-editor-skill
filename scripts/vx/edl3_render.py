@@ -168,6 +168,7 @@ HARD_CODES = frozenset(
         "EFFECT_PARAM",
         "EFFECT_RANGE",
         "EFFECT_NOT_ANIMATABLE",
+        "EFFECT_DENSITY",
         "KEYFRAME_ORDER",
         "KEYFRAME_RANGE",
         "KEYFRAME_INTERP",
