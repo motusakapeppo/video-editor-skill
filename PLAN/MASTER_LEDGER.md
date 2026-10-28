@@ -117,6 +117,8 @@ provvisorie (D010).
 | F2-T13 | W8 speed ramp e limiti | politica audio dello speed ramp nel contratto e tetto dichiarato per reverse e freeze | la politica (atempo a scalini, pitch mantenuto) e' in DECISIONS e il test prova che il picco spettrale resta entro la tolleranza dichiarata; reverse o freeze oltre il tetto falliscono con un codice che nomina il tetto | DONE - D029 registrata: rampa = `atempo` a scalini con pitch mantenuto (4x → [2,2], 0,25x → [0.5,0.5]); tetti letti dal codice, 30,0 s per reverse e 300,0 s per freeze, rifiutati con `REVERSE_TOO_LONG`/`FREEZE_TOO_LONG` che nominano il tetto; 25 assert in `tests/test_edl3_ramp_policy.py` |
 | F2-T14 | W8 fetta verticale v2 | un documento minimo con un effetto a 2 keyframe e una transizione, dal validatore al frame di riferimento | il documento valida, rende e produce un frame di riferimento byte-identico in due esecuzioni; nessuna ondata successiva parte prima che questo sia verde | DONE - 12 assert in `tests/test_edl3_slice_v2.py`: un documento `/1.1` con un effetto a due keyframe e una transizione valida, rende, e lo stesso frame estratto da due render separati ha lo stesso sha256; il golden resta 15 effetti, 34 frame, MAD 0.000 |
 
+**Fase chiusa il 28/10/2026 (ondata W8 inclusa):** 14/14 task, tag `phase-F2-done`, suite completa 120 runner / 3812 assert / 0 fail / 2 skip in 968 s. Lo schema EDL 3 è a `vx.edl3/1.1` (additivo, D028); i 34 frame di riferimento sono rimasti identici byte per byte.
+
 ## F3 — Motion Studio (Chromium)
 
 Motore: Playwright guida il Chrome di sistema (`channel="chrome"`), nessun browser
