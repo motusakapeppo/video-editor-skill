@@ -347,3 +347,55 @@ non coperto da una tolleranza.
 
 Emenda: nessuna. Estende D004 senza toccarlo. Revocabile con una voce che la
 sostituisce.
+
+---
+
+## D029 — La rampa audio è atempo a scalini; reverse e freeze hanno un tetto (2026-10-28)
+
+**Stato: attuata per i tetti; la politica di rampa è dichiarata e resta una deroga registrata al punto 2.**
+
+Contesto. Una rampa di velocità cambia il tempo dell'audio, non solo quello
+dell'immagine. `atempo` non varia nel tempo e accetta un solo fattore per
+istanza, con un tetto per istanza: un rapporto grande non è un'istanza sola.
+Spostare il pitch con `asetrate` è la scorciatoia che sembra gratis e non lo è:
+la voce cambia altezza e il difetto si sente prima di quanto si veda. Reverse e
+freeze, dal canto loro, non sono lenti: sono costosi in memoria (reverse
+bufferizza l'intero clip) o in tempo di uscita (un hold lungo moltiplica i
+frame), quindi un tetto dichiarato è più onesto di un OOM.
+
+Si decide:
+
+1. L'audio di una rampa è una catena di `atempo`, un'istanza per scalino, con
+   prodotto esattamente uguale al rapporto. I numeri sono quelli del codice,
+   non inventati: fattore per istanza in `[MIN_FACTOR, MAX_FACTOR]` =
+   `[0.5, 2.0]`, tolleranza `1e-6`, e ogni fattore è arrotondato e riportato
+   dentro la finestra. Il pitch è mantenuto: 2x è un solo scalino `atempo=2`,
+   4x sono due, 0.25x sono due `atempo=0.5`.
+2. `asetrate`/`rubberband` come meccanismo di una rampa sono vietati: il pitch
+   non deve mai spostarsi per effetto collaterale. Il vocabolario dichiara però
+   ancora tre valori (`segments`, `silence`, `pitch`) e `audio_fragment`
+   implementa `pitch` come `asetrate`+`aresample`, che sposta il pitch e lo
+   dichiara non corretto. È una deroga aperta rispetto a questa decisione: non
+   viene rimossa qui perché togliere un valore dichiarato è un cambio di
+   contratto per `vx.edl3/1.1` e romperebbe i test F2-T05 già scritti. Il
+   default resta `segments` (`DEFAULT_RAMP_AUDIO_POLICY`), quindi nessun
+   documento esistente cambia resa.
+3. Reverse ha un tetto esplicito di `30.0 s` (`MAX_REVERSE_DURATION_SEC`); oltre
+   il tetto il documento è rifiutato con `REVERSE_TOO_LONG`, e il payload porta
+   `{duration, cap}`. Freeze ha un tetto esplicito di `300.0 s`
+   (`MAX_FREEZE_DURATION_SEC`); oltre il tetto il rifiuto è `FREEZE_TOO_LONG`
+   con `{hold_duration, cap}`. I due codici sono propagati intatti dal
+   compilatore (`MODULE_CODES`), non riscritti.
+4. Il confine è incluso: 30.0 s di reverse e 300.0 s di hold passano; un secondo
+   in più no. Il tetto è una politica dichiarata, non una misura calibrata su un
+   corpus, e come tale si registra.
+
+Perché. Un ramp che sposta il pitch è un difetto che si ascolta, non un'opzione;
+una catena di `atempo` è l'unico modo di seguire il rapporto restando dentro i
+limiti per istanza di ffmpeg. Un reverse lungo non degrada, muore: il rifiuto
+anticipato con il numero richiesto e il tetto rende l'errore riparabile invece
+che misterioso. Il freeze non è un problema di memoria ma di durata: il tetto
+guarda l'orologio, non i byte.
+
+Emenda: nessuna. Estende D012 (meccanismi dichiarati) senza toccarlo. Revocabile
+con una voce che la sostituisce.

@@ -179,6 +179,24 @@ EFFECT_REGISTRY: Dict[str, EffectSpec] = {
 EFFECT_KINDS = frozenset(EFFECT_REGISTRY)
 TRANSFORM_PARAMS = frozenset(EFFECT_REGISTRY["transform"].params)
 
+#: Keyframes above which a mechanism-flexible entry switches from a baked
+#: expression to ``sendcmd``. It mirrors
+#: :data:`vx.edl3_render.SENDCMD_THRESHOLD`; the renderer still owns its copy and
+#: a test asserts the two numbers agree, so the rule cannot drift silently.
+SENDCMD_THRESHOLD = 3
+
+#: Kinds whose ``expr`` declaration can be swapped for ``sendcmd``. It mirrors
+#: ``edl3_render.SENDCMD_TRACKS`` (``{("transform", "opacity")}``): ``crop``
+#: animates through a time-variable ``crop`` expression and never flips.
+FLEXIBLE_EXPR_KINDS = frozenset({"transform"})
+
+#: The compositor a text layer is drawn with. ``TextLayer``/``CaptionTrack`` are
+#: their own entities, not registry effects, so their mechanism has no
+#: ``EffectSpec`` to declare it and is named here instead.
+TEXT_BACKEND = "overlay"
+#: The spellings :func:`select_backend` accepts for that entity family.
+TEXT_MECHANISM_KINDS = frozenset({"text", "text_layer", "caption"})
+
 #: Effect kinds the compiler implements. Everything else is refused loudly.
 RENDERABLE_EFFECTS = frozenset({"transform", "crop", "color", "blur"})
 #: Transition kinds the compiler implements.
@@ -196,6 +214,10 @@ __all__ = [
     "RENDERABLE_EFFECTS",
     "RENDERABLE_TRANSITIONS",
     "TEXT_KEYFRAME_PARAMS",
+    "SENDCMD_THRESHOLD",
+    "FLEXIBLE_EXPR_KINDS",
+    "TEXT_BACKEND",
+    "TEXT_MECHANISM_KINDS",
     "EDLError",
     "EffectSpec",
     "Keyframe",
@@ -214,6 +236,7 @@ __all__ = [
     "NestedSequence",
     "Timeline3",
     "param_domain_problem",
+    "select_backend",
     "sample",
 ]
 
@@ -411,6 +434,56 @@ def param_domain_problem(kind: str, name: str, value: float) -> Optional[str]:
         if name in ("similarity", "blend"):
             return between(0.0, 1.0)
     return None
+
+
+def select_backend(kind: str, keyframe_count: int = 0, duration: float = 0.0) -> str:
+    """Return the ffmpeg mechanism this registry entry is rendered with.
+
+    The rule is total over the registry, so no animatable kind can reach the
+    compiler without a declared mechanism:
+
+    * text layers and captions are composited, never drawn by a filter, so they
+      return :data:`TEXT_BACKEND`;
+    * a static entry returns the backend its :class:`EffectSpec` declares;
+    * an animatable entry returns its declared backend, except that a
+      mechanism-flexible ``expr`` entry with more than
+      :data:`SENDCMD_THRESHOLD` keyframes returns ``sendcmd``.
+
+    ``duration`` is part of the surface because a mechanism may legitimately
+    depend on clip length, but no entry in the current registry does: duration
+    changes the number of ``sendcmd`` commands emitted (``frames + 1``), never
+    the choice between mechanisms. It is therefore accepted and unused, which is
+    what keeps this function equal to ``vx.edl3_render.select_backend`` for every
+    registry entry. An unknown kind is refused with ``EFFECT_UNKNOWN``.
+    """
+    name = str(kind)
+    if name in TEXT_MECHANISM_KINDS:
+        return TEXT_BACKEND
+    spec = EFFECT_REGISTRY.get(name)
+    if spec is None:
+        raise EDLError(
+            "EFFECT_UNKNOWN",
+            f"no selection rule for effect kind {name!r}; "
+            f"declared kinds are {sorted(EFFECT_REGISTRY)}",
+            "kind",
+        )
+    if not spec.animatable:
+        return spec.backend
+    try:
+        count = int(keyframe_count)
+    except (TypeError, ValueError) as exc:
+        raise EDLError(
+            "KEYFRAME_SHAPE",
+            f"keyframe_count must be an integer, got {keyframe_count!r}",
+            "keyframes",
+        ) from exc
+    if (
+        spec.backend == "expr"
+        and name in FLEXIBLE_EXPR_KINDS
+        and count > SENDCMD_THRESHOLD
+    ):
+        return "sendcmd"
+    return spec.backend
 
 
 @dataclass
