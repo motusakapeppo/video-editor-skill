@@ -220,6 +220,9 @@ intatta; 200 file di fuzz senza errori non gestiti.
 | F17-T07 | Fuzz con file ostili e catena dei modelli | 200 file ostili danno errori dichiarati e nessun traceback non gestito; un modello con hash diverso da quello atteso viene rifiutato | DONE `0b9c8a4` — 200 casi: 110 errori dichiarati, 0 non gestiti; 3 modelli con hash fissato |
 | F17-T08 | Prova di crash a livello di sistema | 50 terminazioni reali durante una scrittura, con un figlio ffmpeg vivo: il journal resta leggibile, il file mezzo scritto e' un orfano dichiarato, il figlio non sopravvive; gli originali sono protetti con attributo di sola lettura e ACL di Windows, e una scrittura fallisce davvero | TODO |
 
+**Fase riaperta il 27/10/2026:** la prova di crash prevista dal criterio originario (50 uccisioni reali del processo, con i figli ffmpeg, e originali protetti da attributo e ACL di Windows) non esiste nel repository. I sette task scomposti restano verdi; la fase non è chiusa finché `F17-T08` non passa. Prova: `PLAN/DISCREPANZE.md` D-3.
+
+
 
 Codifica per titolo con VMAF, gestione colore, torneo a coppie con ordine
 scambiato, punteggio Elo.
