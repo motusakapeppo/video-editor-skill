@@ -399,3 +399,58 @@ guarda l'orologio, non i byte.
 
 Emenda: nessuna. Estende D012 (meccanismi dichiarati) senza toccarlo. Revocabile
 con una voce che la sostituisce.
+
+## D030 - Il backend dichiarativo e' statico; l'animazione si guadagna per filtro (2026-10-28)
+
+**Stato: attuata in F4-T01.**
+
+Contesto. Con 55 voci da aggiungere, la tentazione e' dichiarare tutto animabile e
+lasciare che `sendcmd` "faccia il resto". Non lo fa: `sendcmd` raggiunge solo i filtri
+che espongono comandi a runtime (`eq` li ha, `vignette` e `lenscorrection` in gran parte
+no), e un filtro senza comandi runtime emette una catena che non cambia mai. Il difetto
+non e' un errore: e' **un'animazione che non anima**, con l'EDL che dichiara movimento e
+il fotogramma fermo.
+
+Si decide:
+
+1. Il backend `filter` e' statico per contratto. Un'istanza con keyframe su un tipo
+   dichiarativo viene rifiutata con `EFFECT_NOT_ANIMATABLE`, che nomina il tipo: meglio
+   un rifiuto rumoroso di un movimento finto.
+2. Un tipo dichiarativo si puo' rendere animabile solo dopo una prova a tre fotogrammi
+   (inizio, meta', fine) che mostri una differenza misurata maggiore di zero. La prova
+   sta nel test, non nella dichiarazione.
+3. `filter_template` e' codice del registro, non dato dell'utente, e i parametri sono
+   gia' coerciti a `float` in `Effect.__post_init__`: la formattazione non riceve mai
+   testo. Resta comunque un test che impone che ogni segnaposto del template sia un
+   parametro dichiarato.
+
+## D031 - Il tetto anti-arlecchino vive nel compilatore, senza deroga (2026-10-28)
+
+**Stato: in attuazione in F4-T08.**
+
+Contesto. Un tetto controllato solo dal percorso automatico e' aggirabile: chiunque
+costruisca un `Timeline3` a mano lo evita. E una deroga dichiarabile sul documento e'
+la stessa falla con piu' cerimonia.
+
+Si decide: il tetto (3 effetti visibili che iniziano in una finestra scorrevole di 10 s)
+e' un controllo del compilatore, con codice `EFFECT_DENSITY` fra quelli duri. Nessuna
+deroga, nessun interruttore. Se un documento legittimo ha bisogno di piu', la decisione
+si prende qui e si registra, non a runtime. I 15 documenti del riferimento hanno un
+effetto ciascuno, quindi il tetto non li tocca.
+
+## D032 - Lo smart render e' riuso di segmenti, non copia di sottointervalli (2026-10-28)
+
+**Stato: in attuazione in F16-T03.**
+
+Contesto. "Copia senza ricodifica" su una porzione del sorgente significa `-ss` + `-c
+copy`: si aggancia a un keyframe e si porta dietro il pre-roll. E' esattamente la
+scorciatoia che D005 ha vietato, qualunque nome le si dia. In piu' la cucitura fra una
+porzione copiata e una ricodificata fallisce in modo silenzioso: parametri di
+configurazione diversi, timestamp non monotoni, un fotogramma perso al giunto.
+
+Si decide: lo smart render riusa un segmento **gia' codificato** quando l'impronta degli
+ingressi, dei parametri e della versione e' la stessa (e' cio' che `stagecache` gia' fa,
+con verifica di byte e hash). Le parti non modificate sono identiche per costruzione,
+perche' sono lo stesso file. Nessun `-c copy` su una selezione, in nessun percorso. La
+prova e' sulla cucitura, non sulla porzione: timestamp monotoni, numero di fotogrammi
+uguale alla somma dei segmenti, e i tre fotogrammi ai lati di ogni giunto confrontati.
