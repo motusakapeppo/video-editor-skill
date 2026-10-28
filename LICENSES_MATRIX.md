@@ -24,6 +24,10 @@ percorso normale).
 | playwright | 1.64.1 | **da confermare** (Apache-2.0 attesa; i metadati non dichiarano il campo) | metadati vuoti; `licenses/` non leggibile con i permessi correnti | libreria |
 | Google Chrome / Microsoft Edge | installati dall'utente | proprietaria | non distribuiti con la skill: usati via `channel` | processo esterno |
 | pesi Whisper (via faster-whisper) | variante locale | **da confermare** (MIT per OpenAI Whisper; la variante va nominata) | non ancora ispezionata | opzionale |
+| silero_vad (pesi ONNX) | v5.1.2, sha256 2623a295...bdd788f | MIT | record fissato in `scripts/vx/models.py` + release GitHub snakers4/silero-vad | opzionale |
+| face_detection_yunet_2023mar (pesi ONNX) | 2023mar, sha256 8f2383e4...552fa4 | MIT | record fissato in `scripts/vx/models.py` + opencv/opencv_zoo | opzionale |
+| mediapipe | 1.1.1 | Apache-2.0 | metadati del pacchetto (classifier Apache 2.0) | libreria |
+| psutil | non installato | BSD-3-Clause | non presente in questo ambiente; import opzionale in `bench.py`, il picco di memoria viene dichiarato assente | opzionale |
 
 ## Da verificare prima dell'integrazione
 
