@@ -151,7 +151,9 @@ def _decode_pcm(path: str | Path, sr: int = PCM_SR) -> np.ndarray:
     Written to a temp file rather than stdout: ``ffmpeg.run`` captures stdout
     as UTF-8 text, which would corrupt raw PCM bytes.
     """
-    with tempfile.TemporaryDirectory(prefix="vx_pcm_") as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix="vx_pcm_", ignore_cleanup_errors=True
+    ) as tmp:
         out = Path(tmp) / "audio.pcm"
         proc = ff.run_ff(
             [
@@ -226,7 +228,9 @@ def noise_floor_and_speech(path: str | Path) -> Dict[str, Any]:
             "samples": 0,
         }
 
-    with tempfile.TemporaryDirectory(prefix="vx_astats_") as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix="vx_astats_", ignore_cleanup_errors=True
+    ) as tmp:
         out = Path(tmp) / "astats.txt"
         graph = (
             "astats=metadata=1:reset=1,"
