@@ -1045,6 +1045,8 @@ class Clip3:
     #: Named Motion Studio template, resolved against its declared parameters.
     template_ref: Optional[str] = None
     #: The values this document sets; the rest come from the template's defaults.
+    #: On a clip that names a preset and no template, these are the preset's
+    #: override values instead -- only the ones that differ from its base.
     exposed_params: Dict[str, Any] = field(default_factory=dict)
     #: Licence, author, source and URL for third-party audio or pictures.
     attribution: Tuple[Dict[str, Any], ...] = ()
@@ -1110,6 +1112,37 @@ class Clip3:
             if item.kind == kind:
                 return item
         return None
+
+    def preset_overrides(self) -> Dict[str, Any]:
+        """The values this clip sets on its preset, empty when it names a template.
+
+        A clip carries one parameter registry: with ``template_ref`` the values in
+        ``exposed_params`` are the template's, so a preset use has nothing to
+        override and takes its base whole. Refused references and out-of-range
+        values are the validator's business, not this accessor's.
+        """
+        if self.template_ref is not None:
+            return {}
+        return dict(self.exposed_params or {})
+
+    def preset_provenance(self) -> Optional[Dict[str, Any]]:
+        """The D034 record for this clip's preset use, or ``None`` without one.
+
+        ``{"preset": <id>, "changed": difference(...)}``: which preset the look
+        started from, and only the values this use moved away from its base (an
+        empty ``changed`` means the declared base was taken as it stands). Append
+        it to :attr:`provenance`; that record shape is accepted there without a
+        schema bump. An unknown ``preset_ref`` raises ``PRESET_UNKNOWN``, and a
+        breaking override raises its ``vx.presets.merge`` code.
+        """
+        if self.preset_ref is None:
+            return None
+        from . import presets  # noqa: PLC0415 - the registry is read, never imported
+
+        return {
+            "preset": presets.resolve(self.preset_ref).id,
+            "changed": presets.difference(self.preset_ref, self.preset_overrides()),
+        }
 
     @property
     def generator_declaration(self) -> Optional[Dict[str, Any]]:
@@ -1763,6 +1796,7 @@ class Timeline3:
 
         self._validate_header(add)
         self._validate_template_params(add)
+        self._validate_preset_ref(add)
         self._validate_clips(add, depth, problems)
         self._validate_effect_density(add)
         self._validate_extras(add)
@@ -1831,6 +1865,20 @@ class Timeline3:
                     add("EXPOSED_PARAM_SHAPE", spot, "no default value")
             for position, record in enumerate(clip.provenance):
                 spot = f"{where}.provenance[{position}]"
+                if "preset" in record or "changed" in record:
+                    if not str(record.get("preset") or "").strip():
+                        add(
+                            "PROVENANCE_SHAPE",
+                            spot,
+                            "a preset record names the preset it started from",
+                        )
+                    if not isinstance(record.get("changed"), Mapping):
+                        add(
+                            "PROVENANCE_SHAPE",
+                            spot,
+                            "a preset record keeps its changed values in an object",
+                        )
+                    continue
                 if record.get("kind") not in PROVENANCE_KINDS:
                     add(
                         "PROVENANCE_SHAPE",
@@ -1897,7 +1945,9 @@ class Timeline3:
         a value falls outside the declared ``values``.
         """
         for index, clip in enumerate(self.clips):
-            if clip.template_ref is None and not clip.exposed_params:
+            if clip.template_ref is None and (
+                not clip.exposed_params or clip.preset_ref is not None
+            ):
                 continue
             where = f"clips[{index}]"
             name = clip.template_ref
@@ -1962,6 +2012,34 @@ class Timeline3:
                 problem = _param_range_problem(declaration, value)
                 if problem is not None:
                     add("PARAM_OUT_OF_RANGE", param_where, problem)
+
+    def _validate_preset_ref(self, add) -> None:
+        """A declared look preset resolves, and every override fits its schema.
+
+        Judged for a ``vx.edl3/1.2`` document only: ``preset_ref`` entered the
+        contract at 1.1 as an annotation nothing read, and an additive minor keeps
+        such a document valid, so 1.2 is where the use is applied and recorded
+        (D034). A clip's ``exposed_params`` are the preset's overrides when it
+        names no template. The registry is imported on demand, so a document
+        without a preset never loads it; each refusal carries the clip's ``where``
+        and the code ``vx.presets.merge`` raised.
+        """
+        if self.version != "vx.edl3/1.2":
+            return
+        if all(clip.preset_ref is None for clip in self.clips):
+            return
+
+        from . import presets  # noqa: PLC0415 - the registry is read, never imported
+
+        for index, clip in enumerate(self.clips):
+            if clip.preset_ref is None or not clip.preset_ref.strip():
+                continue
+            where = f"clips[{index}]"
+            try:
+                presets.merge(clip.preset_ref, clip.preset_overrides())
+            except EDLError as exc:
+                spot = f"{where}.{exc.where}" if exc.where else where
+                add(exc.code, spot, exc.detail)
 
     def _validate_clips(self, add, depth: int, problems: List[Dict[str, str]]) -> None:
         declared = [

@@ -3,9 +3,11 @@
 A preset is a starting point, not a law (D034 #1). It declares a **base** -- the
 concrete values for one effect kind -- plus the parameters a caller is allowed to
 change, each with its type, its range *inside* the effect's own declared range,
-and the base value as its default. Nothing here merges an override: resolving a
-document against its preset is F27-T03. This module is data, lookup and
-validation only -- no variation helper, no merge, no render.
+and the base value as its default. :func:`merge` turns one use of a preset into its
+effective values (base plus override), :func:`effect_for` names the registry effect
+those values instantiate, and :func:`difference` keeps only the values a use moved
+away from the base -- the record a document stores (D034 #2). This module is data,
+lookup, validation and that merge; it never renders and never varies on its own.
 
 Every row names an effect kind that exists in :data:`vx.edl3.EFFECT_REGISTRY` with
 the declarative ``filter`` backend: a preset is a filter with values, never a
@@ -25,13 +27,19 @@ one, so a registry edit cannot make an import fail -- it makes a test fail.
 Refusal
 -------
 :func:`resolve` raises ``EDLError("PRESET_UNKNOWN", ...)`` naming every declared
-id, the same shape :func:`vx.profiles.resolve` uses for ``PROFILE_UNKNOWN``.
+id, the same shape :func:`vx.profiles.resolve` uses for ``PROFILE_UNKNOWN``. The
+merge refuses a use that breaks the schema instead of repairing it: a key the
+preset does not expose is ``PARAM_NOT_EXPOSED``, a value outside the exposed range
+is ``PARAM_OUT_OF_RANGE`` (never rounded into it), and a value of the wrong kind --
+``True`` where a number is expected, or a number where a boolean is -- is
+``PARAM_TYPE``.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 from .edl3 import BACKEND_FILTER, EFFECT_REGISTRY, EDLError
 
@@ -43,6 +51,9 @@ __all__ = [
     "PRESETS",
     "names",
     "resolve",
+    "merge",
+    "effect_for",
+    "difference",
     "by_category",
     "check",
     "check_all",
@@ -348,6 +359,128 @@ def resolve(name: str) -> Preset:
             "preset_ref",
         )
     return preset
+
+
+def _type_problem(preset: Preset, param: PresetParam, value: Any) -> Optional[str]:
+    """One human sentence when ``value`` is not a ``param.kind`` value, else ``None``.
+
+    ``bool`` is never a number, even though Python says it is: a number knob is
+    not satisfied by ``True`` and a boolean knob is not satisfied by ``1``. A
+    ``color`` is judged by its type only -- no declared preset exposes one, and a
+    ``#rrggbb`` shape is the palette's business, not the merge's.
+    """
+    got = type(value).__name__
+    if param.kind == "bool":
+        if isinstance(value, bool):
+            return None
+        return f"preset {preset.id!r} declares {param.name!r} as a boolean, got {got}"
+    if param.kind == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return (
+                f"preset {preset.id!r} declares {param.name!r} as a number, got {got}"
+            )
+        if not math.isfinite(float(value)):
+            return (
+                f"preset {preset.id!r} declares {param.name!r} as a finite number, "
+                f"got {value!r}"
+            )
+        return None
+    if param.kind in ("color", "string"):
+        if isinstance(value, str):
+            return None
+        return (
+            f"preset {preset.id!r} declares {param.name!r} as a {param.kind}, "
+            f"got {got}"
+        )
+    return (
+        f"preset {preset.id!r} declares {param.name!r} with the unknown kind "
+        f"{param.kind!r}"
+    )
+
+
+def _range_problem(preset: Preset, param: PresetParam, value: Any) -> Optional[str]:
+    """One human sentence when ``value`` is outside the exposed range, else ``None``.
+
+    The exposed range rules, not the effect's wider ``ParamSpec``: what a preset
+    allows a caller to change is exactly what it exposes (D034 #1). Bounds are
+    inclusive and nothing is rounded towards them.
+    """
+    if param.minimum is None or param.maximum is None:
+        return None
+    number = float(value)
+    if param.minimum <= number <= param.maximum:
+        return None
+    unit = f" {param.unit}" if param.unit else ""
+    return (
+        f"preset {preset.id!r} exposes {param.name!r} in "
+        f"[{param.minimum:g}, {param.maximum:g}]{unit}, got {value!r}"
+    )
+
+
+def merge(name: str, overrides: Mapping[str, Any]) -> Dict[str, Any]:
+    """The effective values of one use of the preset ``name``.
+
+    ``preset.base`` with ``overrides`` applied and nothing else: a key the preset
+    does not declare in ``exposed`` is refused, never silently dropped; a value
+    outside the exposed range is refused, never rounded into it; a value of the
+    wrong kind is refused, never coerced. An empty ``overrides`` returns the base
+    unchanged -- same keys, same order, same values -- so a use that changes
+    nothing is exactly the declared preset.
+
+    Pure and deterministic: the registry and its base dicts are never mutated, and
+    the returned dict is a fresh copy whose key order is the base's.
+    """
+    preset = resolve(name)
+    exposed = {param.name: param for param in preset.exposed}
+    effective = dict(preset.base)
+    for key, value in overrides.items():
+        spot = f"exposed_params.{key}"
+        param = exposed.get(key)
+        if param is None:
+            raise EDLError(
+                "PARAM_NOT_EXPOSED",
+                f"preset {preset.id!r} exposes no parameter {key!r} "
+                f"(exposed: {sorted(exposed)})",
+                spot,
+            )
+        problem = _type_problem(preset, param, value)
+        if problem is not None:
+            raise EDLError("PARAM_TYPE", problem, spot)
+        problem = _range_problem(preset, param, value)
+        if problem is not None:
+            raise EDLError("PARAM_OUT_OF_RANGE", problem, spot)
+        effective[key] = value
+    return effective
+
+
+def effect_for(name: str, overrides: Mapping[str, Any]) -> Dict[str, Any]:
+    """The registry effect one use of ``name`` instantiates: its kind and values.
+
+    ``{"kind": preset.effect, "params": merge(name, overrides)}``: the shape the
+    compiler needs, with the preset's own effect kind, never a mechanism of its
+    own.
+    """
+    preset = resolve(name)
+    return {"kind": preset.effect, "params": merge(preset.id, overrides)}
+
+
+def difference(name: str, overrides: Mapping[str, Any]) -> Dict[str, Any]:
+    """Only the values ``overrides`` moves away from ``preset.base`` (D034 #2).
+
+    This is the record a document keeps: a use that overrides nothing has an empty
+    difference, and an override equal to the base is not a change. The merge's
+    validation applies unchanged, so an unexposed key or an out-of-range value is
+    refused here instead of quietly missing from the record. Keys come back in the
+    base's declaration order, so the record is stable whatever order the overrides
+    arrive in.
+    """
+    preset = resolve(name)
+    effective = merge(preset.id, overrides)
+    return {
+        key: effective[key]
+        for key, value in preset.base.items()
+        if effective[key] != value
+    }
 
 
 def by_category() -> Dict[str, Tuple[Preset, ...]]:
