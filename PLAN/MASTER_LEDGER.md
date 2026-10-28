@@ -265,6 +265,22 @@ versioni annullabili, ispezione e cancellazione.
 
 ---
 
+## F28 - Il Motion Studio e il sistema dei font sono scollegati
+
+Misurato il 28/10/2026: **53 template su 54** dichiarano `font-family: "Segoe UI",
+system-ui` nel proprio HTML; il font incluso `assets/fonts/Antonio-*.ttf` (OFL) e'
+usato da **zero** template; nessun `template.json` espone un parametro `font`.
+Esiste gia' un sottosistema font completo (`fontlib`, `fontapis`, `fontsource`,
+`fontchooser`, D001 e D002) che nessun template consuma.
+
+### Decomposizione F28 (registrata 2026-10-28)
+
+| ID | Task | Accettazione binaria | Stato |
+|---|---|---|---|
+| F28-T01 | Ogni template dichiara `font` (famiglia, peso) e lo applica via variabile CSS e `@font-face` del font incluso; nessun HTML hardcoda piu' una famiglia di sistema | i 54 HTML non contengono piu' `Segoe UI`; il font di default e' quello incluso e il frame cambia se si cambia famiglia | TODO |
+| F28-T02 | Il generatore risolve la famiglia con `fontlib` (licenza `commercial`), la passa al template e il report registra famiglia, licenza e fonte | un font `personal` viene proposto e non applicato senza risposta; un `unknown` e' scartato e dichiarato; con il provider spento si usa Antonio e il ripiego e' scritto nel report | TODO |
+| F28-T03 | Prova visiva su tre famiglie diverse | tre template con tre famiglie danno tre frame diversi; lo stesso template con lo stesso font da' lo stesso frame | TODO |
+
 ## F27 - Preset come punto di partenza, non come stampo
 
 `preset_ref`, `template_ref` e `exposed_params` esistono nel contratto dal 1.1/1.2, ma
