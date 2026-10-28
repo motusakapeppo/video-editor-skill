@@ -33,6 +33,16 @@ from vx import effects  # noqa: E402
 PASS = 0
 FAIL = 0
 PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+#: Placeholders the emitter fills from the plan, not from the node: the canvas
+#: the clip is staged at. They are not ``ParamSpec`` entries because no document
+#: may set them — ``zoompan`` and ``dolly_zoom`` ask the plan for its size
+#: instead of letting ``zoompan`` fall back to its 1280x720 default, which a
+#: 1080x1920 stage then stretched to 1920 lines (D-10).
+RESERVED = {"canvas_w", "canvas_h"}
+#: The canvas ``document()`` below declares, so a template is formatted for the
+#: size it would really be rendered at.
+DOC_CANVAS = (320, 568)
+
 
 GEOMETRY_KINDS = (
     "zoompan",
@@ -252,16 +262,17 @@ def check_templates(flat: Mapping[str, edl3.EffectSpec]) -> None:
         [kind for kind, spec in flat.items() if not spec.filter_template.strip()],
     )
     undeclared = [
-        f"{kind}: {sorted(used - set(spec.params))}"
+        f"{kind}: {sorted(used - set(spec.params) - RESERVED)}"
         for kind, spec in flat.items()
         for used in [set(PLACEHOLDER.findall(spec.filter_template))]
-        if used - set(spec.params)
+        if used - set(spec.params) - RESERVED
     ]
     check(
-        "every placeholder names a declared parameter",
+        "every placeholder names a declared parameter or a reserved canvas size",
         undeclared == [],
         undeclared,
     )
+
     unused = [
         f"{kind}: {sorted(set(spec.params) - used)}"
         for kind, spec in flat.items()
@@ -277,7 +288,7 @@ def check_templates(flat: Mapping[str, edl3.EffectSpec]) -> None:
     for kind, spec in flat.items():
         try:
             fragment = edl3_render.filter_fragment(
-                edl3.Effect(kind=kind), spec
+                edl3.Effect(kind=kind), spec, DOC_CANVAS
             )
         except Exception as exc:  # noqa: BLE001 - a template that cannot format fails
             broken.append(f"{kind}: {type(exc).__name__}: {exc}")
@@ -314,18 +325,18 @@ def check_templates(flat: Mapping[str, edl3.EffectSpec]) -> None:
     pixelate = edl3.EFFECT_REGISTRY["pixelate"]
     check(
         "pixelate formats its declared size into the filter",
-        edl3_render.filter_fragment(edl3.Effect(kind="pixelate"), pixelate)
+        edl3_render.filter_fragment(edl3.Effect(kind="pixelate"), pixelate, DOC_CANVAS)
         == "pixelize=w=16:h=16:mode=avg",
-        edl3_render.filter_fragment(edl3.Effect(kind="pixelate"), pixelate),
+        edl3_render.filter_fragment(edl3.Effect(kind="pixelate"), pixelate, DOC_CANVAS),
     )
     check(
         "an explicit parameter overrides the default",
         edl3_render.filter_fragment(
-            edl3.Effect(kind="pixelate", params={"size": 8.0}), pixelate
+            edl3.Effect(kind="pixelate", params={"size": 8.0}), pixelate, DOC_CANVAS
         )
         == "pixelize=w=8:h=8:mode=avg",
         edl3_render.filter_fragment(
-            edl3.Effect(kind="pixelate", params={"size": 8.0}), pixelate
+            edl3.Effect(kind="pixelate", params={"size": 8.0}), pixelate, DOC_CANVAS
         ),
     )
 

@@ -31,6 +31,7 @@ ENTRIES: Dict[str, EffectSpec] = {
         filter_template=(
             "zoompan=z={zoom}:d=1"
             ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            ":s={canvas_w}x{canvas_h}"
         ),
         trigger=(
             "Push in on a frame without moving the camera, to add weight to a still or a "
@@ -39,7 +40,7 @@ ENTRIES: Dict[str, EffectSpec] = {
         cap_seconds=8.0,
         fallback="static",
         notes=(
-            "zoompan always emits its own canvas (hd720 by default) and re-tags "
+            "zoompan emits the plan's own canvas (s=) and re-tags "
             "the frame rate; the compiler's restore stage scales, crops back to "
             "the clip canvas and re-stamps the declared rate, so neither size nor "
             "duration drifts"
@@ -183,6 +184,7 @@ ENTRIES: Dict[str, EffectSpec] = {
         filter_template=(
             "zoompan=z='min({zoom}+{rate}*on,8)':d=1"
             ":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            ":s={canvas_w}x{canvas_h}"
         ),
         trigger=(
             "Grow the frame continuously while the subject holds, the vertigo move of a "

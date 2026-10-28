@@ -688,11 +688,29 @@ def filter_number(value: float) -> str:
     return "0" if text in ("", "-0") else text
 
 
-def filter_fragment(effect: Any, spec: EffectSpec) -> str:
+#: Template placeholders the formatter fills from the *plan*, not from the node.
+#: They are reserved so a template can ask for the canvas it is staged at without
+#: every effect declaring two parameters that no document may set.
+CANVAS_PLACEHOLDERS = ("canvas_w", "canvas_h")
+
+
+def filter_fragment(
+    effect: Any,
+    spec: EffectSpec,
+    canvas: Optional[Tuple[int, int]] = None,
+) -> str:
     """Format one declarative entry's template with this instance's static params.
 
     A parameter the node omits takes its declared default, so the graph never
     guesses a value the registry did not publish.
+
+    ``{canvas_w}`` and ``{canvas_h}`` are *reserved* placeholders, not parameters
+    of the effect: they are filled from the canvas the clip is staged at, never
+    from the node. An effect that rewrites the frame size has to ask the plan
+    where it is going -- ``zoompan`` without ``s=`` silently emits its own 1280x720
+    and the stage then stretches those 720 lines back to a 1920-line canvas
+    (D-10). A template that asks for the canvas and gets none is refused rather
+    than formatted with a size nobody declared.
     """
     if not spec.filter_template:
         raise CompileError(
@@ -703,10 +721,20 @@ def filter_fragment(effect: Any, spec: EffectSpec) -> str:
     values = spec.default_params()
     for name, value in (effect.params or {}).items():
         values[name] = float(value)
+    formatted = {name: filter_number(value) for name, value in values.items()}
+    if any(f"{{{name}}}" in spec.filter_template for name in CANVAS_PLACEHOLDERS):
+        if canvas is None:
+            raise CompileError(
+                "BACKEND_UNIMPLEMENTED",
+                f"{spec.kind!r} asks the template for the plan canvas and none "
+                "was given",
+                f"effects.{spec.kind}",
+            )
+        width, height = canvas
+        formatted["canvas_w"] = str(int(width))
+        formatted["canvas_h"] = str(int(height))
     try:
-        return spec.filter_template.format(
-            **{name: filter_number(value) for name, value in values.items()}
-        )
+        return spec.filter_template.format(**formatted)
     except (IndexError, KeyError, ValueError) as exc:
         raise CompileError(
             "BACKEND_UNIMPLEMENTED",
@@ -733,7 +761,7 @@ def _filter_stage(
         if spec is None or spec.backend != BACKEND_FILTER:
             continue
         for instance in instances:
-            fragments.append(filter_fragment(instance, spec))
+            fragments.append(filter_fragment(instance, spec, canvas))
     if not fragments:
         return []
     width, height = canvas
