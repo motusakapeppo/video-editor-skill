@@ -28,6 +28,8 @@ percorso normale).
 | face_detection_yunet_2023mar (pesi ONNX) | 2023mar, sha256 8f2383e4...552fa4 | MIT | record fissato in `scripts/vx/models.py` + opencv/opencv_zoo | opzionale |
 | mediapipe | 1.1.1 | Apache-2.0 | metadati del pacchetto (classifier Apache 2.0) | libreria |
 | psutil | non installato | BSD-3-Clause | non presente in questo ambiente; import opzionale in `bench.py`, il picco di memoria viene dichiarato assente | opzionale |
+| Antonio (Regular + Bold, font incluso) | 2 TTF, Regular sha256 27f419ff2c909c2f... | OFL-1.1 | `assets/fonts/OFL.txt`, da Google Fonts | libreria |
+| Inter (variabile, font incluso) | 1 TTF variabile, sha256 29160a80ff49ddca... | OFL-1.1 | `assets/fonts/Inter-OFL.txt`, da github.com/google/fonts/ofl/inter, verificato 28/10/2026 | libreria |
 
 ## Da verificare prima dell'integrazione
 
