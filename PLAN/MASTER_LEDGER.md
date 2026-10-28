@@ -111,6 +111,11 @@ provvisorie (D010).
 | F2-T07 | W5 composizione | PiP, maschere, blend, chroma key | per ognuno un documento, un frame di riferimento e un test sul canale alfa | DONE `64acdcf` + `a0a7a76` - PiP, maschera, blend, chroma, 33 controlli |
 | F2-T08 | W6 annidamento | sequenze annidate con parametri e tempi propri | una sequenza dentro una sequenza renderizza; i tempi interni non dipendono da quelli esterni | DONE `64acdcf` + `a0a7a76` - annidamento reso una volta sola, 22 controlli |
 | F2-T09 | W7 chiusura | suite golden per ogni effetto, documentazione, `SKILL.md` | ogni effetto ha un frame su disco; `SKILL.md` sotto 250 righe; suite verde | DONE `f028e1c` - 15 effetti, 34 frame, MAD 0.000 |
+| F2-T10 | W8 schema v2 | EDL 3 `vx.edl3/2`: `preset_ref` risolto da registro, `stack` di camera (max 3, regola di composizione dichiarata), `template_ref` con `exposed_params` (il documento salva solo i valori), `synthetic`, `provenance` per ogni scelta | un documento con i cinque campi valida e fa round-trip; uno `stack` di 4 movimenti e' rifiutato con codice; un trattamento senza `provenance` e' rifiutato; un documento `vx.edl3/1` resta leggibile e dichiara la migrazione | TODO |
+| F2-T11 | W8 migratore v2 | 2.2 -> `vx.edl3/2` e riallineamento dei golden EDL 3 | un documento 2.2 reale, migrato, produce lo stesso render del 2.2 originale a parita' di frame entro la tolleranza dichiarata (MAD <= 0.001); i 34 frame golden esistenti restano identici o vengono rigenerati con un atto esplicito e il secondo giro e' byte-identico | TODO |
+| F2-T12 | W8 backend e regola di scelta | ogni voce del registro dichiara backend e regola per numero di keyframe e durata | un test generato da `EFFECT_REGISTRY` prova che nessuna voce resta senza regola: <=3 keyframe -> expr, oltre -> sendcmd, overlay per i testi; una voce senza regola fa fallire il test | TODO |
+| F2-T13 | W8 speed ramp e limiti | politica audio dello speed ramp nel contratto e tetto dichiarato per reverse e freeze | la politica (atempo a scalini, pitch mantenuto) e' in DECISIONS e il test prova che il picco spettrale resta entro la tolleranza dichiarata; reverse o freeze oltre il tetto falliscono con un codice che nomina il tetto | TODO |
+| F2-T14 | W8 fetta verticale v2 | un documento minimo con un effetto a 2 keyframe e una transizione, dal validatore al frame di riferimento | il documento valida, rende e produce un frame di riferimento byte-identico in due esecuzioni; nessuna ondata successiva parte prima che questo sia verde | TODO |
 
 ## F3 — Motion Studio (Chromium)
 
@@ -213,6 +218,7 @@ intatta; 200 file di fuzz senza errori non gestiti.
 | F17-T05 | Verifica sha256 e bit rot, originali immutabili | un byte alterato in un nostro artefatto viene segnalato; il sorgente ricontrollato resta identico | DONE `853a306` — `verify` segnala byte alterati senza toccare i non posseduti |
 | F17-T06 | Limiti ai sottoprocessi | un ffmpeg che non finisce viene terminato al tempo massimo, con errore dichiarato | DONE `0b9c8a4` — `ProcessTimeout` con stadio, tempo e testa del comando |
 | F17-T07 | Fuzz con file ostili e catena dei modelli | 200 file ostili danno errori dichiarati e nessun traceback non gestito; un modello con hash diverso da quello atteso viene rifiutato | DONE `0b9c8a4` — 200 casi: 110 errori dichiarati, 0 non gestiti; 3 modelli con hash fissato |
+| F17-T08 | Prova di crash a livello di sistema | 50 terminazioni reali durante una scrittura, con un figlio ffmpeg vivo: il journal resta leggibile, il file mezzo scritto e' un orfano dichiarato, il figlio non sopravvive; gli originali sono protetti con attributo di sola lettura e ACL di Windows, e una scrittura fallisce davvero | TODO |
 
 
 Codifica per titolo con VMAF, gestione colore, torneo a coppie con ordine
