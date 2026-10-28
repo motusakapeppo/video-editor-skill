@@ -78,6 +78,13 @@ PROVENANCE_KINDS = ("finding", "opportunity")
 #: Deeper nesting is rejected with ``NESTING_TOO_DEEP``.
 MAX_NESTING_DEPTH = 2
 
+#: Anti-arlecchino cap: at most this many visible effect instances may start
+#: inside any :data:`EFFECT_DENSITY_WINDOW`-second window of one timeline.
+#: Breaching it is reported as ``EFFECT_DENSITY``.
+EFFECT_DENSITY_LIMIT = 3
+#: The sliding window the cap is measured over, in seconds; both edges count.
+EFFECT_DENSITY_WINDOW = 10.0
+
 INTERPOLATIONS = frozenset({"linear", "hold", "bezier"})
 TRANSITION_KINDS = frozenset({"fade_in", "fade_out", "crossfade"})
 #: Generators: the third source kind. ``generator`` names a Motion Studio
@@ -245,6 +252,8 @@ __all__ = [
     "FLEXIBLE_EXPR_KINDS",
     "TEXT_BACKEND",
     "TEXT_MECHANISM_KINDS",
+    "EFFECT_DENSITY_LIMIT",
+    "EFFECT_DENSITY_WINDOW",
     "EDLError",
     "ParamSpec",
     "EffectSpec",
@@ -266,6 +275,7 @@ __all__ = [
     "Timeline3",
     "param_domain_problem",
     "select_backend",
+    "check_effect_density",
     "sample",
 ]
 
@@ -1442,6 +1452,87 @@ class NestedSequence:
 # ---------------------------------------------------------------- timeline
 
 
+def _clip_start_times(timeline: "Timeline3") -> List[float]:
+    """Timeline start of every clip, in document order."""
+    cursor = 0.0
+    starts: List[float] = []
+    for clip in timeline.clips:
+        start = cursor if clip.dst_in is None else float(clip.dst_in)
+        if clip.layer == 0:
+            cursor = max(cursor, start + max(0.0, clip.timeline_duration))
+        starts.append(start)
+    return starts
+
+
+def check_effect_density(
+    timeline: "Timeline3",
+    limit: int = EFFECT_DENSITY_LIMIT,
+    window: float = EFFECT_DENSITY_WINDOW,
+) -> List[str]:
+    """Return one human detail per window holding more than ``limit`` effects.
+
+    No more than ``limit`` visible effect instances may *start* inside any
+    window of ``window`` seconds on one timeline. The window slides and both
+    edges are inclusive: an instance at ``t`` and one at ``t + window`` share a
+    window whenever the material spans it.
+
+    An instance is one library entry of ``Clip3.effects`` on a clip that
+    actually renders, meaning it carries a source picture or a generator. A clip
+    that only references a nested sequence is measured on its own inner
+    timeline; text layers and captions are not ``Effect`` entities, so they
+    never count; and an adjustment layer's effects apply to a whole segment and
+    carry no start of their own, so they are outside the rule.
+
+    The primitives (``transform``, ``crop``, ``color``, ``blur``, ``chroma_key``)
+    are the compositing stack every clip may carry, not looks: they are outside
+    the rule. What the cap governs is the declarative library, where the
+    patchwork risk lives, so a five-primitive stack stays legal while four
+    library looks in ten seconds do not. ``tests/test_edl3_contract.py`` stacks
+    five primitives on one clip and must keep validating.
+
+    ``Effect`` declares no per-instance start time, so each instance is
+    anchored on its clip's start on the timeline: ``dst_in`` when declared,
+    otherwise the concatenation cursor. Pure: the document is only read.
+    """
+    if limit < 1 or window <= 0.0:
+        return []
+    anchored: List[Tuple[float, str]] = []
+    for start, clip in zip(_clip_start_times(timeline), timeline.clips):
+        if not clip.source and clip.generator is None:
+            continue
+        for effect in clip.effects:
+            spec = EFFECT_REGISTRY.get(effect.kind)
+            if spec is None or spec.backend != BACKEND_FILTER:
+                continue
+            anchored.append((start, clip.id))
+    anchored.sort(key=lambda item: item[0])
+
+    problems: List[str] = []
+    visited: List[float] = []
+    for index, (start, _clip_id) in enumerate(anchored):
+        if start in visited:
+            continue
+        visited.append(start)
+        windowed = [
+            item for item in anchored[index:] if item[0] - start <= window + 1e-9
+        ]
+        if len(windowed) <= limit:
+            continue
+        clips: List[str] = []
+        for _t, clip_id in windowed:
+            if clip_id not in clips:
+                clips.append(clip_id)
+        target = (
+            f"clip {clips[0]}" if len(clips) == 1 else f"clips {', '.join(clips)}"
+        )
+        problems.append(
+            f"{len(windowed)} effect instances start between {start:.3f}s and "
+            f"{start + window:.3f}s, at most {limit} per {window:g}s (on {target})"
+        )
+    return problems
+
+
+
 @dataclass
 class Timeline3:
     """The versioned document."""
@@ -1548,6 +1639,7 @@ class Timeline3:
 
         self._validate_header(add)
         self._validate_clips(add, depth, problems)
+        self._validate_effect_density(add)
         self._validate_extras(add)
         self._validate_adjustments(add)
         self._validate_text(add)
@@ -1919,6 +2011,10 @@ class Timeline3:
                 f"{expected:.6f}s by more than half a frame "
                 f"({0.5 / self.fps if self.fps > 0 else 0.0:.6f}s)",
             )
+
+    def _validate_effect_density(self, add) -> None:
+        for detail in check_effect_density(self):
+            add("EFFECT_DENSITY", "clips", detail)
 
     def _validate_placement(self, add) -> None:
         """Layer 0 must tile the timeline: no gap, no overlap.

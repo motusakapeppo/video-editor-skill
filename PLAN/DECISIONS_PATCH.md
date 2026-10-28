@@ -438,6 +438,14 @@ deroga, nessun interruttore. Se un documento legittimo ha bisogno di piu', la de
 si prende qui e si registra, non a runtime. I 15 documenti del riferimento hanno un
 effetto ciascuno, quindi il tetto non li tocca.
 
+Emendamento (2026-10-28, dopo la prima esecuzione). La regola come scritta contava
+ogni istanza, e ha bocciato il documento di contratto che mette cinque primitivi su
+un solo clip (`transform`, `crop`, `color`, `blur`, `chroma_key`). Quel documento non
+e' un arlecchino: e' l'impalcatura che ogni clip puo' portare. Il tetto conta quindi
+le **voci della libreria** (backend dichiarativo), non i primitivi. Prova che la
+regola resta viva: cinque primitivi passano, cinque primitivi piu' quattro look
+vengono rifiutati sui quattro. `tests/test_edl3_density.py` 29 assert.
+
 ## D032 - Lo smart render e' riuso di segmenti, non copia di sottointervalli (2026-10-28)
 
 **Stato: in attuazione in F16-T03.**
