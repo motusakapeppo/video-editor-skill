@@ -20,15 +20,15 @@
       "index": 3,
       "t": 1.0,
       "file": "instant-01.png",
-      "sha256": "112ff16137f0d133cfa32843a20f42b223815f0c43d5f1d493bae4ec7ade15e1",
-      "bytes": 38836
+      "sha256": "b2685695da78922480a986eef3813bf32935aad3d22b718400f0a1edb66efaa1",
+      "bytes": 36865
     },
     {
       "index": 5,
       "t": 1.666667,
       "file": "instant-02.png",
-      "sha256": "112ff16137f0d133cfa32843a20f42b223815f0c43d5f1d493bae4ec7ade15e1",
-      "bytes": 38836
+      "sha256": "b2685695da78922480a986eef3813bf32935aad3d22b718400f0a1edb66efaa1",
+      "bytes": 36865
     }
   ]
 }

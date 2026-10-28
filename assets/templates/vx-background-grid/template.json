@@ -4,6 +4,11 @@
   "duration": 2.2,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "inter"
+    },
     "accent": {
       "type": "color",
       "values": ["#38E1FF", "#FF4D6D", "#FFD400", "#7CFF6B"],

@@ -4,6 +4,11 @@
   "duration": 1.8,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "inter"
+    },
     "value": { "type": "number", "min": 0, "max": 100, "default": 68 },
     "label": { "type": "string", "max_length": 44, "default": "Rendering sequence" },
     "accent": {

@@ -4,6 +4,11 @@
   "duration": 2.3,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "inter"
+    },
     "name": {
       "type": "string",
       "max_length": 34,

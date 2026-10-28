@@ -4,6 +4,33 @@
 <meta charset="utf-8">
 <title>vx-card-profile</title>
 <style>
+  /* Bundled OFL fonts (assets/fonts), shared by every Motion Studio template. */
+  @font-face {
+    font-family: "VX Antonio";
+    src: url("../../fonts/Antonio-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "VX Antonio";
+    src: url("../../fonts/Antonio-Bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+    font-display: block;
+  }
+  @font-face {
+    font-family: "VX Inter";
+    src: url("../../fonts/Inter-Variable.ttf") format("truetype");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: block;
+  }
+  :root {
+    --vx-font-display: "VX Antonio", "VX Inter", sans-serif;
+    --vx-font-text: "VX Inter", "VX Antonio", sans-serif;
+    --vx-font-family: var(--vx-font-display);
+  }
   html, body {
     margin: 0;
     padding: 0;
@@ -14,7 +41,7 @@
   }
   body {
     -webkit-font-smoothing: antialiased;
-    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--vx-font-family);
   }
   #stage {
     position: absolute;
@@ -90,6 +117,7 @@
 
   var DUR = 2.3;
   var DEFAULTS = {
+    font: "inter",
     name: "Giulia Ferri",
     role: "Fotografa",
     tag: "Ospite",
@@ -123,8 +151,21 @@
     return out || "\u00B7";
   }
 
+  function whenFontsReady() {
+    if (!document.fonts) { return Promise.resolve(); }
+    return Promise.all([
+      document.fonts.load('400 40px "VX Antonio"'),
+      document.fonts.load('700 40px "VX Antonio"'),
+      document.fonts.load('400 40px "VX Inter"')
+    ]).catch(function () {}).then(function () {
+      return document.fonts.ready;
+    });
+  }
+
   function apply(t) {
     var p = Object.assign({}, DEFAULTS, window.__vxParams || {});
+    document.documentElement.style.setProperty("--vx-font-family",
+      p.font === "inter" ? "var(--vx-font-text)" : "var(--vx-font-display)");
     var w = window.innerWidth;
     var h = window.innerHeight;
     var width = Math.round(w * 0.82);
@@ -204,7 +245,7 @@
     void stage.offsetHeight;
     return new Promise(function (resolve) {
       requestAnimationFrame(function () {
-        requestAnimationFrame(function () { void stage.offsetHeight; resolve(); });
+        requestAnimationFrame(function () { void stage.offsetHeight; whenFontsReady().then(resolve); });
       });
     });
   };

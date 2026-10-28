@@ -4,6 +4,11 @@
   "duration": 2.0,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "inter"
+    },
     "anchor_x": {
       "type": "number",
       "min": 0,

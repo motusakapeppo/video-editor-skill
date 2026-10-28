@@ -116,7 +116,7 @@ def run(work: Path) -> None:
         "a. stats name files, bytes and deps",
         good["stats"]["files"] >= 2
         and good["stats"]["bytes"] > 0
-        and good["stats"]["deps"] == 0,
+        and good["stats"]["deps"] == 3,
         str(good["stats"]),
     )
     note("runtime", "static-only here; runtime_probe() is opt-in")

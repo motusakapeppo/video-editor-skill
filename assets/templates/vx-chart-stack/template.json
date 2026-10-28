@@ -4,6 +4,11 @@
   "duration": 2.2,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "inter"
+    },
     "value": { "type": "number", "min": 0, "max": 100, "default": 72 },
     "series": { "type": "string", "max_length": 32, "default": "46,32,22" },
     "rows": { "type": "string", "max_length": 24, "default": "Q1,Q2,Q3" },

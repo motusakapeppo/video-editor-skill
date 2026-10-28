@@ -4,6 +4,11 @@
   "duration": 2.0,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "antonio"
+    },
     "value": { "type": "number", "min": 0, "max": 99999, "default": 12840 },
     "label": { "type": "string", "max_length": 24, "default": "Subscribers" },
     "digits": { "type": "int", "min": 3, "max": 6, "default": 5 },

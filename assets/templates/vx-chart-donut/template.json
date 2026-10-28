@@ -4,6 +4,11 @@
   "duration": 2.4,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "inter"
+    },
     "value": { "type": "number", "min": 0, "max": 100, "default": 88 },
     "segments": { "type": "string", "max_length": 40, "default": "38,27,21,14" },
     "labels": { "type": "string", "max_length": 64, "default": "Direct,Search,Social,Referral" },

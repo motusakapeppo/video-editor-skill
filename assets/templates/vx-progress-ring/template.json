@@ -4,6 +4,11 @@
   "duration": 2.0,
   "size": [1080, 1920],
   "params": {
+    "font": {
+      "type": "string",
+      "values": ["antonio", "inter"],
+      "default": "inter"
+    },
     "value": { "type": "number", "min": 0, "max": 100, "default": 74 },
     "label": { "type": "string", "max_length": 44, "default": "Storage used" },
     "caption": { "type": "string", "max_length": 40, "default": "sync / 2.4 GB" },

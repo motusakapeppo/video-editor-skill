@@ -47,7 +47,11 @@ NONDETERMINISTIC_JS  `Math.random`, `Date.now`, `new Date(` or `performance.now`
 DEP_MISSING     a local dependency (font, image, sprite, `.js`, `.css`,
                 `@font-face src`) named by the template does not exist on disk.
 DEP_ABSOLUTE    a dependency with a drive letter, a leading `/` or `\\`, or a
-                `..` that escapes the template directory.
+                `..` that escapes the template directory without landing in a
+                shared asset root. Those roots are the skill's own
+                `assets/fonts/`: the bundled OFL faces live there once instead
+                of being copied into 54 directories, so a template names
+                `../../fonts/Antonio-Regular.ttf` and the file must still exist.
 MANIFEST_INVALID `template.json` missing, not JSON, unknown top-level key, a
                 parameter without `type`, a default outside its own domain,
                 `fps` outside 1..120, a `size` component outside 16..8192, or
@@ -171,6 +175,17 @@ class MotionLintError(VxError):
 
 def _templates_root() -> Path:
     return Path(__file__).resolve().parents[2] / "assets" / "templates"
+
+
+def _shared_roots() -> Tuple[Path, ...]:
+    """The `..` targets a template may name: the skill's bundled font directory.
+
+    Resolved from this file, never a literal path. A missing directory yields an
+    empty tuple, so an absent bundle degrades to the old refusal instead of a
+    false pass: the `@font-face` reference then fails as DEP_MISSING.
+    """
+    fonts = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+    return (fonts.resolve(),) if fonts.is_dir() else ()
 
 
 def _resolve_root(template_dir: str | Path) -> Path:
@@ -327,6 +342,21 @@ class _Linter:
     def add(self, code: str, file: str, line: int, detail: str) -> None:
         self.findings.append(_finding(code, file, line, detail))
 
+    def is_shared(self, target: Path) -> bool:
+        """True when `target` lies inside a declared shared asset root.
+
+        Only `assets/fonts/` is shared: the bundled OFL faces are one copy for
+        the whole library, so `../../fonts/<face>.ttf` is a legitimate
+        dependency while `../outside.png` stays an absolute one.
+        """
+        for shared in _shared_roots():
+            try:
+                target.relative_to(shared)
+            except ValueError:
+                continue
+            return True
+        return False
+
     def read_text(self, path: Path, label: str) -> Optional[str]:
         try:
             data = path.read_bytes()
@@ -364,7 +394,11 @@ class _Linter:
         try:
             target.relative_to(self.root)
         except ValueError:
-            return "escaped", None
+            # A `..` leaves the template directory. It is still a legitimate
+            # dependency when it lands in a shared asset root (the bundled
+            # fonts), and an absolute one when it lands anywhere else.
+            if not self.is_shared(target):
+                return "escaped", None
         return ("exists" if target.exists() else "missing"), target
 
     def reference(self, url: str, label: str, line: int, base: Path, tag: str) -> None:

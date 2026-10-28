@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,15 @@ SCRIPTS = ROOT / "scripts"
 TEMPLATE = ROOT / "assets" / "templates" / "vx-title-lower-third"
 SHIPPED = "vx-title-lower-third"
 SHIPPED_HTML = (TEMPLATE / "index.html").read_text(encoding="utf-8")
+
+#: The shipped page minus its `@font-face` block. A copy of the page dropped in
+#: a temp directory has no `../../fonts/` next to it, and the linter is right to
+#: refuse that reference: these fixtures exist to exercise the catalogue, not the
+#: bundled fonts, so the one block that reaches outside the directory is removed.
+_FONT_FACES = re.compile(
+    r"  /\* Bundled OFL fonts.*?\n  :root \{.*?\n  \}\n", re.DOTALL
+)
+COPY_HTML = _FONT_FACES.sub("", SHIPPED_HTML)
 
 PASS = 0
 FAIL = 0
@@ -193,8 +203,8 @@ def case_a() -> None:
         f"{row.get('title')!r} / {row.get('category')!r}",
     )
     check(
-        "params() lists the four declared parameters",
-        sorted(reg.params(SHIPPED)) == ["accent", "position", "subtitle", "title"],
+        "params() lists the five declared parameters",
+        sorted(reg.params(SHIPPED)) == ["accent", "font", "position", "subtitle", "title"],
         str(sorted(reg.params(SHIPPED))),
     )
 
@@ -203,9 +213,9 @@ def case_b(work: Path) -> None:
     print("\n b. a mixed tree admits the good one and blocks the other two")
     root = work / "mixed"
     write_template(
-        root, "good-one", html=SHIPPED_HTML, meta=manifest_text(name="probe-good")
+        root, "good-one", html=COPY_HTML, meta=manifest_text(name="probe-good")
     )
-    remote_html = SHIPPED_HTML.replace(
+    remote_html = COPY_HTML.replace(
         "</head>",
         '<script src="https://cdn.example.com/remote.js"></script>\n</head>',
         1,
@@ -216,7 +226,7 @@ def case_b(work: Path) -> None:
     write_template(
         root,
         "broken-one",
-        html=SHIPPED_HTML,
+        html=COPY_HTML,
         meta='{"name": "probe-broken", "fps": 30,',
     )
 
@@ -285,6 +295,7 @@ def case_c() -> None:
         "defaults fill the parameters that were not given",
         merged
         == {
+            "font": "antonio",
             "title": "Solo titolo",
             "subtitle": "Ruolo, Citta",
             "accent": "#FFD400",
@@ -393,7 +404,7 @@ def case_e(work: Path) -> None:
     print("\n e. refresh() and add() pick up templates after the first load")
     root_a = work / "growing"
     write_template(
-        root_a, "one", html=SHIPPED_HTML, meta=manifest_text(name="probe-one")
+        root_a, "one", html=COPY_HTML, meta=manifest_text(name="probe-one")
     )
     reg = motion_registry.Registry(root_a)
     check(
@@ -403,7 +414,7 @@ def case_e(work: Path) -> None:
     )
 
     write_template(
-        root_a, "two", html=SHIPPED_HTML, meta=manifest_text(name="probe-two")
+        root_a, "two", html=COPY_HTML, meta=manifest_text(name="probe-two")
     )
     returned = reg.refresh()
     check(
@@ -414,7 +425,7 @@ def case_e(work: Path) -> None:
 
     root_b = work / "second-root"
     write_template(
-        root_b, "three", html=SHIPPED_HTML, meta=manifest_text(name="probe-three")
+        root_b, "three", html=COPY_HTML, meta=manifest_text(name="probe-three")
     )
     returned = reg.add(root_b)
     check(
