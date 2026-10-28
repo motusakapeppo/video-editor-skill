@@ -328,7 +328,7 @@ Uno TrendSnapshot per piattaforma e genere: durate tipiche, schemi dei titoli, h
 4. Aggiorna la knowledge base e scrive nel referto le fonti usate e quelle saltate, con il motivo.
 5. Il critico verifica che il montaggio non copi un riferimento: la distanza dalle impronte usate deve superare una soglia fissata in F0.
 
-### B6. Accettazione (F8 bis)
+### B6. Accettazione (F8 bis) - SUPERATO da C
 
 - Con un server API simulato: la quota viene rispettata, la cache funziona (la seconda richiesta non fa nessuna chiamata) e la chiave non compare in nessun file generato (test che la cerca nei log, nei referti e nel progetto).
 - Senza chiave: il lavoro si completa e il referto dichiara la fonte saltata.
@@ -336,13 +336,13 @@ Uno TrendSnapshot per piattaforma e genere: durate tipiche, schemi dei titoli, h
 - L'incarico 10 dell'esame (reel per una palestra) passa con uno TrendSnapshot datato e con le fonti.
 - I file transitori vengono cancellati con verifica.
 
-### B7. Addendum al prompt (da incollare in coda alla sezione 9)
+### B7. Addendum al prompt (da incollare in coda alla sezione 9) - SUPERATO da C
 
 Il Trend Radar (Allegato B) sostituisce ogni riferimento alla ricerca sui social. Nessun login, nessuna credenziale, nessun accesso automatizzato a Instagram o TikTok, nessun download da piattaforme che lo vietano. La YouTube Data API si usa solo con la chiave in VX\_YOUTUBE\_API\_KEY: la chiave non compare mai in repository, log, referti o prompt, e senza chiave si salta la fonte dichiarandolo. Il Trend Radar parte da solo a ogni lavoro con piattaforma, genere o tema, come descritto in B5. Implementalo in F8 e verifica tutto B6 prima di chiudere la fase.
 
 ## Allegato C. Trend Radar v2: segnali a gradini e provider che si auto-diagnosticano
 
-Precedenza: questo allegato sostituisce l'Allegato B dove i testi differiscono (B2, B5, B6, B7). Restano validi B3 (chiavi e quota YouTube) e B4 (TrendSnapshot).
+Precedenza: questo allegato sostituisce l'Allegato B dove i testi differiscono (B2, B5, B6, B7). Restano validi B3 (chiavi e quota YouTube) e B4 (TrendSnapshot). A sua volta, l'Allegato D sostituisce C3 e C6 per i provider, e ogni uso di API di Instagram o TikTok.
 
 ### C1. Principio
 
@@ -358,12 +358,12 @@ Ogni fonte è un provider con una sonda di capacità. La skill non dà nulla per
 
 Ogni segnale porta fonte, data, livello e confidenza.
 
-### C3. Mappa dei provider noti (da verificare dal vivo: è il compito della sonda)
+### C3. Mappa dei provider noti - SUPERATO IN PARTE da D (TikTok, Instagram, fornitori terzi) (da verificare dal vivo: è il compito della sonda)
 
 - YouTube. Data API: S2 e S1 (metadati e miniature). Gemini su URL pubblico: S4 approssimato, gratuito con un tetto giornaliero di ore di video, previa lettura dei termini del livello gratuito.
 - TikTok. Creative Center pubblico: S1 sugli hashtag (gli altri feed risultano ridotti in un aggiornamento recente e vanno verificati). oEmbed ufficiale su un URL di video: S3 (didascalia con hashtag, autore, miniatura, nome del suono), senza metriche e senza file. Commercial Content e Ad Library: annunci, non contenuti organici, con accesso all'API su domanda. Research API: riservata a istituzioni accademiche e non profit, quindi non disponibile.
 - Instagram. API Graph, ricerca per hashtag e Business Discovery su account professionali: S2 (like, commenti, visualizzazioni) e, solo dove l'API restituisce l'URL del file, S4. Il file manca per i video con audio con licenza (compreso quello della libreria di Instagram) e per i reel con download disattivato. Richiede un account Instagram professionale collegato a una Pagina Facebook e un'app Meta; per un uso pubblico serve la revisione dell'app. Limite di 30 hashtag unici ogni 7 giorni.
-- Fornitori terzi (MCP o API a crediti): spesso S1-S3. Opzionali, spenti di default, con tetto di spesa zero e conferma esplicita prima di qualunque costo.
+- Fornitori terzi (MCP o API a crediti): spesso S1-S3. Opzionali, spenti di default, con tetto di spesa zero e conferma esplicita prima di qualunque costo. SUPERATO da D: nessun fornitore a pagamento, nemmeno come opzione.
 - Web: S0.
 
 ### C4. Sonda di capacità e salute
@@ -396,7 +396,7 @@ Nel brief, trends con valori off, light o deep, più platforms, niche e region. 
 - Video di terzi analizzati in memoria o in cartella temporanea e cancellati; nessuna ridistribuzione.
 - Nell'UE, per il data mining conta anche l'opt-out dei titolari: da verificare con un legale. Questo documento non è una consulenza legale.
 - Chiavi e token (YouTube, Gemini, Meta) solo in variabili d'ambiente, mai nel repository, nei log o nei referti.
-- Tutto gratuito per impostazione predefinita; i provider a pagamento sono opt-in.
+- Tutto gratuito: nessun fornitore a pagamento, nessun credito, nessun abbonamento, nemmeno come opzione (Allegato D).
 
 ### C8. Accettazione (F8 ter)
 
