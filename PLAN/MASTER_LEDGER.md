@@ -265,6 +265,23 @@ versioni annullabili, ispezione e cancellazione.
 
 ---
 
+## F27 - Preset come punto di partenza, non come stampo
+
+`preset_ref`, `template_ref` e `exposed_params` esistono nel contratto dal 1.1/1.2, ma
+oggi sono solo trasportati e validati nella forma: nessuno li risolve, nessuno li
+applica. Il principio: un preset dichiara una base e i parametri esposti; ogni uso
+salva **solo le differenze**; la variazione e' deterministica e riproducibile.
+
+### Decomposizione F27 (registrata 2026-10-28)
+
+| ID | Task | Accettazione binaria | Stato |
+|---|---|---|---|
+| F27-T01 | `template_ref` + `exposed_params` applicati al template: fusione sui valori del template, rifiuto di un parametro non esposto e di un valore fuori intervallo | due valori diversi producono due frame diversi; senza override il frame e' identico al default del template | TODO |
+| F27-T02 | Registro dei preset: movimento di camera, profilo di camera, lente, palette, luce; ognuno con valori base e schema esposto | ogni preset dichiarato si risolve; un preset ignoto e' rifiutato; ogni parametro esposto ha tipo, intervallo e default | TODO |
+| F27-T03 | Fusione preset + override, con `PRESET_UNKNOWN`, `PARAM_NOT_EXPOSED`, `PARAM_OUT_OF_RANGE`, e la provenienza registrata | l'effettivo e' base piu' override, tracciato; un override non esposto e' rifiutato col suo codice | TODO |
+| F27-T04 | Motore di variazione deterministico: dato un preset e un seme, N varianti dentro gli intervalli esposti | lo stesso seme da' le stesse varianti, semi diversi danno varianti diverse, nessuna esce dall'intervallo | TODO |
+| F27-T05 | Prova visiva: tre varianti dello stesso preset | tre frame diversi, e la variante senza override coincide col default byte per byte | TODO |
+
 ## F26 - Profili di genere: un motore, ogni tipo di video
 
 Il motore EDL 3 e' gia' indipendente dal formato: accetta qualunque

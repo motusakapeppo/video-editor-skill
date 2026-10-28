@@ -488,3 +488,27 @@ Si decide:
    aperto: aggiungere un profilo e' aggiungere un dato e la sua prova, non un ramo.
 4. Un profilo senza prova end-to-end non e' dichiarato: la matrice delle consegne
    e il fotogramma di prova sono parte della definizione, non un extra.
+
+## D034 - Un preset e' un punto di partenza; l'uso registra solo le differenze (2026-10-28)
+
+**Stato: in attuazione in F27.**
+
+Contesto. `preset_ref`, `template_ref` ed `exposed_params` sono nel contratto dal 1.1
+e dal 1.2, ma nessuno dei tre viene letto: sono campi inerti. Usare un template cosi'
+com'e' significa ottenere sempre lo stesso titolo, lo stesso movimento, la stessa
+palette: il catalogo diventa uno stampo.
+
+Si decide:
+
+1. Un preset dichiara una **base** (valori concreti) e uno **schema esposto**: per ogni
+   parametro modificabile, tipo, intervallo e valore predefinito. Un parametro non
+   dichiarato nello schema non e' modificabile, e il compilatore lo rifiuta invece di
+   ignorarlo.
+2. Un documento salva **solo le differenze** rispetto alla base. L'effettivo e' la
+   fusione `base + override`, e la provenienza registra da quale preset si e' partiti e
+   quali valori sono stati cambiati.
+3. La variazione e' **deterministica**: dato un seme, le varianti sono le stesse a ogni
+   esecuzione. Niente `random` senza seme, niente differenza che non si possa
+   riprodurre.
+4. Ogni variante deve **differire visivamente** dalla base: una variazione che produce
+   lo stesso frame e' un difetto, e il test lo prova byte per byte.
