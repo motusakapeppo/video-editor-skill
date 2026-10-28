@@ -157,6 +157,46 @@ AUDIO_RATE = 48000
 #: Dialogue joint fade, mirroring the house 12 ms cut fade.
 DIALOGUE_FADE_SEC = 0.012
 
+#: The SDR delivery: the 8-bit picture this engine has always produced, and the
+#: one a document without a profile (or with an SDR profile) gets. Byte identity
+#: with the pre-F26-T05 renderer rests on this row staying exactly this.
+SDR_DELIVERY: Dict[str, Any] = {
+    "profile": None,
+    "transfer": "sdr",
+    "bit_depth": 8,
+    "declared_bit_depth": 8,
+    "encoder": "libx264",
+    "pix_fmt": "yuv420p",
+    "tags": {},
+    "x264_params": "",
+}
+#: A BT.2100 delivery is 10 bit by definition, so the transfer is what switches
+#: the pixel format; the encoder stays libx264 because this build's x264 lists
+#: yuv420p10le among its pixel formats.
+HDR_BIT_DEPTH = 10
+HDR_PIX_FMT = "yuv420p10le"
+HDR_ENCODER = "libx264"
+#: BT.2100 stream tags per declared transfer, plus the x264 VUI spelling of the
+#: same three values. This build's libx264 carries colour into the bitstream VUI
+#: through ``-x264-params`` only: the ``-color_primaries``/``-color_trc`` stream
+#: options alone leave ``color_primaries``/``color_transfer`` unreadable by
+#: ffprobe on the muxed file, so both are written and the test measures the
+#: result on the file rather than trusting the command line.
+HDR_DELIVERY: Dict[str, Dict[str, str]] = {
+    "hlg": {
+        "color_primaries": "bt2020",
+        "color_trc": "arib-std-b67",
+        "colorspace": "bt2020nc",
+        "x264_params": "colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc",
+    },
+    "pq": {
+        "color_primaries": "bt2020",
+        "color_trc": "smpte2084",
+        "colorspace": "bt2020nc",
+        "x264_params": "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc",
+    },
+}
+
 #: Structural validation codes the compiler refuses outright.
 HARD_CODES = frozenset(
     {
@@ -306,6 +346,9 @@ __all__ = [
     "KEYING_OPS",
     "CLIP_ORDER",
     "SUPPORTED_EFFECTS",
+    "SDR_DELIVERY",
+    "HDR_DELIVERY",
+    "delivery_colour",
     "CompileError",
     "resolve_settings",
     "select_backend",
@@ -1861,6 +1904,7 @@ def compile_timeline(
         "audio_policy": audio,
         "fps": float(timeline.fps),
         "duration": float(timeline.duration),
+        "color": delivery_colour(timeline.profile_ref),
         "filter_script": ";\n".join(chains) + "\n",
         "input_args": input_args,
         "map": f"[{base_label}]",
@@ -1948,12 +1992,57 @@ def _input_runs_at_declared_rate(plan: Mapping[str, Any]) -> bool:
     return True
 
 
+def delivery_colour(profile_ref: Optional[str]) -> Dict[str, Any]:
+    """What the document's declared profile means for the delivered stream.
+
+    Pure data, no ffmpeg: the encoder, the pixel format and the stream tags the
+    encoder must write. No profile, or an SDR profile, is the byte-identical
+    8-bit picture this engine has always produced -- an SDR profile's declared
+    10 bit is its graded negative (the ProRes deliverable), never a silent
+    up-conversion of the mp4. A BT.2100 transfer is the only declaration that
+    changes the pixels to 10 bit, because an HDR stream in 8 bit would be a lie
+    about what the file carries.
+
+    A non-SDR transfer reaches here only from a validated document, and
+    :func:`vx.profiles.check` refuses such a row below 10 bit, so the 10-bit
+    pixel format is never invented for a declaration that did not ask for it.
+    """
+    if profile_ref is None:
+        return dict(SDR_DELIVERY, tags={})
+    from . import profiles  # noqa: PLC0415 - the registry is read, never imported
+
+    row = profiles.resolve(profile_ref)
+    if row.transfer == "sdr":
+        return dict(
+            SDR_DELIVERY,
+            tags={},
+            profile=row.id,
+            declared_bit_depth=row.bit_depth,
+        )
+    hdr = HDR_DELIVERY[row.transfer]
+    return {
+        "profile": row.id,
+        "transfer": row.transfer,
+        "bit_depth": HDR_BIT_DEPTH,
+        "declared_bit_depth": row.bit_depth,
+        "encoder": HDR_ENCODER,
+        "pix_fmt": HDR_PIX_FMT,
+        "tags": {
+            "color_primaries": hdr["color_primaries"],
+            "color_trc": hdr["color_trc"],
+            "colorspace": hdr["colorspace"],
+        },
+        "x264_params": hdr["x264_params"],
+    }
+
+
 def _encode(
     plan: Mapping[str, Any], destination: Path, script_dir: Path, timeout: Optional[int]
 ) -> Tuple[ffmpeg.Proc, Path]:
     script_path = script_dir / "filter_complex.txt"
     script_path.write_text(plan["filter_script"], encoding="utf-8", newline="\n")
 
+    colour = plan["color"]
     args = list(plan["input_args"])
     args.extend(["-filter_complex_script", str(script_path), "-map", plan["map"]])
     if plan["audio_map"]:
@@ -1987,16 +2076,20 @@ def _encode(
             "-sn",
             "-dn",
             "-c:v",
-            "libx264",
+            colour["encoder"],
             "-preset",
             "ultrafast",
             "-crf",
             "18",
             "-pix_fmt",
-            "yuv420p",
-            str(destination),
+            colour["pix_fmt"],
         ]
     )
+    for flag, value in colour["tags"].items():
+        args.extend([f"-{flag}", value])
+    if colour["x264_params"]:
+        args.extend(["-x264-params", colour["x264_params"]])
+    args.append(str(destination))
     proc = ffmpeg.run_ff(args, loglevel="error", timeout=timeout, step="render")
     if not proc.ok:
         raise CompileError("RENDER_FAILED", proc.tail(), str(destination))
@@ -2162,6 +2255,7 @@ def render(
         "duration": timeline.duration,
         "fps": timeline.fps,
         "size": [timeline.width, timeline.height],
+        "color": plan["color"],
         "filter_script": plan["filter_script"],
         "filter_script_path": str(script_path.resolve()),
         "clips": plan["clips"],

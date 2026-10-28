@@ -37,7 +37,9 @@ __all__ = [
     "BIT_DEPTHS",
     "Profile",
     "PROFILES",
+    "HDR_PROFILES",
     "names",
+    "variants",
     "resolve",
     "check",
 ]
@@ -329,23 +331,76 @@ PROFILES: Dict[str, Profile] = {
 }
 
 
+#: HDR *delivery variants*: one genre's grammar delivered to a BT.2100 target
+#: instead of the SDR one -- same acts, same cut density, same loudness law,
+#: a different colour pipeline. They live in their own table because
+#: ``PROFILES`` is the *genre* registry, pinned at nine rows by the F26-T01 gate
+#: (``tests/test_profiles.py``); a variant is a second delivery of an existing
+#: grammar, not a tenth genre. A document points at either table the same way,
+#: through ``profile_ref`` and :func:`resolve`, so the renderer reads one
+#: declaration and never a special case.
+#:
+#: The rows here are honest about what an encoder can do: the pipeline carries
+#: the declared bit depth and tags the declared transfer. It is *not* a graded
+#: HDR master -- a grade is a separate step, and no filter in this engine
+#: invents one.
+HDR_PROFILES: Dict[str, Profile] = {
+    "film_hdr": Profile(
+        id="film_hdr",
+        label="Film narrativo HDR (HLG)",
+        width=2048,
+        height=858,
+        fps=24.0,
+        min_seconds=4800.0,
+        max_seconds=10800.0,
+        loudness_lufs=-24.0,
+        true_peak_db=-2.0,
+        bit_depth=10,
+        transfer="hlg",
+        deliverables=("hevc10/mp4", "prores422hq/mov"),
+        hook_seconds=0.0,
+        beat_driven=False,
+        interview_driven=False,
+        act_count=3,
+        cut_density_min=0.5,
+        cut_density_max=3.0,
+        subtitles="sidecar",
+        notes=(
+            "-24 LUFS and -2 dBTP are ATSC A/85, the same feature delivery target "
+            "the SDR film row carries; 2048x858 at 24 fps is the DCI 2K scope "
+            "raster, and HLG is the BT.2100 broadcast transfer, so the encode "
+            "carries 10 bit and tags the stream bt2020/arib-std-b67. This is HDR "
+            "*delivery*, not a graded HDR master: the grade is a separate step and "
+            "this pipeline does not invent one."
+        ),
+    ),
+}
+
+
 def names() -> Tuple[str, ...]:
-    """Every declared profile id, in declaration order."""
+    """Every declared genre id, in declaration order."""
     return tuple(PROFILES)
+
+
+def variants() -> Tuple[str, ...]:
+    """Every declared HDR delivery variant id, in declaration order."""
+    return tuple(HDR_PROFILES)
 
 
 def resolve(name: str) -> Profile:
     """The profile called ``name``; an unknown name is refused with its ids.
 
-    The refusal names every declared id, so a typo is fixed from the message
-    alone and never from reading this module.
+    A genre and an HDR delivery variant resolve the same way, because a document
+    declares both through the same field. The refusal names every declared id
+    from both tables, so a typo is fixed from the message alone.
     """
     key = str(name).strip()
-    profile = PROFILES.get(key)
+    profile = PROFILES.get(key) or HDR_PROFILES.get(key)
     if profile is None:
+        declared = sorted({**PROFILES, **HDR_PROFILES})
         raise EDLError(
             "PROFILE_UNKNOWN",
-            f"no genre profile {key!r}; declared profiles are {sorted(PROFILES)}",
+            f"no genre profile {key!r}; declared profiles are {declared}",
             "profile_ref",
         )
     return profile
@@ -379,6 +434,11 @@ def check(profile: Profile) -> Tuple[str, ...]:
         add("true_peak_db", f"{profile.true_peak_db:g} dBTP must be <= 0")
     if profile.bit_depth not in BIT_DEPTHS:
         add("bit_depth", f"{profile.bit_depth} is not one of {list(BIT_DEPTHS)}")
+    if profile.transfer != "sdr" and profile.bit_depth != 10:
+        add(
+            "bit_depth",
+            f"a {profile.transfer!r} delivery needs 10 bit, got {profile.bit_depth}",
+        )
     if profile.transfer not in TRANSFERS:
         add("transfer", f"{profile.transfer!r} is not one of {sorted(TRANSFERS)}")
     if not profile.deliverables:
