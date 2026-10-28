@@ -316,3 +316,34 @@ che sotterranea.
 
 Emenda: nessuna. Estende D004 senza riscriverlo. Revocabile con una voce che la
 sostituisce.
+
+---
+
+## D028 — Lo schema EDL 3 evolve solo in modo additivo (2026-10-27)
+
+**Stato: proposta.**
+
+Contesto. F2 è chiusa con `vx.edl3/1`. L'aggiornamento chiede nove campi nuovi
+(`preset_ref`, `stack`, `template_ref` con `exposed_params`, `synthetic`,
+`provenance`, `attribution`, `brand_ref`, `variant`, `ext`). Se ognuno costasse un
+migratore, il secondo migratore sarebbe pagato una seconda volta — esattamente il
+costo che si voleva evitare.
+
+Si decide:
+
+1. L'aggiunta di campi **opzionali con default** è un aumento **minore**: da
+   `vx.edl3/1` a `vx.edl3/1.1`. Nessun migratore. Il lettore accetta sia `/1` sia
+   `/1.1`.
+2. I campi sconosciuti con prefisso `x-` si conservano intatti nel round-trip: il
+   documento può portare estensioni che la skill non conosce.
+3. Un campo **obbligatorio** nuovo, o un cambio di significato di un campo
+   esistente, è una versione **maggiore** (`/2`) e richiede il suo migratore.
+4. Il contratto 2.2 resta congelato (D004). Questa politica vale solo per EDL 3.
+
+Perché. Un'etichetta di versione non è una migrazione. Se i campi sono opzionali e
+non toccano il rendering, i 34 frame di riferimento devono restare **identici byte
+per byte**; se cambiano, il difetto è nel codice e va corretto prima di proseguire,
+non coperto da una tolleranza.
+
+Emenda: nessuna. Estende D004 senza toccarlo. Revocabile con una voce che la
+sostituisce.
