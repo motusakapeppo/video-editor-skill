@@ -683,3 +683,80 @@ Codici di rifiuto del generatore: `GENERATOR_SHAPE`, `GENERATOR_SOURCE_CONFLICT`
 `GENERATOR_TEMPLATE`, `GENERATOR_PARAMS`, `GENERATOR_CAPTURE`,
 `GENERATOR_EFFECT`, `CHROMIUM_NEEDS_GENERATOR`, `BACKEND_UNAVAILABLE`.
 
+
+---
+
+<!-- BEGIN EFFECT-INDEX (generated, do not edit by hand) -->
+## 13. Indice della libreria degli effetti
+
+Tabella generata da `vx.edl3.EFFECT_REGISTRY`, non scritta a mano: una riga per
+ogni tipo dichiarativo, con famiglia, innesco, parametri (nome, intervallo,
+default), tetto in secondi, ripiego e backend. Rigenerare con
+`python scripts/gen_effect_index.py`; `--check` fallisce se il file e stantio.
+Un tetto `nessuno` significa che il tipo non dichiara un limite di durata
+(`cap_seconds` a zero): la disciplina resta quella del registro, non un numero
+inventato qui.
+
+| tipo | famiglia | innesco | parametri | tetto | ripiego | backend |
+|---|---|---|---|---|---|---|
+| `bleach_bypass` | color | Drain the colour and harden the contrast, the bleach-bypass look of a war film. | `saturation` 0..1 (default 0.35)<br>`crush` 0.05..0.19 (default 0.13)<br>`lift` 0.71..0.95 (default 0.78) | nessuno | static | filter |
+| `curves` | color | Give a flat or a dense grade its body by moving one tone-curve point, without touching the black or the white point. | `mid` 0.15..0.85 (default 0.36) | nessuno | static | filter |
+| `day_for_night` | color | Turn a daylight shot into a night scene without a second plate, for a night beat on a daylight budget. | `brightness` -0.5..-0.05 (default -0.25)<br>`blue` 0..0.6 (default 0.25) | nessuno | static | filter |
+| `duotone` | color | Wash the frame in one tint over black, for a graphic, poster-like beat. | `tint` 0..360 (default 210)<br>`strength` 0.1..1 (default 0.6) | nessuno | static | filter |
+| `hueshift` | color | Rotate every hue by a fixed angle, to move a costume or a location into a different palette. | `angle` -180..180 (default 30) | nessuno | static | filter |
+| `negative` | color | Invert the picture to a photographic negative, for a flash, a reveal or a dream insert. | `contrast` 0.5..2 (default 1.2) | nessuno | static | filter |
+| `posterize` | color | Quantise the picture into flat bands, for a print, a comic or a cheap-camera look. | `step` 4..128 (default 32) | nessuno | static | filter |
+| `selective_color` | color | Move one colour range without touching the rest, to push a sky or a foliage away from its neighbours. | `yellow` 0..1 (default 0.5)<br>`magenta` 0..1 (default 0.5) | nessuno | static | filter |
+| `sepia` | color | Tint the frame brown-gold like an old print, for memory, archive or flashback material. | `warmth` 0..1 (default 0.6) | nessuno | static | filter |
+| `teal_orange` | color | Split the grade to teal shadows and orange highlights, the blockbuster skin-tone look. | `shadow` 0..0.6 (default 0.25)<br>`highlight` 0..0.6 (default 0.25) | nessuno | static | filter |
+| `threshold` | color | Reduce the frame to pure black and white, for a stencil, a title card or a mask. | `cut` 0..255 (default 128) | nessuno | static | filter |
+| `white_balance` | color | Correct a colour-temperature cast, or impose one, to make a shot read warm or cool. | `temperature` 2000..12000 (default 5000) | nessuno | static | filter |
+| `bars` | composite | Pillar-box a wide shot into a vertical frame, or reserve a side gutter for a sticker column. | `size` 0.02..0.25 (default 0.08) | nessuno | static | filter |
+| `border` | composite | Put a crisp outline around the frame, for a picture-card look or to hold a flat background together. | `thickness` 1..40 (default 8)<br>`inset` 0..0.2 (default 0.02) | nessuno | static | filter |
+| `caption_band` | composite | Reserve a darkened lower band so a caption layer stays readable over a busy shot. | `height` 0.05..0.45 (default 0.18)<br>`opacity` 0.2..1 (default 0.55) | nessuno | static | filter |
+| `frame_in_frame` | composite | Shrink the picture into a centred card on black, for a quote, a stat or a recap where the frame itself is the border. | `inset` 0.4..0.95 (default 0.8) | nessuno | static | filter |
+| `grid` | composite | Lay a rule-of-thirds grid over the frame while deciding where a subject or a caption should sit. | `thickness` 1..12 (default 2)<br>`alpha` 0.1..1 (default 0.5) | nessuno | static | filter |
+| `letterbox` | composite | Frame a vertical clip as cinema scope, black bars top and bottom, for a trailer or a title beat. | `ratio` 1.2..3.6 (default 2.39) | nessuno | static | filter |
+| `progress_bar` | composite | Show elapsed time as a filling bar along the bottom edge, for a countdown, a drill or a step-by-step. | `seconds` 0.5..30 (default 4)<br>`height` 0.004..0.08 (default 0.012) | nessuno | static | filter |
+| `rounded` | composite | Round the frame corners on black, for a card, a sticker or a UI-style insert. | `radius` 0.02..0.3 (default 0.08) | 4 s | skip | filter |
+| `safe_area` | composite | Overlay action-safe and title-safe guides while checking a vertical cut before delivery. | `margin` 0.01..0.15 (default 0.05)<br>`thickness` 1..12 (default 2) | nessuno | static | filter |
+| `spotlight` | composite | Darken the frame edges so the centre reads as a spotlight, for a reveal, a confession or a dream beat. | `angle` 0.63..1.57 (default 1) | nessuno | static | filter |
+| `bokeh` | film | Throw a background out of focus with a broad, soft falloff for a portrait or a product shot. | `radius` 1..24 (default 10)<br>`power` 1..3 (default 1) | 8 s | static | filter |
+| `dreamcore` | film | Push a frame into a pastel, airy half-dream, for a memory insert or a whimsical beat. | `softness` 0..6 (default 2)<br>`lift` 0..0.3 (default 0.12)<br>`saturation` 0.4..1.4 (default 0.85) | 8 s | static | filter |
+| `fog` | film | Put a low-contrast haze over a scene to sell distance, an overcast morning or a smoky room. | `density` 0..0.35 (default 0.14)<br>`saturation` 0..1 (default 0.75) | nessuno | static | filter |
+| `glow` | film | Soften a frame into a luminous haze, for a memory, a dream or a stage light flare. | `sigma` 0.5..12 (default 4)<br>`lift` 0.5..1 (default 0.62) | 8 s | static | filter |
+| `grain` | film | Give a clean digital frame the texture of a pushed film stock, or hide banding in a gradient. | `strength` 0..100 (default 14) | nessuno | static | filter |
+| `halation` | film | Warm the highlights of a frame the way a film base bleeds light back into the red layer, for a period night look. | `knee` 0.7..1 (default 0.88)<br>`cool` 0.4..0.7 (default 0.55) | nessuno | static | filter |
+| `infrared` | film | Re-map the frame into the false colour of infrared film, where foliage glows and skies go dark. | `red` 0.3..1 (default 0.72)<br>`green` 0.3..1 (default 0.85)<br>`blue` 0.05..0.5 (default 0.22) | nessuno | static | filter |
+| `lens_flare` | film | Add a hot flare and its ghost where a light source hits the lens, for a concert or a sunlit exterior. | `strength` 0..1 (default 0.35)<br>`size` 0.05..0.4 (default 0.12) | 6 s | skip | filter |
+| `light_leak` | film | Wash a warm leak of light in from a corner, for a film-camera or home-movie feel. | `strength` 0..1 (default 0.35)<br>`radius` 0.3..1.5 (default 0.9) | 6 s | skip | filter |
+| `soft_focus` | film | Take the edge off a frame for a romantic or interview look without losing the subject entirely. | `sigma` 0.2..8 (default 2.5) | nessuno | static | filter |
+| `vignette` | film | Darken the corners of a frame to pull the eye to the centre, the gate look of an older lens. | `angle` 0.1..1.5 (default 0.6) | nessuno | static | filter |
+| `x_ray` | film | Turn a frame into a blue negative readout, for a medical, sci-fi or surveillance insert. | `contrast` 1..2.5 (default 1.5)<br>`brightness` -0.1..0.3 (default 0.06)<br>`blue` 0..0.6 (default 0.25) | nessuno | static | filter |
+| `dolly_zoom` | geometry | Grow the frame continuously while the subject holds, the vertigo move of a dolly zoom. | `zoom` 1..2 (default 1.05)<br>`rate` 0.001..0.2 (default 0.02) | 8 s | static | filter |
+| `fisheye` | geometry | Bulge the frame like an action camera or a peephole, for a wide, distorted look. | `strength` 0.05..1 (default 0.35) | nessuno | static | filter |
+| `flip_h` | geometry | Mirror the frame left to right, for a selfie view or to break a viewer's sense of direction. | `amount` 0.1..1 (default 1) | nessuno | static | filter |
+| `flip_v` | geometry | Mirror the frame top to bottom, for reflections or an upside-down gag. | `amount` 0.1..1 (default 1) | nessuno | static | filter |
+| `mirror` | geometry | Fold the frame about a vertical axis so one half mirrors the other, for a symmetric, dreamlike frame. | `offset` 0..0.5 (default 0) | 6 s | skip | filter |
+| `pixelate` | geometry | Pixelate a face, a plate or a logo, for anonymity or a lo-fi game look. | `size` 2..64 (default 16) | nessuno | static | filter |
+| `rotate` | geometry | Rotate the whole frame by a fixed angle to level a tilted shot or to tilt it on purpose. | `angle` -180..180 (default 5) | nessuno | static | filter |
+| `shake` | geometry | Shake the frame on impact, a hit, a slam or a loud beat. | `amplitude` 0..40 (default 8)<br>`frequency` 0.1..10 (default 3) | 8 s | static | filter |
+| `swirl` | geometry | Swing the frame through a 3D projection so it twists around its centre, for a disorienting beat. | `yaw` -90..90 (default 20)<br>`pitch` -45..45 (default 10)<br>`roll` -180..180 (default 15) | nessuno | skip | filter |
+| `tilt_shift` | geometry | Tilt the image plane so a city or a set reads as a miniature, the optical half of a tilt-shift look. | `shift` 0..0.5 (default 0.08) | nessuno | static | filter |
+| `whip_pan` | geometry | Whip the frame sideways in one fast move, for a transition between two beats. | `speed` 0.5..20 (default 6)<br>`window` 0.5..1 (default 0.75) | 6 s | static | filter |
+| `zoompan` | geometry | Push in on a frame without moving the camera, to add weight to a still or a reaction. | `zoom` 1..4 (default 1.25) | 8 s | static | filter |
+| `chromatic_aberration` | glitch | Fringe the colour around edges like a bad lens or a cheap capture, without touching the luma detail. | `chroma_r` -16..16 (default 4)<br>`chroma_b` -16..16 (default -4) | nessuno | static | filter |
+| `datamosh` | glitch | Suggest a broken codec where blocks carry stale motion, for a corrupted-footage montage. | `block` 8..96 (default 32)<br>`frames` 2..8 (default 3) | 6 s | static | filter |
+| `echo` | glitch | Print a bright copy of the previous frame over the current one, for motion trails on a fast move. | `opacity` 0.05..0.95 (default 0.45) | nessuno | static | filter |
+| `ghosting` | glitch | Leave a fading dark afterimage of whatever moves, for a haunted or a long-exposure beat. | `decay` 0.5..0.99 (default 0.95) | nessuno | static | filter |
+| `glitch_blocks` | glitch | Scramble the frame in square blocks, for a corrupted-file or a broken-decoder beat. | `block` 4..128 (default 24)<br>`seed` 0..999 (default 7) | nessuno | static | filter |
+| `interference` | glitch | Roll a wide bright band across the picture and sprinkle fresh noise on it, for a broken-transmission beat. | `grain` 0..40 (default 12)<br>`depth` 0.1..0.9 (default 0.6) | 8 s | skip | filter |
+| `motion_blur` | glitch | Smear fast motion over several frames like a long shutter, for a strobe or a whip. | `frames` 2..12 (default 5) | 8 s | static | filter |
+| `rgb_split` | glitch | Split the red and blue planes apart on a hit or a dropped signal, so the frame reads as mis-converged. | `offset_r` -16..16 (default 6)<br>`offset_b` -16..16 (default -6) | nessuno | static | filter |
+| `scanlines` | glitch | Lay a CRT raster over the frame, for a monitor, a security camera or a retro screen insert. | `period` 2..16 (default 4)<br>`depth` 0.1..1 (default 0.6)<br>`speed` 0..2 (default 0.25) | 8 s | skip | filter |
+| `slit_scan` | glitch | Skew the picture row by row and drift the skew, for a rolling-shutter or a photocopier tear. | `shear` 0..8 (default 3)<br>`speed` 0..2 (default 0.5) | 8 s | skip | filter |
+| `smear` | glitch | Drag the frame sideways in one direction only, for speed lines or a scanning-head smear. | `sigma` 4..64 (default 20) | nessuno | static | filter |
+| `vhs` | glitch | Make a clean clip look like a worn tape: luma/chroma noise plus the chroma lag of a mis-tracking head. | `grain` 0..60 (default 18)<br>`shift` 0..16 (default 6) | nessuno | static | filter |
+
+58 tipi dichiarativi in 5 famiglie (color, composite, film, geometry, glitch), piu i cinque tipi di contratto (`transform`, `crop`, `color`, `blur`, `chroma_key`) che vivono nel registro core con i propri backend e la propria validazione.
+<!-- END EFFECT-INDEX -->

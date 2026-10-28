@@ -20,13 +20,14 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-TEMP_ROOT = Path(r"D:\video_work\ulw\bench_tmp")
+TEMP_ROOT = Path(tempfile.gettempdir()) / "vx_bench_tmp"
 AUDIO_POLICY = "mix"
 TAIL_LINES = 40
 RSS_INTERVAL = 0.02
