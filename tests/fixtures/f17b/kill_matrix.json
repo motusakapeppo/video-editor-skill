@@ -1,7 +1,7 @@
 {
   "kills": [
     {
-      "delay_ms": 88,
+      "delay_ms": 139,
       "exit_code": 1,
       "index": 0,
       "invariants": {
@@ -11,10 +11,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 110,
+      "delay_ms": 162,
       "exit_code": 1,
       "index": 1,
       "invariants": {
@@ -24,10 +27,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 194,
+      "delay_ms": 249,
       "exit_code": 1,
       "index": 2,
       "invariants": {
@@ -37,10 +43,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 203,
+      "delay_ms": 258,
       "exit_code": 1,
       "index": 3,
       "invariants": {
@@ -50,10 +59,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 272,
+      "delay_ms": 330,
       "exit_code": 1,
       "index": 4,
       "invariants": {
@@ -63,10 +75,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 325,
+      "delay_ms": 385,
       "exit_code": 1,
       "index": 5,
       "invariants": {
@@ -76,10 +91,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 370,
+      "delay_ms": 432,
       "exit_code": 1,
       "index": 6,
       "invariants": {
@@ -89,10 +107,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 420,
+      "delay_ms": 484,
       "exit_code": 1,
       "index": 7,
       "invariants": {
@@ -102,10 +123,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 464,
+      "delay_ms": 530,
       "exit_code": 1,
       "index": 8,
       "invariants": {
@@ -115,10 +139,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 523,
+      "delay_ms": 592,
       "exit_code": 1,
       "index": 9,
       "invariants": {
@@ -128,10 +155,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 558,
+      "delay_ms": 628,
       "exit_code": 1,
       "index": 10,
       "invariants": {
@@ -141,10 +171,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 633,
+      "delay_ms": 706,
       "exit_code": 1,
       "index": 11,
       "invariants": {
@@ -154,10 +187,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 661,
+      "delay_ms": 735,
       "exit_code": 1,
       "index": 12,
       "invariants": {
@@ -167,10 +203,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 708,
+      "delay_ms": 784,
       "exit_code": 1,
       "index": 13,
       "invariants": {
@@ -180,10 +219,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 771,
+      "delay_ms": 849,
       "exit_code": 1,
       "index": 14,
       "invariants": {
@@ -193,10 +235,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 824,
+      "delay_ms": 905,
       "exit_code": 1,
       "index": 15,
       "invariants": {
@@ -206,10 +251,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 856,
+      "delay_ms": 938,
       "exit_code": 1,
       "index": 16,
       "invariants": {
@@ -219,10 +267,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 917,
+      "delay_ms": 1002,
       "exit_code": 1,
       "index": 17,
       "invariants": {
@@ -232,10 +283,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 932,
+      "delay_ms": 1017,
       "exit_code": 1,
       "index": 18,
       "invariants": {
@@ -245,10 +299,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 981,
+      "delay_ms": 1069,
       "exit_code": 1,
       "index": 19,
       "invariants": {
@@ -258,10 +315,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1077,
+      "delay_ms": 1168,
       "exit_code": 1,
       "index": 20,
       "invariants": {
@@ -271,10 +331,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1105,
+      "delay_ms": 1198,
       "exit_code": 1,
       "index": 21,
       "invariants": {
@@ -284,10 +347,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1155,
+      "delay_ms": 1249,
       "exit_code": 1,
       "index": 22,
       "invariants": {
@@ -297,10 +363,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1216,
+      "delay_ms": 1313,
       "exit_code": 1,
       "index": 23,
       "invariants": {
@@ -310,10 +379,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1258,
+      "delay_ms": 1356,
       "exit_code": 1,
       "index": 24,
       "invariants": {
@@ -323,10 +395,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1284,
+      "delay_ms": 1384,
       "exit_code": 1,
       "index": 25,
       "invariants": {
@@ -336,10 +411,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1343,
+      "delay_ms": 1445,
       "exit_code": 1,
       "index": 26,
       "invariants": {
@@ -349,10 +427,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1413,
+      "delay_ms": 1518,
       "exit_code": 1,
       "index": 27,
       "invariants": {
@@ -362,10 +443,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1432,
+      "delay_ms": 1538,
       "exit_code": 1,
       "index": 28,
       "invariants": {
@@ -375,10 +459,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1512,
+      "delay_ms": 1621,
       "exit_code": 1,
       "index": 29,
       "invariants": {
@@ -388,10 +475,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1539,
+      "delay_ms": 1650,
       "exit_code": 1,
       "index": 30,
       "invariants": {
@@ -401,10 +491,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1593,
+      "delay_ms": 1705,
       "exit_code": 1,
       "index": 31,
       "invariants": {
@@ -414,10 +507,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1661,
+      "delay_ms": 1777,
       "exit_code": 1,
       "index": 32,
       "invariants": {
@@ -427,10 +523,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1687,
+      "delay_ms": 1803,
       "exit_code": 1,
       "index": 33,
       "invariants": {
@@ -440,10 +539,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1751,
+      "delay_ms": 1870,
       "exit_code": 1,
       "index": 34,
       "invariants": {
@@ -453,10 +555,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1783,
+      "delay_ms": 1904,
       "exit_code": 1,
       "index": 35,
       "invariants": {
@@ -466,10 +571,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1838,
+      "delay_ms": 1960,
       "exit_code": 1,
       "index": 36,
       "invariants": {
@@ -479,10 +587,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1907,
+      "delay_ms": 2033,
       "exit_code": 1,
       "index": 37,
       "invariants": {
@@ -492,10 +603,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1959,
+      "delay_ms": 2087,
       "exit_code": 1,
       "index": 38,
       "invariants": {
@@ -505,10 +619,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 1997,
+      "delay_ms": 2126,
       "exit_code": 1,
       "index": 39,
       "invariants": {
@@ -518,10 +635,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2020,
+      "delay_ms": 2151,
       "exit_code": 1,
       "index": 40,
       "invariants": {
@@ -531,10 +651,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2068,
+      "delay_ms": 2200,
       "exit_code": 1,
       "index": 41,
       "invariants": {
@@ -544,10 +667,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2114,
+      "delay_ms": 2248,
       "exit_code": 1,
       "index": 42,
       "invariants": {
@@ -557,10 +683,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2159,
+      "delay_ms": 2295,
       "exit_code": 1,
       "index": 43,
       "invariants": {
@@ -570,10 +699,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2247,
+      "delay_ms": 2387,
       "exit_code": 1,
       "index": 44,
       "invariants": {
@@ -583,10 +715,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2258,
+      "delay_ms": 2398,
       "exit_code": 1,
       "index": 45,
       "invariants": {
@@ -596,10 +731,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2315,
+      "delay_ms": 2457,
       "exit_code": 1,
       "index": 46,
       "invariants": {
@@ -609,10 +747,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2399,
+      "delay_ms": 2545,
       "exit_code": 1,
       "index": 47,
       "invariants": {
@@ -622,10 +763,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "lock",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2427,
+      "delay_ms": 2574,
       "exit_code": 1,
       "index": 48,
       "invariants": {
@@ -635,10 +779,13 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "staging",
+      "reasons": [],
+      "verdict": "passed"
     },
     {
-      "delay_ms": 2487,
+      "delay_ms": 2637,
       "exit_code": 1,
       "index": 49,
       "invariants": {
@@ -648,9 +795,35 @@
         "sources_sha_unchanged": true,
         "sweep_removes_leftovers": true
       },
-      "passed": true
+      "landed": true,
+      "phase": "staging",
+      "reasons": [],
+      "verdict": "passed"
     }
   ],
-  "schema": "vx.f17b.kill_matrix/1",
-  "seed": 1717
+  "note": "the kill window is derived from the measured run duration and every kill is timed against a live child, so this file changes on every run",
+  "schema": "vx.f17b.kill_matrix/2",
+  "seed": 1717,
+  "summary": {
+    "conclusive": 50,
+    "failed": 0,
+    "inconclusive": 0,
+    "measured_run_ms": 3312,
+    "measured_run_seconds": 3.312,
+    "min_conclusive": 40,
+    "phases": {
+      "lock": 48,
+      "staging": 2
+    },
+    "scheduled": 50,
+    "skipped": 0,
+    "window_fractions": [
+      0.03,
+      0.8
+    ],
+    "window_ms": [
+      99,
+      2650
+    ]
+  }
 }

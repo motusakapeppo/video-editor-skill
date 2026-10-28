@@ -260,26 +260,67 @@ def sha_map(root: str | Path) -> Dict[str, str]:
 # --------------------------------------------------------------------------- #
 # delays
 # --------------------------------------------------------------------------- #
-def delay_plan(seed: int, count: int) -> List[int]:
-    """``count`` delays in ``[DELAY_MIN_MS, DELAY_MAX_MS]`` from one seed.
+def delay_plan(
+    seed: int,
+    count: int,
+    *,
+    low_ms: Optional[int] = None,
+    high_ms: Optional[int] = None,
+) -> List[int]:
+    """``count`` delays in ``[low, high]`` from one seed.
 
     Stratified, not plain uniform: the range is cut into ``count`` equal bands
     and each band contributes one draw, so the kills really cover the whole
     pipeline instead of clustering the way a uniform sample of 50 does.  The
     jitter inside a band keeps the sequence seed-dependent.
+
+    ``low_ms``/``high_ms`` are the optional window and default to the fixed
+    ``DELAY_MIN_MS``-``DELAY_MAX_MS`` range, so the historical plan is
+    unchanged.  The crash matrix passes a window derived from a *measured* run
+    (see ``measure_run``): a pipeline that got faster needs the kills earlier,
+    and a kill scheduled past the end of the run proves nothing.  The floor
+    ``DELAY_MIN_MS`` always holds - a delay below it kills during interpreter
+    boot, before any stage has written anything.
     """
+    low_bound = DELAY_MIN_MS if low_ms is None else max(DELAY_MIN_MS, int(low_ms))
+    high_bound = DELAY_MAX_MS if high_ms is None else int(high_ms)
+    if high_bound <= low_bound:
+        high_bound = low_bound + 1
+    if count <= 0:
+        return []
     rng = random.Random(seed)
-    span = (DELAY_MAX_MS - DELAY_MIN_MS) / float(count)
+    span = (high_bound - low_bound) / float(count)
     delays: List[int] = []
     for index in range(count):
-        low = DELAY_MIN_MS + index * span
+        low = low_bound + index * span
         delays.append(int(round(low + rng.uniform(0.0, span))))
-    return [min(DELAY_MAX_MS, max(DELAY_MIN_MS, value)) for value in delays]
+    return [min(high_bound, max(low_bound, value)) for value in delays]
 
 
 # --------------------------------------------------------------------------- #
 # reading the crash site
 # --------------------------------------------------------------------------- #
+PHASE_ORDER = (
+    "boot",
+    "events",
+    "lock",
+    "staging",
+    "planning",
+    "render",
+    "loudness",
+    "delivery",
+    "finished",
+)
+
+
+def phase_rank(phase: str) -> int:
+    """Where ``phase`` sits in the pipeline; unknown labels rank as ``boot``."""
+    try:
+        return PHASE_ORDER.index(phase)
+    except ValueError:
+        return 0
+
+
 def phase_guess(workdir: str | Path) -> str:
     """Which stage the killed run had reached, read off the workdir.
 
@@ -302,6 +343,59 @@ def phase_guess(workdir: str | Path) -> str:
             if (base / Path(*relative.split("/"))).exists():
                 return label
     return "boot"
+
+
+def wait_for_phase(
+    workdir: str | Path,
+    target: str,
+    deadline_s: float,
+    *,
+    poll_s: float = 0.005,
+    proc: Optional[subprocess.Popen] = None,
+) -> Dict[str, Any]:
+    """Block until ``phase_guess`` reaches ``target`` or anything after it.
+
+    Phase-triggered kills need the moment a marker appears, and the only honest
+    clock for that is the workdir itself: ``phase_guess`` is the same label the
+    report prints, so the trigger and the verdict agree by construction.  A
+    target that never appears is not an error - the caller kills anyway and the
+    sample is classified by what it actually left behind - but the wait must
+    stop when the child dies or the deadline passes, or a run that failed at
+    startup would block for the whole budget.
+
+    Returns ``observed`` (the label at the moment the wait stopped),
+    ``reached_ms`` (wall time since this call started), ``reached`` (whether the
+    target or a later phase was seen) and ``stopped`` (``reached``,
+    ``deadline`` or ``exited``).
+    """
+    wanted = phase_rank(target)
+    started = time.monotonic()
+    phase = phase_guess(workdir)
+    while True:
+        elapsed = time.monotonic() - started
+        if phase_rank(phase) >= wanted:
+            return {
+                "observed": phase,
+                "reached_ms": int(round(elapsed * 1000.0)),
+                "reached": True,
+                "stopped": "reached",
+            }
+        if proc is not None and proc.poll() is not None:
+            return {
+                "observed": phase,
+                "reached_ms": int(round(elapsed * 1000.0)),
+                "reached": False,
+                "stopped": "exited",
+            }
+        if elapsed >= deadline_s:
+            return {
+                "observed": phase,
+                "reached_ms": int(round(elapsed * 1000.0)),
+                "reached": False,
+                "stopped": "deadline",
+            }
+        time.sleep(poll_s)
+        phase = phase_guess(workdir)
 
 
 def mp4_complete(path: str | Path) -> bool:
@@ -464,15 +558,108 @@ def kill_tree(proc: subprocess.Popen) -> int:
     return code
 
 
+def anchor_for(timeline: Sequence[Dict[str, Any]], fire_at_ms: float):
+    """Which phase event to wait for, and how long after it to fire.
+
+    A kill is not instantaneous: on Windows ``taskkill /F /T`` takes a few
+    hundred milliseconds to walk the tree and reap it, measured by
+    ``measure_kill_latency``.  So to die inside a phase at
+    ``start + jitter`` the trigger must fire at ``start + jitter - latency``.
+    When that instant is before the phase's own marker - which is always the
+    case for a phase shorter than the latency - the wait has to start at an
+    earlier phase boundary, and the sleep is measured from *that* marker.
+
+    Returns ``(anchor_phase, sleep_ms)``.  Both come from the calibration
+    timeline, so the offset between the anchor and the target is the measured
+    one; the anchor itself is detected live in the run being killed.
+    """
+    chosen = None
+    for entry in timeline:
+        if entry["start_ms"] <= fire_at_ms:
+            if chosen is None or entry["start_ms"] >= chosen["start_ms"]:
+                chosen = entry
+    if chosen is None:
+        return timeline[0]["phase"] if timeline else "boot", 0.0
+    return chosen["phase"], max(0.0, fire_at_ms - float(chosen["start_ms"]))
+
+
+def measure_kill_latency(
+    *,
+    repeats: int = 3,
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    """How long ``kill_tree`` takes to actually end a process on this machine.
+
+    A phase-triggered kill is only honest if the process dies *inside* the
+    phase the trigger saw.  The trigger is synchronous but the kill is not:
+    ``taskkill /F /T`` costs the time to start it plus the time to walk the
+    tree, and the child keeps running (and writing) for all of it.  Measured on
+    the reference Windows box: ~350 ms, against a ``render`` phase of ~90 ms -
+    which is exactly why a marker-triggered kill can never land there and the
+    schedule has to fire early.
+
+    Each repeat is a real ``kill_tree`` of a real child started the same way a
+    run is (own session, so the tree kill is the tree kill).  The median is
+    returned with every sample and the child's identity, so the number can be
+    audited.
+    """
+    samples: List[float] = []
+    for _ in range(max(1, repeats)):
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            cwd=str(ROOT),
+            env=_env(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        time.sleep(0.2)
+        began = time.monotonic()
+        try:
+            kill_tree(child)
+        except Exception:  # noqa: BLE001 - a probe that fails must not kill the run
+            child.kill()
+        samples.append((time.monotonic() - began) * 1000.0)
+    ordered = sorted(samples)
+    median = ordered[len(ordered) // 2]
+    return {
+        "latency_ms": int(round(median)),
+        "samples_ms": [int(round(value)) for value in samples],
+        "timeout": timeout,
+    }
+
+
 def run_kill(
     seed: int,
     index: int,
     base_dir: Optional[str | Path] = None,
     *,
     delay_ms: Optional[int] = None,
+    target_phase: Optional[str] = None,
+    anchor_phase: Optional[str] = None,
+    sleep_ms: float = 0.0,
+    jitter_ms: float = 0.0,
+    watch_timeout: float = 60.0,
+    poll_s: float = 0.005,
 ) -> Dict[str, Any]:
-    """Spawn, kill after the delay, and report what the kill left behind."""
-    if delay_ms is None:
+    """Spawn, kill, and report what the kill left behind.
+
+    Two triggers, one record:
+
+    * ``target_phase`` set - wait for ``anchor_phase`` (default: the target) to
+      appear in the workdir with ``wait_for_phase``, sleep ``sleep_ms`` and
+      kill.  ``target_phase`` is where the kill is *meant* to die, ``anchor``
+      is the boundary that makes it possible when the kill costs more than the
+      phase lasts (see ``anchor_for``); ``jitter_ms`` is the offset inside the
+      target that the schedule was built for.
+    * ``target_phase`` unset - the historical timed kill after ``delay_ms``.
+
+    ``watch_timeout`` bounds the wait: a target that never appears (a run that
+    died at startup) must not eat the whole budget.  The phase recorded in the
+    result is always ``phase_guess`` of the workdir *after* the kill, which is
+    what actually landed, not what was aimed at.
+    """
+    if delay_ms is None and target_phase is None:
         delay_ms = delay_plan(seed, index + 1)[index]
     if base_dir is None:
         base_dir = tempfile.mkdtemp(prefix="vx-f17b-run-")
@@ -484,7 +671,30 @@ def run_kill(
     baseline = sha_map(pool)
 
     proc, out, _argv = spawn_auto(pool, workdir)
-    time.sleep(max(0.0, float(delay_ms) / 1000.0))
+    trigger: Dict[str, Any] = {
+        "target_phase": target_phase,
+        "anchor_phase": anchor_phase or target_phase,
+        "jitter_ms": int(round(float(jitter_ms))),
+        "scheduled_sleep_ms": int(round(float(sleep_ms))),
+        "observed": None,
+        "reached_ms": None,
+        "stopped": None,
+        "reached": None,
+    }
+    if target_phase is None:
+        delay_ms = int(delay_ms or 0)
+        time.sleep(max(0.0, float(delay_ms) / 1000.0))
+    else:
+        watch = wait_for_phase(
+            workdir,
+            trigger["anchor_phase"],
+            watch_timeout,
+            poll_s=poll_s,
+            proc=proc,
+        )
+        trigger.update(watch)
+        time.sleep(max(0.0, float(sleep_ms) / 1000.0))
+        delay_ms = int(trigger["reached_ms"]) + int(round(float(sleep_ms)))
     exit_code = kill_tree(proc)
     killed = exit_code != 0 or bool(getattr(proc, "vx_kill_ok", False))
     report_path = Path(workdir) / "auto_report.json"
@@ -494,6 +704,7 @@ def run_kill(
         "seed": seed,
         "index": index,
         "delay_ms": int(delay_ms),
+        "trigger": trigger,
         "exit_code": int(exit_code),
         "killed": killed,
         "finished": finished,
@@ -508,6 +719,112 @@ def run_kill(
         "baseline": baseline,
         "master": out,
     }
+
+
+def measure_run(
+    base_dir: Optional[str | Path] = None,
+    *,
+    timeout: float = 180.0,
+    label: str = "calibration",
+) -> Dict[str, Any]:
+    """Time ONE real, uninterrupted ``vx auto`` run from spawn to exit.
+
+    This is the calibration the kill window is derived from, and the distinction
+    is the whole point of the function: a delay of 60 s measures *the delay*,
+    not the run, and calibrating on it produced a 60 s "duration" once already.
+    Here the child is spawned by ``spawn_auto`` - same corpus, same argv, same
+    journal switch as every kill - and simply allowed to finish, and the clock
+    runs from ``Popen`` to ``wait``.
+
+    Returns the wall time in ``seconds`` (float, ``time.monotonic``) plus the
+    facts that say the baseline is trustworthy: the exit code, whether the
+    delivered master is a whole MP4, and the stdout tail.  It also returns the
+    phase timeline it observed while waiting (``timeline``: ``phase``,
+    ``start_ms``, ``duration_ms``) and the per-phase totals
+    (``phase_windows_ms``): a kill scheduled by wall clock says nothing about
+    *which* stage it hit, and the per-phase quota needs the measured boundaries
+    rather than a fraction of the total.  Raises ``RuntimeError`` when the run
+    does not finish inside ``timeout`` or does not exit 0 with a complete
+    delivered master - a broken baseline cannot calibrate anything, and silently
+    returning its wall time would hide that.
+    """
+    if base_dir is None:
+        base_dir = tempfile.mkdtemp(prefix="vx-f17b-cal-")
+        atexit.register(shutil.rmtree, str(base_dir), True)
+    run_dir = Path(base_dir) / label
+    run_dir.mkdir(parents=True, exist_ok=True)
+    pool = clone_pool(run_dir / "pool")
+    workdir = run_dir / "work"
+
+    started = time.monotonic()
+    proc, out, _argv = spawn_auto(pool, workdir)
+    timeline: List[Dict[str, Any]] = []
+    current: Optional[str] = None
+    entered = 0.0
+    exit_code: Optional[int] = None
+    while True:
+        elapsed = time.monotonic() - started
+        phase = phase_guess(workdir)
+        if phase != current:
+            if current is not None:
+                timeline[-1]["duration_ms"] = int(round((elapsed - entered) * 1000.0))
+            timeline.append(
+                {
+                    "phase": phase,
+                    "start_ms": int(round(elapsed * 1000.0)),
+                    "duration_ms": 0,
+                }
+            )
+            current = phase
+            entered = elapsed
+        exit_code = proc.poll()
+        if exit_code is not None:
+            break
+        if elapsed > timeout:
+            kill_tree(proc)
+            raise RuntimeError(
+                f"calibration run did not finish within {timeout:.0f} s"
+            )
+        time.sleep(0.005)
+    seconds = time.monotonic() - started
+    if timeline:
+        timeline[-1]["duration_ms"] = int(round((seconds - entered) * 1000.0))
+    windows: Dict[str, int] = {}
+    for entry in timeline:
+        windows[entry["phase"]] = windows.get(entry["phase"], 0) + int(
+            entry["duration_ms"]
+        )
+    try:
+        if proc.stdout is not None:
+            proc.stdout.close()
+    except OSError:
+        pass
+
+    delivered = delivered_path(workdir)
+    delivered_complete = delivered.is_file() and mp4_complete(delivered)
+    tail = b"".join(list(getattr(proc, "vx_output", [])))[-400:]
+    record = {
+        "seconds": seconds,
+        "duration_ms": int(round(seconds * 1000.0)),
+        "exit_code": int(exit_code),
+        "master_present": out.exists(),
+        "delivered": delivered.is_file(),
+        "delivered_complete": bool(delivered_complete),
+        "phase": phase_guess(workdir),
+        "timeline": timeline,
+        "phase_windows_ms": windows,
+        "pool": pool,
+        "workdir": workdir,
+        "stdout_tail": tail.decode("utf-8", "replace"),
+    }
+    if exit_code != 0 or not delivered_complete:
+        raise RuntimeError(
+            "calibration run is not a clean baseline: "
+            f"exit={exit_code} delivered={delivered.is_file()} "
+            f"delivered_complete={delivered_complete} "
+            f"tail={record['stdout_tail']!r}"
+        )
+    return record
 
 
 # --------------------------------------------------------------------------- #
