@@ -21,6 +21,8 @@ Implemented end to end
 * ``color`` — ``eq``; animated values flattened to one ``sendcmd`` command per
   frame because ``eq`` has no time variable in its options;
 * ``blur`` — static ``gblur``;
+* every declarative ``filter`` entry (the ``vx.effects`` families) — one static
+  ffmpeg filter template, formatted with the instance's static params;
 * ``fade_in`` / ``fade_out`` transitions;
 * adjustment layers, applied before each clip's own effects;
 * multi-layer video: layer 0 concatenates, every higher layer is one
@@ -31,7 +33,9 @@ Implemented end to end
 Refused loudly, never skipped
 -----------------------------
 ``chroma_key`` and any kind outside :data:`edl3.RENDERABLE_EFFECTS` →
-``UNSUPPORTED_EFFECT``. A chromium node that qualifies while the engine is
+``UNSUPPORTED_EFFECT``. A keyframed instance of a declarative ``filter`` kind →
+``EFFECT_NOT_ANIMATABLE``: the template is static and no emitter would honour the
+keys. A chromium node that qualifies while the engine is
 absent → ``BACKEND_UNAVAILABLE``; a chromium node with no fallback →
 ``BACKEND_REFUSED``; an unknown property or backend → ``BACKEND_PROPERTY`` /
 ``BACKEND_UNKNOWN``. Two overlays on the same layer → ``LAYER_OVERLAP``. Text
@@ -61,6 +65,7 @@ from .edl3 import (
     BACKENDS,
     EDL3_VERSION,
     EFFECT_REGISTRY,
+    EffectSpec,
     Keyframe,
     KeyframeTrack,
     MAX_NESTING_DEPTH,
@@ -82,6 +87,10 @@ from .edl3_time import AudioPolicy, RemapCurve, audio_fragment, ramp_fragment
 BACKEND_EXPR = "expr"
 BACKEND_SENDCMD = "sendcmd"
 BACKEND_CHROMIUM = "chromium"
+#: The declarative backend: one static ffmpeg filter template per kind, with the
+#: instance's static params substituted. Keyframes have no emitter here.
+BACKEND_FILTER = "filter"
+
 #: More keyframes on a mechanism-flexible track than this switches from a baked
 #: expression to sendcmd. One constant: select_backend and choose_backend read it.
 SENDCMD_THRESHOLD = 3
@@ -104,6 +113,11 @@ IMPLEMENTED_BACKENDS: Dict[str, frozenset] = {
     "color": frozenset({BACKEND_SENDCMD}),
     "blur": frozenset({BACKEND_EXPR}),
 }
+#: Every family entry declares the filter backend and nothing else, so its
+#: implemented set is exactly that one mechanism.
+for _kind, _spec in EFFECT_REGISTRY.items():
+    if _spec.backend == BACKEND_FILTER:
+        IMPLEMENTED_BACKENDS.setdefault(_kind, frozenset({BACKEND_FILTER}))
 RULE_DEFAULT = "default"
 RULE_KEYFRAMES = "keyframe_threshold"
 RULE_QUALIFIED = "chromium_qualified"
@@ -263,6 +277,7 @@ __all__ = [
     "BACKEND_EXPR",
     "BACKEND_SENDCMD",
     "BACKEND_CHROMIUM",
+    "BACKEND_FILTER",
     "SENDCMD_THRESHOLD",
     "SENDCMD_TRACKS",
     "CHROMIUM_QUALIFYING",
@@ -603,6 +618,75 @@ def _blur_fragment(effect: Any) -> str:
     return f"gblur=sigma={_num(1.0 if sigma is None else sigma)}"
 
 
+def filter_number(value: float) -> str:
+    """A stable decimal literal: never an exponent, never a trailing zero."""
+    text = f"{float(value):.10f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
+
+
+def filter_fragment(effect: Any, spec: EffectSpec) -> str:
+    """Format one declarative entry's template with this instance's static params.
+
+    A parameter the node omits takes its declared default, so the graph never
+    guesses a value the registry did not publish.
+    """
+    if not spec.filter_template:
+        raise CompileError(
+            "BACKEND_UNIMPLEMENTED",
+            f"{spec.kind!r} declares the filter backend but has no template",
+            f"effects.{spec.kind}",
+        )
+    values = spec.default_params()
+    for name, value in (effect.params or {}).items():
+        values[name] = float(value)
+    try:
+        return spec.filter_template.format(
+            **{name: filter_number(value) for name, value in values.items()}
+        )
+    except (IndexError, KeyError, ValueError) as exc:
+        raise CompileError(
+            "BACKEND_UNIMPLEMENTED",
+            f"{spec.kind!r} has a filter template that cannot be formatted: {exc}",
+            f"effects.{spec.kind}",
+        ) from exc
+
+
+def _filter_stage(
+    effects: Mapping[str, List[Any]],
+    canvas: Tuple[int, int],
+    fps: int,
+) -> List[str]:
+    """The declarative filters for one clip, plus the stage's own guarantees.
+
+    A template may legitimately re-declare the frame rate or the canvas
+    (``zoompan`` does both), so the stage re-stamps the timeline rate and crops
+    back to the clip canvas. A geometry effect therefore cannot change a clip's
+    duration or the deliverable's size, whatever its template does.
+    """
+    fragments: List[str] = []
+    for kind, instances in effects.items():
+        spec = EFFECT_REGISTRY.get(kind)
+        if spec is None or spec.backend != BACKEND_FILTER:
+            continue
+        for instance in instances:
+            fragments.append(filter_fragment(instance, spec))
+    if not fragments:
+        return []
+    width, height = canvas
+    rate = int(fps)
+    fragments.extend(
+        [
+            f"settb=1/{rate}",
+            "setpts=N",
+            f"fps={rate}",
+            f"scale={width}:{height}:"
+            "force_original_aspect_ratio=increase:flags=bicubic",
+            f"crop={width}:{height}",
+        ]
+    )
+    return fragments
+
+
 def _transition_fragment(
     transition: Optional[Transition], duration: float
 ) -> Optional[str]:
@@ -642,6 +726,15 @@ def _effective_effects(
     by_kind: Dict[str, List[Any]] = {}
     chosen: Dict[str, str] = {}
     for scope, effect in merged:
+        spec = EFFECT_REGISTRY.get(effect.kind)
+        if spec is not None and spec.backend == BACKEND_FILTER and effect.keyframes:
+            raise CompileError(
+                "EFFECT_NOT_ANIMATABLE",
+                f"{effect.kind!r} is rendered by one static filter template and "
+                f"does not animate; keyframes on {sorted(effect.keyframes)} have "
+                "no emitter",
+                scope,
+            )
         by_kind.setdefault(effect.kind, []).append(effect)
         chosen[effect.kind] = routed[scope]["chosen"]
     for kind, instances in by_kind.items():
@@ -869,6 +962,7 @@ def _clip_plan(
         geometry.append(_color_fragment(index, ordinal, color, fps, duration))
     for blur in effects.get("blur") or []:
         geometry.append(_blur_fragment(blur))
+    geometry.extend(_filter_stage(effects, (scaled_width, scaled_height), fps))
     blocks.append({"kind": "filters", "filters": geometry})
 
     opacity_filter: Optional[str] = None

@@ -60,6 +60,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .edl3_time import AudioPolicy
+from .effect_spec import (
+    BACKEND_FILTER,
+    EffectSpec,
+    ParamSpec,
+)
+from .effects import family_entries
 
 EDL3_VERSION = "vx.edl3/1.1"
 #: Accepted schema versions: an additive minor keeps every previous document valid.
@@ -84,8 +90,11 @@ GENERATOR_KEYS = frozenset({"template", "params", "engine", "alpha"})
 #: module's own (:class:`vx.edl3_time.AudioPolicy`), not a copy of it.
 AUDIO_TIME_POLICIES = frozenset(str(item.value) for item in AudioPolicy)
 
-#: Animation mechanisms an effect kind may declare (D012).
-BACKENDS = frozenset({"expr", "sendcmd", "zoompan", "chromium", "frames"})
+#: Animation mechanisms an effect kind may declare (D012). ``filter`` is the
+#: declarative backend: one static ffmpeg filter template, no keyframes.
+BACKENDS = frozenset(
+    {"expr", "sendcmd", "zoompan", "chromium", "frames", BACKEND_FILTER}
+)
 
 _TEXT_ALIGNS = frozenset({"left", "center", "right"})
 _TEXT_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -94,26 +103,14 @@ MAX_TEXT_STROKE = 64.0
 TEXT_KEYFRAME_PARAMS = frozenset({"opacity", "position_x", "position_y"})
 
 
-@dataclass(frozen=True)
-class EffectSpec:
-    """One registry entry: what a kind accepts and how it animates."""
-
-    kind: str
-    params: Tuple[str, ...]
-    animatable: bool
-    animated_params: Tuple[str, ...]
-    backend: str
-    notes: str
-    #: The ffmpeg mechanism a ``chromium`` declaration falls back to when the
-    #: node declares no property that genuinely needs a layout engine. Empty
-    #: means "this kind has no ffmpeg fallback", so the node is refused.
-    fallback: str = ""
-
-
 #: The effect registry. ``backend`` is the mechanism used *when a parameter is
 #: animated*; a static value is a plain filter argument. ``notes`` records the
 #: measured constraint that fixed the choice.
-EFFECT_REGISTRY: Dict[str, EffectSpec] = {
+#:
+#: The five hand-written kinds below are the contract's own: their params,
+#: backends and notes are frozen. Every other kind is declared by a family
+#: module under :mod:`vx.effects` and merged in by :func:`_merge_families`.
+CORE_EFFECT_REGISTRY: Dict[str, EffectSpec] = {
     "transform": EffectSpec(
         kind="transform",
         params=("scale", "opacity"),
@@ -176,6 +173,28 @@ EFFECT_REGISTRY: Dict[str, EffectSpec] = {
     ),
 }
 
+
+def _merge_families(
+    core: Mapping[str, EffectSpec], declared: Mapping[str, EffectSpec]
+) -> Dict[str, EffectSpec]:
+    """The core registry plus every family entry, refusing a stolen kind name."""
+    merged: Dict[str, EffectSpec] = dict(core)
+    for kind, spec in declared.items():
+        if kind in core:
+            raise ValueError(
+                f"family entry {kind!r} collides with the core registry; a core "
+                "kind keeps its own params, backend and notes"
+            )
+        merged[kind] = spec
+    return merged
+
+
+#: The whole registry: the five contract kinds plus every family module that
+#: exists under :mod:`vx.effects`.
+EFFECT_REGISTRY: Dict[str, EffectSpec] = _merge_families(
+    CORE_EFFECT_REGISTRY, family_entries()
+)
+
 EFFECT_KINDS = frozenset(EFFECT_REGISTRY)
 TRANSFORM_PARAMS = frozenset(EFFECT_REGISTRY["transform"].params)
 
@@ -197,8 +216,16 @@ TEXT_BACKEND = "overlay"
 #: The spellings :func:`select_backend` accepts for that entity family.
 TEXT_MECHANISM_KINDS = frozenset({"text", "text_layer", "caption"})
 
-#: Effect kinds the compiler implements. Everything else is refused loudly.
-RENDERABLE_EFFECTS = frozenset({"transform", "crop", "color", "blur"})
+#: Effect kinds the compiler implements: the four hand-written kinds plus every
+#: entry whose declared backend is the static filter template.
+RENDERABLE_EFFECTS = frozenset(
+    {"transform", "crop", "color", "blur"}
+    | {
+        kind
+        for kind, spec in EFFECT_REGISTRY.items()
+        if spec.backend == BACKEND_FILTER
+    }
+)
 #: Transition kinds the compiler implements.
 RENDERABLE_TRANSITIONS = frozenset({"fade_in", "fade_out"})
 
@@ -219,7 +246,9 @@ __all__ = [
     "TEXT_BACKEND",
     "TEXT_MECHANISM_KINDS",
     "EDLError",
+    "ParamSpec",
     "EffectSpec",
+    "BACKEND_FILTER",
     "Keyframe",
     "KeyframeTrack",
     "Effect",
@@ -433,6 +462,17 @@ def param_domain_problem(kind: str, name: str, value: float) -> Optional[str]:
     elif kind == "chroma_key":
         if name in ("similarity", "blend"):
             return between(0.0, 1.0)
+
+    spec = EFFECT_REGISTRY.get(kind)
+    if spec is not None and spec.params_spec:
+        declared = spec.param(name)
+        if declared is None:
+            return f"{kind}.{name} is not a declared parameter"
+        if not declared.contains(value):
+            return (
+                f"{kind}.{name}={value} outside "
+                f"[{declared.lo:g}, {declared.hi:g}]"
+            )
     return None
 
 

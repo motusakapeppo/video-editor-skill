@@ -240,9 +240,18 @@ def check_registry() -> None:
         and not edl3.EFFECT_REGISTRY["chroma_key"].animatable,
         edl3.EFFECT_REGISTRY["chroma_key"].notes[:40],
     )
+    renderable = set(edl3.RENDERABLE_EFFECTS)
+    declarative = {
+        kind
+        for kind, spec in edl3.EFFECT_REGISTRY.items()
+        if spec.backend == edl3.BACKEND_FILTER
+    }
     check(
-        "the renderable set is declared and excludes the placeholder",
-        set(edl3.RENDERABLE_EFFECTS) == {"transform", "crop", "color", "blur"},
+        "the renderable set is declared, excludes the placeholder and carries "
+        "every declarative filter entry",
+        {"transform", "crop", "color", "blur"} <= renderable
+        and "chroma_key" not in renderable
+        and renderable == {"transform", "crop", "color", "blur"} | declarative,
         sorted(edl3.RENDERABLE_EFFECTS),
     )
     check(
