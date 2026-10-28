@@ -676,7 +676,10 @@ def _filter_stage(
     if not fragments:
         return []
     width, height = canvas
-    rate = int(fps)
+    # The declared rate is a real number, not an integer: 23.976 and 29.97 are
+    # deliverable rates (profiles.FPS_CHOICES) and `int()` would silently stamp
+    # 23 and 29 on them. filter_number keeps integer rates byte-identical.
+    rate = filter_number(float(fps))
     fragments.extend(
         [
             f"settb=1/{rate}",
@@ -1764,6 +1767,8 @@ def compile_timeline(
         "version": timeline.version,
         "backend": backend,
         "audio_policy": audio,
+        "fps": float(timeline.fps),
+        "duration": float(timeline.duration),
         "filter_script": ";\n".join(chains) + "\n",
         "input_args": input_args,
         "map": f"[{base_label}]",
@@ -1824,6 +1829,33 @@ def _chain_into(
     return filters
 
 
+def _input_runs_at_declared_rate(plan: Mapping[str, Any]) -> bool:
+    """True when every video input already carries the document's clock.
+
+    Compile is pure and never opens a source, so the only place this can be
+    answered is here, with ffprobe. A generator's numbered image sequence is
+    declared at the timeline's rate by its own ``-framerate`` argument, so it is
+    skipped.
+    """
+    from . import probe as probe_module
+
+    rate = float(plan["fps"])
+    args = list(plan["input_args"])
+    for index, token in enumerate(args):
+        if token != "-i" or index + 1 >= len(args):
+            continue
+        path = str(args[index + 1])
+        if "%" in path:
+            continue
+        try:
+            input_rate = float(probe_module.probe(path).fps)
+        except Exception:  # noqa: BLE001 - an unreadable clock is not the declared one
+            return False
+        if input_rate > 0 and abs(input_rate - rate) > 1e-3:
+            return False
+    return True
+
+
 def _encode(
     plan: Mapping[str, Any], destination: Path, script_dir: Path, timeout: Optional[int]
 ) -> Tuple[ffmpeg.Proc, Path]:
@@ -1847,6 +1879,17 @@ def _encode(
         )
     else:
         args.append("-an")
+    # The deliverable's clock is the document's declared rate, never the source's.
+    # Without this option the encoder keeps the input frame rate, so a 24 fps
+    # document rendered from a 30 fps source ships at 30 fps.
+    args.extend(["-r", filter_number(float(plan["fps"]))])
+    if not _input_runs_at_declared_rate(plan):
+        # Resampling to another clock lets the cfr encoder emit up to two frames
+        # past the source's last one, so the tail is bounded by the duration the
+        # document declares. A document already at its own clock is untouched:
+        # its picture length is its own business (a ramp or a freeze ends where
+        # the plan says, and only the picture is retimed).
+        args.extend(["-t", filter_number(float(plan["duration"]))])
     args.extend(
         [
             "-sn",
