@@ -25,7 +25,6 @@ import json
 import re
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -36,7 +35,6 @@ from .contract import (
     EXIT_OK,
     EXIT_RENDER_FAIL,
     PLATFORM_INSETS,
-    SAFE_ZONES,
     THRESHOLDS,
     Cue,
     Transcript,
@@ -57,179 +55,24 @@ __all__ = [
     "declared_box",
     "wrap_text",
     "write_hook_ass",
-    "SUBTITLE_STYLES",
-    "DEFAULT_PRESET",
-    "style_for",
     "main",
 ]
 
 DEFAULT_MODEL = "small"
-
-# `DEFAULT_FONT` resta il volto di titolazione (l'hook card): Antonio e' un
-# condensed da cartello, giusto per una testata e sbagliato per una frase da
-# leggere. I sottotitoli usano il volto dichiarato dal preset (`reel` = Inter).
 DEFAULT_FONT = "Antonio"
 
-# --------------------------------------------------------------------------- #
-# Tipografia: stili dichiarati
-# --------------------------------------------------------------------------- #
+# Tipografia cinetica. Antonio (OFL) e' condensed: 0.387 em/carattere misurato sul
+# set di cue reale, 0.394 in maiuscolo. 0.42 e' il limite prudente usato per il box
+# dichiarato, cosi' il cancello 4 non protegge un ingombro ottimistico.
 #
-# Un solo numero non descrive un sottotitolo: servono famiglia, avanzamento,
-# corpo, peso, contorno, ombra, margini e colore. Qui vivono insieme, cosi' una
-# resa non e' un insieme di default sparsi in `write_ass` ma una voce che si
-# legge e si prova con un frame.
-#
-# Avanzamento misurato (Pillow, 100 px, corpus di battute italiane): Antonio
-# 0.371 medio / 0.416 maiuscolo; Inter 0.451-0.472 misto / 0.573-0.613
-# maiuscolo; Playfair Display 0.433-0.458 misto / 0.553-0.598 maiuscolo. I
-# valori dichiarati sono il massimo misurato +6-9% di margine, mai un'ipotesi
-# ottimistica: `_CHAR_EM` a 0.34 sottostimava Inter di oltre un terzo e il box
-# dichiarato proteggeva uno spazio che il testo non occupava.
-#
-# Tele di riferimento delle SAFE_ZONES: sono rettangoli in pixel, vanno
-# normalizzati prima di applicarli a una tela di altezza diversa (stessa
-# tabella di `vx.autoframe._SAFE_REF`).
-_REF_CANVAS = {
-    "9:16": (1080, 1920),
-    "1:1": (1080, 1080),
-    "4:5": (1080, 1350),
-    "16:9": (1920, 1080),
-    "4:3": (1440, 1080),
-}
-
-_ADVANCE = {"Antonio": 0.42, "Inter": 0.50, "Playfair Display": 0.50}
-_ADVANCE_UPPER = {"Antonio": 0.42, "Inter": 0.62, "Playfair Display": 0.60}
-_FALLBACK_ADVANCE = 0.62
-_FALLBACK_ADVANCE_UPPER = 0.72
-
-# Placca nera all'80%: il default storico, usato da `write_hook_ass` e dai
-# preset senza piastra.
-BACK_COLOUR = "&H80000000"
-
-
-@dataclass(frozen=True)
-class SubtitleStyle:
-    """Un look di sottotitolo, con i numeri che lo giustificano.
-
-    `base_ratio` e' il corpo massimo in frazione di `out_h`; il corpo effettivo
-    e' `min(base_ratio * out_h, larghezza_utile / (caratteri * advance_em))`, mai
-    sotto `min_px`. `outline_px`/`shadow_px` sono pixel alla tela `ref_h` e
-    vengono riscalati, come prima. `safe_air_ratio` e' l'aria fra il bordo
-    inferiore del testo e la linea sicura della piattaforma.
-    """
-
-    name: str
-    family: str
-    role: str
-    advance_em: float
-    base_ratio: float
-    min_px: int
-    bold: bool
-    uppercase: bool
-    outline_px: int
-    shadow_px: int
-    ref_h: int
-    safe_air_ratio: float
-    primary: str
-    secondary: str
-    plate: bool = False
-    plate_pad_ratio: float = 0.0
-    back: str = BACK_COLOUR
-    pop: bool = True
-
-
-# Tre voci, un default per aspect. `reel` e' il verticale sociale; `wide` e' il
-# 16:9/4:3; `interview` e' il documentario, opt-in perche' un'intervista non e'
-# un reel e non deve diventare il default di nessuno.
-SUBTITLE_STYLES: Dict[str, SubtitleStyle] = {
-    "reel": SubtitleStyle(
-        name="reel",
-        family="Inter",
-        role="vertical social (9:16, 4:5, 1:1): frase leggibile, non un cartello",
-        # 0.451-0.472 misurato misto; 0.50 e' il limite prudente.
-        advance_em=0.50,
-        # 0.064 * 1920 = 123 px di tetto; su 18 caratteri comanda la larghezza.
-        base_ratio=0.064,
-        min_px=40,
-        bold=False,  # Inter-Variable ha il 400 reale; il -1 sarebbe un finto grassetto
-        uppercase=False,
-        # 7 px di contorno a 1920 = 0.36% dell'altezza: il valore storico, tenuto
-        # perche' e' quello che i test e il riferimento social citano.
-        outline_px=7,
-        shadow_px=4,
-        ref_h=1920,
-        # 12 px sopra la linea sicura (0.6% di 1920).
-        safe_air_ratio=12.0 / 1920.0,
-        primary="&H00FFFFFF",  # bianco
-        secondary="&H004BC2FF",  # #FFC24B: ambra del karaoke
-    ),
-    "interview": SubtitleStyle(
-        name="interview",
-        family="Playfair Display",
-        role="documentario/intervista: lower third editoriale, piastra invece di contorno",
-        advance_em=0.50,  # 0.433-0.458 misurato misto
-        base_ratio=0.040,  # 77 px a 1920; 43 px a 1080
-        min_px=28,
-        bold=False,
-        uppercase=False,
-        outline_px=0,
-        shadow_px=0,
-        ref_h=1920,
-        # 48 px sopra la linea sicura: un lower third respira, non tocca il bordo.
-        safe_air_ratio=48.0 / 1920.0,
-        primary="&H00E6EFF5",  # #F5EFE6, bianco carta
-        secondary="&H00E6EFF5",
-        plate=True,
-        # 0.012 * 1920 = 23 px di imbottitura; 13 px a 1080.
-        plate_pad_ratio=0.012,
-        # &H66 alpha = 60% opaco: su fondo bianco il contrasto resta >= 5.8:1.
-        back="&H66000000",
-        pop=False,  # un documentario non fa pop-in
-    ),
-    "wide": SubtitleStyle(
-        name="wide",
-        family="Inter",
-        role="16:9 / 4:3: didascalia broadcast, maiuscolo assente",
-        advance_em=0.50,
-        base_ratio=0.042,  # 45 px a 1080 (4.2% dell'altezza)
-        min_px=28,
-        bold=False,
-        uppercase=False,
-        outline_px=4,  # il valore storico del riferimento orizzontale
-        shadow_px=2,
-        ref_h=1080,
-        # 4 px sopra la linea sicura (1080-1044=36, piu' 4).
-        safe_air_ratio=4.0 / 1080.0,
-        primary="&H00FFFFFF",
-        secondary="&H00FFFFFF",
-    ),
-}
-
-#: preset di default per aspect. `interview` non compare: si sceglie.
-DEFAULT_PRESET = {
-    "9:16": "reel",
-    "4:5": "reel",
-    "1:1": "reel",
-    "3:4": "reel",
-    "16:9": "wide",
-    "4:3": "wide",
-}
-
-
-def style_for(aspect: str) -> SubtitleStyle:
-    """Il preset che un aspect riceve quando nessuno ne dichiara uno."""
-    return SUBTITLE_STYLES[DEFAULT_PRESET.get(str(aspect), "reel")]
-
-
-def _advance_for(family: str, uppercase: bool = False) -> float:
-    table = _ADVANCE_UPPER if uppercase else _ADVANCE
-    return table.get(str(family or "").strip(), (
-        _FALLBACK_ADVANCE_UPPER if uppercase else _FALLBACK_ADVANCE
-    ))
-
-
+# BorderStyle 1: il testo ha un contorno vero, non una placca. I valori sotto sono
+# quelli misurati a 1080x1920 (references/04-specifiche-social.md:85): outline 7,
+# shadow 4 sul verticale; 4 e 2 sull'orizzontale a 1080 di altezza. In `write_ass`
+# vengono riscalati su `out_h`, cosi' la proporzione resta la stessa a ogni
+# risoluzione invece di essere un numero magico legato a un solo output.
 BORDER_STYLE_VERTICAL = 1
 BOX_PADDING_VERTICAL = 0
+BACK_COLOUR = "&H80000000"
 
 # Animazione: dissolvenza morbida ai due capi e pop-in dal 95% al 100%. Il pop
 # parte piu' piccolo e finisce esattamente al 100%, quindi non supera mai il box
@@ -257,15 +100,15 @@ WRAP_CHARS_VERTICAL = 30
 MAX_LINES_VERTICAL = 2
 
 
-
 GAP_BREAK = 0.45  # seconds of silence that closes a cue
 MIN_CUE = 0.4  # never emit a shorter cue; extend the end instead
 SENTENCE_END = ".!?…"
 _TRAILING = "\"'”’»)]}"
 
-# L'avanzamento non e' piu' una costante unica: dipende dal volto e dal caso
-# (`_advance_for`). Il vecchio 0.34 era tarato su un Antonio maiuscolo
-# ottimistico e sottostimava Inter di oltre un terzo.
+# Arial Black uppercase advance is ~0.484 em/char (measured: "QUESTO È UN
+# TEST" @119px renders 935 px wide including outline).  0.50 is a safe upper
+# bound that keeps the longest cue clear of the frame edge.
+_CHAR_EM = 0.34
 
 FILLERS = frozenset(
     {
@@ -642,17 +485,8 @@ def build_cues(
 # --------------------------------------------------------------------------- #
 
 
-def _karaoke_body(
-    cue: Cue, *, uppercase: bool = True, chunks: Optional[Sequence[str]] = None
-) -> str:
-    """`{\\kNN}WORD` per word, centiseconds summing exactly to the cue.
-
-    `chunks` are the wrapped lines: the `\\k` runs are distributed over them so a
-    long cue breaks like a caption instead of running off the frame. When the
-    chunk word count does not line up with the timed words (a cue without word
-    times, or a wrap that split a token) the highlight is dropped rather than
-    invented, and the plain wrapped text is returned.
-    """
+def _karaoke_body(cue: Cue) -> str:
+    """`{\\kNN}WORD` per word, centiseconds summing exactly to the cue."""
     words = cue.words or [{"start": cue.start, "end": cue.end, "word": cue.text}]
     starts = [float(w.get("start", cue.start)) for w in words]
     total_cs = max(1, int(round((cue.end - cue.start) * 100)))
@@ -678,37 +512,15 @@ def _karaoke_body(
             if not need:
                 break
 
-    tokens = [
-        "{\\k%d}%s"
-        % (
-            k,
-            _ass_escape(
-                str(w.get("word", "")).upper()
-                if uppercase
-                else str(w.get("word", ""))
-            ),
-        )
+    body = " ".join(
+        "{\\k%d}%s" % (k, _ass_escape(str(w.get("word", "")).upper()))
         for w, k in zip(words, ks)
-    ]
-
-    lines = list(chunks or [])
-    expected = sum(len(str(line).split()) for line in lines)
-    if lines and expected == len(tokens):
-        rendered: List[str] = []
-        cursor = 0
-        for line in lines:
-            count = len(str(line).split())
-            rendered.append(" ".join(tokens[cursor : cursor + count]))
-            cursor += count
-        body = "\\N".join(rendered)
-    else:
-        body = " ".join(tokens)
+    )
     return ("{\\k%d}" % lead_cs + body) if lead_cs else body
 
 
-def _clean_body(cue: Cue, *, uppercase: bool = False) -> str:
-    text = cue.text.upper() if uppercase else cue.text
-    return _ass_escape(text)
+def _clean_body(cue: Cue) -> str:
+    return _ass_escape(cue.text)
 
 
 def wrap_text(
@@ -761,7 +573,7 @@ def write_ass(
     aspect: str = "9:16",
     platform: str = "tiktok",
     style: str = "karaoke",
-    font: Optional[str] = None,
+    font: str = DEFAULT_FONT,
     out_w: int = 1080,
     out_h: int = 1920,
     bottom_limit_px: Optional[int] = None,
@@ -769,20 +581,14 @@ def write_ass(
     outline: Optional[int] = None,
     shadow: Optional[int] = None,
     margin_lr: Optional[int] = None,
-    border_style: Optional[int] = None,
-    back_colour: Optional[str] = None,
-    animate: Optional[bool] = None,
+    border_style: int = BORDER_STYLE_VERTICAL,
+    back_colour: str = BACK_COLOUR,
+    animate: bool = ANIMATE,
     beats: Optional[Sequence[float]] = None,
     margin_v: Optional[int] = None,
     font_family: Optional[str] = None,
-    preset: Optional[str] = None,
 ) -> str:
     """Write an ASS file and return its absolute path (plain UTF-8, no BOM).
-
-    `preset` sceglie una voce di :data:`SUBTITLE_STYLES`. Quando e' `None`
-    l'aspect decide: `reel` per il verticale, `wide` per 16:9/4:3. Ogni campo
-    del preset puo' ancora essere sovrascritto da un argomento esplicito, cosi'
-    il chiamante che sa cosa vuole non perde il controllo.
 
     `bottom_limit_px` is the highest Y (exclusive) the text block may reach. It is
     what `vx.layout` computes from the graphic overlays, and it overrides the
@@ -795,85 +601,51 @@ def write_ass(
     `margin_v` replaces the computed bottom margin; the bridge uses it to anchor the
     captions to the canvas instead of to the platform safe zone.
 
-    `font_family` is the ASS `Fontname`: when given it replaces the preset family
-    verbatim, so the renderer can burn the family `typography.apply` actually
-    copied into the job's fonts dir. `font` still wins over the preset when
-    `font_family` is absent.
+    `font_family` is the ASS `Fontname`: when given it replaces `font` verbatim, so
+    the renderer can burn the family `typography.apply` actually copied into the
+    job's fonts dir. When `None`, `font` is used exactly as before.
     """
     target = Path(dst)
     target.parent.mkdir(parents=True, exist_ok=True)
     margin_override = margin_v
 
-    if preset is not None and str(preset) not in SUBTITLE_STYLES:
-        raise ValueError(
-            f"vx.subs: preset {preset!r} non dichiarato; scegli fra "
-            f"{sorted(SUBTITLE_STYLES)}"
-        )
-    look = SUBTITLE_STYLES[str(preset)] if preset else style_for(aspect)
-    family = font_family or font or look.family
-    uppercase = bool(look.uppercase)
-    advance = _advance_for(family, uppercase)
-    border = int(border_style) if border_style is not None else (
-        3 if look.plate else BORDER_STYLE_VERTICAL
-    )
-    back = (
-        back_colour
-        if back_colour is not None
-        else (look.back if border == 3 else BACK_COLOUR)
-    )
-
     vertical = aspect not in ("16:9", "4:3")
-    base = max(int(look.min_px), int(round(look.base_ratio * out_h)))
-    chars = (WRAP_CHARS_VERTICAL if vertical else 42) if wrap_chars is None else int(
-        wrap_chars
-    )
-    ref_w, ref_h = _REF_CANVAS.get(aspect, (out_w, out_h))
-
-    if border == 3:
-        # BorderStyle 3: `Outline` e' l'imbottitura della placca, non un contorno.
-        outline = (
-            _scaled(int(round(look.plate_pad_ratio * ref_h)), out_h, ref_h)
-            if outline is None
-            else int(outline)
+    if vertical:
+        base = int(round(0.070 * out_h))
+        default_outline = (
+            BOX_PADDING_VERTICAL
+            if border_style == 3
+            else _scaled(OUTLINE_VERTICAL, out_h, 1920)
         )
-        shadow = 0 if shadow is None else int(shadow)
+        outline = default_outline if outline is None else int(outline)
+        shadow = (
+            _scaled(SHADOW_VERTICAL, out_h, 1920) if shadow is None else int(shadow)
+        )
+        chars = WRAP_CHARS_VERTICAL if wrap_chars is None else int(wrap_chars)
+        insets = PLATFORM_INSETS.get(platform, (0, 0, 0, 0))
+        scale = out_h / 1920.0
+        margin_v = int(
+            round(
+                max(
+                    out_h - safe_rect(aspect)[3] + 12,
+                    insets[1] * scale + 12,
+                )
+            )
+        )
     else:
+        base = int(round(0.045 * out_h))
         outline = (
-            _scaled(look.outline_px, out_h, look.ref_h)
+            _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
             if outline is None
             else int(outline)
         )
         shadow = (
-            _scaled(look.shadow_px, out_h, look.ref_h)
-            if shadow is None
-            else int(shadow)
+            _scaled(SHADOW_HORIZONTAL, out_h, 1080) if shadow is None else int(shadow)
         )
+        chars = 42 if wrap_chars is None else int(wrap_chars)
+        margin_v = 40
 
-    x1, x2, _y1, y2 = safe_rect(aspect)
-    if margin_lr is None:
-        # Simmetrico per costruzione: `vx.layout.text_box` assume il blocco
-        # centrato sulla tela, quindi due margini diversi sposterebbero il testo
-        # in un punto che il cancello non misura.
-        margin_l = margin_r = int(round(x1 * out_w / ref_w))
-    else:
-        margin_l = margin_r = int(margin_lr)
-
-    air = look.safe_air_ratio * out_h
-    if aspect in SAFE_ZONES:
-        below_safe = (ref_h - y2) * out_h / ref_h
-    elif not vertical:
-        below_safe = 0.037 * out_h
-    else:
-        below_safe = max(0, out_h - y2)
-    if vertical:
-        platform_bottom = (
-            PLATFORM_INSETS.get(platform, (0, 0, 0, 0))[1] * out_h / 1920.0
-        )
-        margin_v = int(round(max(below_safe, platform_bottom) + air))
-    else:
-        margin_v = int(round(below_safe + air))
-
-    if style == "clean" and border == 1 and int(outline) > 0:
+    if style == "clean" and border_style == 1 and int(outline) > 0:
         outline = max(0, int(outline) - 1)
         shadow = max(0, int(shadow) - 1)
 
@@ -881,21 +653,19 @@ def write_ass(
         # Con la placca (BorderStyle 3) MarginV àncora il glifo, ma lo sfondo
         # dipinto si estende di `outline` px oltre: senza compensare, l'inchiostro
         # visivo sfonda il limite pur con il testo dentro (misurato: 1212 vs 1207).
-        plate = int(outline) if int(border) == 3 else 0
+        plate = int(outline) if int(border_style) == 3 else 0
         margin_v = max(0, int(out_h) - int(bottom_limit_px) + plate)
 
     if margin_override is not None:
         margin_v = max(0, int(margin_override))
 
+    margin_lr = 60 if margin_lr is None else int(margin_lr)
     wrapped: List[List[str]] = [wrap_text(c.text, chars) for c in cues]
     longest = max(
         (max((len(x) for x in lines), default=1) for lines in wrapped), default=1
     )
-    avail = max(64, out_w - margin_l - margin_r)
-    size = max(
-        int(look.min_px),
-        min(base, int(avail / (max(1, longest) * advance))),
-    )
+    avail = max(64, out_w - 2 * margin_lr)
+    size = max(24, min(base, int(avail / (max(1, longest) * _CHAR_EM))))
 
     header = (
         "[Script Info]\n"
@@ -910,28 +680,24 @@ def write_ass(
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Vx,{family},{size},{look.primary},{look.secondary},&H00000000,"
-        f"{back},{-1 if look.bold else 0},0,0,0,100,100,0,0,"
-        f"{border},{outline},{shadow},2,"
-        f"{margin_l},{margin_r},{margin_v},1\n"
+        f"Style: Vx,{font_family or font},{size},&H00FFFFFF,&H0000D7FF,&H00000000,"
+        f"{back_colour},-1,0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,"
+        f"{margin_lr},{margin_lr},{margin_v},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
         "Effect, Text\n"
     )
 
-    fade_pop = (
-        f"{{\\fad({FADE_MS},{FADE_MS})"
-        f"\\fscx{POP_FROM}\\fscy{POP_FROM}"
-        f"\\t(0,{POP_MS},\\fscx100\\fscy100)}}"
+    pop = (
+        (
+            f"{{\\fad({FADE_MS},{FADE_MS})"
+            f"\\fscx{POP_FROM}\\fscy{POP_FROM}"
+            f"\\t(0,{POP_MS},\\fscx100\\fscy100)}}"
+        )
+        if animate
+        else ""
     )
-    fade_only = f"{{\\fad({FADE_MS},{FADE_MS})}}"
-    if animate is False:
-        pop = ""
-    elif animate is True:
-        pop = fade_pop
-    else:
-        pop = fade_pop if look.pop else fade_only
 
     def beat_flashes(cue: Cue) -> str:
         """Colour flashes on the beats that land inside this cue.
@@ -960,14 +726,11 @@ def write_ass(
             continue
         prefix = pop + (f"{{{beat_flashes(cue)}}}" if beats else "")
         if style == "karaoke":
-            body = prefix + _karaoke_body(cue, uppercase=uppercase, chunks=chunks)
+            body = prefix + _karaoke_body(cue)
         elif len(chunks) > 1:
-            body = prefix + "\\N".join(
-                _ass_escape(chunk.upper() if uppercase else chunk)
-                for chunk in chunks
-            )
+            body = prefix + "\\N".join(_ass_escape(chunk) for chunk in chunks)
         else:
-            body = prefix + _clean_body(cue, uppercase=uppercase)
+            body = prefix + _clean_body(cue)
         lines.append(
             f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Vx,,0,0,0,,{body}"
         )
@@ -1003,16 +766,7 @@ def write_hook_ass(
     margin_v = 40
     base = int(round(0.045 * out_h))
     avail = max(64, int(out_w) - 2 * margin_lr)
-    size = max(
-        24,
-        min(
-            base,
-            int(
-                avail
-                / (max(1, len(body)) * _advance_for(str(family), uppercase=True))
-            ),
-        ),
-    )
+    size = max(24, min(base, int(avail / (max(1, len(body)) * _CHAR_EM))))
     outline = _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
     shadow = _scaled(SHADOW_HORIZONTAL, out_h, 1080)
 
@@ -1345,7 +1099,6 @@ def declared_box(ass_path) -> Dict[str, Any]:
     w, h = _playres(text)
     style = next((ln for ln in text.splitlines() if ln.startswith("Style:")), "")
     fields = style.split(",")
-    family = fields[1].strip() if len(fields) > 1 else ""
     font_px = int(fields[2]) if len(fields) > 2 else 0
     outline_px = int(fields[16]) if len(fields) > 16 else 0
     shadow_px = int(fields[17]) if len(fields) > 17 else 0
@@ -1354,7 +1107,6 @@ def declared_box(ass_path) -> Dict[str, Any]:
 
     lines = 1
     widest = 0
-    widest_text = ""
     for line in text.splitlines():
         if not line.startswith("Dialogue:"):
             continue
@@ -1365,20 +1117,10 @@ def declared_box(ass_path) -> Dict[str, Any]:
         ]
         chunks = [c for c in chunks if c]
         lines = max(lines, len(chunks) or 1)
-        for chunk in chunks:
-            if len(chunk) > widest:
-                widest, widest_text = len(chunk), chunk
-
-    # Un testo gia' maiuscolo avanza di piu': il box dichiarato deve usare la
-    # tabella del caso che il file contiene davvero, non quella del caso scritto
-    # nel sorgente.
-    letters = [ch for ch in widest_text if ch.isalpha()]
-    upper = bool(letters) and all(ch.isupper() for ch in letters)
-    advance = _advance_for(family, uppercase=upper)
+        widest = max(widest, max((len(c) for c in chunks), default=0))
 
     return {
         "playres": [w, h],
-        "font_family": family,
         "font_px": font_px,
         "outline_px": outline_px,
         "shadow_px": shadow_px,
@@ -1386,8 +1128,7 @@ def declared_box(ass_path) -> Dict[str, Any]:
         "margin_lr": margin_lr,
         "lines": lines,
         "widest_chars": widest,
-        "advance_em": advance,
-        "line_px": int(round(widest * font_px * advance)),
+        "line_px": int(round(widest * font_px * _CHAR_EM)),
     }
 
 
@@ -1464,13 +1205,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--aspect", default="9:16")
     ap.add_argument("--platform", default="tiktok")
-    ap.add_argument("--font", default=None, help="famiglia ASS; default: quella del preset")
-    ap.add_argument(
-        "--preset",
-        default=None,
-        choices=sorted(SUBTITLE_STYLES),
-        help="stile dei testi; default: reel sul verticale, wide sul 16:9",
-    )
+    ap.add_argument("--font", default=DEFAULT_FONT)
     ap.add_argument("--no-vad", action="store_true")
     ap.add_argument("--max-duration", type=float, default=None)
     ap.add_argument("--burn", default=None, help="optional video to burn into")
@@ -1504,7 +1239,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         platform=args.platform,
         style=args.style,
         font=args.font,
-        preset=args.preset,
     )
     srt_path = write_srt(cues, out_dir / f"{stem}.srt")
 
