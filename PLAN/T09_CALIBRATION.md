@@ -64,3 +64,41 @@ Quindi la correzione non e' una formula: sotto **60** di luma media la nitidezza
 resta una descrizione misurata e il triage non la usa come cancello. La soglia cade
 tra il clip piu' scuro giudicato (38,7) e il successivo (83,9).
 
+
+
+## Panel visivo (2/11/2026)
+
+L'utente non e' competente e non vuole decidere: ha delegato la calibrazione,
+chiedendo agenti che guardino. Fatto, con una correzione dichiarata: **non sono
+persone**. Sono modelli che leggono i fotogrammi (`PLAN/T09_PANEL_RUBRIC.md`), e il
+corpus lo scrive: `kind: "model panel (vision), not human"`.
+
+**Cosa e' stato fatto.** Venti clip (le dieci del T09 piu' dieci dal lavoro reale),
+tre fotogrammi ciascuna al 25/50/75% della durata, quattro fogli 5x3. Lettori: A e C
+hanno consegnato; B e D non hanno potuto leggere i file (guasto di accesso,
+dichiarato, non giudizio). Un terzo lettore (E) e' arrivato dopo la fissazione della
+regola.
+
+**Risultato.** Accordo fra A e C: **0,9875**; due celle contestate
+(`c01.exposure` ok/dark, `c06.exposure` ok/dark) diventate `na`. Le tre ancore umane
+sono rispettate: c02 `evident`, c09 `ok`, c08 `noise absent`. Il panel, insomma, vede
+quello che vedeva l'umano.
+
+**Il numero che chiude la questione.** p33 = p67 = **0,0** su shake, exposure, cast e
+noise: 18 clip su 20 sono pulite. Un corpus cosi' non sa separare, e nessun giudice -
+umano o modello - puo' collocare una soglia su una popolazione senza difetti. Il
+limite non era l'annotatore: era il materiale.
+
+**La divergenza che vale la pena tenere.** Il lettore E, arrivato dopo, e' molto piu'
+severo: chiama `evident` il tremolio di c03, c07 e x01 dove A e C dicono `ok`, e
+`light` quasi tutto il rumore. Non e' entrato nel conteggio perche' la regola (due
+lettori utili, unanimita') era fissata prima che arrivasse. Resta scritto qui perche'
+e' un fatto: la severita' fra lettori varia cosi' tanto che una soglia derivata da
+poche decine di giudizi sarebbe fragile comunque.
+
+**Cosa serve per sbloccare davvero.** Una scala di difetti: clip costruiti a livelli
+noti (tremolio 1/2/3, rumore, dominante, esposizione), panel **cieco alla
+costruzione**, e la soglia presa sul livello che il panel chiama `evident` - il modo
+in cui si calibra un sensore: campioni di riferimento piu' un lettore. Il test
+(`tests/test_threshold_provenance.py`, sezione f) ora **impedisce** di chiudere
+F0-T09 su un corpus che non separa.

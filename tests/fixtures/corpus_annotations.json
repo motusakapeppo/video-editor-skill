@@ -1,0 +1,454 @@
+{
+  "schema": "vx.corpus_annotations/1",
+  "provenance": {
+    "annotators": [
+      "A",
+      "C"
+    ],
+    "kind": "model panel (vision), not human: the judges are models reading frames",
+    "axes": [
+      "shake",
+      "exposure",
+      "cast",
+      "noise"
+    ],
+    "agreement": 0.9875,
+    "usable": 18,
+    "contested": [
+      {
+        "clip": "c01",
+        "axis": "exposure",
+        "votes": {
+          "ok": [
+            "A"
+          ],
+          "dark": [
+            "C"
+          ]
+        }
+      },
+      {
+        "clip": "c06",
+        "axis": "exposure",
+        "votes": {
+          "ok": [
+            "A"
+          ],
+          "dark": [
+            "C"
+          ]
+        }
+      }
+    ],
+    "holdout": "7 human judgments from PLAN/T09_CALIBRATION.md (shake anchors)"
+  },
+  "clips": {
+    "c01": {
+      "file": "c01",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "na",
+        "cast": "evident",
+        "noise": "light",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c02": {
+      "file": "c02",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "evident",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c03": {
+      "file": "c03",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c04": {
+      "file": "c04",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c05": {
+      "file": "c05",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c06": {
+      "file": "c06",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "na",
+        "cast": "none",
+        "noise": "light",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c07": {
+      "file": "c07",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c08": {
+      "file": "c08",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c09": {
+      "file": "c09",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "c10": {
+      "file": "c10",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "evident",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x01": {
+      "file": "x01",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x02": {
+      "file": "x02",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "na",
+        "exposure": "very_dark",
+        "cast": "none",
+        "noise": "na",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x03": {
+      "file": "x03",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "evident",
+        "noise": "light",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x04": {
+      "file": "x04",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x05": {
+      "file": "x05",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x06": {
+      "file": "x06",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x07": {
+      "file": "x07",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x08": {
+      "file": "x08",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x09": {
+      "file": "x09",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    },
+    "x10": {
+      "file": "x10",
+      "duration_sec": 0,
+      "type": "panel",
+      "axes": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent",
+        "volume": "na",
+        "silences": "na",
+        "music": "na"
+      },
+      "hook": "na",
+      "publishable": "unjudged",
+      "notes": "annotato dal panel visivo; audio fuori dal perimetro del panel"
+    }
+  },
+  "percentiles": {
+    "shake": {
+      "p33": 0.0,
+      "p67": 0.0,
+      "n": 19
+    },
+    "exposure": {
+      "p33": 0.0,
+      "p67": 0.0,
+      "n": 18
+    },
+    "cast": {
+      "p33": 0.0,
+      "p67": 0.0,
+      "n": 20
+    },
+    "noise": {
+      "p33": 0.0,
+      "p67": 0.0,
+      "n": 19
+    },
+    "volume": {
+      "p33": null,
+      "p67": null,
+      "n": 0
+    },
+    "silences": {
+      "p33": null,
+      "p67": null,
+      "n": 0
+    },
+    "music": {
+      "p33": null,
+      "p67": null,
+      "n": 0
+    },
+    "hook": {
+      "p33": null,
+      "p67": null,
+      "n": 0
+    }
+  },
+  "calibratable": false,
+  "calibratable_reason": "distribuzione degenere su cast, exposure, noise, shake: p33 e p67 coincidono, il corpus non contiene una popolazione di difetti e non sa separare. Le soglie non si possono derivare da qui.",
+  "anchors": [
+    {
+      "clip": "c02",
+      "axis": "shake",
+      "expected": "evident|unwatchable",
+      "got": "evident",
+      "ok": true
+    },
+    {
+      "clip": "c09",
+      "axis": "shake",
+      "expected": "ok|light",
+      "got": "ok",
+      "ok": true
+    },
+    {
+      "clip": "c08",
+      "axis": "noise",
+      "expected": "absent|light",
+      "got": "absent",
+      "ok": true
+    }
+  ]
+}

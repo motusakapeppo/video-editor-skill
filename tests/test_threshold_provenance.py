@@ -268,11 +268,91 @@ def check_shipped_module() -> None:
     print(f"    reader: {importer.reader_name()}")
 
 
+def check_real_corpus() -> None:
+    """(f) the real corpus: who annotated it, and can it separate at all?"""
+    print("(f) real annotated corpus")
+    if not REAL.is_file():
+        skip("real corpus", "corpus_annotations.json not present")
+        return
+    data = json.loads(REAL.read_text(encoding="utf-8"))
+    clips = data.get("clips") or {}
+    provenance = data.get("provenance") or {}
+    check(
+        "real corpus has at least 20 clips",
+        len(clips) >= 20,
+        f"{len(clips)} clip",
+    )
+    check(
+        "the annotators are declared as a model panel, not as people",
+        "model panel" in str(provenance.get("kind", ""))
+        and "not human" in str(provenance.get("kind", "")),
+        str(provenance.get("kind", ""))[:60],
+    )
+    check(
+        "the panel's agreement is measured and high",
+        isinstance(provenance.get("agreement"), (int, float))
+        and float(provenance["agreement"]) >= 0.95,
+        str(provenance.get("agreement")),
+    )
+    check(
+        "the annotations that did not reach a majority are recorded",
+        isinstance(provenance.get("contested"), list),
+        f"{len(provenance.get('contested') or [])} contestate",
+    )
+
+    recomputed = registry.annotated_percentiles(clips)
+    check(
+        "the declared percentiles are the ones the corpus produces",
+        recomputed == (data.get("percentiles") or {}),
+        str(recomputed.get("shake")),
+    )
+
+    anchors = data.get("anchors") or []
+    check(
+        "the human holdout is declared and respected",
+        bool(anchors) and all(anchor.get("ok") for anchor in anchors),
+        [(anchor.get("clip"), anchor.get("axis"), anchor.get("got")) for anchor in anchors],
+    )
+
+    # La regola che impedisce di chiudere il task con un corpus che non separa:
+    # se p33 e p67 coincidono, il task deve restare bloccato nel ledger.
+    calibratable = data.get("calibratable")
+    degenerate = [
+        axis for axis, entry in (data.get("percentiles") or {}).items()
+        if entry.get("n") and entry.get("p33") == entry.get("p67")
+    ]
+    check(
+        "calibratable is the honest consequence of the distribution",
+        bool(calibratable) == (not degenerate),
+        f"calibratable={calibratable}, degeneri={sorted(degenerate)}",
+    )
+    if not calibratable:
+        _, status = read_t09()
+        check(
+            "a corpus that cannot separate keeps F0-T09 blocked",
+            not status.upper().startswith("DONE"),
+            status,
+        )
+        check(
+            "and the reason is written in the corpus",
+            bool(str(data.get("calibratable_reason") or "").strip()),
+            str(data.get("calibratable_reason"))[:80],
+        )
+    else:
+        check(
+            "a calibratable corpus is used, not shelved",
+            any(entry.get("p33") is not None and entry.get("p33") != entry.get("p67")
+                for entry in recomputed.values()),
+            "",
+        )
+
+
 def main() -> int:
     print(f"reader: {importer.reader_name()}")
     check_ledger_and_gate()
     check_sample_recomputation()
     check_shipped_module()
+    check_real_corpus()
     print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP")
     return 0 if FAIL == 0 else 1
 

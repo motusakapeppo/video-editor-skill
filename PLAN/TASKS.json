@@ -107,7 +107,7 @@
       "status": "blocked",
       "evidence": "",
       "commits": [],
-      "note": "servono almeno venti clip con giudizi umani diversi: il corpus attuale ne ha sette e non separa (vedi PLAN/T09_CALIBRATION.md)"
+      "note": "misurato il 2/11/2026 con un panel di modelli che guardano i fotogrammi: 20 clip, accordo 0,9875, ancore umane rispettate (c02 evident, c09 ok, c08 noise absent) - ma p33 = p67 = 0 su shake/exposure/cast/noise, perche' 18 clip su 20 sono pulite. Il limite non e' il giudice, e' il corpus: serve una scala di difetti a livelli di riferimento (clip costruiti per livello, panel cieco alla costruzione) per collocare una soglia. Finche' non c'e', le soglie restano provvisorie."
     },
     {
       "id": "F0-T10",
