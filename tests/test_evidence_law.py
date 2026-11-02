@@ -150,6 +150,37 @@ def contract_matrix() -> None:
         bool(contract.validate_evidence(p, findings, 10.0)),
     )
 
+    # A finding span is timeline time. When the source needs normalising, the
+    # timeline is the staging file and can be a few frames shorter than the
+    # container; a span that reached the container's end made the gate refuse a
+    # real run ("witness outside 0..14.9937"). `_timeline_duration` is the bound.
+    whole = _finding("video.jitter.shaky", [0.0, 15.026])
+    whole_report = {
+        "source": {"duration": 15.026, "analysis_duration": 14.9937},
+        "analysis": {"video": {"jitter": {"score": 1.92, "headroom_pct": 44}}},
+    }
+    clamped = plan.detect_findings(whole_report)
+    jitter = next((f for f in clamped if f.get("id") == "video.jitter.shaky"), {})
+    check(
+        "a whole-clip finding stops at the analysed timeline",
+        jitter.get("span") == [0.0, 14.9937],
+        jitter.get("span"),
+    )
+    whole_plan = _plan(
+        [
+            _treatment(
+                "stabilize",
+                "video.jitter.shaky",
+                [_witness("video.jitter.shaky", 0.0, 14.9937)],
+            )
+        ]
+    )
+    check(
+        "and its witness passes the gate",
+        not contract.validate_plan(whole_plan, {"source": whole_report["source"], "findings": [jitter]}),
+        ",".join(contract.validate_plan(whole_plan, {"source": whole_report["source"], "findings": [jitter]})),
+    )
+
     da = _finding("audio.dead_air.excess", [0.0, 2.0])
     fr = _finding("video.freeze.static", [8.0, 10.0])
     cuts = [{"in": 0.0, "out": 4.0}, {"in": 6.0, "out": 10.0}]

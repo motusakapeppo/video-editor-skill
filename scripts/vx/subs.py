@@ -373,38 +373,65 @@ def _make_cue(words: Sequence[Dict[str, Any]], style: str, max_chars: int) -> Cu
     )
 
 
-def _finalize(cues: List[Cue], max_chars: int, max_cps: float) -> List[Cue]:
+def _finalize(
+    cues: List[Cue],
+    max_chars: int,
+    max_cps: float,
+    max_lines: Optional[int] = None,
+) -> List[Cue]:
     """Enforce min duration / cps without letting cues overlap.
 
-    A cue that would need more time than the gap before the next cue gets
-    merged into it when the combined text still fits `max_chars`; otherwise
-    it is clamped to the next cue's start.
+    ``max_chars`` is the width of *one* line, not of the whole cue: two lines of
+    18 characters hold 36. A cue that would need more time than the gap before
+    the next cue is merged into it whenever the combined text still fits the
+    declared lines; only then is it clamped to the next cue's start, and a second
+    pass lends it the silence *before* it, which is where a fast phrase usually
+    has room. Nothing is invented and nothing overlaps.
     """
+    lines = max(1, int(max_lines or 1))
     out = list(cues)
-    i = 0
-    while i < len(out):
-        cue = out[i]
+
+    def fits(text: str) -> bool:
+        return _wrap_count(text, max_chars) <= lines
+
+    def needed(cue: Cue) -> float:
         need = MIN_CUE
         if max_cps > 0 and cue.text:
             need = max(need, len(cue.text) / max_cps)
-        target = cue.start + need
+        return need
+
+    i = 0
+    while i < len(out):
+        cue = out[i]
+        target = cue.start + needed(cue)
         limit = out[i + 1].start if i + 1 < len(out) else None
 
         if limit is None:
             cue.end = max(cue.end, target)
         elif target > limit:
             nxt = out[i + 1]
-            if len(cue.text) + 1 + len(nxt.text) <= max_chars:
-                cue.text = f"{cue.text} {nxt.text}"
+            merged = f"{cue.text} {nxt.text}"
+            if fits(merged):
+                cue.text = merged
                 cue.words = cue.words + nxt.words
                 cue.end = nxt.end
-                cue.line_count = _wrap_count(cue.text, max_chars)
+                cue.line_count = _wrap_count(merged, max_chars)
                 out.pop(i + 1)
                 continue  # re-evaluate the merged cue
             cue.end = limit
         else:
             cue.end = min(max(cue.end, target), limit)
         i += 1
+
+    # A cue still short of its need borrows the silence before it: the line
+    # appears a moment before the first word is spoken, which is how a fast
+    # phrase becomes readable without overlap and without inventing words.
+    for index, cue in enumerate(out):
+        need = needed(cue)
+        if cue.end - cue.start >= need - 1e-9:
+            continue
+        floor = out[index - 1].end if index else 0.0
+        cue.start = max(floor, cue.end - need)
 
     for cue in out:
         cue.start = round(cue.start, 3)
@@ -450,7 +477,7 @@ def build_cues(
     if cur:
         raw.append(_make_cue(cur, style, chars))
 
-    return _finalize(raw, chars, cps)
+    return _finalize(raw, chars, cps, lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -464,12 +491,16 @@ def _karaoke_body(cue: Cue) -> str:
     starts = [float(w.get("start", cue.start)) for w in words]
     total_cs = max(1, int(round((cue.end - cue.start) * 100)))
 
+    # A cue can begin before its first word (the line is shown, then the word
+    # lights up); that lead-in is its own silent `\k` so the highlight still
+    # lands on the spoken word instead of stretching it.
+    lead_cs = max(0, min(total_cs - 1, int(round((starts[0] - cue.start) * 100))))
     ks: List[int] = []
     for i in range(len(words)):
         end_i = starts[i + 1] if i + 1 < len(words) else cue.end
         ks.append(max(0, int(round((end_i - starts[i]) * 100))))
 
-    diff = total_cs - sum(ks)
+    diff = total_cs - lead_cs - sum(ks)
     if diff > 0:
         ks[-1] += diff
     elif diff < 0:
@@ -481,11 +512,11 @@ def _karaoke_body(cue: Cue) -> str:
             if not need:
                 break
 
-    parts = [
+    body = " ".join(
         "{\\k%d}%s" % (k, _ass_escape(str(w.get("word", "")).upper()))
         for w, k in zip(words, ks)
-    ]
-    return " ".join(parts)
+    )
+    return ("{\\k%d}" % lead_cs + body) if lead_cs else body
 
 
 def _clean_body(cue: Cue) -> str:

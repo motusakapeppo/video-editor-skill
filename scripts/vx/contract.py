@@ -846,6 +846,10 @@ def validate_plan(
     if report is not None:
         findings = report.get("findings") or []
         source = report.get("source") or {}
+        # One horizon for every stage: the timeline the analysis measured, which
+        # is the staging file when the source needed normalising. `plan.py`
+        # clamps findings and cuts to the same number (`_timeline_duration`), so
+        # the gate and the plan can never disagree about where the material ends.
         duration = source.get("analysis_duration") or source.get("duration")
         sources = plan.get("sources") or (report or {}).get("sources")
         errors.extend(validate_evidence(plan, findings, duration, sources=sources))

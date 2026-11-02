@@ -178,6 +178,30 @@ def _loudness_target_name(brief: Optional[dict]) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def _timeline_duration(source: dict) -> float:
+    """The length of the timeline every stage shares.
+
+    When the source needs normalising (VFR, HDR, 4K) the analysis, the proxy,
+    the plan and the render all run on the staging file, whose duration can be a
+    few frames under the container's. That is the bound a finding span or a cut
+    may reach: asking for the container's last 32 ms is asking the timeline for
+    material it does not have, and the gate would refuse it. Reports written
+    before ``analysis_duration`` existed fall back to the container's duration.
+    """
+    return _num(source.get("analysis_duration")) or _num(source.get("duration")) or 0.0
+
+
+def _at_most(value: float, limit: float) -> float:
+    """Round to milliseconds without ever stepping past the timeline.
+
+    ``round(14.9937, 3)`` is ``14.994``, three tenths of a millisecond past the
+    end of the material; the plan gate refuses it ("cut 14.874-14.994 outside
+    0..14.9937"). Clamping is not a tolerance: the cut ends where the material
+    ends, it is not allowed to ask for a frame that does not exist.
+    """
+    return min(round(float(value), 3), float(limit))
+
+
 def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str, Any]]:
     """Every gate in the matrix, evaluated against the real numbers only.
 
@@ -195,7 +219,7 @@ def detect_findings(report: dict, brief: Optional[dict] = None) -> List[Dict[str
     faces = analysis.get("faces") or {}
     speech = analysis.get("speech") or {}
 
-    duration = _num(source.get("duration")) or 0.0
+    duration = _timeline_duration(source)
 
     # -- video ------------------------------------------------------------- #
     jitter = video.get("jitter") or {}
@@ -828,10 +852,12 @@ def _build_cuts(
     cursor = 0.0
     for start, end in merged:
         if start - cursor >= 0.05:
-            keep.append({"in": round(cursor, 3), "out": round(start, 3)})
+            keep.append(
+                {"in": round(cursor, 3), "out": _at_most(start, duration)}
+            )
         cursor = max(cursor, end)
     if duration - cursor >= 0.05:
-        keep.append({"in": round(cursor, 3), "out": round(duration, 3)})
+        keep.append({"in": round(cursor, 3), "out": _at_most(duration, duration)})
 
     removed = duration - sum(item["out"] - item["in"] for item in keep)
     return keep, removed
@@ -935,7 +961,7 @@ def build_plan(report: dict, brief: dict, answers: Optional[dict] = None) -> Edi
 
     src_w = int(_num(source.get("width")) or 0)
     src_h = int(_num(source.get("height")) or 0)
-    duration = _num(source.get("duration")) or 0.0
+    duration = _timeline_duration(source)
 
     aspect = brief.get("format")
     if aspect not in ASPECTS:
@@ -1548,7 +1574,7 @@ def validate(plan, report: dict) -> List[str]:
     errors = list(validate_plan(data, report))
 
     source = (report or {}).get("source") or {}
-    duration = _num(source.get("duration")) or 0.0
+    duration = _timeline_duration(source)
 
     cuts = data.get("cuts") or []
     kept = 0.0

@@ -351,11 +351,15 @@ def _ass_cues(path: Path) -> List[Dict[str, Any]]:
         body = re.sub(r"\{[^}]*\}", "", fields[9])
         lines = body.count("\\N") + 1
         chars = len(body.replace("\\N", "").replace("\\n", "").strip())
-        duration = max(0.0, end - start)
+        start_cs = int(round(start * 100))
+        end_cs = int(round(end * 100))
+        cs = max(0, end_cs - start_cs)
+        duration = cs / 100.0
         cues.append(
             {
                 "start": start,
                 "end": end,
+                "cs": cs,
                 "chars": chars,
                 "lines": lines,
                 "cps": (chars / duration) if duration > 0 else 0.0,
@@ -912,12 +916,23 @@ def check_render(
             )
         )
         cues = sorted(_ass_cues(subs), key=lambda c: (c["start"], c["end"]))
-        worst_cps = max((c["cps"] for c in cues), default=0.0)
+        # ASS stores centiseconds, so the comparison is done in centiseconds:
+        # 9 characters over 0.45 s is 20.0 cps, and 0.4 s is 40 cs, exactly. Doing
+        # it in floats made an exact 20.0 read as 20.000000000000004 and failed a
+        # cue the producer had sized to the limit.
+        worst = max(
+            cues,
+            key=lambda c: (100.0 * c["chars"] / c["cs"]) if c["cs"] else 0.0,
+            default=None,
+        )
+        worst_cps = (100.0 * worst["chars"] / worst["cs"]) if worst and worst["cs"] else 0.0
         worst_lines = max((c["lines"] for c in cues), default=0)
         checks.append(
             _check(
                 "cue_cps_max",
-                worst_cps <= LIMITS["cue_cps_max"],
+                worst is None
+                or not worst["cs"]
+                or 100 * worst["chars"] <= LIMITS["cue_cps_max"] * worst["cs"],
                 round(worst_cps, 2),
                 LIMITS["cue_cps_max"],
                 f"{len(cues)} cue(s)",
@@ -932,14 +947,14 @@ def check_render(
                 f"{len(cues)} cue(s)",
             )
         )
-        durations = [c["end"] - c["start"] for c in cues]
-        shortest = min(durations, default=0.0)
-        longest = max(durations, default=0.0)
+        cs_all = [c["cs"] for c in cues]
+        shortest_cs = min(cs_all, default=0)
+        longest_cs = max(cs_all, default=0)
         checks.append(
             _check(
                 "cue_duration_min",
-                shortest >= LIMITS["cue_dur_min"],
-                round(shortest, 3),
+                shortest_cs >= int(round(LIMITS["cue_dur_min"] * 100)),
+                round(shortest_cs / 100.0, 3),
                 LIMITS["cue_dur_min"],
                 f"{len(cues)} cue(s)",
             )
@@ -947,8 +962,8 @@ def check_render(
         checks.append(
             _check(
                 "cue_duration_max",
-                longest <= LIMITS["cue_dur_max"],
-                round(longest, 3),
+                longest_cs <= int(round(LIMITS["cue_dur_max"] * 100)),
+                round(longest_cs / 100.0, 3),
                 LIMITS["cue_dur_max"],
                 f"{len(cues)} cue(s)",
             )
