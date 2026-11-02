@@ -130,7 +130,7 @@
         }
       ],
       "calibratable": false,
-      "reason": "tre costruzioni diverse, tre letture cieche, sempre 'ok' fino a 1,465 di jitter misurato: un fotogramma fermo non mostra un tremolio, e la sequenza di fotogrammi non basta a un lettore che li guarda come immagini. Lo strumento non e' adatto all'asse, non il difetto assente. La soglia resta quella misurata di D-21 (separazione c02 3,59 / c09 0,85), non confermata a vista.",
+      "reason": "il panel di modelli non vede il tremolio (tre costruzioni, sempre 'ok'); il giudizio umano sul video lo vede e colloca la soglia fra 0,086 e 0,381. La misura resta valida, le bande 0,4/1,0 no.",
       "basis": "nessun livello giudicato evident",
       "attempts": [
         {
@@ -163,7 +163,31 @@
           ],
           "panel": "ok su tutti e quattro i livelli"
         }
-      ]
+      ],
+      "human_probe": {
+        "judge": "utente, giudizio a vista sul video riprodotto, un clip alla volta",
+        "judgments": [
+          {
+            "id": "s01",
+            "value": 0.086,
+            "token": "light"
+          },
+          {
+            "id": "s02",
+            "value": 0.381,
+            "token": "evident"
+          },
+          {
+            "id": "s03",
+            "value": 0.823,
+            "token": "piu' della clip 2 (evident, oltre)"
+          }
+        ],
+        "bound_low": 0.086,
+        "bound_high": 0.381,
+        "conclusion": "la soglia 'evident' cade fra 0,086 e 0,381 di jitter misurato: molto sotto le bande 0,4/1,0 usate oggi, che chiamano 'stable' un tremolio che l'utente giudica evidente. Le bande vanno riviste, non confermate.",
+        "note": "il panel di modelli aveva detto 'ok' su tutti i livelli: sul movimento serve un occhio umano. Questo e' il primo giudizio umano su una scala costruita, ed e' l'unico che puo' collocare la soglia."
+      }
     },
     "exposure": {
       "threshold": 50.636,
