@@ -1,6 +1,6 @@
 # HANDOFF — testa di ripresa per una sessione nuova
 
-**Aggiornato:** 2 novembre 2026, commit `a9e5ddc`.
+**Aggiornato:** 2 novembre 2026, commit `0cf9677`, tag `phase-F25-done`.
 
 Questo file esiste per una ragione sola: una sessione che riparte non deve
 ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
@@ -8,63 +8,75 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
 
 ## Stato in cinque righe
 
-- Skill V2 installata in `~/.config/opencode/skills/video-editor`, MCP `connected`
-  (sei tool), `vx doctor` = ready.
-- Ultima suite interamente verde: **159 runner / 5274 assert / 0 fail / 2 skip in
-  1338,6 s** (commit `9c17919`, tag `phase-F16-done`).
-- Board: `PLAN/TASKS.json`, **82 chiusi con prova, 12 aperti, 1 bloccato**
-  (`F0-T09`: servono venti giudizi umani, non si inventano).
-- Chiusi in questa campagna: D-8, D-9, D-11, D-12, D-13, D-21, D-22, F17-T10, il port
-  V2, F16 (6/6), F25-T01…T04.
+- Skill V2 in `~/.config/opencode/skills/video-editor`; MCP `connected` (sei tool);
+  `vx doctor` = ready.
+- Suite completa: **174 runner / 5652 assert / 0 fail / 2 skip in 1309,8 s**
+  (dopo `0cf9677`).
+- Board: **95 chiusi con prova, 1 bloccato** (`F0-T09`: venti giudizi umani, non
+  si inventano). Nessun task aperto.
+- Fasi chiuse e taggate: F1, F2, F3, F4, F16, F26, F27, F28, **F25** (T01…T15).
 - Albero pulito, remoto allineato, nessun processo in background.
+
+## Cosa e' entrato con F25 (T01…T15)
+
+| task | cosa | prova |
+|---|---|---|
+| T01 | 41 movimenti di camera, 10 famiglie | 14 PASS |
+| T02 | 41 strisce di riferimento; `zoompan` per il crop animato | 83 PASS |
+| T03 | profili pellicola 35mm/16mm/8mm/dv | 17 PASS, 4 frame |
+| T04 | quattro lenti con tetto e ripiego dichiarato | 12 PASS, MAD 12,8-31,8 |
+| T05 | 51 palette LUT 3D con attribuzione | 116 PASS, 51 frame |
+| T06 | ruota delle 8 emozioni, citata in brief ed EDL | 16 PASS, foglio 4x2 |
+| T07 | cancello dei keyframe prima del render | 12 PASS |
+| T08 | modalita' autonoma come unica eccezione | 12 PASS |
+| T09 | lettore di brand con robots e cache | 12 PASS |
+| T10 | `brand.json` con provenienza per ogni campo | 12 PASS |
+| T11 | tre pagine di prova + brand sul frame | 14 PASS |
+| T12 | registro template con slot e linter | 15 PASS |
+| T13 | riempimento slot dalla MaterialMap | 9 PASS, MAD 147 |
+| T14 | tre proporzioni e cache condivisa | 9 PASS |
+| T15 | cancello di curatela | 25 PASS |
 
 ## Come si lavora (le regole che hanno retto finora)
 
 1. **Scenario prima del codice**: condizione binaria, superficie reale (CLI, file,
-   fotogramma), e se un test esiste già lo si legge prima di toccarlo.
+   fotogramma), e se un test esiste gia' lo si legge prima di toccarlo.
 2. **Un task, un commit**, con la prova nel messaggio; poi `vx_tasks.py done … --evidence`.
-3. **Nessun numero senza misura**: se non è stato eseguito, non è fatto. Nel dubbio,
-   il codice vince sui documenti.
-4. **La suite completa è il cancello**: si tagga una fase solo con la suite verde.
-   Dopo ogni commit che tocca `PLAN/*.md`, `python scripts/gen_plan_rev8.py` (o il
-   test `test_plan_rev8` diventa rosso: è voluto).
+3. **Nessun numero senza misura**: se non e' stato eseguito, non e' fatto. Nel
+   dubbio, il codice vince sui documenti.
+4. **La suite completa e' il cancello**: si tagga una fase solo con la suite verde.
+   Dopo ogni modifica a `PLAN/*.md`, `python scripts/gen_plan_rev8.py`, o
+   `test_plan_rev8` diventa rosso (e' voluto).
 5. **Un processo pesante alla volta**; i test che misurano tempi non vanno in
-   parallelo a render.
+   parallelo a un render.
 
 ## Dove sono i pezzi
 
 | cosa | dove |
 |---|---|
 | protocollo CLI | `SKILL.md`, `scripts/vx/cli.py` |
-| contratto EDL 3 | `scripts/vx/edl3.py` (effetti, transizioni, ricette) |
+| contratto EDL 3 | `scripts/vx/edl3.py` |
 | compilatore | `scripts/vx/edl3_render.py` |
-| chunk + parallelo | `scripts/vx/edl3_chunks.py` (`jobs=`), `edl3_slice.py` |
-| movimenti di camera | `scripts/vx/camera.py` (41 preset, 10 famiglie) |
-| profili pellicola | `scripts/vx/camera_profiles.py` (35mm, 16mm, 8mm, dv) |
-| lenti | `scripts/vx/lenses.py` (vignette, CA, bokeh, fisheye) |
-| prestazioni | `scripts/gen_performance.py` → `PLAN/PERFORMANCE.md` |
+| camera | `camera.py` (41 movimenti), `camera_profiles.py` (4 profili) |
+| ottica | `lenses.py` (vignette, CA, bokeh, fisheye) |
+| colore | `lut.py` (51 palette), `palette.py` (palette grafica) |
+| emozioni | `emotions.py` (ruota + foglio 8 riquadri) |
+| brand | `brand.py` (lettura), `brandjson.py` (estrazione), `branding.py` (render) |
+| composizione | `templates.py` (7 disegni), `slotfill.py`, `multiratio.py`, `curation.py` |
+| cancello keyframe | `keygate.py` |
 | board | `scripts/vx_tasks.py` + `PLAN/TASKS.json` |
-| discrepanze | `PLAN/DISCREPANZE.md` (D-22 chiusa; le storiche pure) |
-| ripresa lunga | `../..  /RIPRESA SKILL VIDEO EDITOR.md` in `<WORK_DIR>` |
+| ripresa lunga | `D:\video_work\RIPRESA SKILL VIDEO EDITOR.md` |
 
-## Il prossimo task (già scritto, non da inventare)
+## L'unico task bloccato
 
-`F25-T05` — **libreria di almeno 50 palette LUT 3D**: categoria, provenienza e
-licenza per ognuna; una LUT assente dal disco produce il ripiego `eq` +
-`colorbalance` con `fallback=true`; `protect_skin` misura la distanza su una toppa
-di pelle e limita la forza; ogni palette ha un frame di riferimento.
-
-Trappole già pagate, da non ripagare:
-
-- i file `.cube` vanno **generati** e dichiarati come nostri (licenza MIT), non
-  scaricati: nessun materiale di terzi senza provenienza;
-- un golden per palette significa 50 render: usare il percorso `--write` come
-  `test_edl3_kinds.py`, con sorgente deterministica 320x568 a 12 fps;
-- `protect_skin` deve **misurare** (distanza su una toppa), non stimare: la toppa
-  si costruisce da un frame reale e si dichiara il punto.
+`F0-T09` — corpus annotato per calibrare le soglie. Servono **almeno venti
+giudizi umani** su clip veri; ce ne sono sette e non separano. Non si inventano:
+il task resta `blocked` finche' qualcuno non li fornisce. Quando arriveranno:
+`python scripts/vx_tasks.py block F0-T09` (sblocco) e poi il criterio nel campo
+`acceptance` di `PLAN/TASKS.json`.
 
 ## Convenzioni di scrittura
 
 Italiano, misure dentro le frasi, niente aggettivi al posto dei numeri. I messaggi
-di commit dicono cosa è stato eseguito e con quale comando. I test stampano
+di commit dicono cosa e' stato eseguito e con quale comando. I test stampano
 `PASS/FAIL` con il valore accanto.
