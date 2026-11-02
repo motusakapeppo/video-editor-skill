@@ -176,6 +176,61 @@ def main() -> int:
         finally:
             server.stop()
 
+    # -- piu' lavori in parallelo ------------------------------------------- #
+    with tempfile.TemporaryDirectory(prefix="vx-multi-") as raw2:
+        base = Path(raw2)
+        for name, prompt, pct in (("alfa", "reel alfa", 25.0), ("beta", "reel beta", 80.0)):
+            job_dir = base / name
+            (job_dir / "keyframes").mkdir(parents=True)
+            master = job_dir / "master.mp4"
+            master.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"m" * 1000)
+            (job_dir / "progress.json").write_text(
+                json.dumps(
+                    {
+                        "prompt": prompt,
+                        "clips": 1,
+                        "percent": pct,
+                        "elapsed_sec": 5,
+                        "current": "render",
+                        "note": "",
+                        "phases": [{"key": "render", "label": "Renderizzo"}],
+                        "master": str(master),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        multi = serve.Server(base).start()
+        try:
+            data = json.loads(get(multi.url + "api/state").decode("utf-8"))
+            check(
+                "S6 two jobs are discovered, both visible",
+                len(data["jobs"]) == 2 and {j["prompt"] for j in data["jobs"]} == {"reel alfa", "reel beta"},
+                [j["prompt"] for j in data["jobs"]],
+            )
+            first = json.loads(get(multi.url + "api/state?job=0").decode("utf-8"))
+            second = json.loads(get(multi.url + "api/state?job=1").decode("utf-8"))
+            check(
+                "S6 ?job picks the right one",
+                first["prompt"] != second["prompt"] and second["selected"] == 1,
+                (first["prompt"], second["prompt"]),
+            )
+            sizes = {len(get(multi.url + f"result?job={i}")) for i in (0, 1)}
+            expected = (base / "beta" / "master.mp4").stat().st_size
+            check(
+                "S6 each job serves its own result, whole",
+                sizes == {expected},
+                sizes,
+            )
+            broken = json.loads(get(multi.url + "api/state?job=99").decode("utf-8"))
+            check(
+                "S6 an index that does not exist falls back instead of breaking",
+                broken["selected"] == 1 and broken["prompt"] in {"reel alfa", "reel beta"},
+                broken["selected"],
+            )
+        finally:
+            multi.stop()
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 

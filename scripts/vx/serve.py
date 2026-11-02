@@ -1,92 +1,42 @@
-"""vx.serve — la UI locale: guardi il lavoro e approvi i fotogrammi.
+"""vx.serve — la UI locale: guardi i lavori e approvi i fotogrammi.
 
-Un server stdlib su `127.0.0.1`, tre cose e niente di piu':
+Un server stdlib su `127.0.0.1`. Con **un** lavoro si comporta come sempre; con
+**piu'** lavori in parallelo ne scopre quanti sono sotto la cartella indicata
+(fino a due livelli) e li espone tutti:
 
-* ``/``            la pagina, che chiede lo stato ogni secondo e si ridisegna;
-* ``/api/state``   lo stato in JSON (fase, percentuale, fotogrammi, approvazione);
-* ``/api/approve`` un POST che scrive il record di approvazione **nella forma
-                   che ``keygate`` legge**, con lo stesso digest dei fotogrammi.
+* ``/``                    la pagina, che chiede lo stato ogni secondo;
+* ``/api/state?job=N``     lo stato: fase, percentuale, fotogrammi, approvazione,
+                           il master, e la lista ``jobs``;
+* ``/api/approve?job=N``   POST che scrive il record **nella forma di keygate**;
+* ``/frames/<nome>?job=N`` il PNG di un fotogramma;
+* ``/result?job=N``        il master, con Range (il player puo' scorrere).
 
-Perche' non e' un secondo formato: l'approvazione che nasce da un clic deve essere
-la stessa che nasce dalla CLI, altrimenti il cancello avrebbe due verita'.
-
-Cosa NON fa, e va detto: non lancia il render e non lo sblocca da sola. Il render
-legge il record quando il percorso lo chiama; agganciare il cancello al render e'
-un passo separato, con la sua prova.
+Due lavori non si pestano i piedi perche' ogni lavoro scrive i suoi file nella
+propria cartella, con sostituzione atomica: chi legge vede prima o dopo, mai un
+JSON troncato. L'indice del lavoro e' un numero, e se il numero non esiste si
+cade sul primo — la pagina non si rompe.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from . import keygate
 
-PAGE = """<!doctype html><html lang="it"><head><meta charset="utf-8">
-<title>vx - lavoro in corso</title>
-<style>
-:root { color-scheme: dark; }
-body { margin:0; padding:24px; background:#111214; color:#e8e6e3;
-       font:15px/1.5 ui-monospace,"JetBrains Mono",Consolas,monospace; }
-h1 { font-size:18px; margin:0 0 2px; }
-h2 { font-size:14px; margin:26px 0 10px; color:#8b8f96; font-weight:600;
-     text-transform:uppercase; letter-spacing:.08em; }
-.muted { color:#8b8f96; }
-.bar { height:6px; background:#23262b; border-radius:3px; margin:16px 0 8px; overflow:hidden; }
-.bar > i { display:block; height:100%; background:#4ea1ff; transition:width .4s ease; }
-.frames { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
-figure { margin:0; background:#1a1c20; border-radius:6px; overflow:hidden; }
-figure img { width:100%; display:block; }
-figcaption { padding:6px 8px; font-size:12px; color:#8b8f96; }
-button { margin-top:16px; padding:10px 18px; font:inherit; border:0; border-radius:6px;
-         background:#4ea1ff; color:#08131f; font-weight:700; cursor:pointer; }
-button[disabled] { background:#2a2e34; color:#6d727a; cursor:default; }
-.ok { color:#9fe3a6; }
-</style></head><body>
-<h1 id="title">Lavoro in corso</h1>
-<div class="muted" id="meta"></div>
-<div class="bar"><i id="fill" style="width:0%"></i></div>
-<div class="muted" id="status">carico...</div>
-<h2>Fotogrammi chiave</h2>
-<div class="frames" id="frames"></div>
-<button id="approve" disabled>Approva questi fotogrammi</button>
-<div class="muted" id="verdict" style="margin-top:10px"></div>
-<script>
-async function tick() {
-  const r = await fetch('/api/state', {cache: 'no-store'});
-  const s = await r.json();
-  document.getElementById('title').textContent = s.prompt || 'Lavoro in corso';
-  document.getElementById('meta').textContent =
-    (s.clips ? s.clips + ' clip · ' : '') + s.elapsed_sec + ' secondi';
-  document.getElementById('fill').style.width = s.percent + '%';
-  const f = document.getElementById('status');
-  f.textContent = s.current ? s.phases.find(p => p.key === s.current)?.label || s.current
-                            : (s.note || 'in attesa');
-  f.className = s.current ? 'muted' : 'ok';
-  const box = document.getElementById('frames');
-  box.innerHTML = '';
-  for (const fr of s.frames) {
-    const fig = document.createElement('figure');
-    fig.innerHTML = '<img src="/frames/' + encodeURIComponent(fr.name) + '" alt="">' +
-      '<figcaption>' + fr.name + '</figcaption>';
-    box.appendChild(fig);
-  }
-  const b = document.getElementById('approve');
-  b.disabled = s.approved || s.frames.length === 0;
-  b.textContent = s.approved ? 'Approvati' : 'Approva questi fotogrammi';
-  document.getElementById('verdict').textContent = s.approved
-    ? 'Il cancello e\' aperto per questo lavoro.' : '';
+UI_DIR = Path(__file__).resolve().parent / "ui"
+UI_FILES = {
+    "index.html": "text/html; charset=utf-8",
+    "app.css": "text/css; charset=utf-8",
+    "app.js": "text/javascript; charset=utf-8",
 }
-document.getElementById('approve').onclick = async () => {
-  await fetch('/api/approve', {method: 'POST'});
-  tick();
-};
-setInterval(tick, 1000); tick();
-</script></body></html>
-"""
+
+#: Quanti livelli di cartelle guardare sotto la radice.
+MAX_DEPTH = 2
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -97,25 +47,52 @@ def _read_json(path: Path) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def state(root: Path) -> Dict[str, Any]:
-    """Lo stato del lavoro, letto dai file che la skill scrive gia'."""
+def _ui(name: str) -> Optional[bytes]:
+    if name not in UI_FILES:
+        return None
+    candidate = UI_DIR / name
+    return candidate.read_bytes() if candidate.is_file() else None
+
+
+def discover(root: Path) -> List[Path]:
+    """Le cartelle di lavoro sotto ``root``: quella stessa, poi i figli.
+
+    Un lavoro e' una cartella che contiene ``progress.json``. L'ordine e' per
+    data di modifica, il piu' recente prima, cosi' quando ne parte uno nuovo
+    finisce davanti senza che nessuno debba dirlo.
+    """
     root = Path(root)
-    progress = _read_json(root / "progress.json")
-    if not progress:
-        progress = _read_json(root / "master-auto" / "progress.json")
-    base = root if (root / "progress.json").is_file() else root / "master-auto"
-    frames_dir = base / "keyframes"
-    frames = []
-    if frames_dir.is_dir():
-        frames = [
-            {"name": item.name, "bytes": item.stat().st_size}
-            for item in sorted(frames_dir.glob("*.png"))
-        ]
-    record = keygate.read(base / keygate.RECORD_NAME)
+    found: List[Path] = []
+    if (root / "progress.json").is_file():
+        found.append(root)
+    for level in range(1, MAX_DEPTH + 1):
+        pattern = "/".join(["*"] * level) + "/progress.json"
+        found.extend(path.parent for path in root.glob(pattern))
+    unique = {path.resolve(): path for path in found}
+
+    def stamp(path: Path) -> float:
+        try:
+            return (path / "progress.json").stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(unique.values(), key=stamp, reverse=True)
+
+
+def _job_state(directory: Path) -> Dict[str, Any]:
+    progress = _read_json(directory / "progress.json")
+    frames_dir = directory / "keyframes"
+    frames = [
+        {"name": item.name, "bytes": item.stat().st_size}
+        for item in sorted(frames_dir.glob("*.png"))
+    ] if frames_dir.is_dir() else []
+    record = keygate.read(directory / keygate.RECORD_NAME)
     master_text = str(progress.get("master") or "")
     master = Path(master_text) if master_text else None
     ready = bool(master and master.is_file() and master.stat().st_size > 0)
     return {
+        "job": directory.name,
+        "path": str(directory),
         "prompt": progress.get("prompt") or "",
         "clips": progress.get("clips") or 0,
         "percent": progress.get("percent") or 0.0,
@@ -131,16 +108,52 @@ def state(root: Path) -> Dict[str, Any]:
     }
 
 
-def approve(root: Path) -> Dict[str, Any]:
-    """Scrive il record nella forma di ``keygate``, con il digest del piano.
+def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
+    """Lo stato del lavoro scelto, piu' l'elenco di tutti quelli vivi."""
+    jobs = discover(root)
+    if not jobs:
+        return {
+            "job": "",
+            "path": str(root),
+            "prompt": "",
+            "clips": 0,
+            "percent": 0.0,
+            "elapsed_sec": 0,
+            "current": None,
+            "note": "",
+            "phases": [],
+            "frames": [],
+            "approved": False,
+            "master": "",
+            "master_ready": False,
+            "master_bytes": 0,
+            "jobs": [],
+            "selected": 0,
+        }
+    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    payload = _job_state(jobs[chosen])
+    payload["jobs"] = [
+        {
+            "index": position,
+            "job": _job_state(path)["job"],
+            "prompt": _read_json(path / "progress.json").get("prompt") or "",
+            "percent": _read_json(path / "progress.json").get("percent") or 0.0,
+            "current": _read_json(path / "progress.json").get("current"),
+        }
+        for position, path in enumerate(jobs)
+    ]
+    payload["selected"] = chosen
+    return payload
 
-    Il digest arriva da ``keyframes/pending.json``, che e' quello che la skill ha
-    calcolato estraendo i fotogrammi: qui non si ricalcola niente, si firma quello
-    che si e' visto.
-    """
-    root = Path(root)
-    base = root if (root / "progress.json").is_file() else root / "master-auto"
-    pending = _read_json(base / "keyframes" / "pending.json")
+
+def approve(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
+    """Scrive il record nella forma di ``keygate``, con il digest del piano."""
+    jobs = discover(root)
+    if not jobs:
+        return {"ok": False, "reason": "nessun lavoro in corso"}
+    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    directory = jobs[chosen]
+    pending = _read_json(directory / "keyframes" / "pending.json")
     digest = str(pending.get("digest") or "")
     if not digest:
         return {"ok": False, "reason": "nessun piano di fotogrammi da approvare"}
@@ -152,95 +165,107 @@ def approve(root: Path) -> Dict[str, Any]:
         "count": int(pending.get("count") or 0),
         "frames": list(pending.get("frames") or []),
     }
-    (base / keygate.RECORD_NAME).write_text(
+    (directory / keygate.RECORD_NAME).write_text(
         json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
         newline="\n",
     )
-    return {"ok": True, "count": payload["count"]}
+    return {"ok": True, "count": payload["count"], "job": directory.name}
 
 
-UI_DIR = Path(__file__).resolve().parent / "ui"
-#: Solo questi file: il server non deve poter leggere altro dal disco.
-UI_FILES = {
-    "index.html": "text/html; charset=utf-8",
-    "app.css": "text/css; charset=utf-8",
-    "app.js": "text/javascript; charset=utf-8",
-}
-
-
-def _ui(name: str):
-    """The bytes of one whitelisted UI file, or ``None``."""
-    if name not in UI_FILES:
-        return None
-    candidate = UI_DIR / name
-    if not candidate.is_file():
-        return None
-    return candidate.read_bytes()
+#: Il disegno di ripiego, se i file della UI non ci sono ancora.
+PAGE = """<!doctype html><html lang="it"><head><meta charset="utf-8">
+<title>vx - lavoro in corso</title></head><body>
+<h1>Lavoro in corso</h1><p id="status">carico…</p>
+<script>
+setInterval(async () => {
+  const s = await (await fetch('/api/state', {cache:'no-store'})).json();
+  document.getElementById('status').textContent =
+    (s.prompt || '') + ' — ' + s.percent + '% ' + (s.note || '');
+}, 1000);
+</script></body></html>
+"""
 
 
 def make_handler(root: Path):
+    def query(path: str) -> tuple:
+        parsed = urllib.parse.urlsplit(path)
+        params = urllib.parse.parse_qs(parsed.query)
+        raw = (params.get("job") or [None])[0]
+        try:
+            index = int(raw) if raw is not None else None
+        except ValueError:
+            index = None
+        return parsed.path, index
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # noqa: D102 - silence the console
             pass
 
-        def _send(self, body: bytes, content_type: str, status: int = 200) -> None:
+        def _send(self, body: bytes, content_type: str, status: int = 200,
+                  extra: Optional[Dict[str, str]] = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            for key, value in (extra or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
 
         def do_GET(self):  # noqa: D102
-            if self.path in ("/", "/index.html"):
+            path, index = query(self.path)
+            if path in ("/", "/index.html"):
                 body = _ui("index.html") or PAGE.encode("utf-8")
                 self._send(body, "text/html; charset=utf-8")
                 return
-            if self.path.startswith("/ui/"):
-                name = Path(self.path[len("/ui/"):]).name
+            if path.startswith("/ui/"):
+                name = Path(path[len("/ui/"):]).name
                 body = _ui(name)
                 if body is None:
                     self._send(b"not found", "text/plain", status=404)
                     return
                 self._send(body, UI_FILES[name])
                 return
-            if self.path == "/api/state":
-                self._send(json.dumps(state(root), ensure_ascii=False).encode("utf-8"),
+            if path == "/api/state":
+                self._send(json.dumps(state(root, index), ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
-            if self.path in ("/result", "/result.mp4"):
-                self._result()
+            if path in ("/result", "/result.mp4"):
+                self._result(index)
                 return
-            if self.path.startswith("/frames/"):
-                name = Path(self.path[len("/frames/"):]).name
-                candidate = root / "keyframes" / name
-                if not candidate.is_file():
-                    candidate = root / "master-auto" / "keyframes" / name
-                if candidate.is_file():
-                    self._send(candidate.read_bytes(), "image/png")
-                else:
-                    self._send(b"not found", "text/plain", status=404)
+            if path.startswith("/frames/"):
+                self._frame(path[len("/frames/"):], index)
                 return
             self._send(b"not found", "text/plain", status=404)
 
-        def _result(self) -> None:
+        def _frame(self, raw: str, index: Optional[int]) -> None:
+            jobs = discover(root)
+            if not jobs:
+                self._send(b"not found", "text/plain", status=404)
+                return
+            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            name = Path(urllib.parse.unquote(raw)).name
+            candidate = jobs[chosen] / "keyframes" / name
+            if not candidate.is_file():
+                self._send(b"not found", "text/plain", status=404)
+                return
+            self._send(candidate.read_bytes(), "image/png")
+
+        def _result(self, index: Optional[int]) -> None:
             """Il master, con Range: il browser deve poter scorrere."""
-            root_state = state(root)
-            master_text = str(_read_json(root / "progress.json").get("master") or "")
-            if not master_text:
-                master_text = str(_read_json(root / "master-auto" / "progress.json").get("master") or "")
-            path = Path(master_text) if master_text else None
-            if not root_state.get("master_ready") or path is None or not path.is_file():
-                body = b"il master non esiste ancora"
-                self.send_response(404)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+            jobs = discover(root)
+            if not jobs:
+                self._send(b"nessun lavoro", "text/plain", status=404)
+                return
+            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            progress = _read_json(jobs[chosen] / "progress.json")
+            text = str(progress.get("master") or "")
+            path = Path(text) if text else None
+            if path is None or not path.is_file() or path.stat().st_size == 0:
+                self._send(b"il master non esiste ancora", "text/plain", status=404)
                 return
             size = path.stat().st_size
-            start, end = 0, size - 1
-            status = 200
+            start, end, status = 0, size - 1, 200
             header = self.headers.get("Range")
             if header and header.startswith("bytes="):
                 chunk = header[len("bytes="):].split(",")[0].strip()
@@ -272,9 +297,9 @@ def make_handler(root: Path):
                     remaining -= len(block)
 
         def do_POST(self):  # noqa: D102
-            if self.path == "/api/approve":
-                result = approve(root)
-                self._send(json.dumps(result, ensure_ascii=False).encode("utf-8"),
+            path, index = query(self.path)
+            if path == "/api/approve":
+                self._send(json.dumps(approve(root, index), ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
             self._send(b"not found", "text/plain", status=404)
@@ -305,4 +330,5 @@ class Server:
         self.httpd.server_close()
 
 
-__all__ = ["PAGE", "Server", "approve", "make_handler", "state"]
+__all__ = ["MAX_DEPTH", "PAGE", "Server", "UI_DIR", "UI_FILES", "approve", "discover",
+           "make_handler", "state"]

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -39,6 +40,15 @@ li.current .mark { color: #4ea1ff; }
 footer { margin-top: 22px; color: #8b8f96; font-size: 13px; }
 footer b { color: #e8e6e3; font-weight: 600; }
 """
+
+
+def _atomic(path: Path, text: str) -> None:
+    """Scrive il file accanto e lo sostituisce: chi legge vede prima o dopo."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(temporary, path)
 
 
 @dataclass
@@ -76,12 +86,18 @@ class Panel:
         self.write()
 
     def write(self) -> Path:
+        """Scrive pagina e json **atomicamente**.
+
+        Con piu' lavori in parallelo un lettore puo' aprire il file mentre viene
+        riscritto: senza `os.replace` vedrebbe un JSON troncato e la pagina
+        lampeggerebbe su "in attesa". Il file temporaneo si scrive accanto e si
+        sostituisce in un colpo solo.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(self.html(), encoding="utf-8", newline="\n")
-        (self.path.parent / "progress.json").write_text(
+        _atomic(self.path, self.html())
+        _atomic(
+            self.path.parent / "progress.json",
             json.dumps(self.as_dict(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-            newline="\n",
         )
         return self.path
 
