@@ -49,3 +49,18 @@ fotogrammi sopra una soglia di luminosita', oppure normalizzata. Registrato come
 2. Il giudizio non produce un punteggio: produce **una lista di correzioni**. Le parole
    dell'utente sono state tutte della forma "serve aggiustare X", mai "voto 6/10".
 3. Le misure che non separano restano nel referto come **descrizione**, mai come respingimento.
+
+### D-21 - la nitidezza sui fotogrammi scuri (chiusa il 2/11/2026)
+
+Sugli stessi fotogrammi dei dieci clip sono state misurate cinque metriche:
+varianza del laplaciano grezza, dopo CLAHE, dopo gamma 1/2,2, normalizzata per la
+varianza dell'immagine, normalizzata per il gradiente medio. I numeri sono in
+`<WORK_DIR>/t09/sharpness_candidates.json`. **Nessuna** inverte la coppia che conta:
+c01 (luma 38,7, giudicata "mosso, sfuocata") resta sopra c03 (88,7, "buona") in
+tutte e cinque. Il clip scuro ha davvero piu' energia in alta frequenza, ed e' rumore
+e mosso, non dettaglio.
+
+Quindi la correzione non e' una formula: sotto **60** di luma media la nitidezza
+resta una descrizione misurata e il triage non la usa come cancello. La soglia cade
+tra il clip piu' scuro giudicato (38,7) e il successivo (83,9).
+

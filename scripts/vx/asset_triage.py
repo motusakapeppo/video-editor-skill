@@ -608,10 +608,19 @@ def measure_asset(asset: AssetInfo) -> Dict[str, Any]:
 
             sharpness = visual.measure_sharpness(asset.path)
             method = str(sharpness.get("method") or "")
-            if int(sharpness.get("samples") or 0) > 0 and not method.startswith(
+            measured = int(sharpness.get("samples") or 0) > 0 and not method.startswith(
                 "unavailable"
-            ):
+            )
+            if measured and sharpness.get("reliable", True):
                 metrics["sharpness"] = float(sharpness["sharpness"])
+                metrics["sharpness_mean_luma"] = float(sharpness.get("mean_luma") or 0.0)
+            elif measured:
+                # D-21: below the luma floor the Laplacian variance ranks a dark,
+                # blurry clip above a bright, good one. The number is kept as a
+                # description and the gate declares the check not evaluated.
+                metrics["sharpness_descriptive"] = float(sharpness["sharpness"])
+                metrics["sharpness_mean_luma"] = float(sharpness.get("mean_luma") or 0.0)
+                metrics["sharpness_reliable"] = False
             else:
                 metrics["measure_error"] = method or "sharpness unavailable"
         except Exception as exc:  # noqa: BLE001 - absent metric is declared downstream

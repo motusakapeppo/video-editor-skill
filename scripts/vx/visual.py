@@ -24,6 +24,11 @@ from typing import Any, Dict, List
 
 MOTION_HIGH = 9.0
 SHARPNESS_LOW = 45.0
+#: Below this mean luma the Laplacian variance stops meaning "sharp". Measured on
+#: the T09 corpus: c01 sits at 38.7 and is judged "sfuocata" while scoring 2.32,
+#: above c03 at 88.7 ("buona", 1.92). No contrast-aware candidate tested inverts
+#: that pair, so below the floor the number is descriptive, never a gate.
+SHARPNESS_MIN_LUMA = 60.0
 FRAME_WIDTH = 320
 
 
@@ -149,9 +154,12 @@ def measure_sharpness(path: str | Path, *, samples: int = 5) -> Dict[str, Any]:
         if still is not None:
             gray = cv2.cvtColor(still, cv2.COLOR_BGR2GRAY)
             value = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            luma = float(gray.mean())
             return {
                 "sharpness": value,
                 "samples": 1,
+                "mean_luma": luma,
+                "reliable": luma >= SHARPNESS_MIN_LUMA,
                 "method": "laplacian_variance",
             }
 
@@ -165,6 +173,7 @@ def measure_sharpness(path: str | Path, *, samples: int = 5) -> Dict[str, Any]:
             }
 
         values: List[float] = []
+        lumas: List[float] = []
         try:
             fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
             frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
@@ -177,11 +186,13 @@ def measure_sharpness(path: str | Path, *, samples: int = 5) -> Dict[str, Any]:
                         continue
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     values.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
+                    lumas.append(float(gray.mean()))
             else:
                 ok, frame = cap.read()
                 if ok and frame is not None:
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     values.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
+                    lumas.append(float(gray.mean()))
         finally:
             cap.release()
 
@@ -191,9 +202,12 @@ def measure_sharpness(path: str | Path, *, samples: int = 5) -> Dict[str, Any]:
                 "samples": 0,
                 "method": "unavailable: no decodable frames",
             }
+        luma = float(np.median(lumas)) if lumas else 0.0
         return {
             "sharpness": float(np.median(values)),
             "samples": len(values),
+            "mean_luma": luma,
+            "reliable": luma >= SHARPNESS_MIN_LUMA,
             "method": "laplacian_variance",
         }
     except Exception as exc:  # noqa: BLE001
