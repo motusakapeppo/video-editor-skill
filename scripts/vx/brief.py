@@ -229,6 +229,13 @@ def validate(brief: Dict[str, Any]) -> List[str]:
     if not _is_hex64(brief.get("corpus_hash")):
         errors.append("corpus_hash deve essere 64 esadecimali")
 
+    # La citazione della ruota e' facoltativa, ma se c'e' deve essere vera: una
+    # versione vecchia o un'emozione che non esiste sono errori, non note.
+    if brief.get("emotion") is not None:
+        from .emotions import citation_problems
+
+        errors.extend(citation_problems(brief.get("emotion")))
+
     choices = brief.get("choices")
     if not isinstance(choices, dict):
         errors.append("choices mancante o non è un oggetto")

@@ -1,0 +1,74 @@
+{
+  "wheel": "vx.emotions/1",
+  "columns": 4,
+  "rows": 2,
+  "tiles": [
+    "gioia",
+    "tenerezza",
+    "nostalgia",
+    "malinconia",
+    "tensione",
+    "meraviglia",
+    "rabbia",
+    "calma"
+  ],
+  "cells": [
+    {
+      "index": 0,
+      "column": 0,
+      "row": 0,
+      "emotion": "gioia"
+    },
+    {
+      "index": 1,
+      "column": 1,
+      "row": 0,
+      "emotion": "tenerezza"
+    },
+    {
+      "index": 2,
+      "column": 2,
+      "row": 0,
+      "emotion": "nostalgia"
+    },
+    {
+      "index": 3,
+      "column": 3,
+      "row": 0,
+      "emotion": "malinconia"
+    },
+    {
+      "index": 4,
+      "column": 0,
+      "row": 1,
+      "emotion": "tensione"
+    },
+    {
+      "index": 5,
+      "column": 1,
+      "row": 1,
+      "emotion": "meraviglia"
+    },
+    {
+      "index": 6,
+      "column": 2,
+      "row": 1,
+      "emotion": "rabbia"
+    },
+    {
+      "index": 7,
+      "column": 3,
+      "row": 1,
+      "emotion": "calma"
+    }
+  ],
+  "sha256": "100ad1d18c99e14e01f2f92eb9ba837255738e2fa99f57dfa87851b6d9f4f7ab",
+  "size": [
+    576,
+    512
+  ],
+  "tile": [
+    144,
+    256
+  ]
+}

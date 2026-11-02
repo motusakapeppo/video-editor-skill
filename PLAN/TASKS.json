@@ -628,9 +628,11 @@
       "acceptance": "la tabella ha un numero di versione e 8 voci; ogni voce dichiara i quattro assi; una voce con un asse mancante è rifiutata nominando l'asse; la versione usata è citata nel Creative Brief e nell'EDL; un foglio di 8 riquadri sulla stessa clip è su disco",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_emotions.py 16 PASS: ruota vx.emotions/1 con 8 voci e 4 assi ciascuna; voce senza music rifiutata con EMOTION_AXIS che nomina l'asse; citazione nel brief (emotion.wheel) e nell'EDL (x-emotion) con round trip; versione vecchia respinta; foglio 4x2 576x512 con 8 riquadri diversi dal primo (MAD 1,7-50,7) byte-identico",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
