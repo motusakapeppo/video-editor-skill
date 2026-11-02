@@ -1,6 +1,6 @@
 # Piano - Revisione 8
 
-Generato da scripts/gen_plan_rev8.py dal commit 95cadc4 del 2026-11-02.
+Generato da scripts/gen_plan_rev8.py dal commit 0a86f56 del 2026-11-02.
 
 Copia in sola lettura: la fonte di verita' e' il repository (PLAN/MASTER_PLAN.md, PLAN/MASTER_LEDGER.md, PLAN/ANNEX_F.md). Non modificare questo file a mano.
 
