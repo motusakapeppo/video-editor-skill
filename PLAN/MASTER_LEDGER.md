@@ -221,6 +221,14 @@ timecode, feedback JSON che diventa patch.
 da profondità, ponte opzionale Blender, rendering software come ripiego.
 
 ## F16 — Prestazioni
+
+Stato al 2/11/2026: **chiusa**, 6/6. Chunk in parallelo byte-identici alla serie
+(3,64 s -> 0,77 s, x4,75); smart render provato (seconda corsa tutta in cache, un
+cambio rifa' solo il suo chunk, nessuno script di chunk porta `-c copy`); fedelta'
+encoder misurata sul frame decodificato (libx264 0,0; nvenc 1,19; un encode
+degradato 24,89 contro soglia 2,0); intermedio lossless ffv1 con frame identico e
+peso x4,7; referto generato (1800 clip compilate in 0,315 s). Suite 159 runner /
+5274 assert / 0 fail / 2 skip in 1338,6 s.
 Render a segmenti paralleli, smart render con test di identità, encoder hardware
 scelto per prova, intermedi lossless, benchmark ufficiale.
 
