@@ -1,0 +1,16 @@
+{
+  "profile": "dv",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 1.0,
+  "at": 0.5,
+  "sha256": "69f5699574de6baf393db52258ec89b6763f70d27d77c46d63d04b239defc52a",
+  "chain": [
+    "grain",
+    "crop",
+    "halation"
+  ]
+}

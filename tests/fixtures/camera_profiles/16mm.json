@@ -1,0 +1,16 @@
+{
+  "profile": "16mm",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 1.0,
+  "at": 0.5,
+  "sha256": "0e640f2ff5fa855110baf0389e280a6cc1d326dba2e35a90633cd79b8c3e3f28",
+  "chain": [
+    "grain",
+    "crop",
+    "halation"
+  ]
+}

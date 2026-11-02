@@ -586,9 +586,11 @@
       "acceptance": "ogni profilo dichiara i quattro parametri con dominio e default; il gate weave è deterministico a parità di seme (due giri, hash identici); un `ratio` fuori dai valori ammessi è rifiutato con il valore; ogni profilo ha un golden frame",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_camera_profiles.py 17 PASS: 4 profili (35mm, 16mm, 8mm, dv) con dominio e default; stesso seme stessa traccia di gate weave, seme diverso traccia diversa; rapporto 21:9 rifiutato con PROFILE_RATIO e il valore; grana 5.0 rifiutata con PROFILE_LIMIT e il nome; un frame di riferimento per profilo byte-identico e diverso dal frame senza profilo",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
