@@ -1,0 +1,21 @@
+{
+  "schema": "vx.curation/1",
+  "template": "credits",
+  "golden": "tests/fixtures/templates/credits.png",
+  "golden_sha256": "40d535e128c0faa07474d9edc11bb8170c69009854675b307f5a8fcc1e04a19a",
+  "ratio": "16:9",
+  "params": [
+    "lead",
+    "speed"
+  ],
+  "critic": {
+    "verdict": "approved",
+    "why": "golden ricostruito dal layout e misurato: ogni slot mostra il colore dichiarato",
+    "share": {
+      "headline": 1.0,
+      "body": 1.0,
+      "foot": 1.0
+    },
+    "std": 56.451
+  }
+}

@@ -754,9 +754,11 @@
       "acceptance": "un file di template non curato è rifiutato dal registro con il motivo; il validatore del registro riporta zero violazioni; il conteggio dichiarato non include varianti dello stesso disegno",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_curation.py 25 PASS: 7 template curati (golden ricostruito dal layout e misurato per quota di colore di ogni slot, sha nel record, linter verde, parametri esposti); template senza record -> TEMPLATE_UNCURATED col motivo e fuori dal conteggio; golden manomesso -> 'golden changed since curation'; variante dello stesso disegno ammessa come variant e conteggio fermo a 7; validatore 0 violazioni",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

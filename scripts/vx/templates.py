@@ -18,6 +18,7 @@ parametro e il suo intervallo.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .contract import VxError
@@ -430,6 +431,56 @@ _TEMPLATES: Tuple[Template, ...] = (
 )
 
 
+SLOT_COLOURS = (
+    "#e4572e", "#17bebb", "#ffc914", "#76b041",
+    "#2e86ab", "#a29bfe", "#ff6f91", "#b8b8ff",
+)
+
+
+def render_golden(
+    template: "Template",
+    *,
+    ratio: str = "16:9",
+    size: Tuple[int, int] = (640, 360),
+    out: Path,
+    background: str = "#101010",
+) -> Path:
+    """Draw each slot box in its own colour: the golden proves the geometry."""
+    import subprocess
+
+    from . import ffmpeg as ff
+
+    layout = template.layouts.get(ratio)
+    if layout is None:
+        raise TemplateError("TEMPLATE_LINT", f"{template.name} has no layout for {ratio}")
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    width, height = int(size[0]), int(size[1])
+    parts = []
+    for index, slot in enumerate(template.slots):
+        x, y, w, h = layout[slot.name]
+        parts.append(
+            "drawbox=x={}:y={}:w={}:h={}:color={}:t=fill".format(
+                int(round(x * width)),
+                int(round(y * height)),
+                max(2, int(round(w * width))),
+                max(2, int(round(h * height))),
+                SLOT_COLOURS[index % len(SLOT_COLOURS)],
+            )
+        )
+    proc = subprocess.run(
+        [
+            ff.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", f"color=c={background}:s={width}x{height}:d=1:r=1",
+            "-vf", ",".join(parts), "-frames:v", "1", str(out),
+        ],
+        capture_output=True,
+    )
+    if proc.returncode != 0 or not out.is_file():
+        raise TemplateError("TEMPLATE_GOLDEN", proc.stderr.decode("utf-8", "replace")[-200:])
+    return out
+
+
 def _bootstrap() -> None:
     for template in _TEMPLATES:
         register(template)
@@ -444,6 +495,7 @@ __all__ = [
     "MIN_SLOTS",
     "Param",
     "RATIOS",
+    "SLOT_COLOURS",
     "REGISTRY",
     "REJECTED",
     "SLOT_ROLES",
@@ -455,6 +507,7 @@ __all__ = [
     "count",
     "lint",
     "register",
+    "render_golden",
     "resolve",
     "validate",
 ]

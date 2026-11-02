@@ -1,0 +1,23 @@
+{
+  "schema": "vx.curation/1",
+  "template": "product_card",
+  "golden": "tests/fixtures/templates/product_card.png",
+  "golden_sha256": "606861d8bb804bd94a48c59f6b1ff244c752c3531cd90f6d3fcaf82f9284302a",
+  "ratio": "16:9",
+  "params": [
+    "card",
+    "radius"
+  ],
+  "critic": {
+    "verdict": "approved",
+    "why": "golden ricostruito dal layout e misurato: ogni slot mostra il colore dichiarato",
+    "share": {
+      "media": 1.0,
+      "headline": 1.0,
+      "body": 1.0,
+      "cta": 1.0,
+      "logo": 1.0
+    },
+    "std": 78.539
+  }
+}

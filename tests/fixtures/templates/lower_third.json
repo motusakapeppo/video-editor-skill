@@ -1,0 +1,20 @@
+{
+  "schema": "vx.curation/1",
+  "template": "lower_third",
+  "golden": "tests/fixtures/templates/lower_third.png",
+  "golden_sha256": "c1e9d5e334a3456017a275ba3fc7550b42be1fe12042f48c60301d44925fb33c",
+  "ratio": "16:9",
+  "params": [
+    "panel",
+    "inset"
+  ],
+  "critic": {
+    "verdict": "approved",
+    "why": "golden ricostruito dal layout e misurato: ogni slot mostra il colore dichiarato",
+    "share": {
+      "headline": 1.0,
+      "body": 1.0
+    },
+    "std": 37.51
+  }
+}
