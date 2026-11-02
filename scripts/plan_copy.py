@@ -66,9 +66,37 @@ HISTORY_IDS = ("B2", "B5", "B6", "B7", "C3")
 PHASE_IDS = [f"F{number}" for number in range(32)]
 
 
+PLAN_INPUTS = (
+    "PLAN/MASTER_PLAN.md",
+    "PLAN/MASTER_LEDGER.md",
+    "PLAN/ANNEX_F.md",
+    "PLAN/DECISIONS_PATCH.md",
+    "PLAN/DISCREPANZE.md",
+)
+
+
+def _plan_commit() -> tuple:
+    """The last commit that touched the plan inputs: the document's own version.
+
+    Citare HEAD rendeva il documento stantio a ogni commit di codice, e la testata
+    non puo' citare il commit che la contiene. Il contenuto cambia solo quando
+    cambiano gli input, quindi e' quello il commit da citare.
+    """
+    done = subprocess.run(
+        ["git", "log", "-1", "--format=%h %cs", "--", *PLAN_INPUTS],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    parts = (done.stdout or "").split()
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return git_show("%h"), git_show("%cs")
+
+
 def header(commit: Optional[str]) -> List[str]:
-    head_hash = git_show("%h")
-    head_date = git_show("%cs")
+    head_hash, head_date = _plan_commit()
     if not head_hash or not head_date:
         raise SystemExit(
             "git: commit o data illeggibili; senza commit il documento non si genera"
