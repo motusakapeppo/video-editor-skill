@@ -3,22 +3,120 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <link rel="icon" href="data:,">
   <title>vx — lavoro in corso</title>
   <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
-  <main>
-    <h1 id="title">Lavoro in corso</h1>
-    <p class="muted" id="meta"></p>
-    <div class="bar"><i id="fill"></i></div>
-    <p class="muted" id="status">carico…</p>
+  <div class="bg" aria-hidden="true"></div>
 
-    <h2>Fotogrammi chiave</h2>
-    <div class="frames" id="frames"></div>
+  <div class="shell">
+    <header class="top">
+      <p class="brand">
+        <span class="brand-dot" aria-hidden="true"></span>
+        <span class="brand-name">vx</span>
+        <span class="brand-sep" aria-hidden="true">/</span>
+        <span class="brand-role">banco di montaggio</span>
+      </p>
+      <h1 class="job-title" id="jobTitle">Lavoro in corso</h1>
+      <p class="job-clock num" id="jobClock" aria-label="Tempo di lavoro">0:00</p>
+    </header>
 
-    <button id="approve" disabled>Approva questi fotogrammi</button>
-    <p class="muted" id="verdict"></p>
-  </main>
+    <nav class="jobs" id="jobs" aria-label="Lavori in corso" hidden>
+      <p class="jobs-label">Lavori in corso <span class="jobs-count num" id="jobsCount">00</span></p>
+      <ul class="jobs-list" id="jobsList"></ul>
+    </nav>
+
+    <main class="board">
+      <div class="col-work">
+        <section class="stage" aria-label="Stato del lavoro">
+          <div class="stage-head">
+            <p class="eyebrow" id="stateWord">In corso</p>
+            <p class="chips">
+              <span class="chip" id="clipChip">clip non dichiarate</span>
+            </p>
+          </div>
+
+          <div class="hero">
+            <div class="hero-figure">
+              <span class="hero-num num" id="percent" aria-hidden="true">0</span>
+              <span class="hero-unit num" aria-hidden="true">%</span>
+            </div>
+            <div class="hero-side">
+              <p class="hero-label" id="heroLabel">avanzamento</p>
+              <p class="hero-sub num" id="heroSub">in attesa del lavoro</p>
+            </div>
+          </div>
+
+          <div class="bar" id="bar" role="progressbar" aria-label="Avanzamento del lavoro"
+               aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="bar-track">
+              <i class="bar-fill" id="fill"></i>
+              <i class="bar-head" id="barHead"></i>
+            </div>
+            <div class="bar-ticks num" aria-hidden="true">
+              <span>0</span><span>50</span><span>100</span>
+            </div>
+          </div>
+
+          <div class="now" id="now" aria-live="polite">
+            <p class="now-label">Ora</p>
+            <p class="now-text" id="nowText">Sto aspettando il primo aggiornamento dal lavoro.</p>
+            <p class="now-note" id="nowNote" hidden></p>
+          </div>
+
+          <div class="verdict" id="verdict" hidden aria-live="polite">
+            <span class="verdict-mark" aria-hidden="true">✓</span>
+            <div class="verdict-body">
+              <p class="verdict-title" id="verdictTitle">Lavoro concluso</p>
+              <p class="verdict-text" id="verdictText"></p>
+              <p class="verdict-meta num" id="verdictMeta"></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="result" aria-labelledby="resultTitle">
+          <div class="result-head">
+            <h2 id="resultTitle">Risultato</h2>
+            <p class="result-meta num" id="resultMeta">non ancora</p>
+          </div>
+          <div class="result-body" id="resultBody"></div>
+        </section>
+
+        <section class="deck-wrap" aria-labelledby="framesTitle">
+          <div class="deck-head">
+            <h2 id="framesTitle">Fotogrammi chiave</h2>
+            <p class="deck-count num" id="frameCount">00</p>
+          </div>
+          <p class="deck-empty" id="framesEmpty" hidden>
+            Nessun fotogramma: il lavoro non ne ha ancora scritti.
+          </p>
+          <div class="deck" id="frames"></div>
+        </section>
+      </div>
+
+      <aside class="col-rail" aria-labelledby="phasesTitle">
+        <div class="rail-inner">
+          <div class="rail-head">
+            <h2 id="phasesTitle">Sequenza</h2>
+            <p class="rail-sub num" id="railSub">0 fasi</p>
+          </div>
+
+          <ol class="spine" id="phases"></ol>
+          <p class="rail-empty" id="phasesEmpty" hidden>
+            La sequenza delle fasi non è ancora arrivata.
+          </p>
+
+          <div class="action">
+            <button id="approve" type="button" disabled>Approva questi fotogrammi</button>
+            <p class="action-note" id="approveNote">Aspetto i fotogrammi prima di aprire il cancello.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
   <script src="/ui/app.js"></script>
 </body>
 </html>
