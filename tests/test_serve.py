@@ -14,13 +14,14 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from vx import keygate, serve  # noqa: E402
+from vx import keygate, serve, subs  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -42,6 +43,240 @@ def post(url: str) -> dict:
     request = urllib.request.Request(url, method="POST", data=b"")
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def style_line(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("Style:"):
+            return line
+    return ""
+
+
+def check_font_gate(raw: str) -> None:
+    """La proposta accende il cancello, il campione si serve, la scelta si scrive."""
+    job = Path(raw) / "lavoro"
+    (job / "fonts").mkdir(parents=True)
+    (job / "progress.json").write_text(
+        json.dumps({"prompt": "reel font", "percent": 10.0, "current": "font"}),
+        encoding="utf-8",
+    )
+    sample = job / "fonts" / "playfairdisplay-sample.png"
+    sample.write_bytes(b"\x89PNG\r\n\x1a\n" + b"s" * 32)
+    proposal = {
+        "schema": "vx.fontproposal/1",
+        "requirement": "elegante, editoriale",
+        "sample": "PROVA",
+        "network": False,
+        "pool": "local",
+        "chosen": "Playfair Display",
+        "reason_if_none": "",
+        "candidates": [
+            {
+                "family": "Playfair Display",
+                "licence": "commercial",
+                "licence_url": "",
+                "score": 0.91,
+                "because": "serif editoriale",
+                "file": str(Path(raw) / "manca.ttf"),
+                "sample_png": str(sample),
+                "source": "bundle",
+                "downloaded": False,
+            },
+            {
+                "family": "Inter",
+                "licence": "commercial",
+                "licence_url": "",
+                "score": 0.42,
+                "because": "neutro",
+                "file": str(Path(raw) / "manca2.ttf"),
+                # Il PNG non c'e': il candidato resta, il campione e' vuoto.
+                "sample_png": str(job / "fonts" / "inter-sample.png"),
+                "source": "bundle",
+                "downloaded": False,
+            },
+        ],
+    }
+    (job / "font_proposal.json").write_text(json.dumps(proposal), encoding="utf-8")
+
+    server = serve.Server(job).start()
+    try:
+        data = json.loads(get(server.url + "api/state").decode("utf-8"))
+        font = data["font"]
+        check(
+            "S9 la proposta accende il cancello con i suoi candidati",
+            font["pending"] is True
+            and font["chosen"] == ""
+            and len(font["candidates"]) == 2
+            and font["candidates"][0]["family"] == "Playfair Display",
+            font,
+        )
+        check(
+            "S9 il campione vale un URL solo se il PNG esiste",
+            font["candidates"][0]["sample"] == "/fonts/sample/playfairdisplay-sample.png"
+            and font["candidates"][1]["sample"] == "",
+            [candidate["sample"] for candidate in font["candidates"]],
+        )
+
+        with urllib.request.urlopen(
+            server.url + "fonts/sample/playfairdisplay-sample.png?job=0", timeout=10
+        ) as response:
+            png = response.read()
+            check(
+                "S9 il campione si serve come PNG",
+                response.headers.get("Content-Type") == "image/png"
+                and png.startswith(b"\x89PNG"),
+                f"{response.status} {len(png)}",
+            )
+        try:
+            get(server.url + "fonts/sample/..%2F..%2Fetc%2Fpasswd.png?job=0")
+            escaped = False
+        except Exception:  # noqa: BLE001
+            escaped = True
+        check("S9 il traversal non esce dalla cartella fonts", escaped, "404")
+
+        refused = post(
+            server.url + "api/font-pick?job=0&family=" + urllib.parse.quote("Comic Sans")
+        )
+        check(
+            "S9 una famiglia inventata non scrive niente",
+            refused.get("ok") is False
+            and refused.get("reason") == "famiglia non proposta"
+            and not (job / "font_choice.json").is_file(),
+            refused,
+        )
+
+        picked = post(
+            server.url
+            + "api/font-pick?job=0&family="
+            + urllib.parse.quote("Playfair Display")
+        )
+        choice = json.loads((job / "font_choice.json").read_text(encoding="utf-8"))
+        check(
+            "S9 la scelta e' scritta nella forma promessa",
+            picked.get("ok") is True
+            and picked.get("chosen") == "Playfair Display"
+            and choice.get("schema") == "vx.fontchoice/1"
+            and choice.get("family") == "Playfair Display"
+            and choice.get("from") == "ui"
+            and bool(choice.get("chosen_utc")),
+            choice,
+        )
+        after = json.loads(get(server.url + "api/state").decode("utf-8"))
+        check(
+            "S9 scelto: il cancello si chiude e chosen si legge",
+            after["font"]["pending"] is False
+            and after["font"]["chosen"] == "Playfair Display",
+            after["font"],
+        )
+    finally:
+        server.stop()
+
+
+def check_ass_bridge() -> None:
+    """La scelta arriva al pixel: il Fontname dell'ASS e' la famiglia scelta."""
+    from vx import cli
+    from vx.contract import Cue
+
+    with tempfile.TemporaryDirectory(prefix="vx-fontass-") as raw:
+        work = Path(raw) / "lavoro"
+        work.mkdir()
+        bundled = ROOT / "assets" / "fonts" / "PlayfairDisplay.ttf"
+        (work / "font_proposal.json").write_text(
+            json.dumps(
+                {
+                    "schema": "vx.fontproposal/1",
+                    "requirement": "elegante",
+                    "sample": "PROVA",
+                    "network": False,
+                    "pool": "local",
+                    "chosen": "Playfair Display",
+                    "reason_if_none": "",
+                    "candidates": [
+                        {
+                            "family": "Playfair Display",
+                            "licence": "commercial",
+                            "licence_url": "",
+                            "score": 0.9,
+                            "because": "serif",
+                            "file": str(bundled),
+                            "sample_png": "",
+                            "source": "bundle",
+                            "downloaded": False,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cues = [
+            Cue(
+                start=0.0,
+                end=1.5,
+                text="CIAO MONDO",
+                words=[{"start": 0.0, "end": 1.5, "word": "CIAO"}],
+                style="karaoke",
+                line_count=1,
+            )
+        ]
+        bare = Path(raw) / "vuoto"
+        bare.mkdir()
+        preset = Path(
+            cli._write_job_ass(
+                cues,
+                bare,
+                bare / "preset.ass",
+                aspect="9:16",
+                platform="tiktok",
+                style="karaoke",
+                out_w=1080,
+                out_h=1920,
+            )
+        )
+        check(
+            "S10 senza proposta ne' scelta resta il preset (Inter)",
+            "Vx,Inter," in preset.read_text(encoding="utf-8"),
+            style_line(preset),
+        )
+
+        (work / "font_choice.json").write_text(
+            json.dumps(
+                {
+                    "schema": "vx.fontchoice/1",
+                    "family": "Playfair Display",
+                    "chosen_utc": "2026-01-01T00:00:00+00:00",
+                    "from": "ui",
+                }
+            ),
+            encoding="utf-8",
+        )
+        chosen = Path(
+            cli._write_job_ass(
+                cues,
+                work,
+                work / "scelto.ass",
+                aspect="9:16",
+                platform="tiktok",
+                style="karaoke",
+                out_w=1080,
+                out_h=1920,
+            )
+        )
+        text = chosen.read_text(encoding="utf-8")
+        check(
+            "S10 il Fontname dell'ASS e' la famiglia scelta",
+            "Vx,Playfair Display," in text,
+            style_line(chosen),
+        )
+        check(
+            "S10 il TTF scelto e' copiato in <workdir>/fonts",
+            (work / "fonts" / "PlayfairDisplay.ttf").is_file(),
+            sorted(path.name for path in (work / "fonts").glob("*.ttf")),
+        )
+        check(
+            "S10 il filtro di burn punta alla cartella font del lavoro",
+            "fonts" in subs.burn_filter(chosen, fontsdir=work / "fonts"),
+            subs.burn_filter(chosen, fontsdir=work / "fonts"),
+        )
 
 
 def main() -> int:
@@ -101,6 +336,80 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 traversal = True
             check("S2 a name outside the folder is refused", traversal, "404")
+
+            # -- regia: il progresso di ffmpeg e gli shot del piano ----------- #
+            zero = {"out_time_sec": 0.0, "duration_sec": 0.0, "percent": 0.0, "speed": ""}
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            check(
+                "S7 without the ffmpeg progress file the render stays at zero",
+                data["render"] == zero and data["timeline"] == [],
+                {"render": data["render"], "timeline": data["timeline"]},
+            )
+
+            (job / "plan.json").write_text(
+                json.dumps(
+                    {
+                        "contract_version": "2.2.0",
+                        "timeline": {
+                            "fps": 30.0,
+                            "duration_sec": 4.0,
+                            "aspect_ratio": "9:16",
+                            "resolution": [1080, 1920],
+                        },
+                        "sources": {},
+                        "tracks": {
+                            "video": [
+                                {
+                                    "track_id": 0,
+                                    "role": "a_roll",
+                                    # Fuori ordine apposta: la UI ordina per destinazione.
+                                    "clips": [
+                                        {"clip_id": "v0_2_0", "source_id": "sano.mp4",
+                                         "src_in": 10.0, "src_out": 11.0,
+                                         "dst_in": 3.0, "dst_out": 4.0,
+                                         "layer": 0, "role": "main_talking_head"},
+                                        {"clip_id": "v0_0_0", "source_id": "sano.mp4",
+                                         "src_in": 0.0, "src_out": 1.0,
+                                         "dst_in": 0.0, "dst_out": 1.0,
+                                         "layer": 0, "role": "main_talking_head"},
+                                        {"clip_id": "v0_1_0", "source_id": "sano.mp4",
+                                         "src_in": 5.0, "src_out": 7.0,
+                                         "dst_in": 1.0, "dst_out": 3.0,
+                                         "layer": 0, "role": "main_talking_head"},
+                                    ],
+                                }
+                            ],
+                            "audio": [],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job / "render").mkdir()
+            (job / "render" / "ffmpeg-progress.txt").write_text(
+                "frame=90\nfps=30.0\nout_time_us=1500000\nout_time_ms=1500000\n"
+                "out_time=00:00:01.500000\nspeed=1.20x\nprogress=continue\n",
+                encoding="utf-8",
+            )
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            render = data["render"]
+            check(
+                "S7 the render block reads ffmpeg and the plan duration",
+                render["out_time_sec"] == 1.5
+                and render["duration_sec"] == 4.0
+                and render["percent"] == 37.5
+                and render["speed"] == "1.20x",
+                render,
+            )
+            shots = data["timeline"]
+            check(
+                "S8 the timeline holds every shot, ordered by destination time",
+                [shot["index"] for shot in shots] == [0, 1, 2]
+                and [shot["t_in"] for shot in shots] == [0.0, 1.0, 3.0]
+                and [shot["t_out"] for shot in shots] == [1.0, 3.0, 4.0]
+                and [shot["dur"] for shot in shots] == [1.0, 2.0, 1.0],
+                shots,
+            )
 
             result = post(server.url + "api/approve")
             check(
@@ -221,6 +530,36 @@ def main() -> int:
                 ),
                 encoding="utf-8",
             )
+            if name == "beta":
+                # Un solo lavoro ha piano e progresso di ffmpeg: ?job deve
+                # riportare quello giusto, e l'altro restare a zero.
+                (job_dir / "plan.json").write_text(
+                    json.dumps(
+                        {
+                            "timeline": {"fps": 30.0, "duration_sec": 2.0},
+                            "tracks": {
+                                "video": [
+                                    {
+                                        "track_id": 0,
+                                        "role": "a_roll",
+                                        "clips": [
+                                            {"clip_id": "v0_0_0", "source_id": "beta.mp4",
+                                             "src_in": 0.0, "src_out": 2.0,
+                                             "dst_in": 0.0, "dst_out": 2.0,
+                                             "layer": 0, "role": "main_talking_head"},
+                                        ],
+                                    }
+                                ]
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (job_dir / "render").mkdir()
+                (job_dir / "render" / "ffmpeg-progress.txt").write_text(
+                    "out_time_ms=500000\nspeed=1.0x\nprogress=continue\n",
+                    encoding="utf-8",
+                )
 
         multi = serve.Server(base).start()
         try:
@@ -244,6 +583,16 @@ def main() -> int:
                 sizes == {expected},
                 sizes,
             )
+            by_prompt = {item["prompt"]: item for item in (first, second)}
+            check(
+                "S7 ?job carries each job's own render block and timeline",
+                by_prompt["reel beta"]["render"]["out_time_sec"] == 0.5
+                and by_prompt["reel beta"]["render"]["percent"] == 25.0
+                and len(by_prompt["reel beta"]["timeline"]) == 1
+                and by_prompt["reel alfa"]["render"]["out_time_sec"] == 0.0
+                and by_prompt["reel alfa"]["timeline"] == [],
+                {name: (item["render"], len(item["timeline"])) for name, item in by_prompt.items()},
+            )
             broken = json.loads(get(multi.url + "api/state?job=99").decode("utf-8"))
             check(
                 "S6 an index that does not exist falls back instead of breaking",
@@ -252,6 +601,11 @@ def main() -> int:
             )
         finally:
             multi.stop()
+
+    # -- il cancello dei font e il ponte fino all'ASS ---------------------- #
+    with tempfile.TemporaryDirectory(prefix="vx-fontgate-") as raw3:
+        check_font_gate(raw3)
+    check_ass_bridge()
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

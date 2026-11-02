@@ -967,6 +967,123 @@ def _layout_gate(zone, ass_path: str) -> Dict[str, Any]:
     return gates.layout(zone, box).to_dict()
 
 
+def _maybe_json(path: Path) -> Dict[str, Any]:
+    """A JSON object, or ``{}``: a missing or broken file is not an error here."""
+    try:
+        return _load_json(path)
+    except VxError:
+        return {}
+
+
+def _font_choice(work: Path) -> Dict[str, Any]:
+    """La famiglia scelta per il lavoro, dalla UI o dal ``chosen`` della proposta.
+
+    La scelta esplicita (``font_choice.json``) vince. Senza di lei vale il
+    ``chosen`` di ``font_proposal.json``, ma solo se e' davvero un candidato:
+    un nome che la proposta non contiene non diventa un ``Fontname``. Nessuna
+    delle due: ``{}`` e il render resta sul preset, come prima.
+    """
+    choice = _maybe_json(Path(work) / "font_choice.json")
+    proposal = _maybe_json(Path(work) / "font_proposal.json")
+    raw = proposal.get("candidates")
+    by_family = {
+        str(item.get("family") or ""): item
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, dict)
+    }
+    family = str(choice.get("family") or "").strip()
+    if family not in by_family:
+        proposed = str(proposal.get("chosen") or "").strip()
+        family = proposed if proposed in by_family else ""
+    if not family:
+        return {}
+    return {"family": family, "record": by_family[family]}
+
+
+def _job_font(work: Path) -> Dict[str, Any]:
+    """Porta il TTF scelto in ``<workdir>/fonts`` e dice dove puntare libass.
+
+    Ritorna ``{"family", "fonts_dir", "note"}``: famiglia vuota significa che
+    si resta sul preset, e la nota dice perche' (file mancante o copia fallita)
+    invece di lasciar credere che il font scelto sia stato usato.
+    """
+    picked = _font_choice(work)
+    if not picked:
+        return {"family": "", "fonts_dir": "", "note": ""}
+    family = picked["family"]
+    source = Path(str(picked["record"].get("file") or ""))
+    if not source.is_file():
+        return {
+            "family": "",
+            "fonts_dir": "",
+            "note": f"{family}: file {source} mancante, il render resta sul preset",
+        }
+    from . import fontlib  # noqa: PLC0415 -- only the font path needs it
+
+    try:
+        record = fontlib.FontRecord(
+            family=family,
+            licence=str(picked["record"].get("licence") or "unknown"),
+            file=str(source),
+            sha256="",
+        )
+        fonts_dir = fontlib.job_fonts_dir(Path(work), [record])
+    except Exception as exc:  # noqa: BLE001 - a copy that fails is a declared fallback
+        return {
+            "family": "",
+            "fonts_dir": "",
+            "note": f"{family}: copia in <workdir>/fonts non riuscita ({exc}), "
+                    "il render resta sul preset",
+        }
+    return {"family": family, "fonts_dir": str(fonts_dir), "note": ""}
+
+
+def _use_job_fonts(fonts_dir: str) -> None:
+    """Fa puntare libass alla cartella font del lavoro, non solo al bundle.
+
+    ``render`` e ``qc`` costruiscono ``subtitles=...:fontsdir=`` chiamando
+    ``vx.fonts.fontsdir_arg()``; quella cartella contiene gia' il bundle piu' il
+    font scelto (``fontlib.job_fonts_dir``), quindi la stessa chiamata basta a
+    far comparire nel pixel la famiglia scelta invece del sostituto del sistema.
+    """
+    if not str(fonts_dir or "").strip():
+        return
+    from . import fonts as fonts_mod  # noqa: PLC0415
+
+    fonts_mod.fontsdir_arg = lambda: winpath.ass_filter_path(fonts_dir)
+
+
+def _write_job_ass(
+    cues,
+    work: Path,
+    dst: Path,
+    *,
+    aspect: str,
+    platform: str,
+    style: str,
+    out_w: int,
+    out_h: int,
+    zone=None,
+    font: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Scrive l'ASS con la famiglia scelta; senza scelta, il preset di sempre."""
+    from . import subs  # noqa: PLC0415
+
+    resolved = _job_font(work) if font is None else font
+    return subs.write_ass(
+        cues,
+        dst,
+        aspect=aspect,
+        platform=platform,
+        style=style,
+        out_w=out_w,
+        out_h=out_h,
+        bottom_limit_px=zone.text_limit_y if zone else None,
+        margin_lr=zone.margin_lr if zone else None,
+        font_family=resolved.get("family") or None,
+    )
+
+
 def cmd_subs(args: argparse.Namespace) -> int:
     from . import subs
 
@@ -1561,22 +1678,32 @@ def cmd_run(args: argparse.Namespace) -> int:
                 int(built.output.get("height") or 1920),
                 getattr(args, "overlay", None),
             )
-            ass = subs.write_ass(
+            font = _job_font(work)
+            if font["family"]:
+                _use_job_fonts(font["fonts_dir"])
+                _log(f"[run] font scelto: {font['family']} ({font['fonts_dir']})")
+            elif font["note"]:
+                _log(f"[run] font: {font['note']}")
+                rep.setdefault("skipped", []).append(
+                    {"treatment": "font", "reason": font["note"]}
+                )
+            ass = _write_job_ass(
                 cues,
+                work,
                 work / "subs" / f"{stem}.ass",
                 aspect=str(built.output.get("aspect") or "9:16"),
                 platform=str(built.output.get("platform") or "tiktok"),
                 style=str(params.get("style") or "karaoke"),
                 out_w=int(built.output.get("width") or 1080),
                 out_h=int(built.output.get("height") or 1920),
-                bottom_limit_px=zone.text_limit_y if zone else None,
-                margin_lr=zone.margin_lr if zone else None,
+                zone=zone,
+                font=font,
             )
             if zone is not None:
                 rep["artifacts"]["gate4"] = _layout_gate(zone, ass)
                 rep["artifacts"]["layout"] = zone.to_dict()
             srt = subs.write_srt(cues, work / "subs" / f"{stem}.srt")
-            fonts = subs.verify_fonts(ass)
+            fonts = subs.verify_fonts(ass, fontsdir=font["fonts_dir"] or None)
             if not fonts.get("ok", True):
                 raise QCFailure(
                     {
@@ -1869,16 +1996,18 @@ def cmd_edl(args: argparse.Namespace) -> int:
 def cmd_auto(args: argparse.Namespace) -> int:
     """Prompt + folder -> triage -> EDL -> render -> QC -> deliverables -> report."""
     from . import auto
+    from . import settings
     from .grammar import GrammarError
 
     # La narrazione e' per chi guarda, il JSON per chi legge: non convivono.
     narrator = None
+    panel_dir = None
+    panel = None
     if not getattr(args, "json", False):
         from . import narrate
 
         global _NARRATING
         _NARRATING = True
-        panel = None
         target = getattr(args, "panel", None)
         if target is None and not getattr(args, "no_panel", False):
             # Default: il pannello vive accanto al master, dove si va a cercarlo.
@@ -1887,8 +2016,9 @@ def cmd_auto(args: argparse.Namespace) -> int:
         if target and not getattr(args, "no_panel", False):
             from . import panel as panel_mod
 
+            panel_dir = Path(target)
             panel = panel_mod.Panel(
-                Path(target) / "progress.html",
+                panel_dir / "progress.html",
                 prompt=str(getattr(args, "prompt", "")),
                 clips=_media_count(getattr(args, "assets", "")),
                 phases=list(narrate.PHASES.items()),
@@ -1896,7 +2026,7 @@ def cmd_auto(args: argparse.Namespace) -> int:
             if getattr(args, "watch", False):
                 from . import watch as watch_mod
 
-                url = watch_mod.running(Path(target)) or watch_mod.spawn(Path(target))
+                url = watch_mod.running(panel_dir) or watch_mod.spawn(panel_dir)
                 if url:
                     panel.watch_url = url
                     print(f"Lo guardi qui: {url}", flush=True)
@@ -1907,8 +2037,22 @@ def cmd_auto(args: argparse.Namespace) -> int:
         count = _media_count(getattr(args, "assets", ""))
         narrator.header(str(getattr(args, "prompt", "")), count)
 
+    # Il cancello dei font: default dalla configurazione, poi i flag vincono.
+    if getattr(args, "font_network", None) is None:
+        args.font_network = bool(settings.get("font.network", True)) and (
+            auto.font_network_available()
+        )
+    if getattr(args, "font_wait", None) is None:
+        args.font_wait = float(settings.get("font.wait_sec", auto.FONT_WAIT_DEFAULT))
+
     try:
-        report = auto.run(args, progress=narrator)
+        report = auto.run(
+            args,
+            progress=narrator,
+            progress_file=str(auto.progress_path(args)),
+            view_url=str(getattr(panel, "watch_url", "") or "") if panel else "",
+            view_active=panel is not None,
+        )
     except GrammarError as exc:
         _out(
             {
@@ -2274,6 +2418,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="apre la vista del lavoro e stampa l'indirizzo PRIMA del render: "
         "pannello, fotogrammi, approvazione e player del risultato",
+    )
+    p.add_argument(
+        "--font-network",
+        dest="font_network",
+        action="store_true",
+        default=None,
+        help="scarica dal catalogo i font proposti (default: rete attiva se "
+        "disponibile); un prelievo fallito resta dichiarato, non ferma il job",
+    )
+    p.add_argument(
+        "--no-font-network",
+        dest="font_network",
+        action="store_false",
+        help="solo pool locale: nessun socket per la proposta dei font",
+    )
+    p.add_argument(
+        "--font-wait",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="quanto si aspetta una scelta umana nella vista (default: 180); "
+        "allo scadere si usa il font proposto e lo si dichiara",
+    )
+    p.add_argument(
+        "--no-font-gate",
+        action="store_true",
+        help="nessuna attesa: si prende subito il font proposto dalla classifica",
     )
     p.add_argument(
         "--subs",

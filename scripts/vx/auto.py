@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
@@ -48,6 +49,12 @@ from . import (
 # The delivery spec the renderer is asked to hit and the QC gate re-measures.
 TARGET_LUFS = -14.0
 TARGET_TP = -1.0
+
+#: Il cancello dei font: la proposta che ``fontproposal`` scrive, la scelta che
+#: la vista deposita e quanto si aspetta una persona prima di decidere da soli.
+FONT_PROPOSAL_NAME = "font_proposal.json"
+FONT_CHOICE_NAME = "font_choice.json"
+FONT_WAIT_DEFAULT = 180.0
 
 
 def loudness_target(document: Any = None) -> tuple[float, float]:
@@ -222,6 +229,16 @@ def _resolve_workdir(args: Any) -> Path:
         return Path(explicit)
     out = Path(args.out)
     return out.parent / f"{out.stem}-auto"
+
+
+def progress_path(args: Any) -> Path:
+    """Il file ``-progress`` di ffmpeg per questo lavoro.
+
+    Sta accanto al grafo del render (``<workdir>/render/``) perche' e' li' che
+    ``render_edl`` scrive i suoi passaggi; ``vx serve`` lo legge per dire a che
+    punto e' il render invece di stimarlo.
+    """
+    return _resolve_workdir(args) / "render" / "ffmpeg-progress.txt"
 
 
 def _discover(args: Any) -> List[asset_triage.AssetInfo]:
@@ -638,6 +655,350 @@ def _render_effects(report: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
     return reframe, restore
 
 
+def _say(msg: str) -> None:
+    """Una riga per chi guarda: stdout col narratore, stderr con ``--json``.
+
+    Con ``--json`` lo stdout e' il documento, quindi l'avviso non puo' finirci;
+    il narratore invece parla proprio li' e la riga va letta insieme alle altre.
+    """
+    stream = sys.stdout if _NARRATING else sys.stderr
+    try:
+        print(msg, file=stream, flush=True)
+    except Exception:  # noqa: BLE001 - uno stream chiuso non ferma il montaggio
+        pass
+
+
+def font_network_available(timeout: float = 0.8) -> bool:
+    """Se il catalogo risponde, in meno di un secondo e senza scaricare niente.
+
+    La proposta di font e' l'unico punto che puo' uscire in rete; quando il
+    socket non si apre si resta sul pool locale invece di aspettare un timeout
+    di download per ogni famiglia.
+    """
+    import socket
+
+    try:
+        with socket.create_connection(("raw.githubusercontent.com", 443), timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _rationale(payload: Any) -> Mapping[str, Any]:
+    """Il blocco creativo del payload, o un vuoto: qui non si inventa nulla."""
+    if not isinstance(payload, Mapping):
+        return {}
+    context = payload.get("execution_context")
+    if not isinstance(context, Mapping):
+        return {}
+    rationale = context.get("creative_rationale")
+    return rationale if isinstance(rationale, Mapping) else {}
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def font_requirement(prompt: Any, payload: Any, plan: Any) -> str:
+    """La richiesta da dare a ``fontproposal``: prompt piu' tipo di contenuto.
+
+    Il solo prompt non basta: un reel "120 bpm, duotone, taglio a battuta" chiede
+    un carattere diverso da un montaggio lento. I token arrivano dal payload gia'
+    deciso e dal piano gia' costruito, non da una seconda interpretazione.
+    """
+    parts: List[str] = []
+    text = " ".join(str(prompt or "").split())
+    if text:
+        parts.append(text)
+    rationale = _rationale(payload)
+    pacing = rationale.get("pacing")
+    pacing = pacing if isinstance(pacing, Mapping) else {}
+    bpm = pacing.get("bpm_target")
+    if isinstance(bpm, (int, float)) and not isinstance(bpm, bool) and bpm > 0:
+        parts.append(f"{int(bpm)} bpm")
+    cut = str(pacing.get("cut_policy") or "").strip()
+    if cut and cut != "standard":
+        parts.append(cut.replace("_", " "))
+    color = rationale.get("color_palette")
+    if isinstance(color, Mapping) and str(color.get("type") or "") == "duotone":
+        parts.append("vintage")
+    genre = str(rationale.get("genre_detected") or "").strip()
+    if genre:
+        parts.append(genre.replace("_", " "))
+    if len(parts) == (1 if text else 0):
+        # Nessun look dichiarato e nessun prompt: il piano resta un verticale.
+        parts.append(f"verticale {getattr(plan, 'aspect_ratio', '') or '9:16'}")
+    return ", ".join(part for part in parts if part)
+
+
+def font_energy(payload: Any, plan: Any) -> float:
+    """0..1 dai numeri del piano: BPM, politica di taglio, densita' dei tagli.
+
+    ``fontchooser.rank`` usa l'energia per chiedere un peso piu' o meno nero;
+    una costante sarebbe una bugia. Il BPM viene dal payload, la densita' dai
+    clip che il piano ha davvero, e la politica di taglio dice se il ritmo e'
+    sincronizzato o narrativo.
+    """
+    rationale = _rationale(payload)
+    pacing = rationale.get("pacing")
+    pacing = pacing if isinstance(pacing, Mapping) else {}
+    bpm = pacing.get("bpm_target")
+    if isinstance(bpm, (int, float)) and not isinstance(bpm, bool) and bpm > 0:
+        bpm_term = _clamp01((float(bpm) - 70.0) / 80.0)
+    else:
+        bpm_term = 0.5
+    cut = str(pacing.get("cut_policy") or "").strip()
+    cut_term = 1.0 if cut in ("beat_synced", "onset_synced") else 0.35
+    duration = 0.0
+    try:
+        duration = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    cuts = sum(len(getattr(track, "clips", ()) or ()) for track in getattr(plan, "video_tracks", ()))
+    density_term = _clamp01((cuts / duration) / 0.8) if duration > 0 and cuts else 0.35
+    return round(
+        _clamp01(0.5 * bpm_term + 0.25 * cut_term + 0.25 * density_term), 3
+    )
+
+
+def _choice_family(workdir: Path) -> str:
+    """La famiglia scritta dalla vista, o ``""``: un file rotto non e' una scelta."""
+    path = Path(workdir) / FONT_CHOICE_NAME
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(data, Mapping):
+        return ""
+    return str(data.get("family") or "").strip()
+
+
+def _candidate_map(proposal: Any) -> Dict[str, Mapping[str, Any]]:
+    raw = proposal.get("candidates") if isinstance(proposal, Mapping) else None
+    items = raw if isinstance(raw, list) else []
+    out: Dict[str, Mapping[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        family = str(item.get("family") or "").strip()
+        if family:
+            out.setdefault(family, item)
+    return out
+
+
+def font_gate(
+    workdir: Any,
+    *,
+    requirement: str,
+    energy: float,
+    allow_network: bool = False,
+    wait: float = FONT_WAIT_DEFAULT,
+    gate: bool = True,
+    view_url: str = "",
+    propose: Optional[Callable[..., Dict[str, Any]]] = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    notify: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Proponi i font, poi aspetta una scelta umana senza mai bloccarsi.
+
+    Ordine dei casi, e sono tutti finiti:
+
+    1. una ``font_choice.json`` gia' presente vince subito, nessuna attesa;
+    2. senza scelta, se il cancello e' aperto (vista accesa, non
+       ``--no-font-gate``) si scrive dove scegliere e si controlla il file ogni
+       secondo per al massimo ``wait`` secondi;
+    3. alla scelta si usa quella famiglia (``selected_by="user"``); allo scadere
+       si usa ``proposal["chosen"]`` e lo si dichiara
+       (``selected_by="auto_after_timeout"``);
+    4. cancello chiuso: si usa subito ``chosen`` (``selected_by="auto"``).
+
+    Se ``propose`` solleva, la sezione torna con ``family=""`` e un ``error``
+    in italiano: il chiamante prosegue col font del preset invece di fermare il
+    montaggio. ``propose``, ``clock`` e ``sleep`` sono iniettabili per provare il
+    cancello senza rete e senza aspettare davvero.
+    """
+    root = Path(workdir)
+    say = notify if notify is not None else _say
+    section: Dict[str, Any] = {
+        "family": "",
+        "licence": "",
+        "source": "",
+        "downloaded": False,
+        "selected_by": "auto",
+        "candidates": [],
+        "pool": "local",
+        "waited_sec": 0.0,
+    }
+    runner = propose
+    if runner is None:
+        from . import fontproposal  # noqa: PLC0415 - the network path stays lazy
+
+        runner = fontproposal.propose
+    try:
+        proposal = runner(
+            root,
+            requirement=str(requirement or ""),
+            energy=float(energy),
+            allow_network=bool(allow_network),
+        )
+    except Exception as exc:  # noqa: BLE001 - un font mancante non ferma un render
+        section["error"] = (
+            f"proposta font non disponibile, resta il preset: {exc}"
+        )
+        say(f"Font: {section['error']}")
+        return section
+    if not isinstance(proposal, Mapping):
+        section["error"] = (
+            "proposta font non valida (non e' un oggetto JSON), resta il preset"
+        )
+        say(f"Font: {section['error']}")
+        return section
+
+    by_family = _candidate_map(proposal)
+    section["candidates"] = [
+        {"family": family, "score": item.get("score")}
+        for family, item in by_family.items()
+    ]
+    section["pool"] = str(proposal.get("pool") or "local")
+
+    started = clock()
+    family = _choice_family(root)
+    selected_by = "user" if family else "auto"
+    waited = 0.0
+    if not family and gate and float(wait) > 0:
+        if str(view_url or "").strip():
+            say(f"Scegli il font nella vista: {view_url}")
+        else:
+            say(f"Scegli il font nella cartella: {root} (file {FONT_CHOICE_NAME})")
+        deadline = started + float(wait)
+        while True:
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            sleep(min(1.0, remaining))
+            family = _choice_family(root)
+            if family:
+                break
+        waited = max(0.0, clock() - started)
+
+    if family:
+        selected_by = "user"
+    if not family:
+        chosen = str(proposal.get("chosen") or "").strip()
+        if chosen and chosen in by_family:
+            family = chosen
+            selected_by = (
+                "auto_after_timeout" if (gate and float(wait) > 0) else "auto"
+            )
+    section["waited_sec"] = round(waited, 3)
+
+    item = by_family.get(family)
+    if item is not None:
+        section.update(
+            {
+                "family": family,
+                "licence": str(item.get("licence") or ""),
+                "source": str(item.get("source") or ""),
+                "downloaded": bool(item.get("downloaded")),
+                "file": str(item.get("file") or ""),
+                "selected_by": selected_by,
+            }
+        )
+    elif family:
+        # Una scelta che la proposta non contiene non e' un Fontname valido.
+        section["family"] = family
+        section["error"] = (
+            f"{family}: famiglia non presente fra i candidati proposti, "
+            "il render resta sul preset"
+        )
+        selected_by = "user"
+
+    if section["family"]:
+        if selected_by == "user":
+            say(f"Font: {section['family']} — scelta nella vista.")
+        elif selected_by == "auto_after_timeout":
+            say(
+                f"Font: {section['family']} — scelto in automatico dopo "
+                f"{float(wait):g} s senza scelta."
+            )
+        else:
+            say(f"Font: {section['family']} — scelto in automatico.")
+    elif not section.get("error"):
+        reason = str(proposal.get("reason_if_none") or "").strip()
+        section["error"] = reason or "nessun font proposto: resta il preset"
+    if section.get("error") and not section["family"]:
+        say(f"Font: {section['error']}")
+    return section
+
+
+def _run_font_gate(
+    args: Any,
+    workdir: Path,
+    plan: Any,
+    payload: Any,
+    *,
+    view_url: str = "",
+    view_active: bool = False,
+) -> Dict[str, Any]:
+    """Legge i flag, traduce il piano in richiesta/energia, apre o chiude il cancello."""
+    allow_network = getattr(args, "font_network", None)
+    if allow_network is None:
+        allow_network = bool(settings.get("font.network", True)) and (
+            font_network_available()
+        )
+    wait = getattr(args, "font_wait", None)
+    if wait is None:
+        wait = float(settings.get("font.wait_sec", FONT_WAIT_DEFAULT))
+    gate = bool(view_active) and not bool(getattr(args, "no_font_gate", False))
+    return font_gate(
+        workdir,
+        requirement=font_requirement(getattr(args, "prompt", ""), payload, plan),
+        energy=font_energy(payload, plan),
+        allow_network=bool(allow_network),
+        wait=float(wait),
+        gate=gate,
+        view_url=str(view_url or ""),
+        notify=_say,
+    )
+
+
+def _caption_font(workdir: Path) -> Dict[str, str]:
+    """Famiglia scelta e cartella font per l'ASS dell'auto; vuota = preset.
+
+    ``cli._job_font`` e' l'unico posto che legge ``font_choice.json`` /
+    ``font_proposal.json.chosen`` e copia il TTF in ``<workdir>/fonts``: qui si
+    usa lo stesso risultato del percorso ``run``, cosi' ``Fontname`` e
+    ``fontsdir`` non possono divergere. Quando la scelta c'e' ma il file non
+    arriva nella cartella, la famiglia torna vuota e ``fallback_reason`` dice
+    perche': il report non deve far credere che il pixel sia cambiato.
+    """
+    from . import cli as cli_mod  # noqa: PLC0415 -- cli importa auto a runtime
+
+    try:
+        picked = cli_mod._job_font(Path(workdir))
+    except Exception as exc:  # noqa: BLE001 - un font non ferma il montaggio
+        return {
+            "family": "",
+            "fonts_dir": "",
+            "fallback_reason": f"font scelto non applicabile: {exc}",
+        }
+    family = str(picked.get("family") or "")
+    fonts_dir = str(picked.get("fonts_dir") or "")
+    note = str(picked.get("note") or "")
+    if not family:
+        return {"family": "", "fonts_dir": "", "fallback_reason": note}
+    if not Path(fonts_dir).is_dir():
+        return {
+            "family": "",
+            "fonts_dir": "",
+            "fallback_reason": (
+                f"{family}: cartella {fonts_dir} mancante, il master resta sul preset"
+            ),
+        }
+    return {"family": family, "fonts_dir": fonts_dir, "fallback_reason": ""}
+
+
 def _run_locked(
     args: Any,
     workdir: Path,
@@ -646,6 +1007,8 @@ def _run_locked(
     progress_file: Optional[str] = None,
     montage: bool = False,
     fill: str = "fit",
+    view_url: str = "",
+    view_active: bool = False,
 ) -> Dict[str, Any]:
     from . import events as events_mod
     from . import features as features_mod
@@ -739,14 +1102,9 @@ def _run_locked(
         if bridge_report.captions:
             from . import bridge as bridge_mod
 
-            written = bridge_mod.caption_ass(
-                bridge_report.captions,
-                workdir / "captions.ass",
-                aspect=str(plan.aspect_ratio),
-                out_w=int(plan.resolution[0]),
-                out_h=int(plan.resolution[1]),
-            )
-            captions_ass = str(written) if written is not None else None
+            # L'ASS nasce dopo il cancello dei font: la famiglia scelta deve
+            # arrivare nel `Fontname`, non solo nel report. Il sidecar SRT non
+            # ha font e si scrive subito.
             sidecar = bridge_mod.caption_srt(
                 bridge_report.captions,
                 workdir / "captions.srt",
@@ -790,6 +1148,45 @@ def _run_locked(
         encoding="utf-8",
     )
 
+    # Il piano esiste: ora si propongono i font e si aspetta la scelta, prima del
+    # render. Il cancello e' aperto solo se c'e' una vista e non l'hanno spento:
+    # in autonomia senza pannello si prende il ``chosen`` e lo si dichiara.
+    font_section = _run_font_gate(
+        args, workdir, plan, payload, view_url=view_url, view_active=view_active
+    )
+    _emit(
+        log,
+        "font",
+        "done" if font_section.get("family") else "skip",
+        str(font_section.get("family") or font_section.get("error") or ""),
+    )
+
+    # La scelta deve arrivare al pixel, non solo al report: l'ASS si scrive qui,
+    # dopo il cancello, con il `Fontname` di `cli._job_font` e la sua cartella.
+    caption_font = _caption_font(workdir)
+    if bridge_report is not None and getattr(bridge_report, "captions", None):
+        from . import bridge as bridge_mod
+
+        written = bridge_mod.caption_ass(
+            bridge_report.captions,
+            workdir / "captions.ass",
+            aspect=str(plan.aspect_ratio),
+            out_w=int(plan.resolution[0]),
+            out_h=int(plan.resolution[1]),
+            font_family=caption_font["family"] or None,
+        )
+        captions_ass = str(written) if written is not None else None
+        bridge_summary["subtitles"] = captions_ass
+    if not caption_font["family"]:
+        chosen = str(font_section.get("family") or "")
+        if chosen:
+            font_section["fallback_reason"] = caption_font.get(
+                "fallback_reason"
+            ) or (
+                f"{chosen}: nessun file in {workdir / 'fonts'}, "
+                "il master resta sul preset"
+            )
+
     exemptions = grammar.camera_exemptions(plan)
     try:
         grammar.assert_cinematic_rules(plan)
@@ -818,6 +1215,9 @@ def _run_locked(
     _notify(progress, 25.0, "render", log=log, status="start")
     ceiling_dbtp = qc.true_peak_ceiling(target_tp) if bridge_gains_applied else None
     render_cache: Dict[str, Any] = {}
+    if progress_file:
+        # Un file lasciato da un render precedente direbbe il falso: si riparte da zero.
+        Path(progress_file).unlink(missing_ok=True)
     render.render_edl(
         plan,
         staged_paths,
@@ -834,6 +1234,7 @@ def _run_locked(
         reframe=reframe_map,
         restore=restore_map,
         ceiling_dbtp=ceiling_dbtp,
+        fonts_dir=caption_font["fonts_dir"] or None,
         cache_report=render_cache,
     )
     estimate.finish(render_estimate)
@@ -884,6 +1285,7 @@ def _run_locked(
             "a_roll_count": len(a_roll_indices),
         },
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
+        "font": font_section,
         "bridge": bridge_summary,
         "render_estimate": render_estimate,
         "audio": audio_summary(analyses, ceiling_dbtp),
@@ -944,12 +1346,16 @@ def run(
     progress_file: Optional[str] = None,
     montage: Optional[bool] = None,
     fill: Optional[str] = None,
+    view_url: str = "",
+    view_active: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Execute the whole pipeline under the workdir lock and return the report.
 
     ``montage`` and ``fill`` default to ``None``: the flags on ``args`` win
     unless a caller passes an explicit value, so an existing caller that only
     has ``args`` keeps the single-a_roll and ``fit`` behaviour unchanged.
+    ``view_active`` says whether a human can actually see this job (panel or
+    ``--watch``); when it is ``None`` a narrator carrying a panel counts as one.
     """
     out = Path(args.out)
     assets_dir = Path(args.assets)
@@ -973,6 +1379,9 @@ def run(
         )
 
     workdir.mkdir(parents=True, exist_ok=True)
+    if view_active is None:
+        panel = getattr(progress, "panel", None) if progress is not None else None
+        view_active = bool(view_url) or panel is not None
     beat = lock.acquire(
         workdir,
         stage="auto",
@@ -986,6 +1395,8 @@ def run(
             progress_file=progress_file,
             montage=montage_mode,
             fill=fill_mode,
+            view_url=view_url,
+            view_active=bool(view_active),
         )
     except Exception as exc:  # noqa: BLE001 - re-raised unchanged, only logged
         from . import events as events_mod

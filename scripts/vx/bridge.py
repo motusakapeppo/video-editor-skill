@@ -777,6 +777,7 @@ def caption_ass(
     out_w: int = 1080,
     out_h: int = 1920,
     caption_style: Optional[Mapping[str, Any]] = None,
+    font_family: Optional[str] = None,
 ) -> Optional[Path]:
     """Write the ASS burned by the EDL render; ``None`` when no caption survives.
 
@@ -785,6 +786,11 @@ def caption_ass(
     ``MarginV`` is set here, from the canvas and not from the source geometry or
     the platform safe zone: ``round(out_h * ratio)`` clamped to
     ``[24, out_h // 4]``.
+
+    ``font_family`` is the ``Fontname`` the caller chose for this job (see
+    ``cli._job_font``); ``None`` keeps the preset family, so a caller without a
+    choice produces the same ASS as before. The burn filter must point at the
+    directory holding that font (``fonts_dir=`` in ``render_edl``).
     """
     from . import subs
 
@@ -804,6 +810,7 @@ def caption_ass(
         out_w=int(out_w),
         out_h=int(out_h),
         margin_v=margin_v,
+        font_family=font_family or None,
     )
     return Path(path)
 

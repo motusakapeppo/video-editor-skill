@@ -26,9 +26,10 @@ import subprocess
 import sys
 import threading
 import urllib.parse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from . import keygate
 
@@ -42,6 +43,12 @@ UI_FILES = {
 #: Quanti livelli di cartelle guardare sotto la radice.
 MAX_DEPTH = 2
 
+#: La proposta di font e la scelta dell'operatore, scritte nella workdir.
+FONT_PROPOSAL_NAME = "font_proposal.json"
+FONT_CHOICE_NAME = "font_choice.json"
+FONT_CHOICE_SCHEMA = "vx.fontchoice/1"
+FONT_SAMPLE_PREFIX = "/fonts/sample/"
+
 
 def _read_json(path: Path) -> Dict[str, Any]:
     try:
@@ -49,6 +56,179 @@ def _read_json(path: Path) -> Dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _number(value: Any) -> Optional[float]:
+    """A finite float, or ``None``: a missing field is not a zero."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and abs(number) != float("inf") else None
+
+
+def _parse_kv(path: Path) -> Dict[str, str]:
+    """The ``chiave=valore`` file ffmpeg writes with ``-progress``.
+
+    ffmpeg appends one block per update and the last block wins: reading the
+    whole file and keeping the last value of each key gives the current state.
+    An unreadable file is an empty block, never an exception.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    values: Dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if separator and key:
+            values[key] = value.strip()
+    return values
+
+
+def _empty_render() -> Dict[str, Any]:
+    return {"out_time_sec": 0.0, "duration_sec": 0.0, "percent": 0.0, "speed": ""}
+
+
+def _data_dir(directory: Path) -> Path:
+    """Dove stanno ``plan.json`` e ``render/``: la cartella del lavoro o la sua ``work``.
+
+    Il pannello (``progress.json``) vive accanto al master, mentre il piano e il
+    render stanno nella workdir: con una workdir esplicita sono due cartelle
+    diverse. Si guarda prima quella del lavoro, poi ``work`` dentro, poi quella
+    del master. Se non c'e' niente si resta sulla cartella del lavoro: la UI
+    legge zeri, non un errore.
+    """
+    candidates = [directory, directory / "work", directory.parent / "work"]
+    for candidate in candidates:
+        if (candidate / "plan.json").is_file():
+            return candidate
+    for candidate in candidates:
+        if (candidate / "render").is_dir():
+            return candidate
+    return directory
+
+
+def _empty_font() -> Dict[str, Any]:
+    """Nessuna proposta: il cancello dei font resta chiuso e la UI non lo apre."""
+    return {
+        "pending": False,
+        "sample": "",
+        "requirement": "",
+        "pool": "",
+        "chosen": "",
+        "candidates": [],
+    }
+
+
+def _font_state(directory: Path) -> Dict[str, Any]:
+    """La proposta di font e la scelta presa, nella forma promessa alla UI.
+
+    ``pending`` e' vero solo con una proposta che ha candidati e nessun
+    ``font_choice.json``: e' il segnale che apre il cancello. Il campione di un
+    candidato e' un URL solo quando il PNG esiste davvero; se manca resta ``""``
+    e la UI mostra il segnaposto invece di un'immagine rotta. Una scelta gia'
+    presa non torna indietro: ``chosen`` arriva solo dal file di scelta.
+    """
+    proposal = _read_json(directory / FONT_PROPOSAL_NAME)
+    if not proposal:
+        return _empty_font()
+    raw = proposal.get("candidates")
+    items = [item for item in raw if isinstance(item, Mapping)] if isinstance(raw, list) else []
+    choice = _read_json(directory / FONT_CHOICE_NAME)
+
+    candidates: List[Dict[str, Any]] = []
+    for item in items:
+        png = Path(str(item.get("sample_png") or ""))
+        name = png.name if png.name and png.is_file() else ""
+        candidates.append(
+            {
+                "family": str(item.get("family") or ""),
+                "licence": str(item.get("licence") or ""),
+                "because": str(item.get("because") or ""),
+                "score": _number(item.get("score")) or 0.0,
+                "downloaded": bool(item.get("downloaded")),
+                "sample": (FONT_SAMPLE_PREFIX + urllib.parse.quote(name)) if name else "",
+            }
+        )
+
+    first = next((item["sample"] for item in candidates if item["sample"]), "")
+    return {
+        "pending": bool(candidates) and not (directory / FONT_CHOICE_NAME).is_file(),
+        "sample": Path(urllib.parse.unquote(first)).name if first else "",
+        "requirement": str(proposal.get("requirement") or ""),
+        "pool": str(proposal.get("pool") or ""),
+        "chosen": str(choice.get("family") or ""),
+        "candidates": candidates,
+    }
+
+
+def timeline(plan: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Gli shot del piano EDL, in ordine di destinazione.
+
+    La fonte e' il ``plan.json`` che ``auto`` scrive nella workdir
+    (``tracks.video[].clips[]`` con ``dst_in``/``dst_out``). Si tengono i clip
+    del livello 0 — la sequenza dei tagli — e solo se non ce ne sono si usano
+    tutti: una sovrapposizione e' un grafico, non un altro shot.
+    """
+    tracks = plan.get("tracks")
+    video = tracks.get("video") if isinstance(tracks, Mapping) else None
+    clips: List[tuple] = []
+    for track in video or []:
+        if not isinstance(track, Mapping):
+            continue
+        for clip in track.get("clips") or []:
+            if not isinstance(clip, Mapping):
+                continue
+            start = _number(clip.get("dst_in"))
+            end = _number(clip.get("dst_out"))
+            if start is None or end is None or end <= start:
+                continue
+            layer = _number(clip.get("layer"))
+            clips.append((start, end, int(layer) if layer is not None else 0))
+    base = [item for item in clips if item[2] == 0] or clips
+    base.sort(key=lambda item: (item[0], item[1]))
+    return [
+        {
+            "index": index,
+            "t_in": round(start, 6),
+            "t_out": round(end, 6),
+            "dur": round(end - start, 6),
+        }
+        for index, (start, end, _) in enumerate(base)
+    ]
+
+
+def render_state(directory: Path, plan: Mapping[str, Any]) -> Dict[str, Any]:
+    """Dove e' arrivato ffmpeg, letto dal suo file di progresso.
+
+    ``out_time_us`` e ``out_time_ms`` sono **entrambi** microsecondi: ffmpeg ha
+    chiamato cosi' il campo e non l'ha piu' cambiato. La durata non arriva dal
+    file — ffmpeg non la scrive — ma dal piano. Senza file si torna zeri.
+    """
+    values = _parse_kv(directory / "render" / "ffmpeg-progress.txt")
+    if not values:
+        return _empty_render()
+    micro: Optional[float] = None
+    for key in ("out_time_us", "out_time_ms"):
+        if key in values:
+            micro = _number(values[key])
+            if micro is not None:
+                break
+    out_time = max(0.0, micro) / 1_000_000.0 if micro is not None else 0.0
+    block = plan.get("timeline")
+    duration = _number(block.get("duration_sec")) if isinstance(block, Mapping) else None
+    duration = duration if duration is not None and duration > 0 else 0.0
+    percent = (
+        min(100.0, max(0.0, out_time / duration * 100.0)) if duration > 0 else 0.0
+    )
+    return {
+        "out_time_sec": round(out_time, 3),
+        "duration_sec": round(duration, 3),
+        "percent": round(percent, 2),
+        "speed": str(values.get("speed") or ""),
+    }
 
 
 def _ui(name: str) -> Optional[bytes]:
@@ -85,6 +265,8 @@ def discover(root: Path) -> List[Path]:
 
 def _job_state(directory: Path) -> Dict[str, Any]:
     progress = _read_json(directory / "progress.json")
+    data_dir = _data_dir(directory)
+    plan = _read_json(data_dir / "plan.json")
     frames_dir = directory / "keyframes"
     frames = [
         {"name": item.name, "bytes": item.stat().st_size}
@@ -109,6 +291,9 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "master": master.name if ready and master is not None else "",
         "master_ready": ready,
         "master_bytes": master.stat().st_size if ready and master is not None else 0,
+        "render": render_state(data_dir, plan),
+        "timeline": timeline(plan),
+        "font": _font_state(directory),
     }
 
 
@@ -131,6 +316,9 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "master": "",
             "master_ready": False,
             "master_bytes": 0,
+            "render": _empty_render(),
+            "timeline": [],
+            "font": _empty_font(),
             "jobs": [],
             "selected": 0,
         }
@@ -212,6 +400,42 @@ def approve(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     return {"ok": True, "count": payload["count"], "job": directory.name}
 
 
+def font_pick(root: Path, index: Optional[int] = None, family: str = "") -> Dict[str, Any]:
+    """Registra la famiglia scelta dalla UI per un lavoro.
+
+    Solo una famiglia che la proposta contiene davvero viene accettata: un nome
+    inventato non scrive niente, cosi' il render non parte con un ``Fontname``
+    che il job non ha. Il file e' nella forma ``vx.fontchoice/1``.
+    """
+    jobs = discover(root)
+    if not jobs:
+        return {"ok": False, "reason": "nessun lavoro in corso"}
+    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    directory = jobs[chosen]
+    proposal = _read_json(directory / FONT_PROPOSAL_NAME)
+    raw = proposal.get("candidates")
+    families = [
+        str(item.get("family") or "")
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, Mapping)
+    ]
+    wanted = str(family or "").strip()
+    if not wanted or wanted not in families:
+        return {"ok": False, "reason": "famiglia non proposta"}
+    payload = {
+        "schema": FONT_CHOICE_SCHEMA,
+        "family": wanted,
+        "chosen_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "from": "ui",
+    }
+    (directory / FONT_CHOICE_NAME).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return {"ok": True, "chosen": wanted}
+
+
 #: Il disegno di ripiego, se i file della UI non ci sono ancora.
 PAGE = """<!doctype html><html lang="it"><head><meta charset="utf-8">
 <title>vx - lavoro in corso</title></head><body>
@@ -275,7 +499,32 @@ def make_handler(root: Path):
             if path.startswith("/frames/"):
                 self._frame(path[len("/frames/"):], index)
                 return
+            if path.startswith(FONT_SAMPLE_PREFIX):
+                self._font_sample(path[len(FONT_SAMPLE_PREFIX):], index)
+                return
             self._send(b"not found", "text/plain", status=404)
+
+        def _font_sample(self, raw: str, index: Optional[int]) -> None:
+            """Il PNG del campione, solo dalla cartella ``fonts`` del lavoro.
+
+            Il nome e' ridotto a ``Path(name).name`` e deve finire in ``.png``:
+            un percorso con ``..`` non esce dalla cartella, un altro tipo di
+            file non si serve.
+            """
+            jobs = discover(root)
+            if not jobs:
+                self._send(b"not found", "text/plain", status=404)
+                return
+            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            name = Path(urllib.parse.unquote(raw)).name
+            if not name.lower().endswith(".png"):
+                self._send(b"not found", "text/plain", status=404)
+                return
+            candidate = jobs[chosen] / "fonts" / name
+            if not candidate.is_file():
+                self._send(b"not found", "text/plain", status=404)
+                return
+            self._send(candidate.read_bytes(), "image/png")
 
         def _frame(self, raw: str, index: Optional[int]) -> None:
             jobs = discover(root)
@@ -345,6 +594,13 @@ def make_handler(root: Path):
                 self._send(json.dumps(reveal(root, index), ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
+            if path == "/api/font-pick":
+                params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                family = (params.get("family") or [""])[0]
+                answer = font_pick(root, index, family)
+                self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
             self._send(b"not found", "text/plain", status=404)
 
     return Handler
@@ -373,5 +629,7 @@ class Server:
         self.httpd.server_close()
 
 
-__all__ = ["MAX_DEPTH", "PAGE", "REVEAL", "Server", "UI_DIR", "UI_FILES", "approve",
-           "discover", "make_handler", "reveal", "reveal_native", "state"]
+__all__ = ["FONT_CHOICE_NAME", "FONT_CHOICE_SCHEMA", "FONT_PROPOSAL_NAME",
+           "FONT_SAMPLE_PREFIX", "MAX_DEPTH", "PAGE", "REVEAL", "Server", "UI_DIR",
+           "UI_FILES", "approve", "discover", "font_pick", "make_handler",
+           "render_state", "reveal", "reveal_native", "state", "timeline"]

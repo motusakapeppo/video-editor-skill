@@ -144,6 +144,12 @@ DEFAULTS: Dict[str, Any] = {
         "heartbeat_seconds": 30,
         "zombie_warn_seconds": 300,
     },
+    "font": {
+        # Rete attiva di default quando il catalogo risponde; --no-font-network
+        # la spegne per job. ``wait_sec`` e' quanto si aspetta una scelta umana.
+        "network": True,
+        "wait_sec": 180.0,
+    },
     "qc": {
         "duration_drift_ms": 40.0,
         "frame_count_delta": 1,

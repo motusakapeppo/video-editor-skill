@@ -30,6 +30,11 @@
     verdictMeta: $('verdictMeta'),
     resultMeta: $('resultMeta'),
     resultBody: $('resultBody'),
+    fontGate: $('fontGate'),
+    fontCards: $('fontCards'),
+    fontReq: $('fontReq'),
+    fontPool: $('fontPool'),
+    gateError: $('gateError'),
     frames: $('frames'),
     framesEmpty: $('framesEmpty'),
     frameCount: $('frameCount'),
@@ -418,6 +423,158 @@
     }, 4000);
   }
 
+  /* ------------------------------------------------------------ scelta font */
+
+  // Il cancello dei font: si apre solo se il lavoro dichiara una scelta da fare,
+  // non si chiude con Esc né col clic fuori, e sparisce quando la scelta è presa.
+  const pickedJobs = new Set();
+  let gateJob = null;
+  let gatePicking = false;
+
+  function fontCard(candidate, index, word) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'font-card';
+    card.dataset.family = String(candidate.family || '');
+
+    const sample = document.createElement('span');
+    sample.className = 'font-sample';
+
+    const img = document.createElement('img');
+    img.alt = 'Campione: ' + word + ' in ' + (candidate.family || 'carattere senza nome');
+    img.decoding = 'async';
+    img.addEventListener('load', () => sample.classList.add('is-loaded'));
+    img.addEventListener('error', () => {
+      sample.textContent = '';
+      const note = document.createElement('span');
+      note.className = 'font-sample-note';
+      note.textContent = 'Campione non disponibile';
+      sample.append(note);
+    });
+    sample.append(img);
+    if (candidate.sample) {
+      // Il campione è un percorso servito dal server: va tenuto sul lavoro scelto.
+      img.src = scoped(String(candidate.sample));
+    } else {
+      sample.textContent = '';
+      const note = document.createElement('span');
+      note.className = 'font-sample-note';
+      note.textContent = 'Campione non disponibile';
+      sample.append(note);
+    }
+
+    const body = document.createElement('span');
+    body.className = 'font-body';
+
+    const family = document.createElement('span');
+    family.className = 'font-family';
+    family.textContent = candidate.family || 'Carattere senza nome';
+
+    const licence = document.createElement('span');
+    licence.className = 'font-licence';
+    licence.textContent = candidate.licence ? String(candidate.licence) : 'licenza non dichiarata';
+
+    const why = document.createElement('span');
+    why.className = 'font-why';
+    why.textContent = candidate.because
+      ? String(candidate.because)
+      : 'Nessun motivo dichiarato per questo carattere.';
+
+    body.append(family, licence, why);
+    card.append(sample, body);
+    card.addEventListener('click', () => pickFont(String(candidate.family || ''), card));
+    return card;
+  }
+
+  function buildGate(font) {
+    el.fontReq.textContent = String(font.requirement || '').trim() || 'nessuna indicazione dal lavoro';
+    el.fontPool.textContent = font.pool === 'local' ? 'Dal computer' : 'Dal catalogo';
+    el.gateError.textContent = '';
+
+    const candidates = Array.isArray(font.candidates) ? font.candidates : [];
+    const word = String(font.sample || 'prova');
+    const signature = candidates.map((c) => c.family + '|' + c.sample).join('~');
+    if (el.fontCards.dataset.signature === signature) return;
+
+    el.fontCards.dataset.signature = signature;
+    el.fontCards.textContent = '';
+    candidates.forEach((candidate, index) => {
+      el.fontCards.append(fontCard(candidate, index, word));
+    });
+  }
+
+  function openGate(font) {
+    gateJob = jobIndex;
+    buildGate(font);
+    if (!el.fontGate.open) {
+      document.documentElement.classList.add('has-gate');
+      el.fontGate.showModal();
+    }
+    const first = el.fontCards.querySelector('.font-card');
+    if (first) first.focus();
+  }
+
+  function closeGate() {
+    gateJob = null;
+    gatePicking = false;
+    if (el.fontGate.open) el.fontGate.close();
+    document.documentElement.classList.remove('has-gate');
+  }
+
+  function paintFontGate(state) {
+    const font = state && state.font;
+    const pending = !!(font && font.pending === true && !font.chosen);
+
+    if (!pending) {
+      if (el.fontGate.open) closeGate();
+      return;
+    }
+    if (gatePicking || pickedJobs.has(jobIndex)) return;
+
+    if (el.fontGate.open && gateJob === jobIndex) {
+      buildGate(font);
+      return;
+    }
+    openGate(font);
+  }
+
+  async function pickFont(family, card) {
+    if (gatePicking || !family) return;
+    gatePicking = true;
+    el.gateError.textContent = '';
+    card.setAttribute('aria-busy', 'true');
+    el.fontCards.querySelectorAll('.font-card').forEach((node) => { node.disabled = true; });
+
+    try {
+      const base = scoped('/api/font-pick');
+      const url = base + (base.indexOf('?') === -1 ? '?' : '&') + 'family=' + encodeURIComponent(family);
+      const response = await fetch(url, { method: 'POST' });
+      const result = await response.json();
+
+      if (result && result.ok === true) {
+        pickedJobs.add(jobIndex);
+        gatePicking = false;
+        closeGate();
+        await tick();
+        return;
+      }
+      el.gateError.textContent =
+        (result && result.reason) || 'La scelta non è stata registrata: riprova.';
+    } catch (error) {
+      el.gateError.textContent = 'La scelta non è stata registrata: il server non risponde.';
+    }
+
+    gatePicking = false;
+    card.removeAttribute('aria-busy');
+    el.fontCards.querySelectorAll('.font-card').forEach((node) => { node.disabled = false; });
+    card.focus();
+  }
+
+  // Il cancello non si scavalca: nessuna chiusura con Esc, nessun clic di sfondo.
+  el.fontGate.addEventListener('cancel', (event) => {
+    event.preventDefault();
+  });
+
   /* ------------------------------------------------------------------ lavori */
 
   let jobNodes = [];
@@ -638,6 +795,7 @@
     // fotogrammi e approvazione
     paintFrames(frames, done);
     paintResult(state);
+    paintFontGate(state);
 
     el.approve.classList.toggle('is-approved', approved);
     el.approve.disabled = approved || frames.length === 0;

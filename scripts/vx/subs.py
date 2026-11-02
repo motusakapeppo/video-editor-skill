@@ -1104,14 +1104,20 @@ def write_srt(cues: List[Cue], dst) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def burn_filter(ass_path) -> str:
+def burn_filter(ass_path, *, fontsdir=None) -> str:
     """`ass='D\\:/work/a.ass':fontsdir='.../assets/fonts'`.
 
     The bundled font directory is part of the filter on purpose: libass prefers
     a font it can load from `fontsdir` over a system substitute, so the render
-    is the same on a clean machine as on this one.
+    is the same on a clean machine as on this one. When `fontsdir` is given it
+    replaces the bundle — that is the job directory holding the chosen family
+    plus the bundle (`vx.fontlib.job_fonts_dir`), so the picked font is the one
+    libass finds.
     """
-    return "ass=" + ass_filter_path(ass_path) + ":fontsdir=" + fonts_mod.fontsdir_arg()
+    directory = (
+        fonts_mod.fontsdir_arg() if fontsdir is None else ass_filter_path(fontsdir)
+    )
+    return "ass=" + ass_filter_path(ass_path) + ":fontsdir=" + directory
 
 
 def _playres(ass_text: str) -> tuple[int, int]:
@@ -1159,7 +1165,7 @@ def _resolved_style_size(log: str, style_name: str) -> int:
     return 0
 
 
-def verify_fonts(ass_path, *, log_path=None) -> Dict[str, Any]:
+def verify_fonts(ass_path, *, log_path=None, fontsdir=None) -> Dict[str, Any]:
     """Burn one frame and read libass' `fontselect:` decisions.
 
     libass substitutes a missing family silently, so this is the only way to
@@ -1188,7 +1194,7 @@ def verify_fonts(ass_path, *, log_path=None) -> Dict[str, Any]:
         "-i",
         f"color=c=black:s={w}x{h}:r=25:d={start + 1.5:.2f}",
         "-vf",
-        burn_filter(src),
+        burn_filter(src, fontsdir=fontsdir),
         "-ss",
         f"{start + 0.05:.3f}",
         "-frames:v",

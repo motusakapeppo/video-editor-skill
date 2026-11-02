@@ -3,12 +3,331 @@
     {
       "directory": "ofl/abrilfatface",
       "family": "abrilfatface",
-      "fetched_utc": "2026-10-28T19:57:48+00:00",
+      "fetched_utc": "2026-11-02T22:25:44+00:00",
       "files": [
         {
           "bytes": 67364,
           "name": "AbrilFatface-Regular.ttf",
           "sha256": "5971d4a3758a922a9fedc7f6fb825a96341a2e718c45a4b2c9a6b417c8c4dbe9"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/alfaslabone",
+      "family": "alfaslabone",
+      "fetched_utc": "2026-11-02T23:08:18+00:00",
+      "files": [
+        {
+          "bytes": 97376,
+          "name": "AlfaSlabOne-Regular.ttf",
+          "sha256": "28664afa698a3393bd5a29eec750230a0645c5301d62200e5f2d3a027fb2299d"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/archivo",
+      "family": "archivo",
+      "fetched_utc": "2026-11-02T23:08:51+00:00",
+      "files": [
+        {
+          "bytes": 741368,
+          "name": "Archivo-Italic[wdth,wght].ttf",
+          "sha256": "305d13b4eb80e62f7d517f78d7c045250d977552a420f2dbed906f314e761305"
+        },
+        {
+          "bytes": 658596,
+          "name": "Archivo[wdth,wght].ttf",
+          "sha256": "0e094a7d3c7c4c25cf1310c4b30014f1dae9332220b1c2c88f4fa996f0b05053"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/archivoblack",
+      "family": "archivoblack",
+      "fetched_utc": "2026-11-02T22:14:24+00:00",
+      "files": [
+        {
+          "bytes": 90988,
+          "name": "ArchivoBlack-Regular.ttf",
+          "sha256": "dd9a89a019b4849f66ab75455fe7bdf931311042cbb0f0f97acc061539703180"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/archivonarrow",
+      "family": "archivonarrow",
+      "fetched_utc": "2026-11-02T22:14:33+00:00",
+      "files": [
+        {
+          "bytes": 98456,
+          "name": "ArchivoNarrow-Italic[wght].ttf",
+          "sha256": "147c09214be086bf1c70311ffb66f4f5a252e48f828f1d49e35ae56951016cc6"
+        },
+        {
+          "bytes": 93304,
+          "name": "ArchivoNarrow[wght].ttf",
+          "sha256": "adbe027f625c8393ae0f6e174e32e233dda485bc3eda5153ce428275394ef97f"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/barlowcondensed",
+      "family": "barlowcondensed",
+      "fetched_utc": "2026-11-02T22:14:30+00:00",
+      "files": [
+        {
+          "bytes": 110828,
+          "name": "BarlowCondensed-Black.ttf",
+          "sha256": "e74b750df582c608f35db467b711b2b60d2217618e85e60b72b42dfd00446cab"
+        },
+        {
+          "bytes": 112592,
+          "name": "BarlowCondensed-BlackItalic.ttf",
+          "sha256": "e1ed5d7e50c6a4498454d40509ce2362384a2c7870df3418fdbd010f81dffad3"
+        },
+        {
+          "bytes": 109912,
+          "name": "BarlowCondensed-Bold.ttf",
+          "sha256": "e476562ec9c1e16cf16475895b511f08c804f438cc9a9f80a44ea50a0eeb5b65"
+        },
+        {
+          "bytes": 112196,
+          "name": "BarlowCondensed-BoldItalic.ttf",
+          "sha256": "d8694f65cd70c3e5e600ead37657aab0adb5f63b275d0c1f6f4a7046de222145"
+        },
+        {
+          "bytes": 110296,
+          "name": "BarlowCondensed-ExtraBold.ttf",
+          "sha256": "724c9c25952d5f4a2d87185d9767aa006144c5f0d944dc05bf7d5d603551c260"
+        },
+        {
+          "bytes": 113004,
+          "name": "BarlowCondensed-ExtraBoldItalic.ttf",
+          "sha256": "331783dae9ec0c398f4d32c9fd5a56d4c602caa0c1628c2b9cbfe93f48eb68c9"
+        },
+        {
+          "bytes": 101172,
+          "name": "BarlowCondensed-ExtraLight.ttf",
+          "sha256": "19e3c4a81dc7fcee8c38ab6be3819fcc45d3f3822f011ac7b4bd550e6502b80f"
+        },
+        {
+          "bytes": 107832,
+          "name": "BarlowCondensed-ExtraLightItalic.ttf",
+          "sha256": "a58c17c59c226eb0ef411b73696f79374d170f2708acc6d72d8db8c07f333286"
+        },
+        {
+          "bytes": 109856,
+          "name": "BarlowCondensed-Italic.ttf",
+          "sha256": "063615da0a64f318397de2afac330dfbfbbf4cdb562a9987cb72bfdcbd37ba7c"
+        },
+        {
+          "bytes": 101996,
+          "name": "BarlowCondensed-Light.ttf",
+          "sha256": "2c37e1e6b5feb71d38a42e6180d2e2f4ca1aad22cfecbd017430f3863deba67d"
+        },
+        {
+          "bytes": 108540,
+          "name": "BarlowCondensed-LightItalic.ttf",
+          "sha256": "14aabc4936c54a3aae666abccbc4be612e4a33501c9483f7e4ebb249359d0171"
+        },
+        {
+          "bytes": 103360,
+          "name": "BarlowCondensed-Medium.ttf",
+          "sha256": "262bd143292ce479ee0cd09a42b47ab173fca8e9c6eb5ed0b5c8a845bc371d17"
+        },
+        {
+          "bytes": 110340,
+          "name": "BarlowCondensed-MediumItalic.ttf",
+          "sha256": "e036488bfe3ea1e9f39f006b1237c2931e7cfea7d9ecdccdf17507a5986f73d9"
+        },
+        {
+          "bytes": 102480,
+          "name": "BarlowCondensed-Regular.ttf",
+          "sha256": "583cec5da3b84bc4dc7c9c72e2a565c94d34e431518b19d7e250b7830ad5f996"
+        },
+        {
+          "bytes": 109428,
+          "name": "BarlowCondensed-SemiBold.ttf",
+          "sha256": "7b619d14bc2327509a9ef32b0890f709626f7ecc9ff61191c2a4314c5499d2d9"
+        },
+        {
+          "bytes": 112272,
+          "name": "BarlowCondensed-SemiBoldItalic.ttf",
+          "sha256": "dc83cbbb7545a117ab9e4c10ed07d35eef6f563b77621a1d357f25a3194987d1"
+        },
+        {
+          "bytes": 100364,
+          "name": "BarlowCondensed-Thin.ttf",
+          "sha256": "68afe339b8503a9d74b2c3b5b0c521ea5333461f29aeaf7c680141482114d85a"
+        },
+        {
+          "bytes": 107076,
+          "name": "BarlowCondensed-ThinItalic.ttf",
+          "sha256": "5b0ff874e3ae64e2b3dc2c761d8ba2eb3eae324d269441f6de0062e8fbff0b8e"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/blackopsone",
+      "family": "blackopsone",
+      "fetched_utc": "2026-11-02T22:14:24+00:00",
+      "files": [
+        {
+          "bytes": 166532,
+          "name": "BlackOpsOne-Regular.ttf",
+          "sha256": "282a825b5f294377387e3969f765408157dbea8da0f5d0aae68c6bc704b145b3"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/bungee",
+      "family": "bungee",
+      "fetched_utc": "2026-11-02T23:08:17+00:00",
+      "files": [
+        {
+          "bytes": 118996,
+          "name": "Bungee-Regular.ttf",
+          "sha256": "c4f5361ce120af3e6b9156d0bf379fa19cda2ea0cd18ac01fd99596c6bf66e3f"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/butcherman",
+      "family": "butcherman",
+      "fetched_utc": "2026-11-02T22:14:35+00:00",
+      "files": [
+        {
+          "bytes": 66100,
+          "name": "Butcherman-Regular.ttf",
+          "sha256": "b8cee5e2cdc71f44e6806dc0db1090a3ce2e48ca727072073700bf646b0ce6b5"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/creepster",
+      "family": "creepster",
+      "fetched_utc": "2026-11-02T22:14:33+00:00",
+      "files": [
+        {
+          "bytes": 62724,
+          "name": "Creepster-Regular.ttf",
+          "sha256": "402aeb734586c74aecd3dbdc454589b1fb12e2e1c71f782fd019ae68066d9f44"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/fjallaone",
+      "family": "fjallaone",
+      "fetched_utc": "2026-11-02T22:14:35+00:00",
+      "files": [
+        {
+          "bytes": 209052,
+          "name": "FjallaOne-Regular.ttf",
+          "sha256": "ce3b299625abe3c76f8acd235b57b3e07ac6ee2d550e106a4b4e4d60095ae2ba"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/lobster",
+      "family": "lobster",
+      "fetched_utc": "2026-11-02T23:08:17+00:00",
+      "files": [
+        {
+          "bytes": 406076,
+          "name": "Lobster-Regular.ttf",
+          "sha256": "d6568e697fd50cedc0be04d8aae4127fe95add607e7bff954ca88604be80c205"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/nosifer",
+      "family": "nosifer",
+      "fetched_utc": "2026-11-02T22:14:31+00:00",
+      "files": [
+        {
+          "bytes": 43272,
+          "name": "Nosifer-Regular.ttf",
+          "sha256": "09c5ac35e34dc7a397d5f698b703c5640b59cf93d4d343ebae4f16f3859d09b8"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/oswald",
+      "family": "oswald",
+      "fetched_utc": "2026-11-02T22:14:23+00:00",
+      "files": [
+        {
+          "bytes": 172088,
+          "name": "Oswald[wght].ttf",
+          "sha256": "5b38c246e255a12f5712d640d56bcced0472466fc68983d2d0410ec0457c2817"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/rubikglitch",
+      "family": "rubikglitch",
+      "fetched_utc": "2026-11-02T22:14:23+00:00",
+      "files": [
+        {
+          "bytes": 407304,
+          "name": "RubikGlitch-Regular.ttf",
+          "sha256": "260245012483d56956269100ebece747aa95b4b67e5a9411a81a36e91f55e653"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/squadaone",
+      "family": "squadaone",
+      "fetched_utc": "2026-11-02T22:14:36+00:00",
+      "files": [
+        {
+          "bytes": 19072,
+          "name": "SquadaOne-Regular.ttf",
+          "sha256": "5b34a1633dbc48db3835d8a847bc475e6e0267121d3435854729ba4b407a05df"
+        }
+      ],
+      "licence": "OFL-1.1",
+      "source": "https://raw.githubusercontent.com/google/fonts/main"
+    },
+    {
+      "directory": "ofl/staatliches",
+      "family": "staatliches",
+      "fetched_utc": "2026-11-02T22:14:34+00:00",
+      "files": [
+        {
+          "bytes": 63316,
+          "name": "Staatliches-Regular.ttf",
+          "sha256": "8395212aa4c6c3534bd39a745d956305ff080c3f3ed73ba61e4fbaae951e55cc"
         }
       ],
       "licence": "OFL-1.1",
