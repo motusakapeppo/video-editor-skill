@@ -68,29 +68,59 @@ Il profilo predefinito è `social`. Il QC accetta uno scarto di 0.3 LU
 LRA di lavoro: 11.0 LU. Oltre 12.0 LU (`lra_wide`) il range dinamico è troppo
 largo per un social e il loudnorm lavora male.
 
-## Posizionamento dei sottotitoli
+## Posizionamento e stile dei sottotitoli
 
-Il margine inferiore non è un numero fisso: si calcola.
+Il margine inferiore non è un numero fisso: si calcola dalla safe zone, con
+l'aria dichiarata dallo stile.
 
 ```
-margin_v = max(out_h - safe_y2 + 12, inset_bottom * scale + 12)
+margin_v = (ref_h - safe_y2) * out_h / ref_h + aria
 ```
+
+`ref_h` è la tela su cui è scritta la safe zone (1920 per il verticale, 1080
+per il 16:9); `aria` è `safe_air_ratio * out_h`. I margini laterali sono
+simmetrici e vengono da `x1` della stessa tabella: il blocco resta centrato,
+che è l'ipotesi con cui `vx.layout.text_box` lo misura.
 
 Su 1080x1920 con `9:16`:
 
 | Piattaforma | Calcolo | `margin_v` |
 |-------------|---------|------------|
-| `tiktok` | max(1920-1248+12, 660+12) | 684 |
-| `reels` | max(684, 672+12) | 684 |
-| `shorts` | max(684, 672+12) | 684 |
+| `tiktok` | max(1920-1248, 660) + 12 | 684 |
+| `reels` | max(672, 672) + 12 | 684 |
+| `shorts` | max(672, 672) + 12 | 684 |
 
-Il margine laterale è 60 px per lato. Il font di base è `0.062 * out_h`, cioè
-119 px sul verticale, con outline 7 e shadow 4. In orizzontale il font è
-`0.045 * out_h` (49 px su 1080), outline 4, shadow 2, margine verticale 40.
+Tre stili dichiarati in `vx.subs.SUBTITLE_STYLES`. L'aspect sceglie il default:
+`reel` sul verticale, `wide` sul 16:9/4:3. `interview` è opt-in: un documentario
+non è un reel.
 
-La dimensione viene poi ridotta se la cue più lunga non ci sta:
-`size = min(base, (out_w - 80) / (longest * 0.50))`. Il fattore 0.50 è
-l'avanzamento misurato di Antonio maiuscolo, con margine di sicurezza.
+| Stile | Default per | Famiglia | Corpo (tetto) | Contorno/ombra | Margine V | Colore |
+|-------|-------------|----------|---------------|----------------|-----------|--------|
+| `reel` | 9:16, 4:5, 1:1 | Inter | 0.064 × H (123 px a 1920) | 7/4 a 1920 | safe + 12 px | bianco; il karaoke passa a #FFC24B |
+| `wide` | 16:9, 4:3 | Inter | 0.046 × H (50 px a 1080) | 4/2 a 1080 | safe + 4 px | bianco |
+| `interview` | — (opt-in) | Playfair Display | 0.040 × H (77 px a 1920) | placca 23 px, nessun contorno | safe + 48 px | #F5EFE6 su nero 65% |
+
+La dimensione viene poi ridotta se la riga più lunga non ci sta:
+`size = min(base, larghezza_utile / (caratteri × avanzamento))`, e la larghezza
+vince sempre sul pavimento (`min_px` alza il tetto, non autorizza a sfondare).
+L'avanzamento è misurato sui file, non supposto: Antonio 0.371 misto / 0.416
+maiuscolo, Inter 0.451-0.472 / 0.573-0.613, Playfair 0.433-0.458 / 0.553-0.598.
+I valori dichiarati (0.50 misto e 0.62 maiuscolo per Inter) sono il massimo
+misurato più il 6-9%.
+
+Il vecchio 0.34 era un limite ottimistico: con 18 caratteri autorizzava 134 px
+su una riga che ne occupava 934, e una riga da 30 caratteri usciva dalla tela.
+Il contorno 7/4 a 1920 resta quello di questo documento: 0.36% e 0.21%
+dell'altezza, cioè 7.5% e 4.3% del corpo di un sottotitolo da 93 px.
+
+Perché Inter e non Antonio per il testo: Antonio è un condensed da cartello,
+24% più stretto e senza una larghezza da lettura; in maiuscolo perde le
+differenze di lettera. Inter ha x-height alta e un 400 reale; il flag `Bold` di
+libass lo ispessisce del 21% misurato (16181 vs 13353 px d'inchiostro, bbox
++1 px) senza deformarlo. Playfair resta il volto editoriale del documentario,
+protetto da una placca al 65%: su fondo bianco il testo #F5EFE6 conserva 6.1:1.
+L'apostrofo dritto del trascritto diventa `’` (U+2019) nel testo inciso e nel
+SRT: un carattere, nessuna parola cambiata.
 
 ## Hook
 
