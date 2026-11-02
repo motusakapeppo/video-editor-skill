@@ -20,6 +20,7 @@ instead of emitting an empty section.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -47,6 +48,23 @@ __all__ = [
 ]
 
 
+def _strip_header(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines()
+        if not line.startswith("Generato da scripts/gen_plan_rev8.py")
+    )
+
+
+def _cited_commit(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("Generato da scripts/gen_plan_rev8.py"):
+            parts = line.split()
+            for index, token in enumerate(parts):
+                if token == "commit" and index + 1 < len(parts):
+                    return parts[index + 1].strip("`'\".,;")
+    return ""
+
+
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description="Genera PLAN/PLAN_REV8.md")
     parser.add_argument("--check", action="store_true", help="exit 1 se il file e' stantio")
@@ -64,9 +82,22 @@ def main(argv: Sequence[str]) -> int:
         if current is None:
             print(f"{name}: manca, eseguire python scripts/gen_plan_rev8.py")
             return 1
-        if current == expected:
+        # La testata cita il commit in cui il documento e' stato generato: e' l'unica
+        # riga che cambia a ogni commit e non puo' citare se stessa. Si confronta il
+        # resto, e si pretende che il commit citato esista davvero.
+        same_body = _strip_header(current) == _strip_header(expected)
+        cited = _cited_commit(current)
+        exists = bool(cited) and subprocess.run(
+            ["git", "cat-file", "-e", f"{cited}^{{commit}}"],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+        ).returncode == 0
+        if same_body and exists:
             print(f"{name}: Revisione 8 aggiornata ({lines} righe)")
             return 0
+        if same_body and not exists:
+            print(f"{name}: la testata cita un commit che non esiste ({cited!r}). Eseguire python scripts/gen_plan_rev8.py")
+            return 1
         changed = changed_phases(current, expected)
         detail = f"; righe cambiate: {', '.join(changed)}" if changed else ""
         print(

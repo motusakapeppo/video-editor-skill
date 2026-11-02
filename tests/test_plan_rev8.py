@@ -137,6 +137,14 @@ def body_violations(text: str) -> list:
     return problems
 
 
+def _commit_date(ref: str) -> str:
+    done = subprocess.run(
+        ["git", "log", "-1", "--format=%cs", ref],
+        cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8",
+    )
+    return (done.stdout or "").strip()
+
+
 def main() -> int:
     committed = PLAN_FILE.read_text(encoding="utf-8")
     rendered = gen.render()
@@ -145,14 +153,19 @@ def main() -> int:
     # -- (a) determinism -------------------------------------------------- #
     second = gen.render()
     check("due render identici byte per byte", rendered == second, f"{len(rendered)} byte")
+    cited = gen._cited_commit(committed) or "HEAD"
     check(
-        "l'unica data nel documento e' quella del commit",
-        sorted(set(re.findall(r"\d{4}-\d{2}-\d{2}", committed))) == [git("%cs")],
+        "l'unica data nel documento e' quella del commit citato",
+        sorted(set(re.findall(r"\d{4}-\d{2}-\d{2}", committed))) == [_commit_date(cited)],
         sorted(set(re.findall(r"\d{4}-\d{2}-\d{2}", committed))),
     )
+    check("il commit citato esiste nel repository", bool(_commit_date(cited)), cited)
 
     # -- (b) the committed file is the generator's output ----------------- #
-    check("PLAN_REV8.md == render()", committed == rendered)
+    check(
+        "PLAN_REV8.md == render(), testata a parte",
+        strip_commit_line(committed) == strip_commit_line(rendered),
+    )
     current = run("--check")
     check("--check esce 0 sul file committato", current.returncode == 0, current.stdout.strip())
     check("--check stampa 'aggiornata'", "aggiornata" in current.stdout)
