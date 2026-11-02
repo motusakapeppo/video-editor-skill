@@ -46,6 +46,9 @@ REPORT_KEYS = (
     "applied_gain_db",
     "output_lufs",
     "output_true_peak_db",
+    "tolerance_lu",
+    "within_tolerance",
+    "trim_passes",
 )
 
 
@@ -152,6 +155,20 @@ def main() -> int:
             all(key in first for key in REPORT_KEYS),
             sorted(first),
         )
+        check(
+            "b0. the report declares its tolerance and whether it met it",
+            first["tolerance_lu"] == TOLERANCE_LU and first["within_tolerance"] is True,
+            f"{first['tolerance_lu']} LU, met={first['within_tolerance']}",
+        )
+        check(
+            "b0. every trim it ran is listed and moved the file",
+            all(
+                isinstance(row, dict) and row.get("pass", 0) >= 1
+                for row in first["trim_passes"]
+            ),
+            f"{len(first['trim_passes'])} trim(s)",
+        )
+
         fresh_first = qc.lufs_of(reports["reel"][1])
         check(
             "b2. output_lufs equals the fresh measurement of the file",

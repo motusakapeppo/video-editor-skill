@@ -17,6 +17,13 @@ measurement of the produced file, and the applied gain is the difference of the
 two measured loudnesses. Nothing is copied from the request, and nothing is
 clamped to make a target look met.
 
+A profile declares a 0.5 LU tolerance, and dynamic material can stop 0.9 LU short
+of it (D-13). So the master keeps going: up to :data:`MAX_TRIM_PASSES` linear
+trims of at most :data:`TRIM_LIMIT_DB`, each followed by a fresh measurement,
+until the file is within :data:`CLOSE_ENOUGH_LU`. The report says how many trims
+ran and whether the result is inside the declared tolerance; a miss beyond the
+trim limit stays a declared miss.
+
 Refusal codes
 -------------
 ``LOUDNESS_NO_AUDIO``
@@ -29,6 +36,7 @@ Refusal codes
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Any, Dict, Tuple, Union
 
@@ -47,6 +55,16 @@ __all__ = [
 
 LOUDNESS_NO_AUDIO = "LOUDNESS_NO_AUDIO"
 LOUDNESS_UNMEASURED = "LOUDNESS_UNMEASURED"
+
+#: A profile declares 0.5 LU. Loudnorm in dynamic mode can stop short on material
+#: whose loudness moves (a music bed under a quiet voice): the 28/10 reel landed
+#: 0.9 LU under the target. A trimmed gain is a linear shift, so it moves the
+#: integrated value without touching the dynamics; beyond this limit the file is
+#: a different master, not a trim, and the miss is declared instead of papered over.
+CLOSE_ENOUGH_LU = 0.2
+TRIM_LIMIT_DB = 2.0
+MAX_TRIM_PASSES = 2
+TOLERANCE_LU = 0.5
 
 ProfileLike = Union[str, profiles.Profile]
 
@@ -167,6 +185,58 @@ def master(source: Path, profile: ProfileLike, out: Path, workdir: Path) -> Dict
     # requested numbers.
     after = _measure(target, what="output")
 
+    # Pass 3..n: a linear trim on the produced file, re-measured. Loudnorm's
+    # dynamic mode can stop 0.9 LU short on material whose loudness moves; the
+    # trim moves the integrated value without re-interpreting the dynamics, and
+    # the house limiter keeps the declared true peak. A miss larger than
+    # TRIM_LIMIT_DB is not a trim any more: it stays declared, not hidden.
+    trims = []
+    final = target
+    for attempt in range(1, MAX_TRIM_PASSES + 1):
+        delta = want_lufs - after["lufs"]
+        if abs(delta) <= CLOSE_ENOUGH_LU or abs(delta) > TRIM_LIMIT_DB:
+            break
+        trimmed = work / f"{target.stem}.trim{attempt}{target.suffix}"
+        graph = render.edl_loudness_graph(
+            f"volume={delta:.3f}dB", ceiling_dbtp=want_tp
+        )
+        proc = ff.run_ff(
+            [
+                "-i",
+                str(final),
+                "-filter_complex",
+                graph,
+                "-map",
+                "[aout]",
+                "-map",
+                "0:v:0?",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-movflags",
+                "+faststart",
+                str(trimmed),
+            ]
+        )
+        if not proc.ok or not trimmed.is_file() or trimmed.stat().st_size == 0:
+            raise VxError(f"profile loudness trim failed: {proc.tail(8)}")
+        final = trimmed
+        after = _measure(final, what="output")
+        trims.append(
+            {
+                "pass": attempt,
+                "requested_db": round(delta, 3),
+                "output_lufs": round(after["lufs"], 3),
+            }
+        )
+
+    if final != target:
+        os.replace(final, target)
+        after = _measure(target, what="output")
+
     return {
         "profile": row.id,
         "target": {"lufs": want_lufs, "true_peak_db": want_tp},
@@ -175,5 +245,8 @@ def master(source: Path, profile: ProfileLike, out: Path, workdir: Path) -> Dict
         "applied_gain_db": round(after["lufs"] - before["lufs"], 3),
         "output_lufs": round(after["lufs"], 3),
         "output_true_peak_db": round(after["true_peak_db"], 3),
+        "tolerance_lu": TOLERANCE_LU,
+        "within_tolerance": abs(after["lufs"] - want_lufs) <= TOLERANCE_LU + 1e-9,
+        "trim_passes": trims,
         "master": str(target),
     }
