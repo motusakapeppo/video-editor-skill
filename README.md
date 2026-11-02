@@ -247,6 +247,23 @@ assets/models/            modello YuNet
 Il lavoro vive in `<work_root>\<stem>-<sha8>\`; il file sorgente non viene mai
 scritto, e il QC ricontrolla lo `sha256` prima di dichiarare finito un render.
 
+## Dove riprendere
+
+Il lavoro aperto vive in due posti, e nessuno dei due si ricorda a memoria:
+
+```powershell
+<venv>\Scripts\python.exe scripts\vx_tasks.py sync      # ledger -> board
+<venv>\Scripts\python.exe scripts\vx_tasks.py next      # il primo task lavorabile
+<venv>\Scripts\python.exe scripts\vx_tasks.py list --open
+<venv>\Scripts\python.exe scripts\vx_tasks.py start F16-T02
+<venv>\Scripts\python.exe scripts\vx_tasks.py done F16-T02 --evidence "..." --commit abc1234
+```
+
+`PLAN/TASKS.json` e' la copia di lavoro di `PLAN/MASTER_LEDGER.md`: una riga per
+task, con stato, criteri di accettazione, prova e commit. Non si scrive a mano —
+`sync` la rilegge dal ledger — e `check` fallisce se un task chiuso non porta la
+sua prova, se uno stato non esiste o se ci sono piu' di due task in volo.
+
 ## Test
 
 ```powershell
