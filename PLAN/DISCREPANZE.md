@@ -98,6 +98,14 @@ del mezzo: il tremolio si vede in movimento. La scala resta registrata come
 test impedisce di spacciarla per calibrata. Le bande misurate (0,4 / 1,0) restano
 quelle di D-21, con la separazione c02 (3,59) / c09 (0,85) che regge sui numeri.
 
+**Tre tentativi sul tremolio, tutti falliti allo stesso modo.** Dopo la prima
+scala (oscillazione a 1,45 Hz) ho provato a presentarlo come sei fotogrammi
+consecutivi, poi a costruirlo con offset casuali per fotogramma fino a 22 px:
+misurato 0,086 / 0,381 / 0,823 / **1,465**, monotono. Il panel ha risposto `ok` a
+tutti e quattro i livelli in tutte e tre le prove. Non e' un errore ripetuto: e'
+la stessa risposta da uno strumento che guarda immagini ferme. Un quarto
+tentativo non avrebbe aggiunto informazione, e non l'ho fatto.
+
 **Conseguenza sul consumatore.** Le soglie derivate stanno nel corpus
 (`tests/fixtures/corpus_ladder.json`) e sono esposte da `registry.provenance()`;
 il loro uso nel triage e' un task separato, perche' cambiare le bande cambia i

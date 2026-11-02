@@ -130,8 +130,40 @@
         }
       ],
       "calibratable": false,
-      "reason": "il panel cieco ha giudicato 'ok' tutti e quattro i livelli: tre fotogrammi fissi non mostrano un tremolio periodico. La scala non e' valida per questo asse e la soglia resta quella misurata, non confermata a vista.",
-      "basis": "nessun livello giudicato evident"
+      "reason": "tre costruzioni diverse, tre letture cieche, sempre 'ok' fino a 1,465 di jitter misurato: un fotogramma fermo non mostra un tremolio, e la sequenza di fotogrammi non basta a un lettore che li guarda come immagini. Lo strumento non e' adatto all'asse, non il difetto assente. La soglia resta quella misurata di D-21 (separazione c02 3,59 / c09 0,85), non confermata a vista.",
+      "basis": "nessun livello giudicato evident",
+      "attempts": [
+        {
+          "construction": "oscillazione sinusoidale a 1,45 Hz, ampiezza 6/14/26 px",
+          "values": [
+            0.086,
+            0.434,
+            0.932,
+            1.698
+          ],
+          "panel": "ok su tutti e quattro i livelli"
+        },
+        {
+          "construction": "sei fotogrammi consecutivi a 0,04 s della stessa scala (presentazione in movimento)",
+          "values": [
+            0.086,
+            0.434,
+            0.932,
+            1.698
+          ],
+          "panel": "ok su tutti e quattro i livelli"
+        },
+        {
+          "construction": "offset casuali per fotogramma (random(1)/random(2)), ampiezza 5/12/22 px",
+          "values": [
+            0.086,
+            0.381,
+            0.823,
+            1.465
+          ],
+          "panel": "ok su tutti e quattro i livelli"
+        }
+      ]
     },
     "exposure": {
       "threshold": 50.636,
