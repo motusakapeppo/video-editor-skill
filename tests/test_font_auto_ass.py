@@ -200,10 +200,45 @@ def test_missing_file_declares_fallback() -> None:
         )
 
 
+def test_explicit_not_in_candidates_declares_fallback() -> None:
+    print("\n-- scelta non fra i candidati: nessun `chosen` silenzioso")
+    with tempfile.TemporaryDirectory(prefix="vx-font-auto-") as raw:
+        work = Path(raw)
+        _choice(work, ttf=True)
+        # La proposta non contiene la famiglia scelta: `_font_choice` cadrebbe
+        # sul `chosen`, e il pixel sarebbe un'altra famiglia senza dirlo.
+        (work / "font_proposal.json").write_text(
+            json.dumps(
+                {
+                    "schema": "vx.fontproposal/1",
+                    "chosen": PRESET_FAMILY,
+                    "candidates": [
+                        {"family": PRESET_FAMILY, "file": "", "licence": "unknown"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        font = auto._caption_font(work)
+        check("fallback: nessuna sostituzione silenziosa", font["family"] == "", font)
+        check(
+            "il motivo nomina la famiglia scelta",
+            FAMILY in str(font["fallback_reason"]),
+            font["fallback_reason"],
+        )
+        ass = bridge.caption_ass(CAPTIONS, work / "captions.ass", font_family=None)
+        check(
+            f"Style resta {PRESET_FAMILY}",
+            style_family(Path(ass).read_text(encoding="utf-8")) == PRESET_FAMILY,
+            style_family(Path(ass).read_text(encoding="utf-8")),
+        )
+
+
 def main() -> int:
     test_choice_reaches_ass_and_filter()
     test_without_choice_preset_and_identical_bytes()
     test_missing_file_declares_fallback()
+    test_explicit_not_in_candidates_declares_fallback()
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 

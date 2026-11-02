@@ -35,6 +35,13 @@
     fontReq: $('fontReq'),
     fontPool: $('fontPool'),
     gateError: $('gateError'),
+    regiaMeta: $('regiaMeta'),
+    reelScroll: $('reelScroll'),
+    reelStrip: $('reelStrip'),
+    reelHead: $('reelHead'),
+    reelSpeed: $('reelSpeed'),
+    regiaLine: $('regiaLine'),
+    regiaEmpty: $('regiaEmpty'),
     frames: $('frames'),
     framesEmpty: $('framesEmpty'),
     frameCount: $('frameCount'),
@@ -65,6 +72,7 @@
 
   const pad2 = (n) => String(n).padStart(2, '0');
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const num = (value, digits) => (Number(value) || 0).toFixed(digits).replace('.', ',');
 
   function mmss(seconds) {
     const total = Math.max(0, Math.round(Number(seconds) || 0));
@@ -423,6 +431,96 @@
     }, 4000);
   }
 
+  /* -------------------------------------------------------------------- regia */
+
+  // La striscia è il piano, non il video: la testina segue `render.percent`, che
+  // arriva dal file -progress di ffmpeg. A percent 0 non c'è testina.
+  function paintReel(state) {
+    const shots = Array.isArray(state.timeline) ? state.timeline : [];
+    const render = state.render && typeof state.render === 'object' ? state.render : {};
+    const percent = clamp(Number(render.percent) || 0, 0, 100);
+    const total = shots.reduce((sum, shot) => sum + (Number(shot.dur) || 0), 0);
+
+    el.regiaEmpty.hidden = shots.length > 0;
+    el.reelScroll.hidden = shots.length === 0;
+    el.regiaLine.hidden = shots.length === 0;
+
+    if (!shots.length) {
+      el.regiaMeta.textContent = '';
+      return;
+    }
+
+    el.regiaMeta.textContent = num(total, 1) + ' s';
+
+    const signature = jobIndex + '|' + shots.map((s) => s.index + ':' + s.dur).join(',');
+    if (el.reelStrip.dataset.signature !== signature) {
+      el.reelStrip.dataset.signature = signature;
+      el.reelStrip.textContent = '';
+      shots.forEach((shot) => {
+        const block = document.createElement('span');
+        block.className = 'shot-block';
+        block.style.flexGrow = String(Math.max(0.001, Number(shot.dur) || 0));
+        block.title =
+          'Shot ' + pad2((Number(shot.index) || 0) + 1) +
+          ' · ' + num(shot.t_in, 2) + '–' + num(shot.t_out, 2) + ' s';
+        const label = document.createElement('span');
+        label.className = 'n';
+        label.textContent = pad2((Number(shot.index) || 0) + 1);
+        block.append(label);
+        el.reelStrip.append(block);
+      });
+    }
+
+    el.reelStrip.querySelectorAll('.is-now').forEach((node) => node.classList.remove('is-now'));
+
+    const speed = String(render.speed || '').trim();
+    const speedText = speed ? speed.replace('.', ',') : '';
+
+    if (percent <= 0 || total <= 0) {
+      el.reelHead.hidden = true;
+      el.regiaLine.textContent = 'Timeline pronta, encode non ancora iniziato.';
+      el.reelScroll.setAttribute(
+        'aria-label',
+        'Sequenza di ' + shots.length + ' shot, ' + num(total, 1) + ' secondi; encode non ancora iniziato'
+      );
+      return;
+    }
+
+    const t = (percent / 100) * total;
+    let index = 0;
+    for (let i = 0; i < shots.length; i += 1) {
+      index = i;
+      if (t >= Number(shots[i].t_in) && t < Number(shots[i].t_out)) break;
+    }
+
+    const shot = shots[index];
+    const block = el.reelStrip.children[index];
+    if (!block) return;
+
+    const span = Number(shot.dur) || 0;
+    const local = span > 0 ? clamp((t - Number(shot.t_in)) / span, 0, 1) : 0;
+    const x = block.offsetLeft + block.offsetWidth * local;
+
+    el.reelHead.hidden = false;
+    el.reelHead.style.transform = 'translateX(' + x.toFixed(1) + 'px)';
+    block.classList.add('is-now');
+
+    el.reelSpeed.textContent = speedText;
+    el.reelSpeed.hidden = !speedText;
+    el.reelSpeed.classList.toggle('is-left', x > el.reelStrip.offsetWidth - 60);
+
+    el.regiaLine.textContent =
+      'Encode al ' + Math.round(percent) + '% — ' +
+      num(Number(render.out_time_sec) || t, 1) + ' s di ' + num(total, 1) + ' s' +
+      (speedText ? ' · ' + speedText : '');
+
+    el.reelScroll.setAttribute(
+      'aria-label',
+      'Sequenza di ' + shots.length + ' shot, ' + num(total, 1) +
+      ' secondi; encode al ' + Math.round(percent) + '%'
+    );
+  }
+
   /* ------------------------------------------------------------ scelta font */
 
   // Il cancello dei font: si apre solo se il lavoro dichiara una scelta da fare,
@@ -703,6 +801,8 @@
     // Il server dice quale lavoro ha davvero servito: la pagina lo segue.
     if (Number.isFinite(Number(state.selected))) jobIndex = Number(state.selected);
     paintJobs(state);
+    lastState = state;
+    paintReel(state);
 
     const finished = !state.current && percent >= 99.9;
     const ready = state.master_ready === true;
@@ -818,6 +918,12 @@
   let inflight = false;
   let approving = false;
   let hasDrawn = false;
+  let lastState = null;
+
+  // La testina è posizionata in pixel: se cambia la larghezza va ricalcolata.
+  window.addEventListener('resize', () => {
+    if (lastState) paintReel(lastState);
+  });
 
   async function tick() {
     if (inflight) return;
