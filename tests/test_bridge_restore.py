@@ -74,7 +74,10 @@ def plan() -> edl_plan.EDLPlan:
 
 
 def build(
-    audio_analysis: object, video_analysis: object = ..., motion_none: bool = False
+    audio_analysis: object,
+    video_analysis: object = ...,
+    motion_none: bool = False,
+    stabilize_intent: str = "propose",
 ):
     kwargs = {} if motion_none else {"motion": {"c01": video_analysis}}
     return bridge.build(
@@ -82,6 +85,7 @@ def build(
         {"c01": audio_analysis},
         target_lufs=-14.0,
         loudness_spans=lambda path, spans: {"input_i": -20.0},
+        stabilize_intent=stabilize_intent,
         **kwargs,
     )
 
@@ -111,7 +115,7 @@ def main() -> int:
     base_graph = render.build_edl_filtergraph(plan(), {"c01": 0}, has_audio=True)
 
     # -- finding present: both filters, one instance per clip --------------- #
-    new_plan, report = build(analysis(), motion())
+    new_plan, report = build(analysis(), motion(), stabilize_intent="apply")
     check("una voce restore per frammento", len(report.restore) == 3)
     required = {"clip_id", "denoise", "stabilize", "noise_dbfs", "jitter", "declared"}
     check(
@@ -162,7 +166,7 @@ def main() -> int:
     )
 
     # -- finding absent: declared, measured, graph untouched ---------------- #
-    quiet_plan, quiet = build(analysis(snr=22.0, floor=-55.0), motion(0.12))
+    quiet_plan, quiet = build(analysis(snr=22.0, floor=-55.0), motion(0.12), stabilize_intent="apply")
     check(
         "senza finding nessun filtro",
         not any(item["denoise"] or item["stabilize"] for item in quiet.restore),
@@ -210,7 +214,7 @@ def main() -> int:
     )
 
     # -- the two thresholds, exactly at the edge ---------------------------- #
-    edge_plan, edge = build(analysis(snr=SNR_LOW, floor=-30.0), motion(JITTER_HIGH))
+    edge_plan, edge = build(analysis(snr=SNR_LOW, floor=-30.0), motion(JITTER_HIGH), stabilize_intent="apply")
     check(
         "snr == soglia: sotto significa sotto",
         not any(item["denoise"] for item in edge.restore),
@@ -296,6 +300,20 @@ def main() -> int:
         "render_edl accetta restore con default None",
         inspect.signature(render.render_edl).parameters["restore"].default is None,
     )
+
+    default_plan, default_report = build(analysis(), motion(), stabilize_intent="propose")
+    check(
+        "per default propone e non applica",
+        all(item["stabilize_proposed"] and not item["stabilize"] for item in default_report.restore),
+        [(item["stabilize_proposed"], item["stabilize"]) for item in default_report.restore[:1]],
+    )
+    check(
+        "e la dichiarazione dice perche' non e' partito",
+        "non applicato senza intento" in default_report.restore[0]["declared"],
+        default_report.restore[0]["declared"],
+    )
+    applied = graph(*build(analysis(), motion(), stabilize_intent="apply"))
+    check("con intento dichiarato deshake entra nella catena", "deshake" in applied, "deshake")
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

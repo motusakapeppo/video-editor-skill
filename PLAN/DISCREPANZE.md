@@ -141,15 +141,20 @@ r4 = 1,220, **fattore 2,12** — peggio del 2,46 della metrica in uso. Il motivo
 fisico, non algoritmico: una panoramica a mano libera oscilla davvero mentre
 panoramica. L'energia del movimento c'e' in entrambi i casi; cambia l'**intenzione**.
 
-**Il danno concreto, e una correzione che devo a me stesso.** Avevo scritto che la
-panoramica di r2 (1,717) "fa partire `stabilize deshake`" e che si sarebbe vista una
-camera bloccata. **Falso, verificato nel codice:** nessun filtro `deshake` esiste in
-questo ponte. `stabilize` e' solo una dichiarazione nel referto, e la frase diceva
-"stabilize deshake (jitter ...)" come se il trattamento fosse stato fatto. Il danno non
-e' nel render: e' **un referto che dichiara un lavoro inesistente**. Corretto: la riga
-ora dice "stabilize proposto ...; nessun filtro deshake applicato", e il record porta
-`stabilize_applied: False`. Nessuna soglia su una misura di moto puo' sostituire la
-decisione del montatore: il jitter resta una descrizione con il suo numero.
+**Il danno concreto, e due correzioni che devo a me stesso.** La panoramica di r2
+(1,717) supera `jitter_shaky` e `stabilize: true` arriva a `render.py:1414`, che aggiunge
+davvero `deshake` alla catena: il trattamento parte, ed e' il motivo per cui il numero
+non si puo' usare come cancello.
+
+Avevo poi scritto il contrario - "nessun filtro deshake esiste" - perche' avevo cercato
+solo in `bridge.py`: **sbagliato due volte**. La verifica giusta e' la catena intera, non
+il primo file che si apre.
+
+**La correzione.** L'intento si dichiara: `build(..., stabilize_intent=...)` vale
+`propose` per default e `apply` solo su richiesta. Con `propose` il referto dice
+"stabilize proposto (jitter X >= Y); non applicato senza intento dichiarato" e
+`stabilize` resta falso; con `apply` la catena contiene `deshake` e il referto dice
+"applicato". Il flag non e' piu' dedotto dal solo jitter: e' una decisione.
 
 **La stabilizzazione, adesso, esiste ed e' misurata (2/11/2026).** `scripts/vx/stabilize.py`
 fa due passaggi `vidstab` (stima del moto, compensazione) e **rimisura** il jitter

@@ -1169,6 +1169,7 @@ def _denoise_filter(noise_dbfs: Optional[float]) -> str:
 def _restore_sentence(
     denoise: bool,
     stabilize: bool,
+    applied: bool,
     snr: Optional[float],
     floor: Optional[float],
     jitter: Optional[float],
@@ -1186,19 +1187,20 @@ def _restore_sentence(
             if snr is not None
             else "denoise assente (snr non misurato)"
         )
-    if stabilize:
-        # Nessun filtro deshake esiste in questo ponte: la riga dichiara una
-        # PROPOSTA, non un trattamento applicato. Scrivere "stabilize deshake"
-        # senza il filtro era un referto che mentiva sul lavoro fatto.
+    if applied:
+        parts.append(f"stabilize deshake applicato (jitter {jitter:.2f} >= {jitter_thr:.2f})")
+    elif stabilize:
+        # Il render sa applicare deshake; qui non parte perche' manca la
+        # dichiarazione d'intento. Il movimento puo' essere voluto.
         parts.append(
             f"stabilize proposto (jitter {jitter:.2f} >= {jitter_thr:.2f}); "
-            "nessun filtro deshake applicato"
+            "non applicato senza intento dichiarato"
         )
     else:
         parts.append(
-            f"stabilize non proposto (jitter {jitter:.2f} < {jitter_thr:.2f})"
+            f"stabilize assente (jitter {jitter:.2f} < {jitter_thr:.2f})"
             if jitter is not None
-            else "stabilize non proposto (jitter non misurato)"
+            else "stabilize assente (jitter non misurato)"
         )
     return "; ".join(parts)
 
@@ -1210,6 +1212,7 @@ def _declare_restore(
     *,
     analysis: Any,
     motion: Any,
+    intent: str = "propose",
 ) -> None:
     """Gate denoise on ``snr_db`` and stabilisation on ``jitter.score``.
 
@@ -1228,9 +1231,13 @@ def _declare_restore(
     jitter_thr = float(THRESHOLDS["jitter_shaky"])
     denoise = snr is not None and snr < snr_thr
     stabilize = jitter is not None and jitter >= jitter_thr
+    # D-24: un pan a mano libera e un tremore misurano uguale. Il render sa
+    # applicare deshake, ma applicarlo senza sapere se il movimento era voluto
+    # significa bloccare una panoramica. L'intento si dichiara.
+    applied = stabilize and str(intent) == "apply"
     filter_text = _denoise_filter(floor) if denoise else None
     declared = _restore_sentence(
-        denoise, stabilize, snr, floor, jitter, snr_thr, jitter_thr
+        denoise, stabilize, applied, snr, floor, jitter, snr_thr, jitter_thr
     )
 
     for new_clip in created:
@@ -1239,9 +1246,10 @@ def _declare_restore(
                 "clip_id": new_clip.clip_id,
                 "source_id": clip.source_id,
                 "denoise": denoise,
-                "stabilize": stabilize,
-                #: True solo se un filtro deshake esiste davvero; oggi non esiste.
-                "stabilize_applied": False,
+                "stabilize": applied,
+                "stabilize_proposed": stabilize,
+                "stabilize_applied": applied,
+                "stabilize_intent": str(intent),
                 "noise_dbfs": round(floor, 2) if floor is not None else None,
                 "jitter": round(jitter, 3) if jitter is not None else None,
                 "snr_db": round(snr, 2) if snr is not None else None,
@@ -1264,12 +1272,14 @@ def _declare_restore(
             if isinstance(analysis, BaseException):
                 entry["detail"] = f"analysis_failed: {analysis}"
             report.not_applied.append(entry)
-        if not stabilize:
+        if not applied:
             entry = {
                 "anchor_id": None,
                 "clip_id": new_clip.clip_id,
                 "source_id": clip.source_id,
-                "reason": "stabilize_not_justified",
+                "reason": (
+                    "stabilize_not_declared" if stabilize else "stabilize_not_justified"
+                ),
                 "jitter": round(jitter, 3) if jitter is not None else None,
                 "threshold": jitter_thr,
             }
@@ -1293,6 +1303,7 @@ def build(
     caption_style: Optional[Mapping[str, Any]] = None,
     faces: Optional[Mapping[str, Any]] = None,
     motion: Optional[Mapping[str, Any]] = None,
+    stabilize_intent: Optional[str] = None,
 ) -> Tuple[edl_plan.EDLPlan, BridgeReport]:
     """Cut the a_roll chain on measured silence and gain it per used segment.
 
@@ -1568,6 +1579,7 @@ def build(
                 created,
                 analysis=analysis,
                 motion=motion.get(clip.source_id),
+                intent=str(stabilize_intent or "propose"),
             )
 
     duration = cursor
