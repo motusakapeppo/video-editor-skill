@@ -102,7 +102,7 @@ body {
   z-index: 1;
   max-width: 1280px;
   margin: 0 auto;
-  padding: 20px 30px 42px;
+  padding: 20px 34px 42px;
 }
 
 .top {
@@ -204,9 +204,9 @@ body {
   gap: 10px;
   width: clamp(224px, 25vw, 320px);
   padding: 10px 12px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, .012));
+  background: linear-gradient(180deg, #171e28, #111720);
   color: inherit;
   text-decoration: none;
   transition:
@@ -217,8 +217,8 @@ body {
 }
 
 .job:hover {
-  border-color: var(--line-strong);
-  background: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .02));
+  border-color: rgba(255, 255, 255, .24);
+  background: linear-gradient(180deg, #1c2530, #151c25);
   transform: translateY(-1px);
 }
 
@@ -228,18 +228,20 @@ body {
 }
 
 .job[aria-current="true"] {
-  border-color: rgba(78, 161, 255, .4);
-  background: linear-gradient(180deg, rgba(78, 161, 255, .12), rgba(78, 161, 255, .025));
-  box-shadow: inset 0 0 0 1px rgba(78, 161, 255, .1);
+  border-color: rgba(78, 161, 255, .62);
+  background: linear-gradient(180deg, rgba(78, 161, 255, .19), rgba(78, 161, 255, .05));
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    inset 0 0 0 1px rgba(78, 161, 255, .16);
 }
 
 .job-idx {
   font: 500 10px/1 var(--mono);
   letter-spacing: .06em;
-  color: var(--ink-3);
+  color: #8b97a7;
 }
 
-.job[aria-current="true"] .job-idx { color: var(--accent-2); }
+.job[aria-current="true"] .job-idx { color: #bfe0ff; }
 
 .job-name {
   min-width: 0;
@@ -247,17 +249,24 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
   font: 500 12.5px/1.35 var(--sans);
-  color: var(--ink-2);
+  color: #c8d3e0;
 }
 
-.job[aria-current="true"] .job-name { color: var(--ink); }
+.job[aria-current="true"] .job-name {
+  color: #f4f9ff;
+  font-weight: 600;
+}
 
 .job-pct {
   font-size: 12px;
-  color: var(--ink-3);
+  font-weight: 600;
+  color: #96a3b4;
 }
 
-.job[aria-current="true"] .job-pct { color: var(--accent-2); }
+.job[aria-current="true"] .job-pct {
+  color: #cbe5ff;
+  font-weight: 700;
+}
 
 .job-bar {
   position: absolute;
@@ -266,7 +275,7 @@ body {
   bottom: 6px;
   height: 2px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, .06);
+  background: rgba(255, 255, 255, .07);
   overflow: hidden;
 }
 
@@ -274,7 +283,7 @@ body {
   display: block;
   height: 100%;
   border-radius: 2px;
-  background: var(--ink-3);
+  background: rgba(255, 255, 255, .3);
   transition: width 900ms var(--ease-soft);
 }
 
@@ -294,7 +303,7 @@ body {
 .col-work {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 16px;
   min-width: 0;
 }
 
@@ -335,6 +344,8 @@ body {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(142, 200, 255, .55), transparent);
 }
+
+body.is-done .stage { padding-bottom: 16px; }
 
 .stage-head {
   display: flex;
@@ -448,17 +459,18 @@ body.is-done .hero-unit { color: var(--ok); }
 
 .hero-label {
   margin: 0 0 6px;
-  font: 600 10px/1 var(--mono);
+  font: 700 10px/1 var(--mono);
   letter-spacing: .22em;
   text-transform: uppercase;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .hero-sub {
   margin: 0;
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 500;
   letter-spacing: .04em;
-  color: var(--ink-2);
+  color: #d9e4f0;
 }
 
 /* ----------------------------------------------------------------------- barra */
@@ -467,53 +479,54 @@ body.is-done .hero-unit { color: var(--ok); }
 
 .bar-track {
   position: relative;
-  height: 12px;
-  padding: 2px;
-  border: 1px solid rgba(255, 255, 255, .06);
-  border-radius: 4px;
+  height: 20px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 5px;
   background: #070a0e;
   box-shadow:
     0 1px 0 rgba(255, 255, 255, .04),
-    inset 0 2px 7px rgba(0, 0, 0, .85);
+    inset 0 3px 8px rgba(0, 0, 0, .85);
 }
 
 .bar-fill {
   display: block;
   width: 0;
   height: 100%;
-  border-radius: 2px;
-  background: linear-gradient(90deg, #1e5a9c 0%, #2f7fd0 55%, #4ea1ff 100%);
+  border-radius: 3px;
+  background: linear-gradient(180deg, #63b2ff 0%, #3d8fe8 46%, #2368b4 100%);
   box-shadow:
-    0 0 18px rgba(78, 161, 255, .45),
-    inset 0 1px 0 rgba(255, 255, 255, .35);
+    inset 0 1px 0 rgba(255, 255, 255, .55),
+    inset 0 -1px 0 rgba(0, 0, 0, .35),
+    0 0 20px rgba(78, 161, 255, .45);
   transition: width 900ms var(--ease-soft);
 }
 
 .bar-track::after {
   content: "";
   position: absolute;
-  inset: 2px;
+  inset: 3px;
   z-index: 2;
-  border-radius: 2px;
+  border-radius: 3px;
   pointer-events: none;
   background-image: repeating-linear-gradient(90deg,
-    rgba(255, 255, 255, .12) 0 1px,
+    rgba(255, 255, 255, .16) 0 1px,
     transparent 1px 10%);
-  opacity: .38;
+  opacity: .45;
 }
 
 .bar-head {
   position: absolute;
-  top: -3px;
-  bottom: -3px;
+  top: -4px;
+  bottom: -4px;
   left: 0;
   z-index: 3;
-  width: 2px;
+  width: 3px;
   border-radius: 2px;
-  background: linear-gradient(180deg, #fff, rgba(160, 205, 255, .85));
+  background: linear-gradient(180deg, #ffffff, #bfe0ff);
   box-shadow:
-    0 0 12px rgba(142, 200, 255, .95),
-    0 0 26px rgba(78, 161, 255, .6);
+    0 0 14px rgba(190, 226, 255, 1),
+    0 0 30px rgba(78, 161, 255, .7);
   transform: translateX(-1px);
   opacity: 0;
   transition: left 900ms var(--ease-soft), opacity 300ms ease;
@@ -1212,9 +1225,18 @@ body.is-done .hero-unit { color: var(--ok); }
 
 @media (max-width: 1040px) {
   .board { grid-template-columns: minmax(0, 1fr); gap: 24px; }
-  .rail-inner { position: static; min-height: 0; }
-  .action { margin-top: 22px; }
-  .spine { perspective: none; }
+  .rail-inner { position: static; }
+  /* Prima l'azione, poi la sequenza: il pulsante non deve finire in fondo. */
+  .action {
+    order: 1;
+    max-width: 420px;
+    margin: 0 0 26px;
+    padding: 0;
+    border-top: 0;
+  }
+  .rail-head { order: 2; }
+  .spine { order: 3; perspective: none; }
+  .rail-empty { order: 4; }
   .phase { transform: none; }
   .phase.is-now { transform: none; }
 }
@@ -1232,6 +1254,7 @@ body.is-done .hero-unit { color: var(--ok); }
   .hero-num { font-size: 64px; }
   .now-text { font-size: 15px; }
   .job { width: min(74vw, 300px); }
+  .action { max-width: 100%; }
   .deck { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
   .shot-cap { grid-template-columns: auto minmax(0, 1fr); }
   .shot-size { display: none; }
