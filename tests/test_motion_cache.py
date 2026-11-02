@@ -525,10 +525,12 @@ def run(tmp: Path) -> None:
 
     # -- e. a truncated frame is a miss ----------------------------------- #
     stage("e1. truncated frame")
-    resolved_now = motion.validate_params(template, PARAMS)
-    frame_key = scratch.key(
-        template, resolved_now, fps=FPS, size=(SIDE, SIDE), engine=engine, t=0.0
-    )
+    # The capture keys a frame by the params *the page received*, which include
+    # the font it resolved; `validate_params` alone is not the whole key.  Ask
+    # the run for the key it used instead of rebuilding it here: a test that
+    # rebuilds a private key can pass while looking at a file that never existed.
+    frame_key = restyled_again["frame_keys"][0]
+    assert frame_key is not None, "the cache is enabled, so every frame has a key"
     frame_path = cache_dir / f"{frame_key}.png"
     check(
         "e. the first frame of the current run is on disk",

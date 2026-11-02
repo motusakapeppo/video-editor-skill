@@ -1508,6 +1508,7 @@ def capture(
     degraded: List[str] = []
     paths: List[str] = []
     digests: List[str] = []
+    keys: List[Optional[str]] = []
 
     pw = browser = context = page = None
     started = time.perf_counter()
@@ -1637,6 +1638,7 @@ def capture(
             path.write_bytes(png)
             paths.append(str(path))
             digests.append(hashlib.sha256(png).hexdigest())
+            keys.append(frame_key)
     finally:
         _close_quietly(page, context, browser, pw)
         if cache.enabled:
@@ -1653,6 +1655,7 @@ def capture(
         "engine": engine,
         "engine_version": engine_version,
         "frames": paths,
+        "frame_keys": keys,
         "frame_count": len(paths),
         "fps": rate,
         "size": [width, height],
