@@ -712,9 +712,11 @@
       "acceptance": "ogni template dichiara slot con tipo e ruolo, parametri esposti con dominio, `layouts` per proporzione e una famiglia; un template senza slot è rifiutato; un valore fuori dominio è rifiutato con il nome del parametro; un template che non passa il linter non entra nel conteggio",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_templates.py 15 PASS: 6 template in 6 famiglie, ognuno 1-8 slot con tipo e ruolo, parametri con dominio contenente il default, 4 layout che coprono tutti gli slot; template senza slot -> TEMPLATE_NO_SLOTS e fuori dal conteggio col motivo; panel 4.0 -> TEMPLATE_PARAM con '.panel' e '[0.2, 0.9]'; parametro non esposto rifiutato col nome; layout incompleto -> TEMPLATE_LINT, fuori dal registro, linter nomina lo slot mancante",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
