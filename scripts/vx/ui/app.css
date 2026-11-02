@@ -819,6 +819,65 @@ body.is-done .hero-unit { color: var(--ok); }
   opacity: .75;
 }
 
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.result-actions .open-result { margin-top: 0; }
+
+.reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 15px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .03);
+  color: var(--ink-2);
+  font: 600 13px/1 var(--sans);
+  cursor: pointer;
+  transition:
+    background 200ms ease,
+    border-color 200ms ease,
+    color 200ms ease,
+    transform 180ms var(--ease-out);
+}
+
+.reveal:hover {
+  border-color: rgba(255, 255, 255, .26);
+  background: rgba(255, 255, 255, .06);
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.reveal:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 3px;
+}
+
+.reveal[aria-busy="true"] {
+  opacity: .6;
+  cursor: progress;
+  transform: none;
+}
+
+.reveal-note {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font: 500 11.5px/1.4 var(--mono);
+  letter-spacing: .02em;
+  color: var(--ink-3);
+  opacity: 1;
+  transition: opacity 320ms ease;
+}
+
+.reveal-note.is-ok { color: var(--ok); }
+.reveal-note.is-warn { color: var(--warn); }
+
 /* ----------------------------------------------------------------- fotogrammi */
 
 .deck-wrap {

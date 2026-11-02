@@ -154,7 +154,29 @@ def main() -> int:
                     f"{response.status} {len(chunk)}",
                 )
 
+            # -- aprire la cartella: il percorso non arriva mai dal client ---- #
+            opened = []
+            original = serve.REVEAL
+            serve.REVEAL = lambda where: opened.append(Path(where))
+            try:
+                answer = post(server.url + "api/reveal")
+            finally:
+                serve.REVEAL = original
+            check(
+                "S5 the folder of the master is opened, and it is the recorded one",
+                answer.get("ok") is True
+                and opened == [master]
+                and answer.get("folder") == str(master.parent),
+                {"ok": answer.get("ok"), "opened": [str(where) for where in opened]},
+            )
+
             master.unlink()
+            answer = post(server.url + "api/reveal")
+            check(
+                "S5 without the file no folder is opened",
+                answer.get("ok") is False and "master" in str(answer.get("reason", "")),
+                answer,
+            )
             try:
                 get(server.url + "result")
                 missing_master = False

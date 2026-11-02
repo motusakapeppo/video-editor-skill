@@ -333,7 +333,8 @@
 
     const hint = document.createElement('p');
     hint.className = 'result-hint';
-    hint.textContent = 'Anteprima in pagina. Il pulsante apre il file intero, a schermo intero.';
+    hint.textContent =
+      'Anteprima in pagina. «Guarda il risultato» apre il file a schermo intero.';
 
     const open = document.createElement('a');
     open.className = 'open-result';
@@ -346,6 +347,39 @@
     arrow.setAttribute('aria-hidden', 'true');
     arrow.textContent = '↗';
     open.append(arrow);
+
+    // Comando secondario: apre la cartella del master nel gestore di file.
+    // Compare solo insieme al player, perche' dipende dallo stesso file.
+    const reveal = document.createElement('button');
+    reveal.type = 'button';
+    reveal.className = 'reveal';
+    reveal.textContent = 'Apri la cartella';
+
+    const feedback = document.createElement('p');
+    feedback.className = 'reveal-note';
+    feedback.setAttribute('role', 'status');
+
+    reveal.addEventListener('click', async () => {
+      if (reveal.getAttribute('aria-busy') === 'true') return;
+      reveal.setAttribute('aria-busy', 'true');
+      try {
+        const response = await fetch(scoped('/api/reveal'), { method: 'POST' });
+        const result = await response.json();
+        if (result && result.ok === true) {
+          flash(feedback, 'Cartella aperta', 'ok');
+        } else {
+          flash(
+            feedback,
+            (result && result.reason) || 'Non ho potuto aprire la cartella.',
+            'warn'
+          );
+        }
+      } catch (error) {
+        flash(feedback, 'Non ho potuto aprire la cartella: il server non risponde.', 'warn');
+      } finally {
+        reveal.removeAttribute('aria-busy');
+      }
+    });
 
     video.addEventListener('loadedmetadata', () => {
       if (video.videoWidth > 0 && video.videoHeight > 0) {
@@ -361,9 +395,27 @@
       duration.textContent = 'non leggibile';
     });
 
-    info.append(file, specs, hint, open);
+    const actions = document.createElement('div');
+    actions.className = 'result-actions';
+    actions.append(open, reveal, feedback);
+
+    info.append(file, specs, hint, actions);
     card.append(monitor, info);
     el.resultBody.append(card);
+  }
+
+  // Riscontro breve, sempre nello stesso posto: si spegne da solo dopo 4 s.
+  function flash(note, message, kind) {
+    window.clearTimeout(note._timer);
+    note.textContent = message;
+    note.className = 'reveal-note' + (kind ? ' is-' + kind : '');
+    note.style.opacity = '1';
+    note._timer = window.setTimeout(() => {
+      note.style.opacity = '0';
+      window.setTimeout(() => {
+        if (note.isConnected) note.textContent = '';
+      }, 320);
+    }, 4000);
   }
 
   /* ------------------------------------------------------------------ lavori */

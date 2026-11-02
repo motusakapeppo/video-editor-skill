@@ -9,7 +9,8 @@ Un server stdlib su `127.0.0.1`. Con **un** lavoro si comporta come sempre; con
                            il master, e la lista ``jobs``;
 * ``/api/approve?job=N``   POST che scrive il record **nella forma di keygate**;
 * ``/frames/<nome>?job=N`` il PNG di un fotogramma;
-* ``/result?job=N``        il master, con Range (il player puo' scorrere).
+* ``/result?job=N``        il master, con Range (il player puo' scorrere);
+* ``/api/reveal?job=N``    POST che apre la cartella col master selezionato.
 
 Due lavori non si pestano i piedi perche' ogni lavoro scrive i suoi file nella
 propria cartella, con sostituzione atomica: chi legge vede prima o dopo, mai un
@@ -20,6 +21,9 @@ cade sul primo — la pagina non si rompe.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -144,6 +148,41 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     ]
     payload["selected"] = chosen
     return payload
+
+
+def reveal_native(path: Path) -> None:
+    """Apre la cartella col file selezionato, senza toccare il file."""
+    path = Path(path)
+    if os.name == "nt":
+        # `explorer /select,` vuole la virgola attaccata al percorso.
+        subprocess.Popen(["explorer", f"/select,{path}"])  # noqa: S603,S607
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)])  # noqa: S603,S607
+    else:
+        subprocess.Popen(["xdg-open", str(path.parent)])  # noqa: S603,S607
+
+
+#: Sostituibile nei test: qui si vuole provare il contratto, non aprire finestre.
+REVEAL = reveal_native
+
+
+def reveal(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
+    """Apre la cartella del master. Il percorso non arriva mai dal client.
+
+    Si apre **solo** il file registrato in ``progress.json`` di un lavoro
+    scoperto: la richiesta sceglie il lavoro, non il percorso.
+    """
+    jobs = discover(root)
+    if not jobs:
+        return {"ok": False, "reason": "nessun lavoro"}
+    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    directory = jobs[chosen]
+    text = str(_read_json(directory / "progress.json").get("master") or "")
+    master = Path(text) if text else None
+    if master is None or not master.is_file():
+        return {"ok": False, "reason": "il master non esiste ancora"}
+    REVEAL(master)
+    return {"ok": True, "folder": str(master.parent), "name": master.name}
 
 
 def approve(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
@@ -302,6 +341,10 @@ def make_handler(root: Path):
                 self._send(json.dumps(approve(root, index), ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
+            if path == "/api/reveal":
+                self._send(json.dumps(reveal(root, index), ensure_ascii=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
             self._send(b"not found", "text/plain", status=404)
 
     return Handler
@@ -330,5 +373,5 @@ class Server:
         self.httpd.server_close()
 
 
-__all__ = ["MAX_DEPTH", "PAGE", "Server", "UI_DIR", "UI_FILES", "approve", "discover",
-           "make_handler", "state"]
+__all__ = ["MAX_DEPTH", "PAGE", "REVEAL", "Server", "UI_DIR", "UI_FILES", "approve",
+           "discover", "make_handler", "reveal", "reveal_native", "state"]
