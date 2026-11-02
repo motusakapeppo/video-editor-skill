@@ -200,28 +200,88 @@ def read(record: Path) -> Optional[Dict[str, Any]]:
     return payload if isinstance(payload, dict) else None
 
 
-def check(keyframe_plan: KeyframePlan, record: Path) -> Dict[str, Any]:
-    """Close the gate unless the record matches these keyframes exactly."""
+AUTONOMOUS_KEY = "autonomous"
+
+
+def declare_autonomous(brief: Dict[str, Any], why: str) -> Dict[str, Any]:
+    """The only exception to the gate: declared in the brief, and motivated."""
+    brief[AUTONOMOUS_KEY] = {"declared": True, "why": str(why)}
+    return brief
+
+
+def autonomous_problems(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return ["autonomous: expected an object with declared and why"]
+    found: List[str] = []
+    if value.get("declared") is not True:
+        found.append("autonomous.declared: must be true to open the gate")
+    if not str(value.get("why") or "").strip():
+        found.append("autonomous.why: a waiver without a reason is not a declaration")
+    return found
+
+
+def autonomous_waiver(brief: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The waiver, if the brief really declares and motivates it; else ``None``."""
+    if not isinstance(brief, dict):
+        return None
+    value = brief.get(AUTONOMOUS_KEY)
+    if not isinstance(value, dict):
+        return None
+    if autonomous_problems(value):
+        return None
+    return {"declared": True, "why": str(value.get("why")).strip()}
+
+
+def waiver_line(waiver: Dict[str, Any]) -> str:
+    """The sentence the report repeats, with the reason verbatim."""
+    return (
+        "modalita' autonoma dichiarata nel brief: il cancello dei keyframe e' "
+        f"aperto per eccezione, motivo dichiarato: \"{waiver['why']}\""
+    )
+
+
+def check(
+    keyframe_plan: KeyframePlan,
+    record: Path,
+    *,
+    brief: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Close the gate unless the record matches, or the brief waives it in writing."""
     payload = read(record)
+    waiver = autonomous_waiver(brief)
+    if payload is not None:
+        approved = int(payload.get("count") or 0)
+        if payload.get("approved") is True and approved > 0:
+            if payload.get("digest") != keyframe_plan.digest:
+                raise GateError(
+                    "KEYFRAMES_NOT_APPROVED",
+                    f"0 of {keyframe_plan.count} keyframes approved: the keyframes changed "
+                    f"after approval (record {str(payload.get('digest'))[:12]} != now "
+                    f"{keyframe_plan.digest[:12]})",
+                )
+            return dict(payload, waiver=None, report="")
+    if waiver is not None:
+        return {
+            "version": GATE_VERSION,
+            "approved": False,
+            "digest": keyframe_plan.digest,
+            "count": keyframe_plan.count,
+            "waiver": waiver,
+            "report": waiver_line(waiver),
+        }
     if payload is None:
         raise GateError(
             "KEYFRAMES_NOT_APPROVED",
-            f"0 of {keyframe_plan.count} keyframes approved: no record at {Path(record)}",
+            f"0 of {keyframe_plan.count} keyframes approved: no record at {Path(record)} "
+            "and the brief does not declare autonomous mode",
         )
-    approved = int(payload.get("count") or 0)
-    if payload.get("approved") is not True or approved <= 0:
-        raise GateError(
-            "KEYFRAMES_NOT_APPROVED",
-            f"0 of {keyframe_plan.count} keyframes approved: the record is not an approval",
-        )
-    if payload.get("digest") != keyframe_plan.digest:
-        raise GateError(
-            "KEYFRAMES_NOT_APPROVED",
-            f"0 of {keyframe_plan.count} keyframes approved: the keyframes changed after "
-            f"approval (record {str(payload.get('digest'))[:12]} != now "
-            f"{keyframe_plan.digest[:12]})",
-        )
-    return payload
+    raise GateError(
+        "KEYFRAMES_NOT_APPROVED",
+        f"0 of {keyframe_plan.count} keyframes approved: the record is not an approval "
+        "and the brief does not declare autonomous mode",
+    )
 
 
 def describe(keyframe_plan: KeyframePlan) -> Dict[str, Any]:
@@ -238,6 +298,7 @@ def describe(keyframe_plan: KeyframePlan) -> Dict[str, Any]:
 
 
 __all__ = [
+    "AUTONOMOUS_KEY",
     "GATE_VERSION",
     "GateError",
     "KeyframePlan",
@@ -245,9 +306,13 @@ __all__ = [
     "MIN_KEYFRAMES",
     "RECORD_NAME",
     "approve",
+    "autonomous_problems",
+    "autonomous_waiver",
     "check",
+    "declare_autonomous",
     "describe",
     "plan",
     "read",
     "timeline_digest",
+    "waiver_line",
 ]

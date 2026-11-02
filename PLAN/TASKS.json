@@ -656,9 +656,11 @@
       "acceptance": "con `autonomous` dichiarato e motivato il render parte e il referto ripete la dichiarazione in chiaro; senza dichiarazione e senza approvazione il render resta rifiutato; il test fallisce se l'eccezione si applica con `autonomous` assente dal documento",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_keygate_autonomous.py 12 PASS: senza dichiarazione e senza record il cancello resta chiuso (KEYFRAMES_NOT_APPROVED, 'does not declare autonomous'); autonomous con why vuoto o declared false non apre e il brief lo segnala; dichiarata e motivata apre e il referto ripete il motivo verbatim, render eseguito (122.513 byte); con autonomous assente dal documento o senza brief non apre; un'approvazione valida ha precedenza e non porta deroga",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

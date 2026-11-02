@@ -236,6 +236,13 @@ def validate(brief: Dict[str, Any]) -> List[str]:
 
         errors.extend(citation_problems(brief.get("emotion")))
 
+    # La modalita' autonoma e' l'unica eccezione al cancello dei keyframe: se e'
+    # dichiarata deve avere una ragione scritta, altrimenti non e' una deroga.
+    if brief.get("autonomous") is not None:
+        from .keygate import autonomous_problems
+
+        errors.extend(autonomous_problems(brief.get("autonomous")))
+
     choices = brief.get("choices")
     if not isinstance(choices, dict):
         errors.append("choices mancante o non è un oggetto")
