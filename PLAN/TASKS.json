@@ -642,9 +642,11 @@
       "acceptance": "senza approvazione il render completo è rifiutato con `KEYFRAMES_NOT_APPROVED` e il numero mancante; con approvazione il render parte; una richiesta fuori da 3-6 è rifiutata con il numero; modificare i keyframe dopo l'approvazione riapre il cancello (hash diverso = cancello chiuso)",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_keygate.py 12 PASS: 3 keyframe estratti dalla timeline con sha distinti e digest deterministico; senza record KEYFRAMES_NOT_APPROVED con '0 of 3'; 2 e 7 keyframe rifiutati con KEYFRAME_COUNT e il numero; con approvazione il render completo parte (123.784 byte); cambiare un effetto cambia l'impronta e Richiude il cancello con 'changed after approval'",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
