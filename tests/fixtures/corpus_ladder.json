@@ -100,9 +100,9 @@
   },
   "axes": {
     "shake": {
-      "threshold": 0.227,
-      "level": 0.5,
-      "token": "evident",
+      "threshold": null,
+      "level": null,
+      "token": null,
       "ladder": [
         {
           "level": 0,
@@ -135,9 +135,9 @@
           "token": "ok"
         }
       ],
-      "calibratable": true,
-      "reason": "",
-      "basis": "primo valore misurato che il giudice umano chiama 'evident', sul video: 0,086 light, 0,227 evident, 0,381 evident, 0,823 oltre evident",
+      "calibratable": false,
+      "reason": "il giudizio umano colloca il confine fra 0,086 e 0,227 sulla scala costruita, ma c09 (0,85, giudicata la migliore) cadrebbe dal lato sbagliato: le due misure non sono confrontabili. Serve una scala costruita sul materiale reale e sullo stesso tipo di movimento, oppure una metrica normalizzata.",
+      "basis": "scala monotona e giudicata, ma non trasferibile: la soglia cade sotto c09, giudicata la migliore. Non si adotta.",
       "attempts": [
         {
           "construction": "oscillazione sinusoidale a 1,45 Hz, ampiezza 6/14/26 px",
@@ -198,6 +198,24 @@
         "bound_high": 0.227,
         "conclusion": "la soglia 'evident' cade fra 0,086 e 0,227 di jitter misurato: meno della meta' della banda 0,4 usata oggi, che chiama 'stable' un tremolio che l'umano giudica evidente. La soglia adottata e' 0,227, il primo valore misurato giudicato evidente.",
         "note": "il panel di modelli aveva detto 'ok' su tutti i livelli: sul movimento serve un occhio umano. Questo e' il primo giudizio umano su una scala costruita, ed e' l'unico che puo' collocare la soglia."
+      },
+      "transfer_check": {
+        "real_anchors": [
+          {
+            "clip": "c09",
+            "judgment": "la migliore",
+            "value": 0.85,
+            "would_be": "shaky"
+          },
+          {
+            "clip": "c02",
+            "judgment": "scarsa",
+            "value": 3.59,
+            "would_be": "shaky"
+          }
+        ],
+        "transferable": false,
+        "reason": "la soglia 0,227 classificherebbe 'shaky' la clip c09, che il giudice umano ha chiamato la migliore, con tremolio misurato 0,85. Il tremolio costruito (salti casuali per fotogramma) e quello naturale non stanno sulla stessa scala: la metrica li pesa diversamente. Una soglia assoluta presa dalla scala sintetica non si trasferisce al materiale reale."
       }
     },
     "exposure": {

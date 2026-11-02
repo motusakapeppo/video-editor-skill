@@ -455,12 +455,13 @@
     "file": "tests/fixtures/corpus_ladder.json",
     "calibratable_axes": [
       "cast",
-      "exposure",
+      "exposure"
+    ],
+    "uncalibratable_axes": [
       "shake"
     ],
-    "uncalibratable_axes": [],
     "thresholds": {
-      "shake": 0.227,
+      "shake": null,
       "exposure": 50.636,
       "cast": 46.116
     }

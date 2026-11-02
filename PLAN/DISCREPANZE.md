@@ -88,7 +88,7 @@ livello.
 |---|---|---|---|
 | esposizione | 92,5 / 50,6 / 27,0 / 13,1 (luma) | ok / dark / very_dark / very_dark | **50,636** (livello 1) |
 | dominante | 20,4 / 27,5 / 36,7 / 46,1 | none / none / light / evident | **46,116** (livello 3) |
-| tremolio | 0,086 / 0,227 / 0,381 / 0,823 / 1,698 | light / **evident** / evident / oltre | **0,227** (giudizio umano) |
+| tremolio | 0,086 / 0,227 / 0,381 / 0,823 / 1,698 | light / **evident** / evident / oltre | **non adottata**: 0,227 cadrebbe sotto c09 (0,85, giudicata la migliore) |
 
 **Il tremolio: tre letture di modelli non bastano, un occhio umano si'.** Il panel ha giudicato `ok` anche il
 livello 4, quello che la metrica chiama `shaky` a 1,698: tre fotogrammi fissi non
