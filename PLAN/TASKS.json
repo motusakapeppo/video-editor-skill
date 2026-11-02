@@ -670,9 +670,11 @@
       "acceptance": "con un server di prova locale il registro delle richieste mostra zero richieste fuori dal dominio; una pagina esclusa da `robots.txt` è rifiutata citando la regola; la seconda esecuzione fa zero richieste; una pagina irraggiungibile produce `brand_unavailable` con il motivo, non un traceback",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_brand.py 12 PASS con server locale: 5 richieste tutte sull'origine, zero fuori dominio, asset su altro host saltato e registrato, 2 asset su disco per hash URL; /privato/ rifiutato da brand_robots citando 'Disallow: /privato' e mai richiesto; seconda esecuzione 0 chiamate e 0 richieste al server; host chiuso -> brand_unavailable con motivo, nessun traceback",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
