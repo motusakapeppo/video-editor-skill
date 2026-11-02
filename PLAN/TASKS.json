@@ -600,9 +600,11 @@
       "acceptance": "ogni lente ha un test di innesco e un golden; una distorsione oltre il tetto è rifiutata con il numero; il bokeh senza mappa di profondità produce il blur mascherato dichiarato con `fallback=true` e non un errore non gestito; due lenti in pila passano, due distorsioni insieme sono rifiutate con il nome",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_lenses.py 12 PASS: 4 lenti con dominio; bokeh senza mappa restituisce il ripiego soft_focus con fallback=true e il motivo, con la mappa restituisce bokeh; due lenti in pila passano, due distorsioni sono LENS_CONFLICT coi nomi, angolo 9.0 e' LENS_RANGE; ogni lente arriva ai pixel (MAD 12,8-31,8)",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
