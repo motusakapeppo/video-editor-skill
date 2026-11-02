@@ -203,8 +203,7 @@
       "status": "done",
       "evidence": "tests/test_parallel_chunks.py 4 PASS: quattro chunk in parallelo byte-identici alla serie (sha256 a8682c1e), serie 3,64 s vs parallelo 0,77 s (x4,75), report jobs 1/4",
       "commits": [
-        "08bb454",
-        "pending"
+        "08bb454"
       ],
       "note": ""
     },
@@ -218,7 +217,7 @@
       "status": "done",
       "evidence": "tests/test_smart_render.py 7 PASS: seconda corsa identica riusa tutti i chunk e lascia il file byte-identico; cambiare il contenuto di una clip rifa' solo il suo chunk (rendered=[1], reused=[0,2,3]); un taglio rifa' e nessuno script di chunk porta -c copy (5 script esaminati)",
       "commits": [
-        "pending"
+        "d5b77f2"
       ],
       "note": ""
     },
@@ -232,7 +231,7 @@
       "status": "done",
       "evidence": "tests/test_encoder_fidelity.py 7 PASS: libx264 vs se stesso MAD 0,0; h264_nvenc 1,1871 e hevc_nvenc 1,1852 sotto soglia 2,0; un encode degradato misura 24,89 e supera la soglia (il cancello puo' fallire); un encoder ignoto e' rifiutato con motivo",
       "commits": [
-        "pending"
+        "9c17919"
       ],
       "note": ""
     },
@@ -243,9 +242,11 @@
       "acceptance": "due passaggi lossless danno lo stesso sha256 del singolo passaggio, e il peso e' dichiarato",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_lossless.py 4 PASS: secondo passaggio lossless con lo stesso sha del frame (414e35196f03fa98); peso dichiarato lossless 127461 byte vs consegna 26871 (x4.7); ffv1 fuori da ENCODERS",
+      "commits": [
+        "9c17919"
+      ],
       "note": ""
     },
     {
@@ -255,9 +256,11 @@
       "acceptance": "il referto elenca ogni misura con il comando che l'ha prodotta; suite verde",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "scripts/gen_performance.py misura 1800 clip in 0.315 s e scrive PLAN/PERFORMANCE.md con 6 righe, ognuna col comando; --check passa; tests/test_performance_doc.py 4 PASS",
+      "commits": [
+        "9c17919"
+      ],
       "note": ""
     },
     {
