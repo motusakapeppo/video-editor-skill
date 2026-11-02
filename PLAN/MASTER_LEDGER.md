@@ -141,6 +141,12 @@ respinti.
 | F3-T08 | W7 chiusura | golden frame per ogni template, docs, SKILL.md | un frame per template su disco, SKILL.md sotto 250 righe, suite verde | DONE `b32c6f7` - 54 template x 3 istanti = 162 PNG (13,2 MB) in `tests/fixtures/motion_golden/`; il gate ri-renderizza dal vivo e confronta byte per byte: 118 assert, due giri consecutivi identici, 96 s per giro; `engine_version` 156.0.8078.48 registrata e verificata; SKILL.md esattamente 200 righe, indice 01..26 intatto; decimo codice `NONDETERMINISTIC_JS` |
 
 ## F4 — Libreria effetti e transizioni
+
+Stato al 2/11/2026: **58 look + 5 primitivi** con frame di riferimento; transizioni
+implementate `fade_in`, `fade_out`, `crossfade` con **30 ricette** in quattro famiglie
+(commit `f4t12`, `tests/test_crossfade.py` 12 PASS), e D-8 chiusa. Aperti: il composito
+a due ingressi (F4-T13), LUT e ritocco pelle (F4-T14), il ripristino per il materiale da
+telefonino (F4-T15).
 60+ voci con innesco, parametri, tetto, implementazione, fallback, prova visiva;
 anti-arlecchino (tetto di effetti visibili ogni 10 s).
 
@@ -360,9 +366,9 @@ documento dell'utente resta citabile senza rinominare nulla di gia' fatto.
 
 ### Dipendenze dichiarate
 
-Poggia su F4, F7, F8, F9, F14, F19, E1, E5. **Nessuna di queste e' chiusa**: F4 manca le
-transizioni (F4-T12) e il composito a due ingressi (F4-T13); F7, F8, F9, F14, F19 ed E1/E5
-non esistono ancora. Il documento stesso impone di chiuderle prima e di non scrivere
+Poggia su F4, F7, F8, F9, F14, F19, E1, E5. **Nessuna di queste e' chiusa**: F4 ha chiuso
+le transizioni (F4-T12, 30 ricette, timeline che si accorcia) e manca il composito a due
+ingressi (F4-T13); F7, F8, F9, F14, F19 ed E1/E5 non esistono ancora. Il documento stesso impone di chiuderle prima e di non scrivere
 sostituti provvisori.
 
 ### Dipendenza umana
