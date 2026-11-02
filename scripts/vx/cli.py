@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -1938,6 +1939,20 @@ def _media_count(directory: str) -> int:
     return sum(1 for item in root.iterdir() if item.is_file() and item.suffix.lower() in _MEDIA_SUFFIXES)
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Local UI: the live panel plus the keyframe approval, on 127.0.0.1."""
+    from . import serve
+
+    server = serve.Server(Path(args.dir), port=int(args.port)).start()
+    _log(f"vx serve: {server.url}  (Ctrl+C per fermare)")
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        server.stop()
+        return EXIT_OK
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     """Run the stdio MCP server (debug convenience; no flags, the transport is the interface)."""
     from . import mcp_server
@@ -2269,6 +2284,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", default=None)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_auto)
+
+    p = add("serve", "UI locale: guarda il lavoro e approva i fotogrammi")
+    p.add_argument("dir", help="cartella del lavoro (dove sta progress.json)")
+    p.add_argument("--port", type=int, default=0, help="0 = porta libera scelta dal sistema")
+    p.set_defaults(func=cmd_serve)
 
     p = add("edl", "EDL v2.0 multi-sorgente: validate o render")
     edl_sub = p.add_subparsers(dest="edl_cmd", required=True)
