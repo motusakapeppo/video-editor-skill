@@ -1877,7 +1877,23 @@ def cmd_auto(args: argparse.Namespace) -> int:
 
         global _NARRATING
         _NARRATING = True
-        narrator = narrate.Narrator()
+        panel = None
+        target = getattr(args, "panel", None)
+        if target is None and not getattr(args, "no_panel", False):
+            # Default: il pannello vive accanto al master, dove si va a cercarlo.
+            out = Path(str(getattr(args, "out", "") or "out.mp4"))
+            target = str(out.parent / f"{out.stem}-auto")
+        if target and not getattr(args, "no_panel", False):
+            from . import panel as panel_mod
+
+            panel = panel_mod.Panel(
+                Path(target) / "progress.html",
+                prompt=str(getattr(args, "prompt", "")),
+                clips=_media_count(getattr(args, "assets", "")),
+                phases=list(narrate.PHASES.items()),
+            )
+            panel.write()
+        narrator = narrate.Narrator(panel=panel)
         count = _media_count(getattr(args, "assets", ""))
         narrator.header(str(getattr(args, "prompt", "")), count)
 
@@ -2216,6 +2232,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="salta il ponte analisi->assemblaggio: nessun taglio sul silenzio, "
         "nessun gain misurato sul segmento usato",
+    )
+    p.add_argument(
+        "--panel",
+        metavar="DIR",
+        default=None,
+        help="dove scrivere progress.html (default: la workdir del lavoro); "
+        "la pagina si aggiorna da sola ogni secondo",
+    )
+    p.add_argument(
+        "--no-panel",
+        action="store_true",
+        help="non scrivere il pannello: solo le righe di testo",
     )
     p.add_argument(
         "--subs",
