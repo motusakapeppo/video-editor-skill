@@ -13,8 +13,8 @@ altrimenti i numeri influenzano il giudizio e il confronto perde valore.
 
 ## Corpus pronto
 
-- Cartella: `D:\video_work\t09\clips` (10 clip, 57 MB).
-- Manifesto: `D:\video_work\t09\manifest.csv` - nome file, durata, larghezza, altezza, fps,
+- Cartella: `<WORK_DIR>\t09\clips` (10 clip, 57 MB).
+- Manifesto: `<WORK_DIR>\t09\manifest.csv` - nome file, durata, larghezza, altezza, fps,
   audio, luma media, sorgente. Sono fatti meccanici: **nessun giudizio di qualita'**.
 - Scelta: dieci clip che coprono condizioni diverse (luma da 50,6 a 119,5; verticale 474x850 e
   576x1024, orizzontale 848x480 e 1024x576, 720x1280 a 120 fps; durate da 5,9 a 91,9 s).
@@ -75,4 +75,4 @@ preliminari.
 
 `T09_modulo_annotazioni.xlsx` **non e' presente** in questa macchina (cercato in `Downloads`):
 va esportato dalla chat in cui e' stato creato. Se non e' piu' recuperabile, il ripiego e'
-`D:\video_work\t09\template_annotazioni.csv`, che ha le stesse colonne ma senza liste a tendina.
+`<WORK_DIR>\t09\template_annotazioni.csv`, che ha le stesse colonne ma senza liste a tendina.

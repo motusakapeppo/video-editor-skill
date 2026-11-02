@@ -2,7 +2,7 @@
 
 Data: 28/10/2026. Sette clip dello stesso corpus, giudizio dell'utente raccolto **prima** di
 vedere i numeri, uno alla volta, mentre guardava i fotogrammi e il video. Parole originali in
-`D:\video_work\t09\giudizi.jsonl`.
+`<WORK_DIR>\t09\giudizi.jsonl`.
 
 ## Il campione
 
