@@ -1,0 +1,17 @@
+{
+  "palette": "edit_carta",
+  "category": "editoriale",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "e6be04a8aa182caa49e903e9241429b6d0d8c338a70fd087ac6cbe83bca2bbe3",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

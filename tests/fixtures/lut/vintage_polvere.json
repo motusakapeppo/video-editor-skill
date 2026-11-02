@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_polvere",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "e0cdfb00e89ba4c0b250e10454a18c739b27b7f830670e44812dbd30779dcfb3",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

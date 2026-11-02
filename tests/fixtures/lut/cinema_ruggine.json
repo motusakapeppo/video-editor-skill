@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_ruggine",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "8de3612c47d1a43d1a3644b5e6a9274d21582b0447c5b2e83bb1896c991314d7",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

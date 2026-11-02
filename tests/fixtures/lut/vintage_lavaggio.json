@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_lavaggio",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "868f888263785b6460a228264c037d73fb927a8cc92d75d955e4a9e6061a14a1",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

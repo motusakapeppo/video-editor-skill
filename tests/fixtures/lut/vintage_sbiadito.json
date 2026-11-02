@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_sbiadito",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "eb7fc6ca83db84f00d16d97c66b2f29ac15ab47aea7474cbb2a47872cd7608ed",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

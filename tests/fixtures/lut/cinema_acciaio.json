@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_acciaio",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "a95aa11d73b6b07ba732a3882a8aaba16c5b782d62351abb841f521afec7966a",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

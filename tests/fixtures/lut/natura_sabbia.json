@@ -1,0 +1,17 @@
+{
+  "palette": "natura_sabbia",
+  "category": "natura",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "d3009671be882f1138aa7ea18045efb14505edef925a1d2ba03283df01456886",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "palette": "edit_pulito",
+  "category": "editoriale",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "4a1cc1b29cbd75e7bb68fb4d923bfdb6ef565093f50477009ad9d2f20a3fa11c",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "palette": "noir_bianco_nero",
+  "category": "noir",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "5fab6410d7ee712b8f868d51d2e5d57b558140377d058db0bd2d94c01bd08016",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

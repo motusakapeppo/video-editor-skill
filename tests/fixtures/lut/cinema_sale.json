@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_sale",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "b16101a9a95aa8059960cf5c736cfd02f00abecbeb8ef2f192472202b393ab3f",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

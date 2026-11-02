@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_ghiaccio",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "59e88eb23f0002b197df2e961645fc688d72a9be94a334d89b2d729ca1aad5e3",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_ottanta",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "c009c067ef9d53e85c68fa7457f4252afadfd42af80848e431589ad78266652d",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

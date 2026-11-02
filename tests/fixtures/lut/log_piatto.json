@@ -1,0 +1,17 @@
+{
+  "palette": "log_piatto",
+  "category": "log",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "a151caeb639c86f1f69903ed5b43d87db3ee0d7e131161c6d2e6c0edb461416b",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

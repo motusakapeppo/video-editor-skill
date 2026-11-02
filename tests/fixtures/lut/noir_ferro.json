@@ -1,0 +1,17 @@
+{
+  "palette": "noir_ferro",
+  "category": "noir",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "cc42eba0a6245529e57640942b9c177ec71a783ca50504c69f05e4641532809d",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

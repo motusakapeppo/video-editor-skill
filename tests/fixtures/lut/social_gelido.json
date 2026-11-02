@@ -1,0 +1,17 @@
+{
+  "palette": "social_gelido",
+  "category": "social",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "5495a226163db6b1c04e871ca771c1a4ac723fc730b90b1cd4674192296bc417",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

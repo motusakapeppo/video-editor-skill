@@ -1,0 +1,17 @@
+{
+  "palette": "social_terra",
+  "category": "social",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "888a6f6c54a3c347d0af38d7ef4248cf222138ff101361d1a5a88c8dcd132cd0",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

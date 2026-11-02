@@ -1,0 +1,17 @@
+{
+  "palette": "edit_pietra",
+  "category": "editoriale",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "b94771c455fb4274320e621d434f29177b71c4e47ebda5c39612787700bb3acc",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

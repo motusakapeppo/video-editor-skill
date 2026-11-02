@@ -1,0 +1,17 @@
+{
+  "palette": "social_morbido",
+  "category": "social",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "08ebd79b6bb421935d360be6563f7c40b7e37d50daaec4d257d1ae679581fe54",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

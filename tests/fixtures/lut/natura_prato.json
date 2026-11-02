@@ -1,0 +1,17 @@
+{
+  "palette": "natura_prato",
+  "category": "natura",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "f640a7515899770e9197d231269cfe0c6a6a9c5663cd177a8714344180e964e5",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

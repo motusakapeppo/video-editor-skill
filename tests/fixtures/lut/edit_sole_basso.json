@@ -1,0 +1,17 @@
+{
+  "palette": "edit_sole_basso",
+  "category": "editoriale",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "448e45cd3ac62fddf63c330d2d3e757d1524894beab6a0a73ba82cc0e0cfeb9b",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

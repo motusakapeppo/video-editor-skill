@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_ambra_scura",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "92b13f48610d31a59538dd6d05bf3689b5b79bf709bc8426efe10f9d6bb3828a",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

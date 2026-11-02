@@ -1,0 +1,17 @@
+{
+  "palette": "edit_ombra_lunga",
+  "category": "editoriale",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "59d4c074583cf1a53c585119ef6dc9e8db58fbec86d8f9414faf9040b908b42e",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

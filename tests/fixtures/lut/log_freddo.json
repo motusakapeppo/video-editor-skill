@@ -1,0 +1,17 @@
+{
+  "palette": "log_freddo",
+  "category": "log",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "23935501e5f7337da2e9bdb3a0f5a02aeb5ea0e6028fa6065e8a8362cff813c0",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

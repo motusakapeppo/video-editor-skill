@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_teal_orange",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "8ec16b4bc1332b2543c83fc7f15a662ef3975ea91d76060849ad5250e78ce9e5",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

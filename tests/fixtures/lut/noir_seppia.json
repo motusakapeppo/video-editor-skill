@@ -1,0 +1,17 @@
+{
+  "palette": "noir_seppia",
+  "category": "noir",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "ebf78d478da8f7dcde86f02f740a920a1dc0a83e7fa4118ab8598476c50bfdd9",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

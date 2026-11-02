@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_notte_ciano",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "e8fadf5e2a68d4f11e2bd1b1cb4a0a8a828ce58a3d4217fe8644fa6c663a4cfb",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

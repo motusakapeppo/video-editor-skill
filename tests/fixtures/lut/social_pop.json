@@ -1,0 +1,17 @@
+{
+  "palette": "social_pop",
+  "category": "social",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "e5d67d8608bc6386abee55a6f1732796d58163a270ddb4ce542f289ff7ca4e69",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

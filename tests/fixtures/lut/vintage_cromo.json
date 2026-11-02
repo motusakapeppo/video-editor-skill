@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_cromo",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "58e624800dadacc6e728a3ba591d59562328ae6885cd4ae978298983305579e2",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "palette": "natura_bosco",
+  "category": "natura",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "dfc726c89998713c77533e66e09e42acf6a2901c5fe6b2e2b553aabdfaeeb7be",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

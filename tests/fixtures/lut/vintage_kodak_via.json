@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_kodak_via",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "6fb36516de3374bfe191583448b30fbba57baddefd33cbe609b90720a4a57874",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

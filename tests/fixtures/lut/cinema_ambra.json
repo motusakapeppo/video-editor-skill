@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_ambra",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "989a065ab50ee7d62aa91debcd1ded1f3185a786d48e07c72b6c2b4463b7db9f",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

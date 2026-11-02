@@ -1,0 +1,17 @@
+{
+  "palette": "log_verde",
+  "category": "log",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "aaf2d499bbe823b002d046020d3a5a6b8b5bd3589d0bd03b3b066df3c14b4ec3",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

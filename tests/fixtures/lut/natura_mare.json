@@ -1,0 +1,17 @@
+{
+  "palette": "natura_mare",
+  "category": "natura",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "345b6c5df9a3087f1d65caf0e4f0f78bb32bdad7238fdcf9d0e9e17b5a79e13f",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

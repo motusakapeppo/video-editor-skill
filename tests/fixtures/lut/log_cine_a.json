@@ -1,0 +1,17 @@
+{
+  "palette": "log_cine_a",
+  "category": "log",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "d13121e696a9b34595ed7fab88405ee0ef1f77f35e60f36a86122596860ce391",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

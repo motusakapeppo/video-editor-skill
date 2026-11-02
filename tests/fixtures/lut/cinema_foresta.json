@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_foresta",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "8dffd3c34bc3dd272f42660b306754b34bd0157ce339946ae86b992639755a5b",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

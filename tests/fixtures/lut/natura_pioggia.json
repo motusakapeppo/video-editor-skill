@@ -1,0 +1,17 @@
+{
+  "palette": "natura_pioggia",
+  "category": "natura",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "47ec343e017636126917e7eb8bb4dcf7a363827598de9fd08934ae79f24530d1",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

@@ -614,9 +614,11 @@
       "acceptance": "il registro conta 50 o più voci e ogni voce ha `attribution` completa (licenza, autore, fonte); una LUT assente dal disco produce il ripiego `eq` più `colorbalance` con `fallback=true`; `protect_skin` misura la distanza su una toppa di pelle e limita la forza, con la tolleranza «da calibrare» sul corpus con volti di F6; ogni palette ha un frame di riferimento",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_lut_library.py 116 PASS: 51 palette in 7 categorie, ognuna con licenza/autore/fonte; .cube da 17^3 voci con assi nell'ordine della spec e punti campionati uguali alla ricetta; LUT assente -> fallback eq+colorbalance che renderizza (MAD 2,98); protect_skin misura dE 15,49 sulla toppa e scende a forza 0,40 (dE 5,71 <= 6,0) con tolleranza dichiarata provvisoria; 51 frame di riferimento byte-identici",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

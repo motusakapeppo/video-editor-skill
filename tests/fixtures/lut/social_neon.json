@@ -1,0 +1,17 @@
+{
+  "palette": "social_neon",
+  "category": "social",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "f4650ace5f5274973c0b94d5392119e769b92752605c81ad1d0369a83188eb0d",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

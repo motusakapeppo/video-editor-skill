@@ -1,0 +1,17 @@
+{
+  "palette": "cinema_nebbia",
+  "category": "cinema",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "03a75653e8b88bc36a3b693cfd4c8b9a66a14e72963b33d8c5fb44de0d032940",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}

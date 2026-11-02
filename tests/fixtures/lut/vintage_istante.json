@@ -1,0 +1,17 @@
+{
+  "palette": "vintage_istante",
+  "category": "vintage",
+  "fps": 12,
+  "size": [
+    144,
+    256
+  ],
+  "at": 0.5,
+  "sha256": "7ef825927ca82da2458f52b90f9b43e614dbf7233c093dacbe62615df24f7b81",
+  "fidelity": "lut3d",
+  "attribution": {
+    "license": "MIT",
+    "author": "vx.lut generator",
+    "source": "ricetta v1, sintesi deterministica in vx/lut.py"
+  }
+}
