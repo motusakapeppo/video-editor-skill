@@ -200,9 +200,11 @@
       "acceptance": "lo stesso documento reso in parallelo e in serie produce frame identici byte per byte, con tempo misurato",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_parallel_chunks.py 4 PASS: quattro chunk in parallelo byte-identici alla serie (sha256 a8682c1e), serie 3,64 s vs parallelo 0,77 s (x4,75), report jobs 1/4",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

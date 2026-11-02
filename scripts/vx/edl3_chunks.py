@@ -201,6 +201,7 @@ def render_chunked(
     settings: Optional[Mapping[str, Any]] = None,
     chunks: int = 2,
     benchmark: bool = False,
+    jobs: int = 1,
 ) -> Dict[str, Any]:
     """Render ``timeline`` as ``chunks`` resumable pieces, then join them."""
     from . import edl3_render  # noqa: PLC0415 - render-only, avoids the cycle
@@ -232,7 +233,18 @@ def render_chunked(
         memo={},
     )
 
-    records = [_render_one(run, window) for window in windows]
+    # A chunk is an independent ffmpeg process writing into its own folder, and
+    # the stage cache records each chunk atomically (temp file, then os.replace),
+    # so the windows can overlap without touching each other. `map` keeps the
+    # order of `windows`, which is what the join and the report depend on.
+    workers = max(1, min(int(jobs), len(windows)))
+    if workers == 1:
+        records = [_render_one(run, window) for window in windows]
+    else:
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415 - only here
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            records = list(pool.map(lambda window: _render_one(run, window), windows))
     proc = _join(run, [Path(record["artifact"]) for record in records])
 
     clips: List[Dict[str, Any]] = []

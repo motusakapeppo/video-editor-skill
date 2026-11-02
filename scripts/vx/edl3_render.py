@@ -2461,6 +2461,7 @@ def render(
     settings: Optional[Mapping[str, Any]] = None,
     chunks: Optional[int] = None,
     benchmark: bool = False,
+    jobs: int = 1,
 ) -> Dict[str, Any]:
     """Render ``timeline`` to ``output`` and return the compile/run report.
 
@@ -2503,9 +2504,11 @@ def render(
             settings=settings,
             chunks=int(chunks),
             benchmark=benchmark,
+            jobs=int(jobs),
         )
         report["settings_source"] = settings_source
         report["chunks_auto"] = auto_chunked
+        report["jobs"] = max(1, int(jobs))
         return report
     nested = _render_nested(timeline, script_dir, timeout, audio, settings)
     generators = _materialize_generators(timeline, script_dir, probe)
