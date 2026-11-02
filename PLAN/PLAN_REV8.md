@@ -1,6 +1,6 @@
 # Piano - Revisione 8
 
-Generato da scripts/gen_plan_rev8.py dal commit 374ece7 del 2026-11-02.
+Generato da scripts/gen_plan_rev8.py dal commit 95cadc4 del 2026-11-02.
 
 Copia in sola lettura: la fonte di verita' e' il repository (PLAN/MASTER_PLAN.md, PLAN/MASTER_LEDGER.md, PLAN/ANNEX_F.md). Non modificare questo file a mano.
 
@@ -29,7 +29,7 @@ Le fasi F20..F24 non hanno ancora righe nel ledger: i loro task sono pronti in `
 | F14 | Review Room | APERTO | 0/0 | nessuna riga in MASTER_LEDGER.md |
 | F15 | Shader, 3D e profondità | APERTO | 0/0 | nessuna riga in MASTER_LEDGER.md |
 | F16 | Prestazioni | PARZIALE | 1/6 | ledger: 1 riga DONE senza hash |
-| F17 | Vault e sicurezza dei dati | PARZIALE | 9/10 | `853a306`, `58df879`, `0b9c8a4` |
+| F17 | Vault e sicurezza dei dati | DONE | 10/10 | `853a306`, `58df879`, `0b9c8a4` +1 |
 | F18 | Qualità di consegna e torneo A/B | APERTO | 0/0 | nessuna riga in MASTER_LEDGER.md |
 | F19 | Ricette e ciclo di apprendimento | APERTO | 0/0 | nessuna riga in MASTER_LEDGER.md |
 | F20 | Segnale esterno e certificazione | APERTO | 0/0 | nessuna riga in MASTER_LEDGER.md; 7 task pronti in PLAN/LEDGER_PATCH.md, tutti aperti |
@@ -299,7 +299,7 @@ Accettazione: dopo 50 uccisioni casuali del processo (terminazione reale: `taskk
 | F17-T07 | DONE |
 | F17-T08 | DONE |
 | F17-T09 | DONE |
-| F17-T10 | TODO |
+| F17-T10 | DONE |
 
 ### F18 - Qualità di consegna e torneo A/B
 
