@@ -83,6 +83,7 @@ class Narrator:
                 self.panel.finish(
                     ", ".join(str(item) for item in warnings) or "consegnato",
                     elapsed=elapsed,
+                    master=str(report.get("master") or ""),
                 )
             except Exception:  # noqa: BLE001
                 pass

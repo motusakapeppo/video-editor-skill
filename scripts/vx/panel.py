@@ -54,6 +54,7 @@ class Panel:
     percent: float = 0.0
     elapsed: float = 0.0
     note: str = ""
+    master: str = ""
 
     def record(self, percent: float, stage: str, *, elapsed: float = 0.0) -> None:
         key = str(stage)
@@ -66,11 +67,12 @@ class Panel:
         self.elapsed = float(elapsed)
         self.write()
 
-    def finish(self, note: str = "", *, elapsed: float = 0.0) -> None:
+    def finish(self, note: str = "", *, elapsed: float = 0.0, master: str = "") -> None:
         self.current = None
         self.percent = 100.0
         self.elapsed = float(elapsed)
         self.note = note
+        self.master = str(master or "")
         self.write()
 
     def write(self) -> Path:
@@ -92,6 +94,7 @@ class Panel:
             "done": list(self.done),
             "current": self.current,
             "note": self.note,
+            "master": self.master,
             "phases": [{"key": key, "label": label} for key, label in self.phases],
         }
 

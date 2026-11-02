@@ -121,6 +121,51 @@ def main() -> int:
             after = json.loads(get(server.url + "api/state").decode("utf-8"))
             check("S3 the state reflects the approval", after["approved"] is True, after["approved"])
 
+            # -- il risultato: esiste solo quando c'e' davvero --------------- #
+            master = Path(raw) / "master.mp4"
+            master.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"v" * 3000)
+            progress = json.loads((job / "progress.json").read_text(encoding="utf-8"))
+            progress["master"] = str(master)
+            (job / "progress.json").write_text(json.dumps(progress), encoding="utf-8")
+
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            check(
+                "S5 the state says the result is ready, with its size",
+                data["master_ready"] is True and data["master_bytes"] > 0 and data["master"] == "master.mp4",
+                {k: data[k] for k in ("master", "master_ready", "master_bytes")},
+            )
+
+            with urllib.request.urlopen(server.url + "result", timeout=10) as response:
+                body = response.read()
+                check(
+                    "S5 the result is served as video, whole",
+                    response.status == 200
+                    and response.headers.get("Content-Type") == "video/mp4"
+                    and len(body) == master.stat().st_size,
+                    f"{response.status} {len(body)}",
+                )
+            request = urllib.request.Request(server.url + "result", headers={"Range": "bytes=100-199"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                chunk = response.read()
+                check(
+                    "S5 a Range request returns 206 and the right slice",
+                    response.status == 206 and len(chunk) == 100
+                    and response.headers.get("Content-Range") == f"bytes 100-199/{master.stat().st_size}",
+                    f"{response.status} {len(chunk)}",
+                )
+
+            master.unlink()
+            try:
+                get(server.url + "result")
+                missing_master = False
+            except Exception:  # noqa: BLE001
+                missing_master = True
+            check(
+                "S5 with the file gone the result is 404, not a broken player",
+                missing_master,
+                "404",
+            )
+
             (job / "keyframes" / "pending.json").unlink()
             second = post(server.url + "api/approve")
             check(

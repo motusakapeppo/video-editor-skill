@@ -112,6 +112,9 @@ def state(root: Path) -> Dict[str, Any]:
             for item in sorted(frames_dir.glob("*.png"))
         ]
     record = keygate.read(base / keygate.RECORD_NAME)
+    master_text = str(progress.get("master") or "")
+    master = Path(master_text) if master_text else None
+    ready = bool(master and master.is_file() and master.stat().st_size > 0)
     return {
         "prompt": progress.get("prompt") or "",
         "clips": progress.get("clips") or 0,
@@ -122,6 +125,9 @@ def state(root: Path) -> Dict[str, Any]:
         "phases": progress.get("phases") or [],
         "frames": frames,
         "approved": bool(record and record.get("approved") is True),
+        "master": master.name if ready and master is not None else "",
+        "master_ready": ready,
+        "master_bytes": master.stat().st_size if ready and master is not None else 0,
     }
 
 
@@ -202,6 +208,9 @@ def make_handler(root: Path):
                 self._send(json.dumps(state(root), ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
+            if self.path in ("/result", "/result.mp4"):
+                self._result()
+                return
             if self.path.startswith("/frames/"):
                 name = Path(self.path[len("/frames/"):]).name
                 candidate = root / "keyframes" / name
@@ -213,6 +222,54 @@ def make_handler(root: Path):
                     self._send(b"not found", "text/plain", status=404)
                 return
             self._send(b"not found", "text/plain", status=404)
+
+        def _result(self) -> None:
+            """Il master, con Range: il browser deve poter scorrere."""
+            root_state = state(root)
+            master_text = str(_read_json(root / "progress.json").get("master") or "")
+            if not master_text:
+                master_text = str(_read_json(root / "master-auto" / "progress.json").get("master") or "")
+            path = Path(master_text) if master_text else None
+            if not root_state.get("master_ready") or path is None or not path.is_file():
+                body = b"il master non esiste ancora"
+                self.send_response(404)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            size = path.stat().st_size
+            start, end = 0, size - 1
+            status = 200
+            header = self.headers.get("Range")
+            if header and header.startswith("bytes="):
+                chunk = header[len("bytes="):].split(",")[0].strip()
+                first, _, last = chunk.partition("-")
+                try:
+                    start = int(first) if first else 0
+                    end = int(last) if last else size - 1
+                except ValueError:
+                    start, end = 0, size - 1
+                start = max(0, min(start, size - 1))
+                end = max(start, min(end, size - 1))
+                status = 206
+            length = end - start + 1
+            self.send_response(status)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(length))
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.end_headers()
+            with path.open("rb") as handle:
+                handle.seek(start)
+                remaining = length
+                while remaining > 0:
+                    block = handle.read(min(65536, remaining))
+                    if not block:
+                        break
+                    self.wfile.write(block)
+                    remaining -= len(block)
 
         def do_POST(self):  # noqa: D102
             if self.path == "/api/approve":
