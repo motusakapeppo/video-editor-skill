@@ -83,9 +83,9 @@ nel report (`triage.status = "autonomous"`, `triage.defaults`, provenienza
 & $PY $VX plan --report "<WORK_DIR>\clip-a1b2c3d4\report.json" --answers "%USERPROFILE%\answers.json" --out "<WORK_DIR>\clip-a1b2c3d4\plan.json"
 ```
 
-**5. Run.** Esegue ingest, piano, sottotitoli, render proxy, render full, QC e
-deliverables in un colpo. Per una corsa manuale restano i comandi singoli:
-`subs`, `render --precision proxy`, `render --precision full`, `qc`, `deliverables`.
+**5. Run.** Esegue ingest, piano, sottotitoli, render e QC in un colpo. Dura
+minuti: timeout del tool disattivato o background, mai interrotto a metà. Per
+una corsa manuale restano `subs`, `render --precision proxy|full`, `qc`, `deliverables`.
 
 ```powershell
 & $PY $VX run --input "%USERPROFILE%\clip.mp4" --answers "%USERPROFILE%\answers.json"

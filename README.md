@@ -53,7 +53,7 @@ non la differenza di montaggio.
 |---|---|---|
 | Python | 3.10+ | dentro un virtualenv dedicato |
 | ffmpeg | 8.x | build con `libass`, `vidstab`, `loudnorm`, `silencedetect` (es. gyan.dev essentials) |
-| opencode | — | la skill si attiva da sola su file video e richieste di editing |
+| opencode | 2.x | la skill si attiva da sola su file video e richieste di editing |
 
 Dipendenze Python:
 
@@ -64,6 +64,20 @@ python -m venv <venv>
 ```
 
 ## Installazione
+
+La skill vive in una cartella il cui nome è il suo ID:
+
+```text
+~/.config/opencode/skills/video-editor/
+├── SKILL.md
+├── scripts/
+├── references/
+└── assets/
+```
+
+OpenCode 2 la scopre lì e, per compatibilità, anche nella vecchia cartella
+`~/.config/opencode/skill/`. La si sposta intera, non solo `SKILL.md`: i percorsi
+scritti dentro la skill sono relativi alla cartella che contiene `SKILL.md`.
 
 L'unico modo supportato è l'install editable dalla radice del repo:
 
@@ -76,6 +90,20 @@ vx doctor
 `vx --version` stampa `vx 1.5.0`; `vx doctor` deve dire `ready`. L'install crea
 anche `vx-mcp`, il server MCP su stdio. Un'install non editable non è
 supportata: `SKILL_ROOT` e `assets/fonts/` devono restare nel repo.
+
+Se il repo viene spostato, l'install editable va rifatta dalla nuova radice:
+l'entry point contiene il percorso assoluto del pacchetto. Il server MCP si
+registra in OpenCode 2 con un comando, senza toccare il resto della
+configurazione:
+
+```powershell
+opencode mcp add video-editor --global --env PYTHONIOENCODING=utf-8 -- "<venv>\Scripts\vx-mcp.exe"
+opencode mcp list
+```
+
+`mcp list` deve mostrare `video-editor  connected`. La skill resta usabile anche
+senza MCP: la CLI è il protocollo normativo, l'MCP è la sua variante per agenti.
+Dettagli, forma JSON e differenze V1/V2 in `references/24-api-e-mcp.md`.
 
 ## Setup
 

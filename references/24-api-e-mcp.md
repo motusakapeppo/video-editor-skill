@@ -136,7 +136,7 @@ elemento `content`.
 Una riga che supera il limite di annidamento del parser riceve `-32700` e il
 server continua a servire le righe successive.
 
-### I quattro tool
+### I sei tool
 
 | Tool | Argomenti obbligatori | Argomenti opzionali | Restituisce |
 |---|---|---|---|
@@ -144,13 +144,64 @@ server continua a servire le righe successive.
 | `vx_triage` | `path`, `width`, `height` | `manifest`, `require_anchor` | il payload del triage più `total` |
 | `vx_edl_validate` | `plan` | nessuno | `ok`, `errors`, `grammar`, `camera_exemptions` e il riepilogo quando `ok` |
 | `vx_auto` | `prompt`, `assets`, `out` | `workdir`, `fps`, `manifest`, `autonomous`, `crf`, `preset` | il report di `auto` |
+| `vx_job_submit` | `prompt`, `assets`, `out` | `workdir`, `fps`, `manifest`, `autonomous`, `crf`, `preset` | il record `queued` con il `job_id` |
+| `vx_job_status` | `job_id` (32 esadecimali minuscoli) | nessuno | il record del job: stato, percentuale, stadio, risultato o errore |
 
 `vx_auto` è sincrono e può durare minuti: il timeout è del client. Per un
-client interattivo la CLI è preferibile. Scrive `plan.json` e
+client interattivo la CLI è preferibile, e per un lavoro lungo `vx_job_submit`
+(vedi `references/25-job-engine.md`). Scrive `plan.json` e
 `auto_report.json` sotto `<workdir>`; il master va in `out` e i deliverable in
 `<workdir>/out`.
 
-### Configurazione del client
+### Configurazione del client: OpenCode 2
+
+OpenCode 2 legge i server sotto `mcp.servers`; il vecchio `mcp.<nome>` della V1
+è ancora normalizzato, ma la forma nativa è questa. Il comando ufficiale evita
+di riscrivere il resto del file:
+
+```powershell
+opencode mcp add video-editor --global `
+  --env PYTHONIOENCODING=utf-8 `
+  -- "<venv>\Scripts\vx-mcp.exe"
+```
+
+Equivalente in `opencode.json`, con la stessa forma che scrive la CLI:
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "video-editor": {
+        "type": "local",
+        "command": ["<venv>/Scripts/vx-mcp.exe"],
+        "environment": { "PYTHONIOENCODING": "utf-8" }
+      }
+    }
+  }
+}
+```
+
+Senza install editable servono l'interprete e il percorso del pacchetto:
+`"command": ["<venv>/Scripts/python.exe", "-m", "vx.mcp_server"]` con
+`"environment": {"PYTHONPATH": "<repo>/scripts"}`.
+
+Due cose cambiano rispetto alla V1 e vanno sapute:
+
+- **Code Mode è il default.** Con `codemode` assente o `true`, i tool non
+  finiscono nell'elenco nativo del modello: arrivano dentro `execute` come
+  `tools["video-editor"].vx_doctor(...)`. È la stessa superficie, con un livello
+  in più. `"codemode": false` li riporta nell'elenco nativo, dove il nome è
+  normalizzato `<server>_<tool>` (`video_editor_vx_auto`).
+- **Il timeout di esecuzione è 12 ore** (`mcp.timeout.execution`), non i 30
+  secondi del catalogo. Un `vx_auto` sincrono non muore più a metà per il
+  timeout del client; resta il caso del client che chiude la sessione, e per
+  quello c'è il motore di job.
+
+La skill è scoperta da `~/.config/opencode/skills/video-editor/` (forma
+preferita dalla V2) e, per compatibilità, da `~/.config/opencode/skill/video-editor/`.
+Il nome del server MCP non dipende da dove vive la cartella.
+
+### Configurazione di un client MCP generico
 
 ```json
 {
@@ -174,7 +225,9 @@ Con l'install editable, `command` può essere `vx-mcp` e `args` vuoto.
 - Solo stdio: nessuna rete, nessuna autenticazione.
 - L'install non editable non è supportata: `SKILL_ROOT` e `assets/fonts/`
   devono restare nel repo.
-- Nessun modello di job: se il client chiude lo stdio, il processo termina.
+- Il motore di job non ha cancellazione e non ha un demone: il worker è un
+  processo staccato, e un job avviato arriva a `completed` o `failed`
+  (`references/25-job-engine.md`).
 - `vx_auto` non esegue whisper: non ci sono ancoraggi da trascrizione e i
   B-roll sono distribuiti uniformemente e dichiarati.
 - Senza metadati di camera ogni taglio è un'esenzione dichiarata.
