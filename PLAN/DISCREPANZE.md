@@ -178,3 +178,29 @@ nessuna calibrazione del tremolio e' possibile - e il test
 `tests/test_shake_real_set.py` fallisce apposta il giorno in cui la metrica migliora,
 perche' a quel punto la soglia va rifatta, non ereditata.
 
+
+
+## D-25 — "16:9" nel prompt non cambia il formato; la piattaforma sì (2/11/2026)
+
+Trovato eseguendo un lavoro reale su clip scaricate. Tre prompt, stesso parser:
+
+| prompt | formato scelto | genere |
+|---|---|---|
+| "montaggio orizzontale 16:9 da 30 secondi" | **9:16** | tiktok_promo |
+| "video orizzontale 16:9, 30 secondi" | **9:16** | tiktok_promo |
+| "montaggio cinematografico orizzontale, 30 secondi" | **9:16** | tiktok_promo |
+| "montaggio per YouTube, 30 secondi" | **16:9** | youtube_promo |
+| "reel verticale 9:16, 30 secondi" | 9:16 | reel_promo |
+
+Il token del formato e' riconosciuto dalla regex (`decide.py:274`) ma non entra nella
+scelta: decide il **genere**, e il genere lo decide la piattaforma. Chi scrive "16:9"
+riceve un verticale e non se ne accorge fino al render — che poi viene rifiutato dai
+cancelli di risoluzione, perche' un 1920x1080 non si upscala a 1080x1920.
+
+**Perche' conta.** Il messaggio d'errore che l'utente vede e' `RESOLUTION_TOO_LOW` su
+tutte le clip: sembra un problema del materiale, ed e' invece un formato scelto contro
+la richiesta. Il rimedio onesto: se il prompt nomina un formato, quel formato vince sul
+genere; oppure l'incoerenza va dichiarata prima del render, non dopo.
+
+Non l'ho corretto in fretta: cambia la scelta del piano per ogni prompt che nomina un
+formato, e vuole la sua prova sul parser e sui documenti gia' prodotti.
