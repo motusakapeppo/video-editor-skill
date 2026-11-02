@@ -65,7 +65,7 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
 | composizione | `templates.py` (7 disegni), `slotfill.py`, `multiratio.py`, `curation.py` |
 | cancello keyframe | `keygate.py` |
 | board | `scripts/vx_tasks.py` + `PLAN/TASKS.json` |
-| ripresa lunga | `D:\video_work\RIPRESA SKILL VIDEO EDITOR.md` |
+| ripresa lunga | `<WORK_DIR>/RIPRESA SKILL VIDEO EDITOR.md` |
 
 ## L'unico task bloccato
 
