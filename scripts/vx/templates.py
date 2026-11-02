@@ -135,11 +135,12 @@ def lint(template: Template) -> List[str]:
         if count > 1:
             problems.append(f"param {name!r} declared {count} times")
 
-    for ratio in RATIOS:
-        layout = template.layouts.get(ratio)
-        if layout is None:
-            problems.append(f"layout {ratio}: missing")
-            continue
+    if not template.layouts:
+        problems.append("layouts: no layout declared")
+    for ratio in template.layouts:
+        if ratio not in RATIOS:
+            problems.append(f"layout {ratio!r}: ratio is not declared")
+    for ratio, layout in template.layouts.items():
         missing = [slot.name for slot in template.slots if slot.name not in layout]
         if missing:
             problems.append(f"layout {ratio}: slots missing {missing}")
@@ -409,6 +410,22 @@ _TEMPLATES: Tuple[Template, ...] = (
             ),
         },
         why="Titoli di coda: chi ha fatto cosa, con la riga di chiusura in fondo.",
+    ),
+    Template(
+        name="banner",
+        family="title",
+        slots=_slots(
+            ("media", "image", "background"),
+            ("headline", "text", "headline"),
+        ),
+        params=_params(("tracking", 0.0, 0.2, 0.04)),
+        layouts={
+            "16:9": _boxes(
+                ("media", 0.0, 0.0, 1.0, 1.0),
+                ("headline", 0.06, 0.40, 0.88, 0.18),
+            ),
+        },
+        why="Solo orizzontale, per scelta: un banner non si gira in verticale, si dichiara.",
     ),
 )
 

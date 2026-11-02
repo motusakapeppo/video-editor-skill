@@ -740,9 +740,11 @@
       "acceptance": "da un progetto escono 3 proporzioni; un template che esiste solo in orizzontale dichiara la degradazione invece di ritagliare in silenzio; il test conta gli stadi eseguiti e prova il riuso della cache fra le proporzioni",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_multiratio.py 9 PASS: 3 proporzioni -> 3 frame (640x360, 360x640, 480x480); banner solo orizzontale dichiara layout_missing con ripiego pillarbox e nessun frame per 9:16, mentre 16:9 rende; cache condivisa: 1 stadio e 2 riusi sui tre formati, seconda esecuzione nessuno stadio (1 stadio, 3 riusi)",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

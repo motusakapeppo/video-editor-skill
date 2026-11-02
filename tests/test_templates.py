@@ -39,8 +39,8 @@ def check(label: str, ok: bool, detail: object = "") -> None:
 def main() -> int:
     # S1 -------------------------------------------------------------------- #
     check(
-        "S1 six templates, six families",
-        templates.count() == 6 and all(templates.by_family().values()),
+        "S1 seven templates, six families",
+        templates.count() == 7 and all(templates.by_family().values()),
         {family: len(names) for family, names in templates.by_family().items()},
     )
     check("S1 the registry is clean", not templates.validate(), templates.validate())
@@ -54,10 +54,10 @@ def main() -> int:
     bad_layouts = [
         name
         for name, template in templates.REGISTRY.items()
-        if set(template.layouts) != set(templates.RATIOS)
+        if not template.layouts
         or any(set(layout) != {slot.name for slot in template.slots} for layout in template.layouts.values())
     ]
-    check("S1 every template has a layout per ratio, covering every slot", not bad_layouts, bad_layouts)
+    check("S1 every template declares layouts covering every slot", not bad_layouts, bad_layouts)
     bad_params = [
         f"{name}.{param.name}"
         for name, template in templates.REGISTRY.items()
