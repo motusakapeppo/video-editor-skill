@@ -34,7 +34,10 @@ anche lanciato da una cartella qualsiasi; `tests/test_packaging.py` 16 PASS.
 Registrato con il comando ufficiale, che riscrive solo la propria voce:
 
 ```powershell
-opencode mcp add video-editor --global --env PYTHONIOENCODING=utf-8 -- "<VENV>\Scripts\vx-mcp.exe"
+opencode mcp add video-editor --global `
+  --env PYTHONIOENCODING=utf-8 `
+  --env PYTHONPATH="<repo>\scripts" `
+  -- "<VENV>\Scripts\python.exe" -m vx.mcp_server
 ```
 
 La voce scritta è quella nativa V2:
@@ -43,11 +46,21 @@ La voce scritta è quella nativa V2:
 {
   "mcp": { "servers": { "video-editor": {
     "type": "local",
-    "command": ["<VENV>/Scripts/vx-mcp.exe"],
-    "environment": { "PYTHONIOENCODING": "utf-8" }
+    "command": ["<VENV>/Scripts/python.exe", "-m", "vx.mcp_server"],
+    "environment": {
+      "PYTHONIOENCODING": "utf-8",
+      "PYTHONPATH": "<repo>/scripts"
+    }
   } } }
 }
 ```
+
+La forma `-m` è quella provata. L'entry point `vx-mcp.exe` risponde quando lo si
+lancia a mano (`initialize` + `tools/list`: sei tool), ma avviato dal servizio
+desktop usciva con codice 255 e la connessione non si apriva; con `python -m
+vx.mcp_server` la connessione è immediata. Se il workspace ha un proprio
+`.opencode/opencode.json` la voce va scritta lì, senza `--global`: è quello che
+fa comparire il server nell'elenco di quella cartella.
 
 Prove: `opencode mcp list` → `✓ video-editor connected`; il log del servizio
 registra `mcp connected server=video-editor tools=6`; un handshake diretto

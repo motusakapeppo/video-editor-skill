@@ -162,7 +162,8 @@ di riscrivere il resto del file:
 ```powershell
 opencode mcp add video-editor --global `
   --env PYTHONIOENCODING=utf-8 `
-  -- "<venv>\Scripts\vx-mcp.exe"
+  --env PYTHONPATH="<repo>\scripts" `
+  -- "<venv>\Scripts\python.exe" -m vx.mcp_server
 ```
 
 Equivalente in `opencode.json`, con la stessa forma che scrive la CLI:
@@ -173,17 +174,26 @@ Equivalente in `opencode.json`, con la stessa forma che scrive la CLI:
     "servers": {
       "video-editor": {
         "type": "local",
-        "command": ["<venv>/Scripts/vx-mcp.exe"],
-        "environment": { "PYTHONIOENCODING": "utf-8" }
+        "command": ["<venv>/Scripts/python.exe", "-m", "vx.mcp_server"],
+        "environment": {
+          "PYTHONIOENCODING": "utf-8",
+          "PYTHONPATH": "<repo>/scripts"
+        }
       }
     }
   }
 }
 ```
 
-Senza install editable servono l'interprete e il percorso del pacchetto:
-`"command": ["<venv>/Scripts/python.exe", "-m", "vx.mcp_server"]` con
-`"environment": {"PYTHONPATH": "<repo>/scripts"}`.
+L'entry point `vx-mcp` funziona lanciato a mano (risponde a `initialize` e
+`tools/list`), ma avviato dal servizio desktop è uscito con codice 255 e la
+connessione non si apriva; la forma `python -m vx.mcp_server` con `PYTHONPATH`
+si connette subito. Se si usa l'entry point, `command` è `["<venv>/Scripts/vx-mcp.exe"]`
+e `PYTHONPATH` non serve (l'install editable lo fornisce).
+
+In un progetto con un proprio `.opencode/opencode.json` la voce va messa lì
+(senza `--global`): quel file è la configurazione di progetto e il server deve
+comparire nell'elenco di quella cartella.
 
 Due cose cambiano rispetto alla V1 e vanno sapute:
 

@@ -97,13 +97,20 @@ registra in OpenCode 2 con un comando, senza toccare il resto della
 configurazione:
 
 ```powershell
-opencode mcp add video-editor --global --env PYTHONIOENCODING=utf-8 -- "<venv>\Scripts\vx-mcp.exe"
+opencode mcp add video-editor --global `
+  --env PYTHONIOENCODING=utf-8 `
+  --env PYTHONPATH="<repo>\scripts" `
+  -- "<venv>\Scripts\python.exe" -m vx.mcp_server
 opencode mcp list
 ```
 
-`mcp list` deve mostrare `video-editor  connected`. La skill resta usabile anche
-senza MCP: la CLI è il protocollo normativo, l'MCP è la sua variante per agenti.
-Dettagli, forma JSON e differenze V1/V2 in `references/24-api-e-mcp.md`.
+`mcp list` deve mostrare `video-editor  connected`. La forma `python -m
+vx.mcp_server` è quella provata: l'entry point `vx-mcp` risponde a mano ma
+avviato dal servizio desktop usciva con 255. In un progetto con un proprio
+`.opencode/opencode.json` la voce va scritta lì, senza `--global`. La skill resta
+usabile anche senza MCP: la CLI è il protocollo normativo, l'MCP è la sua
+variante per agenti. Dettagli, forma JSON e differenze V1/V2 in
+`references/24-api-e-mcp.md`.
 
 ## Setup
 
