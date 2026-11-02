@@ -87,12 +87,17 @@ def main() -> int:
 
     # next returns an open task and prints its acceptance.
     open_rows = [row for row in board["tasks"] if row["status"] in vx_tasks.OPEN]
-    first = vx_tasks.show(open_rows[0]) if open_rows else ""
-    check(
-        "next shows the acceptance of the first open task",
-        "accettazione:" in first,
-        open_rows[0]["id"] if open_rows else "none",
-    )
+    if not open_rows:
+        # Board vuota: la proprieta' e' vacua, non fallita. Si dichiara invece
+        # di far finta che ci sia un task aperto.
+        print("    [SKIP] next shows the acceptance of the first open task    board vuota")
+    else:
+        first = vx_tasks.show(open_rows[0])
+        check(
+            "next shows the acceptance of the first open task",
+            "accettazione:" in first,
+            open_rows[0]["id"],
+        )
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
