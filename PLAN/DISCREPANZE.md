@@ -110,3 +110,37 @@ tentativo non avrebbe aggiunto informazione, e non l'ho fatto.
 (`tests/fixtures/corpus_ladder.json`) e sono esposte da `registry.provenance()`;
 il loro uso nel triage e' un task separato, perche' cambiare le bande cambia i
 verdetti e vuole la sua prova. Non si e' spacciato per fatto cio' che non lo e'.
+
+
+## D-24 — il tremolio: la metrica non distingue una panoramica da un tremore (2/11/2026)
+
+Cinque estratti da 4 secondi di materiale reale, giudicati a vista dall'utente:
+
+| clip | giudizio umano | jitter misurato |
+|---|---|---|
+| r3 | ok | 0,031 |
+| r5 | ok | 0,026 |
+| r1 | light | 0,213 |
+| r2 | **panoramica, non oscillazione** | **1,717** |
+| r4 | evident | 4,226 |
+
+Il difetto: `measure_jitter` cumula il flusso mediano in un percorso, toglie la media
+mobile a 0,5 s e misura il residuo. **La panoramica di r2 vale 1,717 e il tremolio vero
+di r4 vale 4,226**: un fattore 2,5. Nessuna soglia su questo numero puo' separare le
+due cose, e infatti la soglia presa dal sintetico (0,227) avrebbe flaggato c09, giudicata
+la migliore.
+
+Ho provato il candidato ovvio — residuo sulla **velocita'** invece che sul percorso
+cumulato — e non cambia nulla: r2 0,263 contro r4 0,845, sempre un fattore 3,2. Il
+residuo e' rumore di stima del flusso, proporzionale alla velocita': 7% sul pan, 9% sul
+tremolio. Derivare non elimina il rumore, lo amplifica.
+
+**Conseguenza.** La soglia del tremolio resta `null` e il task resta onesto: nessun
+numero. Il set di giudizi (5 clip, reali, con il valore misurato accanto) e' in
+`tests/fixtures/corpus_shake_real.json` ed e' la verita' di riferimento per il lavoro
+che serve: un estimatore diverso (omografia RANSAC su punti tracciati, o correlazione
+di fase su frame sfocati), validato su questo set. Finche' l'estimatore non cambia,
+nessuna calibrazione del tremolio e' possibile - e il test
+`tests/test_shake_real_set.py` fallisce apposta il giorno in cui la metrica migliora,
+perche' a quel punto la soglia va rifatta, non ereditata.
+

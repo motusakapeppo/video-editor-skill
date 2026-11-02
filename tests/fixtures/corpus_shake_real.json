@@ -1,0 +1,51 @@
+{
+  "schema": "vx.shake_real/1",
+  "judge": "utente, video riprodotti uno alla volta, 2/11/2026",
+  "unit": "estratti da 4 s, misurati sull'estratto e non sulla clip intera",
+  "clips": [
+    {
+      "id": "r1",
+      "source": "t09_04_WhatsApp_Video_2026-10-26_at_23.08.00.mp4",
+      "jitter": 0.213,
+      "judgment": "light"
+    },
+    {
+      "id": "r2",
+      "source": "t09_10_WhatsApp_Video_2026-10-26_at_23.02.09_(1).mp4",
+      "jitter": 1.717,
+      "judgment": "pan",
+      "note": "la camera si muove per inquadratura, non oscilla"
+    },
+    {
+      "id": "r3",
+      "source": "t09_08_WhatsApp_Video_2026-10-26_at_23.02.21.mp4",
+      "jitter": 0.031,
+      "judgment": "ok"
+    },
+    {
+      "id": "r4",
+      "source": "t09_02_WhatsApp_Video_2026-10-26_at_23.02.09.mp4",
+      "jitter": 4.226,
+      "judgment": "evident"
+    },
+    {
+      "id": "r5",
+      "source": "t09_09_VID-20250530-WA0072.mp4",
+      "jitter": 0.026,
+      "judgment": "ok"
+    }
+  ],
+  "candidate": {
+    "name": "velocity residual",
+    "values": {
+      "r1": 0.039,
+      "r2": 0.263,
+      "r3": 0.007,
+      "r4": 0.845,
+      "r5": 0.006
+    },
+    "verdict": "non separa: r2/r4 = 3,2 con il residuo contro 2,5 con la metrica attuale",
+    "why": "il residuo e' rumore di stima del flusso, proporzionale alla velocita' (7-9% in entrambi i casi); integrare o derivare non cambia il rapporto"
+  },
+  "conclusion": "la metrica attuale non distingue una panoramica da un tremolio: 1,717 contro 4,226, un fattore 2,5. Nessuna soglia su questo numero e' valida. Serve un estimatore diverso (omografia RANSAC su punti tracciati, o correlazione di fase su frame sfocati), con questo set di giudizi come golden."
+}

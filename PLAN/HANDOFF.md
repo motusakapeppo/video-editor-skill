@@ -12,8 +12,8 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
   `vx doctor` = ready.
 - Suite completa: **174 runner / 5652 assert / 0 fail / 2 skip in 1309,8 s**
   (dopo `0cf9677`).
-- Board: **95 chiusi con prova, 1 bloccato** (`F0-T09`: venti giudizi umani, non
-  si inventano). Nessun task aperto.
+- Board: **96 chiusi con prova, 0 aperti, 0 bloccati**. `F0-T09` è chiuso: corpus
+  annotato, scala di difetti, soglie derivate e test che le verifica.
 - Fasi chiuse e taggate: F1, F2, F3, F4, F16, F26, F27, F28, **F25** (T01…T15).
 - Albero pulito, remoto allineato, nessun processo in background.
 
@@ -71,13 +71,22 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
 | board | `scripts/vx_tasks.py` + `PLAN/TASKS.json` |
 | ripresa lunga | `<WORK_DIR>/RIPRESA SKILL VIDEO EDITOR.md` |
 
-## L'unico task bloccato
+## Il prossimo lavoro, che non è sul board perché è nato dopo
 
-`F0-T09` — corpus annotato per calibrare le soglie. Servono **almeno venti
-giudizi umani** su clip veri; ce ne sono sette e non separano. Non si inventano:
-il task resta `blocked` finche' qualcuno non li fornisce. Quando arriveranno:
-`python scripts/vx_tasks.py block F0-T09` (sblocco) e poi il criterio nel campo
-`acceptance` di `PLAN/TASKS.json`.
+`D-24`: **la metrica del tremolio non distingue una panoramica da un tremore.** Su
+materiale reale, un pan di inquadratura misura 1,717 e un tremolio vero 4,226 — un
+fattore 2,5. Il candidato ovvio (residuo sulla velocità invece che sul percorso) non
+separa: 0,263 contro 0,845, sempre 3,2×, perché il residuo è rumore di stima
+proporzionale alla velocità.
+
+Serve un **estimatore diverso** — omografia RANSAC su punti tracciati, o correlazione
+di fase su frame sfocati — validato su `tests/fixtures/corpus_shake_real.json` (cinque
+estratti reali con il giudizio umano accanto). Il test `tests/test_shake_real_set.py`
+fallisce apposta il giorno in cui la metrica migliora: a quel punto la soglia va
+rifatta su quel set, non ereditata dal sintetico.
+
+Finché l'estimatore non cambia, la soglia del tremolio resta `null`, e nessun numero
+inventato prende il suo posto.
 
 ## Convenzioni di scrittura
 
