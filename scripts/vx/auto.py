@@ -688,7 +688,8 @@ def _run_locked(
     bridge_report: Any = None
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge", log=log, status="start")
-        subs_enabled = not bool(getattr(args, "no_subs", False))
+        # Un testo sopra il video non si scrive se nessuno l'ha chiesto.
+        subs_enabled = bool(getattr(args, "subs", False))
         plan, bridge_report, analyses = _bridge_plan(
             plan,
             captions=subs_enabled,

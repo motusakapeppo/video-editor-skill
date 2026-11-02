@@ -2182,9 +2182,17 @@ def build_parser() -> argparse.ArgumentParser:
         "nessun gain misurato sul segmento usato",
     )
     p.add_argument(
+        "--subs",
+        action="store_true",
+        help=(
+            "brucia i sottotitoli dalla trascrizione; senza questo flag non si "
+            "scrive nessun testo sopra il video"
+        ),
+    )
+    p.add_argument(
         "--no-subs",
         action="store_true",
-        help="nessun sottotitolo: salta la trascrizione e non brucia le caption",
+        help="compatibilita': i sottotitoli sono gia' spenti di default",
     )
     p.add_argument(
         "--no-feature",
