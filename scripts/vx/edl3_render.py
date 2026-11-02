@@ -57,6 +57,7 @@ script, runs ffmpeg with ``-filter_complex_script`` and returns the report.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -2274,6 +2275,24 @@ def _materialize_generators(
     return paths
 
 
+#: One filtergraph grows with the timeline: a 60 s master at 1080x1920 reached
+#: 5.848 MB of working set and over eleven minutes without writing a frame
+#: (D-12, measured on the profile test of 28/10). The chunk path keeps every
+#: graph small: 1.085-1.517 MB per profile in F26-T06. Above this many seconds a
+#: render takes the chunk path on its own, so a long document cannot fall into
+#: the unbounded one by forgetfulness.
+AUTO_CHUNK_ABOVE_SEC = 120.0
+AUTO_CHUNK_SECONDS = 20.0
+
+
+def auto_chunks(duration: float) -> Optional[int]:
+    """The chunk count a document needs, or ``None`` when one graph is enough."""
+    seconds = float(duration or 0.0)
+    if seconds <= AUTO_CHUNK_ABOVE_SEC:
+        return None
+    return max(2, int(math.ceil(seconds / AUTO_CHUNK_SECONDS)))
+
+
 def render(
     timeline: Timeline3,
     output: Any,
@@ -2289,9 +2308,12 @@ def render(
 
     ``chunks`` selects the resumable path: at least two chunks are rendered and
     recorded by :mod:`vx.edl3_chunks`, which skips a chunk whose recorded inputs
-    still match. The default ``None`` is the single ffmpeg process this engine
-    has always run, and its graph is untouched. ``benchmark`` asks ffmpeg for its
-    own ``-benchmark`` line, reported under ``benchmark``.
+    still match. With ``None`` a document longer than :data:`AUTO_CHUNK_ABOVE_SEC`
+    takes that path on its own (``chunks_auto`` in the report), because one graph
+    for a long timeline grows without bound; a short document keeps the single
+    ffmpeg process this engine has always run, and its graph is untouched.
+    ``benchmark`` asks ffmpeg for its own ``-benchmark`` line, reported under
+    ``benchmark``.
     """
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -2305,6 +2327,12 @@ def render(
         settings_source = "probe"
     else:
         settings_source = "declared"
+    auto_chunked = False
+    if chunks is None:
+        decided = auto_chunks(float(getattr(timeline, "duration", 0.0) or 0.0))
+        if decided is not None:
+            chunks = decided
+            auto_chunked = True
     if chunks is not None and int(chunks) > 1:
         from . import edl3_chunks  # noqa: PLC0415 - the resumable path only
 
@@ -2319,6 +2347,7 @@ def render(
             benchmark=benchmark,
         )
         report["settings_source"] = settings_source
+        report["chunks_auto"] = auto_chunked
         return report
     nested = _render_nested(timeline, script_dir, timeout, audio, settings)
     generators = _materialize_generators(timeline, script_dir, probe)
