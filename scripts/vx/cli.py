@@ -44,7 +44,14 @@ from . import winpath
 # --------------------------------------------------------------------------- #
 
 
+#: Quando il narratore parla, le righe tecniche di `auto` tacciono: una voce
+#: sola, altrimenti la narrazione si spezza in mezzo.
+_NARRATING = False
+
+
 def _log(msg: str) -> None:
+    if _NARRATING and msg.startswith("[auto]"):
+        return
     print(msg, file=sys.stderr, flush=True)
 
 
@@ -1863,8 +1870,19 @@ def cmd_auto(args: argparse.Namespace) -> int:
     from . import auto
     from .grammar import GrammarError
 
+    # La narrazione e' per chi guarda, il JSON per chi legge: non convivono.
+    narrator = None
+    if not getattr(args, "json", False):
+        from . import narrate
+
+        global _NARRATING
+        _NARRATING = True
+        narrator = narrate.Narrator()
+        count = _media_count(getattr(args, "assets", ""))
+        narrator.header(str(getattr(args, "prompt", "")), count)
+
     try:
-        report = auto.run(args)
+        report = auto.run(args, progress=narrator)
     except GrammarError as exc:
         _out(
             {
@@ -1878,12 +1896,30 @@ def cmd_auto(args: argparse.Namespace) -> int:
 
     if getattr(args, "json", False):
         _out(report)
+    elif narrator is not None:
+        narrator.summary(report)
     else:
         _log(
             f"[auto] ok: {report['master']} "
             f"({report['timeline_sec']:.3f}s, {report['assets']['selected']} selezionati)"
         )
     return EXIT_OK
+
+
+_MEDIA_SUFFIXES = frozenset(
+    {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mts", ".jpg", ".jpeg", ".png", ".webp"}
+)
+
+
+def _media_count(directory: str) -> int:
+    """How many media files sit at the top of the folder: cheap, no probing."""
+    try:
+        root = Path(directory)
+    except TypeError:
+        return 0
+    if not root.is_dir():
+        return 0
+    return sum(1 for item in root.iterdir() if item.is_file() and item.suffix.lower() in _MEDIA_SUFFIXES)
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:

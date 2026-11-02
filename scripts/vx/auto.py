@@ -68,7 +68,13 @@ def loudness_target(document: Any = None) -> tuple[float, float]:
     return profile_master.target_for(str(ref))
 
 
+#: Quando c'e' un narratore, le righe tecniche tacciono: una voce sola.
+_NARRATING = False
+
+
 def _log(msg: str) -> None:
+    if _NARRATING and msg.startswith("[auto]"):
+        return
     print(msg, file=sys.stderr, flush=True)
 
 
@@ -908,6 +914,8 @@ def run(
     """
     out = Path(args.out)
     assets_dir = Path(args.assets)
+    global _NARRATING
+    _NARRATING = progress is not None
     workdir = _resolve_workdir(args)
     montage_mode = (
         bool(getattr(args, "montage", False)) if montage is None else bool(montage)
