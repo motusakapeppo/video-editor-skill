@@ -181,6 +181,32 @@ Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
 `out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. L'export multi-aspect non è
 implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`; `python tests/test_motion_golden.py` ricattura i 54 template della Motion Studio a tre istanti e li confronta byte per byte con `tests/fixtures/motion_golden/`.
 
+## Il font lo sceglie il contesto (e tu lo confermi)
+
+Prima di renderizzare, `vx auto` costruisce una richiesta dai dati veri del
+lavoro (prompt, bpm, look, densita' dei tagli) e chiama
+`fontproposal.propose`: il catalogo ha 2.065 famiglie, l'intenzione viene
+tradotta in un piccolo insieme di famiglie note, quelle si scaricano (massimo
+12), si misurano sui byte reali e producono un campione PNG ciascuna. La
+proposta vive in `<workdir>/font_proposal.json`; la scelta in
+`<workdir>/font_choice.json`.
+
+Il render **non parte** finche' la scelta non c'e', ma non aspetta per sempre:
+`--font-wait SECONDS` (default 180). Le tre uscite sono dichiarate nel report,
+mai silenziose:
+
+| `font.selected_by` | quando |
+|---|---|
+| `user` | la scelta e' arrivata dalla vista o era gia' su disco |
+| `auto` | nessuna vista e nessuna attesa (`--autonomous`, `--no-font-gate`) |
+| `auto_after_timeout` | e' scaduta l'attesa: si prende la prima proposta, **e si scrive** |
+
+Senza rete il bacino e' solo locale (`pool: "local"`) e lo dichiara; se la
+proposta fallisce del tutto il montaggio prosegue col font del preset e il
+report porta `font.error`. La famiglia scelta arriva al `Fontname` dell'ASS
+anche nel percorso `auto` (`bridge.caption_ass`), con `fontsdir` sulla cartella
+del lavoro.
+
 ## Guardare mentre lavora (frase di attivazione)
 
 Se l'utente dice **"mostrami cosa succede"**, **"fammi vedere"**, **"segui il
