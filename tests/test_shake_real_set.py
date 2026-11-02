@@ -62,20 +62,28 @@ def main() -> int:
         by_id["r2"].get("note"),
     )
 
-    candidate = data.get("candidate") or {}
-    values = candidate.get("values") or {}
+    candidates = data.get("candidates") or ([data["candidate"]] if data.get("candidate") else [])
     check(
-        "S3 the candidate was measured on the same set",
-        set(values) == {c["id"] for c in clips},
-        values,
+        "S3 both candidates were measured on the same set",
+        len(candidates) == 2
+        and all(set(c.get("values") or {}) == {clip["id"] for clip in clips} for c in candidates),
+        [c.get("name") for c in candidates],
     )
-    candidate_ratio = (
-        float(values["r4"]) / float(values["r2"]) if values.get("r2") else 0.0
-    )
+    for candidate in candidates:
+        values = candidate.get("values") or {}
+        ratio = float(values["r4"]) / float(values["r2"]) if values.get("r2") else 0.0
+        check(
+            f"S3 {candidate.get('name')}: does not separate either",
+            ratio < 3.5,
+            f"r4/r2 = {ratio:.2f}",
+        )
     check(
-        "S3 and it does not separate either: same band as the metric in use",
-        candidate_ratio < 3.5,
-        f"r4/r2 = {candidate_ratio:.2f}",
+        "S3 every candidate stays outside the band that would separate them",
+        all(
+            (float(c["values"]["r4"]) / float(c["values"]["r2"])) < 3.5
+            for c in candidates
+        ),
+        "nessuno supera 3,5",
     )
     check(
         "S3 the threshold stays withdrawn while the metric is blind",

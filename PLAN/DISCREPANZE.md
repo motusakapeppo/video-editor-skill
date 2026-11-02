@@ -135,6 +135,20 @@ cumulato — e non cambia nulla: r2 0,263 contro r4 0,845, sempre un fattore 3,2
 residuo e' rumore di stima del flusso, proporzionale alla velocita': 7% sul pan, 9% sul
 tremolio. Derivare non elimina il rumore, lo amplifica.
 
+**Terzo estimatore, stesso esito.** Ho provato anche l'omografia RANSAC su punti
+tracciati (200 corner, `estimateAffinePartial2D`, residuo di velocita'): r2 = 0,576,
+r4 = 1,220, **fattore 2,12** — peggio del 2,46 della metrica in uso. Il motivo e'
+fisico, non algoritmico: una panoramica a mano libera oscilla davvero mentre
+panoramica. L'energia del movimento c'e' in entrambi i casi; cambia l'**intenzione**.
+
+**Il danno concreto.** `scripts/vx/bridge.py:1224` decide
+`stabilize = jitter >= THRESHOLDS["jitter_shaky"]` (1,0). La panoramica di r2, a 1,717,
+fa partire `stabilize deshake` su un movimento voluto: il classico effetto camera
+bloccata. Nessuna soglia su una misura di moto puo' sostituire la decisione del
+montatore: il jitter resta una descrizione con il suo numero, e il gate va rifatto
+(chiedere l'intenzione, o proporre la stabilizzazione invece di applicarla) in un task
+con la sua prova, perche' cambia i piani gia' prodotti.
+
 **Conseguenza.** La soglia del tremolio resta `null` e il task resta onesto: nessun
 numero. Il set di giudizi (5 clip, reali, con il valore misurato accanto) e' in
 `tests/fixtures/corpus_shake_real.json` ed e' la verita' di riferimento per il lavoro

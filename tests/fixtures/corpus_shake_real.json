@@ -35,17 +35,37 @@
       "judgment": "ok"
     }
   ],
-  "candidate": {
-    "name": "velocity residual",
-    "values": {
-      "r1": 0.039,
-      "r2": 0.263,
-      "r3": 0.007,
-      "r4": 0.845,
-      "r5": 0.006
+  "conclusion": "tre estimatori (percorso cumulato, residuo di velocita', omografia RANSAC) non separano una panoramica da un tremolio: 2,46 / 3,21 / 2,12. La differenza non e' nell'energia del movimento, e' nell'intenzione: lo stesso oscillare e' un difetto a camera ferma ed e' inquadratura quando accompagna il soggetto. Nessuna soglia su una misura di moto puo' decidere al posto del montatore. Il jitter resta una DESCRIZIONE con il suo numero.",
+  "candidates": [
+    {
+      "name": "velocity residual",
+      "values": {
+        "r1": 0.039,
+        "r2": 0.263,
+        "r3": 0.007,
+        "r4": 0.845,
+        "r5": 0.006
+      },
+      "verdict": "non separa: r2/r4 = 3,2 con il residuo contro 2,5 con la metrica attuale",
+      "why": "il residuo e' rumore di stima del flusso, proporzionale alla velocita' (7-9% in entrambi i casi); integrare o derivare non cambia il rapporto"
     },
-    "verdict": "non separa: r2/r4 = 3,2 con il residuo contro 2,5 con la metrica attuale",
-    "why": "il residuo e' rumore di stima del flusso, proporzionale alla velocita' (7-9% in entrambi i casi); integrare o derivare non cambia il rapporto"
-  },
-  "conclusion": "la metrica attuale non distingue una panoramica da un tremolio: 1,717 contro 4,226, un fattore 2,5. Nessuna soglia su questo numero e' valida. Serve un estimatore diverso (omografia RANSAC su punti tracciati, o correlazione di fase su frame sfocati), con questo set di giudizi come golden."
+    {
+      "name": "RANSAC affine on tracked features",
+      "values": {
+        "r1": 0.0553,
+        "r2": 0.5759,
+        "r3": 0.0357,
+        "r4": 1.2203,
+        "r5": 0.0167
+      },
+      "verdict": "peggio del precedente: r4/r2 = 2,12 contro 2,46 della metrica in uso",
+      "why": "una panoramica a mano libera oscilla davvero mentre panoramica: l'energia c'e', cambia solo l'intenzione"
+    }
+  ],
+  "defect": {
+    "where": "scripts/vx/bridge.py:1224",
+    "what": "stabilize = jitter >= THRESHOLDS['jitter_shaky'] (1,0)",
+    "effect": "un pan a 1,717 fa partire 'stabilize deshake' su un movimento voluto",
+    "fix": "il gate non puo' vivere sul solo jitter: serve una dichiarazione di intenzione (il movimento era voluto?) oppure la stabilizzazione resta una proposta da approvare, non un'azione automatica. Cambiarlo cambia i piani gia' prodotti: task a se', con la sua prova."
+  }
 }
