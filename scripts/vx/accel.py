@@ -25,6 +25,7 @@ import sysconfig
 import tempfile
 import time
 from pathlib import Path
+import tempfile
 from typing import Any, Dict, List, Optional
 
 from . import contract
@@ -189,6 +190,124 @@ def test_encode(
     return {"ok": bool(ok), "error": error[:300], "ms": round(elapsed, 1)}
 
 
+#: The lossless intermediate this pipeline uses when a job genuinely needs more
+#: than one encode (two separate passes, an intermediate a person inspects, a
+#: chunk handed to another tool). ``ffv1`` keeps every sample, decodes in the same
+#: ffmpeg, and is deterministic: a second lossless pass reproduces the frames
+#: exactly. It is not a delivery codec and is deliberately absent from ENCODERS,
+#: so `pick` can never route a master through it.
+LOSSLESS_ARGS = ("-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuv420p")
+
+
+def lossless_args() -> List[str]:
+    """The ffmpeg arguments of the declared lossless intermediate."""
+    return list(LOSSLESS_ARGS)
+
+
+#: The fidelity gate for an encoder candidate: mean absolute difference of the
+#: first decoded frame against the software reference, in 0..255 units. Measured
+#: on the same source, decoded through the same path, so the number is about the
+#: encoder and not about the decoder. Above this the candidate is refused.
+ENCODER_MAD_MAX = 2.0
+#: The reference every candidate is compared to. Software by definition, so the
+#: comparison never depends on a driver being present.
+ENCODER_REFERENCE = "libx264"
+#: One deterministic frame, small enough to compare in a second.
+FIDELITY_SOURCE = "testsrc2=size=320x180:rate=12:duration=0.1"
+
+
+def _encode_one(name: str, target: Path, *, quality: int, preset: str) -> str:
+    spec = ENCODERS.get(name)
+    if spec is None:
+        raise ValueError(f"unknown encoder {name!r}")
+    args = [
+        "-f",
+        "lavfi",
+        "-i",
+        FIDELITY_SOURCE,
+        *[str(part).format(quality=quality, preset=preset) for part in spec["args"]],
+        "-pix_fmt",
+        "yuv420p",
+        str(target),
+    ]
+    proc = ff.run_ff(args, loglevel="error", timeout=120)
+    if not proc.ok or not target.is_file() or target.stat().st_size <= 1024:
+        raise RuntimeError(proc.tail(3) or "empty output")
+    return str(target)
+
+
+def _first_frame(video: Path, target: Path) -> Any:
+    proc = ff.run_ff(
+        [
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-y",
+            str(target),
+        ],
+        loglevel="error",
+        timeout=120,
+    )
+    if not proc.ok or not target.is_file():
+        raise RuntimeError(proc.tail(3) or "cannot decode the first frame")
+    return target
+
+
+def compare_frames(left: Path, right: Path) -> float:
+    """Mean absolute difference of two PNG frames, 0..255; raises if unreadable."""
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(Image.open(left).convert("RGB"), dtype=np.float64)
+    b = np.asarray(Image.open(right).convert("RGB"), dtype=np.float64)
+    if a.shape != b.shape:
+        raise ValueError(f"different shapes: {a.shape} vs {b.shape}")
+    return float(np.abs(a - b).mean())
+
+
+def verify_encoder(
+    name: str,
+    *,
+    quality: int = 24,
+    preset: str = "veryfast",
+    threshold: float = ENCODER_MAD_MAX,
+) -> Dict[str, Any]:
+    """Encode one frame with ``name`` and compare it to the software reference.
+
+    Returns ``{"name", "ok", "mad", "threshold", "reason"}``. ``ok`` is true only
+    when the encoder ran *and* the decoded frame stayed within the threshold; an
+    unavailable encoder is a declared refusal, never a silent pass.
+    """
+    with tempfile.TemporaryDirectory(prefix="vx-fidelity-") as raw:
+        work = Path(raw)
+        try:
+            reference_video = Path(
+                _encode_one(ENCODER_REFERENCE, work / "ref.mp4", quality=quality, preset=preset)
+            )
+            candidate_video = Path(
+                _encode_one(name, work / f"{name}.mp4", quality=quality, preset=preset)
+            )
+            reference = _first_frame(reference_video, work / "ref.png")
+            candidate = _first_frame(candidate_video, work / "cand.png")
+            mad = compare_frames(reference, candidate)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return {
+                "name": name,
+                "ok": False,
+                "mad": None,
+                "threshold": float(threshold),
+                "reason": f"{type(exc).__name__}: {exc}"[:200],
+            }
+    return {
+        "name": name,
+        "ok": mad <= float(threshold),
+        "mad": round(mad, 4),
+        "threshold": float(threshold),
+        "reason": "" if mad <= float(threshold) else f"picture differs by {mad:.2f} > {threshold:.2f}",
+    }
+
+
 def probe_encoders(*, names: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
     listed = set()
     proc = ff.run_ff(["-encoders"], loglevel="error")
@@ -342,11 +461,21 @@ def probe(*, force: bool = False, ttl_hours: float = 24.0) -> Dict[str, Any]:
         "whisper": probe_whisper(),
         "cuda_dll_dirs": len(cuda_dll_dirs()),
     }
+    # Fidelity: a candidate that produced bytes is not yet a candidate that
+    # produced the picture. Every encoder that ran is compared to the software
+    # reference on one decoded frame, and the verdict is recorded with its number.
+    for name, info in report["encoders"].items():
+        if not info.get("ok"):
+            continue
+        info["fidelity"] = verify_encoder(name)
+    report["fidelity_threshold"] = ENCODER_MAD_MAX
     report["best_scratch"] = next(
         (
             name
             for name, info in report["encoders"].items()
-            if info.get("ok") and not ENCODERS[name]["software"]
+            if info.get("ok")
+            and not ENCODERS[name]["software"]
+            and (info.get("fidelity") or {}).get("ok", True)
         ),
         "",
     )
@@ -382,7 +511,7 @@ def pick(
 
     if preferred:
         info = encoders.get(preferred) or {}
-        if info.get("ok"):
+        if info.get("ok") and (info.get("fidelity") or {}).get("ok", True):
             codec_quality = (
                 quality if quality is not None else (21 if kind == "scratch" else 18)
             )

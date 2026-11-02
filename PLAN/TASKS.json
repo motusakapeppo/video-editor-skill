@@ -229,9 +229,11 @@
       "acceptance": "il candidato viene accettato solo se il frame decodificato resta entro la soglia dichiarata; altrimenti si ripiega e lo si dice",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_encoder_fidelity.py 7 PASS: libx264 vs se stesso MAD 0,0; h264_nvenc 1,1871 e hevc_nvenc 1,1852 sotto soglia 2,0; un encode degradato misura 24,89 e supera la soglia (il cancello puo' fallire); un encoder ignoto e' rifiutato con motivo",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
