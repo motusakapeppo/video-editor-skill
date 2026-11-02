@@ -365,8 +365,8 @@ def check_ladder() -> None:
         str((data.get("construction") or {}).get("panel_blind")),
     )
     check(
-        "every axis has four levels",
-        all(len(entry.get("ladder") or []) == 4 for entry in axes.values()),
+        "every axis has at least four levels (a refinement adds rungs)",
+        all(len(entry.get("ladder") or []) >= 4 for entry in axes.values()),
         {axis: len(entry.get("ladder") or []) for axis, entry in axes.items()},
     )
     check(
