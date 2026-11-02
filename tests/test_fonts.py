@@ -75,10 +75,13 @@ def main() -> int:
         bool(result.get("ok")),
         str(result.get("error", "")),
     )
+    bundled = {str(item.get("family") or "").lower() for item in discovered}
+    used = [str(name) for name in result.get("fonts_used", [])]
     check(
-        "verify_fonts used the bundled Antonio",
-        any("antonio" in str(name).lower() for name in result.get("fonts_used", [])),
-        str(result.get("fonts_used")),
+        "verify_fonts used a bundled family, not a system one",
+        bool(used)
+        and all(any(family and family in name.lower() for family in bundled) for name in used),
+        str(used),
     )
     check(
         "verify_fonts resolved the declared size",

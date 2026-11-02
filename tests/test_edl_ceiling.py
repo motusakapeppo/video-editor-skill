@@ -40,7 +40,10 @@ FFMPEG = os.environ.get("VX_FFMPEG") or "ffmpeg"
 
 # Graph of the fixture below at HEAD 9b8ec2c: the new keyword must not move a
 # single byte when it is absent.
-GOLDEN_SHA256 = "e5601bc7d4adb0f5192852eb6181e225445955b216294a9b147e2e42dce671a0"
+# Aggiornato il 2/11/2026: `aformat` precede `apad` sul bus audio. Il grafo cambia
+# di proposito (senza il formato dichiarato, `apad` non allunga dopo un `amix`,
+# misurato 4,019 s su 6), e il golden lo registra invece di subirlo.
+GOLDEN_SHA256 = "0e9bc9be24ea993580b1c1f0eb69d0f929af19155907e2896a6d23bcb048a57f"
 CEILING = -0.9
 HEIGHT = 568
 
@@ -250,7 +253,7 @@ def main() -> int:
     check(
         "grafo senza ceiling: byte-identico a HEAD",
         hashlib.sha256(base.encode("utf-8")).hexdigest() == GOLDEN_SHA256,
-        hashlib.sha256(base.encode("utf-8")).hexdigest()[:16],
+        hashlib.sha256(base.encode("utf-8")).hexdigest(),
     )
     check(
         "ceiling_dbtp=None esplicito: grafo invariato",

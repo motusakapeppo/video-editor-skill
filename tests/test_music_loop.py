@@ -85,8 +85,9 @@ def main() -> int:
         "volume=-8.000dB,adelay=0|0[mum1]" in looped,
     )
     check(
-        "il bus musica resta a 10 s",
-        "[music_bus]apad=whole_dur=10.000000,atrim=start=0:end=10.000000" in looped,
+        "il bus musica resta a 10 s, con il formato dichiarato prima di apad",
+        "[music_bus]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+        "apad=whole_dur=10.000000,atrim=start=0:end=10.000000" in looped,
     )
     check("gain musica invariato", "volume=-8.000dB" in looped)
 

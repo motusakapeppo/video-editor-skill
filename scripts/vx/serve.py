@@ -154,6 +154,25 @@ def approve(root: Path) -> Dict[str, Any]:
     return {"ok": True, "count": payload["count"]}
 
 
+UI_DIR = Path(__file__).resolve().parent / "ui"
+#: Solo questi file: il server non deve poter leggere altro dal disco.
+UI_FILES = {
+    "index.html": "text/html; charset=utf-8",
+    "app.css": "text/css; charset=utf-8",
+    "app.js": "text/javascript; charset=utf-8",
+}
+
+
+def _ui(name: str):
+    """The bytes of one whitelisted UI file, or ``None``."""
+    if name not in UI_FILES:
+        return None
+    candidate = UI_DIR / name
+    if not candidate.is_file():
+        return None
+    return candidate.read_bytes()
+
+
 def make_handler(root: Path):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # noqa: D102 - silence the console
@@ -168,7 +187,16 @@ def make_handler(root: Path):
 
         def do_GET(self):  # noqa: D102
             if self.path in ("/", "/index.html"):
-                self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                body = _ui("index.html") or PAGE.encode("utf-8")
+                self._send(body, "text/html; charset=utf-8")
+                return
+            if self.path.startswith("/ui/"):
+                name = Path(self.path[len("/ui/"):]).name
+                body = _ui(name)
+                if body is None:
+                    self._send(b"not found", "text/plain", status=404)
+                    return
+                self._send(body, UI_FILES[name])
                 return
             if self.path == "/api/state":
                 self._send(json.dumps(state(root), ensure_ascii=False).encode("utf-8"),
