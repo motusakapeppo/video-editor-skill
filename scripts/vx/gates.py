@@ -733,7 +733,8 @@ def _selftest() -> int:
         return 0 if failures == 0 else 1
     good_file = Path(good_raw) if good_raw else None
     bad_file = Path(bad_raw) if bad_raw else None
-    tmp = Path(tmp_raw) if tmp_raw else Path(tempfile.mkdtemp(prefix="vx_gates_"))
+    scratch = None if tmp_raw else tempfile.TemporaryDirectory(prefix="vx_gates_")
+    tmp = Path(tmp_raw) if tmp_raw else Path(scratch.name)
     tmp.mkdir(parents=True, exist_ok=True)
     if good_file is not None and good_file.is_file():
         res = post_render(
@@ -766,6 +767,9 @@ def _selftest() -> int:
         failed = list((tmp / "scarto").glob("DIFETTOSO_*"))
         print(f"  [{'PASS' if failed else 'FAIL'}] file in scarto: {len(failed)}")
         failures += 0 if failed else 1
+
+    if scratch is not None:
+        scratch.cleanup()
 
     print(f"\n{'TUTTO OK' if failures == 0 else str(failures) + ' FALLITI'}")
     return 0 if failures == 0 else 1

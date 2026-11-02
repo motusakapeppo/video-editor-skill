@@ -315,70 +315,71 @@ def renderer_delta(video: str | Path, node: Optional[Any] = None) -> float:
     if duration <= 0.0:
         raise RuntimeError(f"durata non misurabile: {video}")
 
-    work = Path(tempfile.mkdtemp(prefix="vxdelta-"))
-    worst = 0.0
-    samples = 0
-    for index in range(12):
-        at = duration * (index + 0.5) / 12.0
-        source = work / f"frame_{index:02d}.png"
-        proc = subprocess.run(
-            [
-                ff.ffmpeg(),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-ss",
-                f"{at:.3f}",
-                "-i",
-                str(video),
-                "-frames:v",
-                "1",
-                str(source),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if proc.returncode != 0 or not source.is_file():
-            continue
+    with tempfile.TemporaryDirectory(prefix="vxdelta-") as _scratch:
+        work = Path(_scratch)
+        worst = 0.0
+        samples = 0
+        for index in range(12):
+            at = duration * (index + 0.5) / 12.0
+            source = work / f"frame_{index:02d}.png"
+            proc = subprocess.run(
+                [
+                    ff.ffmpeg(),
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-ss",
+                    f"{at:.3f}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
+                    str(source),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0 or not source.is_file():
+                continue
 
-        via_ffmpeg = work / f"frame_{index:02d}_ff.png"
-        proc = subprocess.run(
-            [
-                ff.ffmpeg(),
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(source),
-                "-vf",
-                grade_mod.ffmpeg_filter(grade_node),
-                "-frames:v",
-                "1",
-                str(via_ffmpeg),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if proc.returncode != 0 or not via_ffmpeg.is_file():
-            continue
+            via_ffmpeg = work / f"frame_{index:02d}_ff.png"
+            proc = subprocess.run(
+                [
+                    ff.ffmpeg(),
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(source),
+                    "-vf",
+                    grade_mod.ffmpeg_filter(grade_node),
+                    "-frames:v",
+                    "1",
+                    str(via_ffmpeg),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0 or not via_ffmpeg.is_file():
+                continue
 
-        ff_stats = _luma_percentiles(Image.open(via_ffmpeg))
-        pillow_stats = _luma_percentiles(
-            grade_mod.apply_pillow(Image.open(source), grade_node)
-        )
-        for key in ("p01", "p50", "p99"):
-            worst = max(worst, abs(ff_stats[key] - pillow_stats[key]))
-        samples += 1
+            ff_stats = _luma_percentiles(Image.open(via_ffmpeg))
+            pillow_stats = _luma_percentiles(
+                grade_mod.apply_pillow(Image.open(source), grade_node)
+            )
+            for key in ("p01", "p50", "p99"):
+                worst = max(worst, abs(ff_stats[key] - pillow_stats[key]))
+            samples += 1
 
-    if samples == 0:
-        raise RuntimeError(f"nessun frame misurabile in {video}")
-    return round(worst, 6)
+        if samples == 0:
+            raise RuntimeError(f"nessun frame misurabile in {video}")
+        return round(worst, 6)
 
 
 # --------------------------------------------------------------------------- #

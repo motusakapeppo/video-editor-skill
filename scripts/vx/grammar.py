@@ -57,30 +57,31 @@ def beat_grid(path: str, *, max_seconds: float = 180.0) -> Grid:
 
     from . import ffmpeg as ff
 
-    target = Path(tempfile.mkdtemp(prefix="vxgrid-")) / "audio.wav"
-    proc = ff.run_ff(
-        [
-            "-i",
-            path,
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "22050",
-            "-t",
-            str(max_seconds),
-            "-c:a",
-            "pcm_s16le",
-            str(target),
-        ],
-        loglevel="error",
-    )
-    if not proc.ok:
-        return Grid(method="decode failed")
+    with tempfile.TemporaryDirectory(prefix="vxgrid-") as tmp:
+        target = Path(tmp) / "audio.wav"
+        proc = ff.run_ff(
+            [
+                "-i",
+                path,
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "22050",
+                "-t",
+                str(max_seconds),
+                "-c:a",
+                "pcm_s16le",
+                str(target),
+            ],
+            loglevel="error",
+        )
+        if not proc.ok:
+            return Grid(method="decode failed")
 
-    y, sr = librosa.load(str(target), sr=22050, mono=True)
+        y, sr = librosa.load(str(target), sr=22050, mono=True)
     if y.size == 0:
         return Grid(method="empty audio")
 

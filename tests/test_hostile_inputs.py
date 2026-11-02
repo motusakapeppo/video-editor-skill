@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import atexit
+import shutil
 import struct
 import subprocess
 import sys
@@ -283,6 +285,7 @@ def main() -> int:
         check("timeout: ProcessTimeout", False, "nessuna eccezione")
 
     outer = Path(tempfile.mkdtemp(prefix="vx-hostile-"))
+    atexit.register(shutil.rmtree, outer, True)
     tmp = outer / "work"
     guard = outer / "guard"
     tmp.mkdir()

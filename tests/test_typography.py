@@ -12,6 +12,8 @@ warning.
 from __future__ import annotations
 
 import inspect
+import atexit
+import shutil
 import subprocess
 import os
 import sys
@@ -447,6 +449,7 @@ def check_graph_identity(ass: Path) -> None:
 
 def main() -> int:
     root = Path(tempfile.mkdtemp(prefix="vx-typography-"))
+    atexit.register(shutil.rmtree, root, True)
     print(f"workdir: {root}")
 
     antonio = fonts.font_file("Antonio", "Regular")

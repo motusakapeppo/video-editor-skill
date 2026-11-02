@@ -52,30 +52,31 @@ class Estimate:
 def _decode(path: str, seconds: float = 120.0) -> tuple[np.ndarray, int]:
     import librosa
 
-    target = Path(tempfile.mkdtemp(prefix="vxbpm-")) / "a.wav"
-    proc = ff.run_ff(
-        [
-            "-i",
-            path,
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            "22050",
-            "-t",
-            str(seconds),
-            "-c:a",
-            "pcm_s16le",
-            str(target),
-        ],
-        loglevel="error",
-    )
-    if not proc.ok:
-        raise RuntimeError("audio decode failed")
-    y, sr = librosa.load(str(target), sr=22050, mono=True)
-    return y, sr
+    with tempfile.TemporaryDirectory(prefix="vxbpm-") as tmp:
+        target = Path(tmp) / "a.wav"
+        proc = ff.run_ff(
+            [
+                "-i",
+                path,
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "22050",
+                "-t",
+                str(seconds),
+                "-c:a",
+                "pcm_s16le",
+                str(target),
+            ],
+            loglevel="error",
+        )
+        if not proc.ok:
+            raise RuntimeError("audio decode failed")
+        y, sr = librosa.load(str(target), sr=22050, mono=True)
+        return y, sr
 
 
 def _lowband(y: np.ndarray, sr: int) -> np.ndarray:

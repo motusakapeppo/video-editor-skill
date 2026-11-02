@@ -71,29 +71,30 @@ def _decode(path: str | Path) -> Any:
     import numpy as np
     import tempfile
 
-    target = Path(tempfile.mkdtemp(prefix="vxvad-")) / "pcm.f32"
-    proc = ff.run_ff(
-        [
-            "-i",
-            str(path),
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            str(SAMPLE_RATE),
-            "-f",
-            "f32le",
-            "-y",
-            str(target),
-        ],
-        loglevel="error",
-        timeout=3600,
-    )
-    if not proc.ok or not target.exists():
-        raise RuntimeError(proc.tail(3) or "decode failed")
-    return np.fromfile(target, dtype=np.float32)
+    with tempfile.TemporaryDirectory(prefix="vxvad-") as tmp:
+        target = Path(tmp) / "pcm.f32"
+        proc = ff.run_ff(
+            [
+                "-i",
+                str(path),
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                str(SAMPLE_RATE),
+                "-f",
+                "f32le",
+                "-y",
+                str(target),
+            ],
+            loglevel="error",
+            timeout=3600,
+        )
+        if not proc.ok or not target.exists():
+            raise RuntimeError(proc.tail(3) or "decode failed")
+        return np.fromfile(target, dtype=np.float32)
 
 
 def _probabilities(pcm: Any) -> Any:

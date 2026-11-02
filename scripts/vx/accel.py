@@ -18,6 +18,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import atexit
 import subprocess
 import sys
 import sysconfig
@@ -165,7 +166,8 @@ def test_encode(
     spec = ENCODERS.get(name)
     if spec is None:
         return {"ok": False, "error": "unknown encoder", "ms": 0}
-    out = Path(tempfile.mkdtemp(prefix="vxenc-")) / f"{name}.mp4"
+    scratch = tempfile.TemporaryDirectory(prefix="vxenc-")
+    out = Path(scratch.name) / f"{name}.mp4"
     args = [
         "-f",
         "lavfi",
@@ -183,8 +185,7 @@ def test_encode(
     elapsed = (time.time() - started) * 1000
     ok = proc.ok and out.exists() and out.stat().st_size > 1024
     error = "" if ok else (proc.tail(3) or "empty output")
-    if out.exists():
-        out.unlink(missing_ok=True)
+    scratch.cleanup()
     return {"ok": bool(ok), "error": error[:300], "ms": round(elapsed, 1)}
 
 
@@ -516,8 +517,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _probe_media() -> Path:
-    """Deterministic 3 s signal loud enough that the encoder really runs."""
-    target = Path(tempfile.mkdtemp(prefix="vxprobe-")) / "probe.wav"
+    """Deterministic 3 s signal loud enough that the encoder really runs.
+
+    The file must outlive the function (a child process reads it), so the
+    cleanup is registered to run at exit instead of a folder nobody removes.
+    """
+    handle, name = tempfile.mkstemp(prefix="vxprobe-", suffix=".wav")
+    os.close(handle)
+    target = Path(name)
+    atexit.register(lambda: target.unlink(missing_ok=True))
     ff.run_ff(
         [
             "-f",
