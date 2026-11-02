@@ -88,6 +88,13 @@ rifatta su quel set, non ereditata dal sintetico.
 Finché l'estimatore non cambia, la soglia del tremolio resta `null`, e nessun numero
 inventato prende il suo posto.
 
+**E c'è un danno da riparare, non solo una calibrazione da fare.** `bridge.py:1224`
+applica `stabilize deshake` quando `jitter >= 1,0`: la panoramica di r2, a 1,717, è
+una panoramica voluta e verrebbe stabilizzata — camera bloccata su un movimento che
+serviva. Il gate non può vivere sul solo jitter: o si chiede l'intenzione, o la
+stabilizzazione diventa una proposta da approvare. Cambiare questo cambia i piani già
+prodotti: task a sé, con la sua prova, non una riga infilata di fretta.
+
 ## Convenzioni di scrittura
 
 Italiano, misure dentro le frasi, niente aggettivi al posto dei numeri. I messaggi
