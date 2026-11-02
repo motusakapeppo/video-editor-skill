@@ -48,7 +48,11 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
    Dopo ogni modifica a `PLAN/*.md`, `python scripts/gen_plan_rev8.py`, o
    `test_plan_rev8` diventa rosso (e' voluto).
 5. **Un processo pesante alla volta**; i test che misurano tempi non vanno in
-   parallelo a un render.
+   parallelo a un render. **Vale anche per la suite stessa**: lanciare `run_all.py`
+   e contemporaneamente estrarre fotogrammi o costruire clip fa cadere i test che
+   rendono golden (`test_motion_golden` è caduto due volte così, e passa sempre
+   quando la macchina è dedicata). Se un golden fallisce, prima si guarda cosa
+   altro stava girando, poi si accusa il codice.
 
 ## Dove sono i pezzi
 
