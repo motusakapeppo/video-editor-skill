@@ -726,9 +726,11 @@
       "acceptance": "un progetto con 3 asset riempie 3 slot; un asset del tipo sbagliato è rifiutato nominando lo slot; il frame prova che l'asset dell'utente è davvero nel template (MAD sulla zona dello slot), non solo che il parametro è stato passato",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_slotfill.py 9 PASS: MaterialMap con 3 materiali riempie 3 slot di product_card e dichiara body/cta vuoti; la proporzione cambia il riquadro (0.04,0.04,0.92,0.46 vs 0.04,0.1,0.46,0.8); materiale text su slot image -> SLOT_TYPE che nomina media/image/text; frame 360x640: dentro il riquadro media [229,7 1,6 228,8], senza asset il fondo [16 16 16], MAD 147,0; slot senza nulla da disegnare -> SLOT_RENDER",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
