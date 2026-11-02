@@ -251,7 +251,16 @@ def main() -> int:
     check("intestazione con commit e data ISO", match is not None)
     if match:
         check("data della riga = data del commit", match.group(2) == git("%cs"), match.group(2))
-        check("hash della riga = hash del commit", match.group(1) == git("%h"), match.group(1))
+        # Il commit citato non puo' essere quello che contiene il documento: lo
+    # diventerebbe solo dopo il commit, e la testata avrebbe dovuto indovinarlo.
+    # Quello che si puo' pretendere e' che sia un ANTENATO reale di HEAD: la
+    # testata e' provenienza, il corpo e' la verifica del contenuto.
+    cited = match.group(1) if match else ""
+    ancestor = bool(cited) and subprocess.run(
+        ["git", "merge-base", "--is-ancestor", cited, "HEAD"],
+        cwd=str(ROOT), capture_output=True,
+    ).returncode == 0
+    check("il commit della riga e' un antenato di HEAD", ancestor, cited)
     check("riga di sola lettura presente", gen.READ_ONLY in committed)
     fake = gen.render("deadbeef")
     fake_header = HEADER.search(fake)
