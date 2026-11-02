@@ -684,9 +684,11 @@
       "acceptance": "`brand.json` valida contro lo schema; una pagina di prova nota produce i colori e i font attesi; ogni campo presente ha provenienza (selettore, file o dato strutturato); un colore senza provenienza fa fallire la validazione",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_brandjson.py 12 PASS: brand.json valida contro vx.brandjson/1; pagina nota -> #0a5cff (2 occorrenze, share 0,500), #ff6600, #112233 e famiglia Inter; colori/font/logo/testi/prezzi con provenance (file css, selettore, testo, structured); colore senza provenance -> errore su colors[0].provenance; documento scritto riletto e valido (2.758 byte)",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

@@ -34,6 +34,8 @@ from .fontsource import RobotsPolicy, USER_AGENT, _rule_matches
 
 SCHEMA = "vx.brand/1"
 MAX_ASSETS = 12
+#: Oltre questo tetto un CSS non viene tenuto in memoria nel referto.
+TEXT_CAP = 512 * 1024
 ROBOTS_PATH = "/robots.txt"
 ASSET_SUFFIXES = (
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico",
@@ -287,20 +289,25 @@ def read(
         except BrandError as exc:
             skipped.append({"url": absolute, "why": exc.code})
             continue
-        assets.append(
-            {
-                "url": absolute,
-                "sha256": hashlib.sha256(body).hexdigest(),
-                "bytes": len(body),
-                "suffix": Path(urllib.parse.urlsplit(absolute).path).suffix.lower(),
-            }
-        )
+        suffix = Path(urllib.parse.urlsplit(absolute).path).suffix.lower()
+        entry = {
+            "url": absolute,
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "bytes": len(body),
+            "suffix": suffix,
+        }
+        if suffix == ".css" and len(body) <= TEXT_CAP:
+            # Il CSS serve al lettore di brand per i font e i colori: si tiene il
+            # testo solo sotto il tetto dichiarato, non tutto.
+            entry["text"] = body.decode("utf-8", "replace")
+        assets.append(entry)
 
     return {
         "schema": SCHEMA,
         "url": url,
         "origin": origin,
         "title": _title(page),
+        "page": page,
         "robots": {
             "source": robots_source,
             "rules": [
