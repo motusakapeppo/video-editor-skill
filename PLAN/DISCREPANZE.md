@@ -88,9 +88,9 @@ livello.
 |---|---|---|---|
 | esposizione | 92,5 / 50,6 / 27,0 / 13,1 (luma) | ok / dark / very_dark / very_dark | **50,636** (livello 1) |
 | dominante | 20,4 / 27,5 / 36,7 / 46,1 | none / none / light / evident | **46,116** (livello 3) |
-| tremolio | 0,086 / 0,434 / 0,932 / 1,698 | ok / ok / ok / **ok** | **nessuna** |
+| tremolio | 0,086 / 0,227 / 0,381 / 0,823 / 1,698 | light / **evident** / evident / oltre | **0,227** (giudizio umano) |
 
-**Il tremolio non si calibra da fermo.** Il panel ha giudicato `ok` anche il
+**Il tremolio: tre letture di modelli non bastano, un occhio umano si'.** Il panel ha giudicato `ok` anche il
 livello 4, quello che la metrica chiama `shaky` a 1,698: tre fotogrammi fissi non
 mostrano un tremolio periodico a 9 Hz. Non e' un errore del giudice, e' un limite
 del mezzo: il tremolio si vede in movimento. La scala resta registrata come

@@ -100,15 +100,21 @@
   },
   "axes": {
     "shake": {
-      "threshold": null,
-      "level": null,
-      "token": null,
+      "threshold": 0.227,
+      "level": 0.5,
+      "token": "evident",
       "ladder": [
         {
           "level": 0,
           "id": "s01",
           "value": 0.086,
           "token": "ok"
+        },
+        {
+          "level": 0.5,
+          "id": "t2",
+          "value": 0.227,
+          "token": "evident"
         },
         {
           "level": 1,
@@ -129,9 +135,9 @@
           "token": "ok"
         }
       ],
-      "calibratable": false,
-      "reason": "il panel di modelli non vede il tremolio (tre costruzioni, sempre 'ok'); il giudizio umano sul video lo vede e colloca la soglia fra 0,086 e 0,381. La misura resta valida, le bande 0,4/1,0 no.",
-      "basis": "nessun livello giudicato evident",
+      "calibratable": true,
+      "reason": "",
+      "basis": "primo valore misurato che il giudice umano chiama 'evident', sul video: 0,086 light, 0,227 evident, 0,381 evident, 0,823 oltre evident",
       "attempts": [
         {
           "construction": "oscillazione sinusoidale a 1,45 Hz, ampiezza 6/14/26 px",
@@ -181,11 +187,16 @@
             "id": "s03",
             "value": 0.823,
             "token": "piu' della clip 2 (evident, oltre)"
+          },
+          {
+            "id": "t2",
+            "value": 0.227,
+            "token": "evident"
           }
         ],
         "bound_low": 0.086,
-        "bound_high": 0.381,
-        "conclusion": "la soglia 'evident' cade fra 0,086 e 0,381 di jitter misurato: molto sotto le bande 0,4/1,0 usate oggi, che chiamano 'stable' un tremolio che l'utente giudica evidente. Le bande vanno riviste, non confermate.",
+        "bound_high": 0.227,
+        "conclusion": "la soglia 'evident' cade fra 0,086 e 0,227 di jitter misurato: meno della meta' della banda 0,4 usata oggi, che chiama 'stable' un tremolio che l'umano giudica evidente. La soglia adottata e' 0,227, il primo valore misurato giudicato evidente.",
         "note": "il panel di modelli aveva detto 'ok' su tutti i livelli: sul movimento serve un occhio umano. Questo e' il primo giudizio umano su una scala costruita, ed e' l'unico che puo' collocare la soglia."
       }
     },
