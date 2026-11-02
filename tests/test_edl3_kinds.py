@@ -26,7 +26,7 @@ c. the frame differs from the un-effected frame of the same document, so a kind
 
 The fixtures are written only by this file's ``--write`` mode:
 
-    python tests/test_edl3_kinds.py --write    # re-bless all 58 fixtures
+    python tests/test_edl3_kinds.py --write    # re-bless all 60 fixtures
     python tests/test_edl3_kinds.py           # verify, never writes
 
 Two consecutive ``--write`` runs produce byte-identical PNGs: the writer copies
@@ -59,7 +59,7 @@ FRAME_TIME = 0.5
 #: The declared library: geometry 12 + color 12 + glitch 12 + film 12 +
 #: composite 10. A registry that loses a kind must fail here, not shrink the
 #: gate silently.
-LIBRARY_KINDS = 58
+LIBRARY_KINDS = 60
 CEILING_SECONDS = 90.0
 REBLESS = "python tests/test_edl3_kinds.py --write"
 

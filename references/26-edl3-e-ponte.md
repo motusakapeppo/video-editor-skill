@@ -766,6 +766,8 @@ inventato qui.
 | `slit_scan` | glitch | Skew the picture row by row and drift the skew, for a rolling-shutter or a photocopier tear. | `shear` 0..8 (default 3)<br>`speed` 0..2 (default 0.5) | 8 s | skip | filter |
 | `smear` | glitch | Drag the frame sideways in one direction only, for speed lines or a scanning-head smear. | `sigma` 4..64 (default 20) | nessuno | static | filter |
 | `vhs` | glitch | Make a clean clip look like a worn tape: luma/chroma noise plus the chroma lag of a mis-tracking head. | `grain` 0..60 (default 18)<br>`shift` 0..16 (default 6) | nessuno | static | filter |
+| `restore_lowlight` | restore | A phone clip shot in the dark: lift the shadows without touching the black point, then give back a little edge. | `lift` 0..0.25 (default 0.08)<br>`sharpen` 0..1.5 (default 0.4) | nessuno | static | filter |
+| `restore_soft` | restore | A phone clip whose measured sharpness is low but reliable: take the grain down and give the edges back the micro-contrast the sensor lost. | `sharpen` 0..1.5 (default 0.6)<br>`denoise` 0..1 (default 0.35) | nessuno | static | filter |
 
-58 tipi dichiarativi in 5 famiglie (color, composite, film, geometry, glitch), piu i cinque tipi di contratto (`transform`, `crop`, `color`, `blur`, `chroma_key`) che vivono nel registro core con i propri backend e la propria validazione.
+60 tipi dichiarativi in 6 famiglie (color, composite, film, geometry, glitch, restore), piu i cinque tipi di contratto (`transform`, `crop`, `color`, `blur`, `chroma_key`) che vivono nel registro core con i propri backend e la propria validazione.
 <!-- END EFFECT-INDEX -->

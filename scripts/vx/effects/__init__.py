@@ -24,7 +24,7 @@ from typing import Dict
 from ..effect_spec import EffectSpec
 
 #: The families the loader looks for, in registry order.
-FAMILY_MODULES = ("geometry", "color", "glitch", "film", "composite")
+FAMILY_MODULES = ("geometry", "color", "glitch", "film", "composite", "restore")
 
 
 def families() -> Dict[str, Dict[str, EffectSpec]]:
