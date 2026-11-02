@@ -231,6 +231,10 @@ HARD_CODES = frozenset(
         "TRANSITION_UNKNOWN",
         "TRANSITION_RANGE",
         "TRANSITION_TOO_LONG",
+        "TRANSITION_SLOT",
+        "TRANSITION_DST",
+        "TRANSITION_ORPHAN",
+        "TRANSITION_AUDIO_UNSUPPORTED",
         "NESTING_TOO_DEEP",
         "NESTING_UNKNOWN",
         "SEQUENCE_SHAPE",
@@ -1275,8 +1279,68 @@ def _audio_bus(
         )
         chains.append(f"[{index}:a]{filters}[{label}]")
         dialogue_labels.append(label)
+    base_clips = [clip for clip in timeline.clips if int(clip.layer) == 0]
+    joins = _positions_with_joins(
+        [(index, clip) for index, clip in enumerate(base_clips)],
+        timeline.crossfade_joins(),
+    )
+    if joins and music:
+        raise CompileError(
+            "TRANSITION_AUDIO_UNSUPPORTED",
+            "a crossfade shortens the timeline, and the music bed is placed at "
+            "absolute times: mixing the two would move one against the other. "
+            "Declare the bed as dialogue, or drop it",
+            "audio",
+        )
+    if joins and dialogue_labels and len(dialogue_labels) != len(base_clips):
+        raise CompileError(
+            "TRANSITION_AUDIO_UNSUPPORTED",
+            f"a crossfade needs one dialogue segment per base clip "
+            f"({len(dialogue_labels)} dialogue, {len(base_clips)} base): the sound "
+            "would shorten on different boundaries than the picture",
+            "audio",
+        )
+    if joins and dialogue_labels and len(dialogue_labels) == len(base_clips):
+        tolerance = (1.0 / float(timeline.fps or 1)) + 1e-6
+        for position, (video_clip, audio_clip) in enumerate(zip(base_clips, dialogue)):
+            if (
+                abs(
+                    float(video_clip.timeline_duration)
+                    - (float(audio_clip.dst_out) - float(audio_clip.dst_in))
+                )
+                > tolerance
+            ):
+                raise CompileError(
+                    "TRANSITION_AUDIO_UNSUPPORTED",
+                    f"base clip {position} lasts "
+                    f"{float(video_clip.timeline_duration):.4f} s but its dialogue "
+                    f"lasts {(float(audio_clip.dst_out) - float(audio_clip.dst_in)):.4f} s: the runs "
+                    "would shorten on different boundaries",
+                    "audio",
+                )
     if len(dialogue_labels) == 1:
         dialogue_label: Optional[str] = dialogue_labels[0]
+    elif dialogue_labels and joins:
+        runs = _partition_runs(dialogue_labels, joins)
+        labels: List[Tuple[str, int]] = []
+        for run_index, run in enumerate(runs):
+            if len(run) == 1:
+                labels.append((dialogue_labels[run[0]], run[0]))
+                continue
+            inputs = "".join(f"[{dialogue_labels[position]}]" for position in run)
+            label = f"arun{run_index}"
+            chains.append(f"{inputs}concat=n={len(run)}:v=0:a=1[{label}]")
+            labels.append((label, run[0]))
+        dialogue_label = labels[0][0]
+        for run_index in range(1, len(labels)):
+            next_label, first_position = labels[run_index]
+            seconds = joins[first_position]
+            out = f"axf{run_index}"
+            chains.append(
+                f"[{dialogue_label}][{next_label}]acrossfade=d={_num(seconds)}:"
+                f"c1=tri:c2=tri[{out}]"
+            )
+            dialogue_label = out
     elif dialogue_labels:
         inputs = "".join(f"[{label}]" for label in dialogue_labels)
         chains.append(f"{inputs}concat=n={len(dialogue_labels)}:v=0:a=1[dialog]")
@@ -1521,6 +1585,84 @@ def _route_effects(
                 where,
             )
     return table, routed, summary
+
+
+def _positions_with_joins(
+    base_clips: List[Tuple[int, Any]], joins: List[Tuple[int, float]]
+) -> Dict[int, float]:
+    """Base position -> dissolve seconds, refusing a join that has no neighbour."""
+    by_position = {int(position): float(seconds) for position, seconds in joins}
+    for position in by_position:
+        if position <= 0 or position >= len(base_clips):
+            raise CompileError(
+                "TRANSITION_ORPHAN",
+                f"the dissolve at base position {position} has no clip to dissolve "
+                f"from or into ({len(base_clips)} base clip(s))",
+                "clips",
+            )
+    return by_position
+
+
+def _partition_runs(
+    items: List[Any], joins: Dict[int, float]
+) -> List[List[int]]:
+    """Group positions into runs of hard cuts; each dissolve starts a new run."""
+    runs: List[List[int]] = [[0]] if items else []
+    for position in range(1, len(items)):
+        if position in joins:
+            runs.append([position])
+        else:
+            runs[-1].append(position)
+    return runs
+
+
+def _crossfade_base(
+    base_clips: List[Tuple[int, Any]],
+    plans: Dict[int, Dict[str, Any]],
+    joins: Dict[int, float],
+    chains: List[str],
+) -> str:
+    """Chain the base layer, dissolving the runs where the document says so.
+
+    ``xfade`` takes two inputs and its ``offset`` is a time inside the *first*
+    one, so the chain is built forward: every run is concatenated on its own, then
+    the runs are dissolved pairwise at ``accumulated - dissolve``. The accumulated
+    time is the shortened one, which is exactly what the document's duration says.
+    """
+    runs = _partition_runs(base_clips, joins)
+    labels: List[Tuple[str, float, int]] = []
+    for run_index, run in enumerate(runs):
+        first_position = run[0]
+        if len(run) == 1:
+            index, clip = base_clips[first_position]
+            labels.append((f"c{index}", float(clip.timeline_duration), first_position))
+            continue
+        inputs = "".join(f"[c{base_clips[position][0]}]" for position in run)
+        label = f"run{run_index}"
+        chains.append(f"{inputs}concat=n={len(run)}:v=1:a=0[{label}]")
+        media = sum(float(base_clips[position][1].timeline_duration) for position in run)
+        labels.append((label, media, first_position))
+
+    label, accumulated, _ = labels[0]
+    for run_index in range(1, len(labels)):
+        next_label, media, first_position = labels[run_index]
+        seconds = joins[first_position]
+        offset = accumulated - seconds
+        if offset < -1e-6:
+            raise CompileError(
+                "TRANSITION_TOO_LONG",
+                f"the dissolve at base position {first_position} ({seconds} s) does "
+                f"not fit the {accumulated:.4f} s before it",
+                "clips",
+            )
+        out = f"xf{run_index}"
+        chains.append(
+            f"[{label}][{next_label}]xfade=transition=fade:"
+            f"duration={_num(seconds)}:offset={_num(max(0.0, offset))}[{out}]"
+        )
+        label = out
+        accumulated = accumulated + media - seconds
+    return label
 
 
 def _split_layers(
@@ -1792,8 +1934,11 @@ def compile_timeline(
     chains: List[str] = []
     for index, _clip in base_clips:
         chains.extend(plans[index]["chains"])
+    joins = _positions_with_joins(base_clips, timeline.crossfade_joins())
     if len(base_clips) == 1:
         base_label = f"c{base_clips[0][0]}"
+    elif joins:
+        base_label = _crossfade_base(base_clips, plans, joins, chains)
     else:
         inputs = "".join(f"[c{index}]" for index, _clip in base_clips)
         chains.append(f"{inputs}concat=n={len(base_clips)}:v=1:a=0[out]")

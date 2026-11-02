@@ -238,7 +238,10 @@ RENDERABLE_EFFECTS = frozenset(
     }
 )
 #: Transition kinds the compiler implements.
-RENDERABLE_TRANSITIONS = frozenset({"fade_in", "fade_out"})
+RENDERABLE_TRANSITIONS = frozenset({"fade_in", "fade_out", "crossfade"})
+#: A dissolve longer than this share of the shorter adjacent shot eats the shot
+#: (``grammar.dissolve_limit`` declares the same 25%).
+CROSSFADE_MAX_SHARE = 0.25
 
 __all__ = [
     "EDL3_VERSION",
@@ -1778,6 +1781,24 @@ class Timeline3:
     def height(self) -> int:
         return self.size[1]
 
+    def crossfade_joins(self) -> List[Tuple[int, float]]:
+        """``(base position, seconds)`` for every declared dissolve.
+
+        A dissolve belongs to the clip that enters (``transition_in``), lives on the
+        base layer and exists only in sequential mode: an absolutely placed clip
+        already says where it starts, so an overlap would contradict it.
+        """
+        joins: List[Tuple[int, float]] = []
+        position = -1
+        for clip in self.clips:
+            if int(clip.layer) != 0:
+                continue
+            position += 1
+            transition = clip.transition_in
+            if transition is not None and transition.kind == "crossfade":
+                joins.append((position, float(transition.duration)))
+        return joins
+
     @property
     def duration(self) -> float:
         declared = [
@@ -1787,7 +1808,11 @@ class Timeline3:
         ]
         if declared and len(declared) == len(self.clips):
             return max(declared)
-        return sum(max(0.0, clip.duration) for clip in self.clips)
+        total = sum(max(0.0, clip.duration) for clip in self.clips)
+        # The dissolve is an overlap: the two shots share that many seconds, so the
+        # timeline is shorter by exactly that much. Two 2 s clips with 0.5 s give 3.5.
+        overlap = sum(seconds for _, seconds in self.crossfade_joins())
+        return max(0.0, total - overlap)
 
     # -- validation -------------------------------------------------------
     def validate(self, *, depth: int = 0, prefix: str = "") -> List[Dict[str, str]]:
@@ -2207,6 +2232,60 @@ class Timeline3:
                         f"duration {transition.duration} exceeds clip duration "
                         f"{duration}",
                     )
+                if transition.kind != "crossfade":
+                    continue
+                if slot != "transition_in":
+                    add(
+                        "TRANSITION_SLOT",
+                        f"{transition_where}.kind",
+                        "a crossfade is declared on the clip that enters "
+                        "(transition_in): one declaration per join",
+                    )
+                elif int(clip.layer) != 0:
+                    add(
+                        "TRANSITION_SLOT",
+                        transition_where,
+                        "a crossfade belongs to the base layer: an overlay is placed "
+                        "by dst_in/dst_out and cannot shorten the timeline",
+                    )
+                elif clip.dst_in is not None:
+                    # An absolutely placed timeline concatenates: an overlap there
+                    # would contradict the placement (``CLIP_RANGE`` refuses it), so a
+                    # dissolve exists only in sequential mode, where it is what
+                    # shortens the timeline.
+                    add(
+                        "TRANSITION_DST",
+                        transition_where,
+                        "a crossfade shortens the timeline, so it cannot sit on a "
+                        "clip that already declares where it starts",
+                    )
+                else:
+                    base_before = [
+                        other
+                        for other in self.clips[:index]
+                        if int(other.layer) == 0
+                    ]
+                    if not base_before:
+                        add(
+                            "TRANSITION_ORPHAN",
+                            transition_where,
+                            "the first clip has nothing to dissolve from",
+                        )
+                    else:
+                        previous = base_before[-1]
+                        shorter = min(
+                            float(previous.timeline_duration),
+                            float(clip.timeline_duration),
+                        )
+                        limit = CROSSFADE_MAX_SHARE * shorter
+                        if transition.duration > limit + 1e-9:
+                            add(
+                                "TRANSITION_TOO_LONG",
+                                f"{transition_where}.duration",
+                                f"{transition.duration} s is more than "
+                                f"{CROSSFADE_MAX_SHARE:.0%} of the shorter shot "
+                                f"({shorter:.3f} s): the dissolve would eat it",
+                            )
 
         self._validate_sequences(add, depth, problems)
 

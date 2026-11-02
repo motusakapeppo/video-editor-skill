@@ -133,7 +133,7 @@ def full_document() -> edl3.Timeline3:
                 src_out=1.0,
                 dst_in=1.0,
                 dst_out=2.0,
-                transition_in=edl3.Transition("crossfade", 0.5),
+                transition_in=edl3.Transition("fade_in", 0.5),
             ),
         ],
         sequences={"s1": edl3.NestedSequence("s1", inner)},
@@ -750,13 +750,24 @@ def check_compiler_refusals() -> None:
         compile_code(nested_doc) == "UNSUPPORTED_SEQUENCE",
         compile_code(nested_doc),
     )
-    crossfade_doc = timeline(
+    orphan = timeline(
         clips=[clip(transition_in=edl3.Transition("crossfade", 0.5))]
     )
     check(
-        "crossfade is refused with UNSUPPORTED_TRANSITION",
-        compile_code(crossfade_doc) == "UNSUPPORTED_TRANSITION",
-        compile_code(crossfade_doc),
+        "a crossfade on the first clip is an orphan",
+        "TRANSITION_ORPHAN" in {p["code"] for p in orphan.validate()},
+        sorted({p["code"] for p in orphan.validate()}),
+    )
+    too_long = timeline(
+        clips=[
+            clip(id="a"),
+            clip(id="b", transition_in=edl3.Transition("crossfade", 0.6)),
+        ]
+    )
+    check(
+        "a dissolve over a quarter of the shorter shot is refused",
+        "TRANSITION_TOO_LONG" in {p["code"] for p in too_long.validate()},
+        sorted({p["code"] for p in too_long.validate()}),
     )
     audio_doc = timeline(
         audio=[

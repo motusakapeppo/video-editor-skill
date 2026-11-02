@@ -210,6 +210,14 @@ def render_chunked(
     root = Path(workdir)
     chunk_dir = root / CHUNK_DIR
     chunk_dir.mkdir(parents=True, exist_ok=True)
+    joins = timeline.crossfade_joins() if hasattr(timeline, "crossfade_joins") else []
+    if joins:
+        raise edl3_render.CompileError(
+            "CHUNK_UNSUPPORTED",
+            "the document declares a crossfade, and a chunk boundary would cut it in "
+            "half: render it whole, or remove the dissolves",
+            "chunks",
+        )
     windows = plan_windows(timeline, chunks)
     run = Run(
         timeline=timeline,
