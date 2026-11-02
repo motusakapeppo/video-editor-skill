@@ -307,7 +307,18 @@ def _jitter_verdict(score: float) -> str:
 def _exposure_verdict(mean_luma: float, clip_high_pct: float) -> str:
     if clip_high_pct >= float(THRESHOLDS["clip_high_block_pct"]):
         return "clipped"
-    if mean_luma < float(THRESHOLDS["luma_under"]):
+    # La soglia del buio viene dalla scala di difetti quando c'e': e' misurata
+    # sullo stesso materiale su cui si applica, e un giudice l'ha confermata.
+    under = None
+    try:
+        from .registry import ladder_threshold
+
+        under = ladder_threshold("exposure")
+    except Exception:  # noqa: BLE001 - the fallback is the declared one
+        under = None
+    # ``<=``: il livello che il giudice ha chiamato "dark" e' la soglia stessa, e
+    # una soglia che non include il proprio punto non e' la soglia che ha misurato.
+    if mean_luma <= float(under if under is not None else THRESHOLDS["luma_under"]):
         return "dark"
     if mean_luma > _BRIGHT_LUMA or clip_high_pct >= float(THRESHOLDS["clip_high_pct"]):
         return "bright"

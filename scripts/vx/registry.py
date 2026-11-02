@@ -335,6 +335,38 @@ def _load_thresholds() -> Dict[str, Dict[str, Any]]:
 
 THRESHOLDS: Dict[str, Dict[str, Any]] = _load_thresholds()
 
+#: The defect ladder's calibrated thresholds (``tests/fixtures/corpus_ladder.json``).
+#: An axis is here only when it is both built and transferable: the ladder itself
+#: declares ``calibratable``, and a withdrawn threshold stays ``None`` with a reason.
+_LADDER_FIXTURE = (
+    Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "corpus_ladder.json"
+)
+
+
+def _load_ladder() -> Dict[str, Dict[str, Any]]:
+    if not _LADDER_FIXTURE.is_file():
+        return {}
+    try:
+        data = json.loads(_LADDER_FIXTURE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    axes = data.get("axes") if isinstance(data, dict) else None
+    if not isinstance(axes, dict):
+        return {}
+    return {str(axis): dict(entry) for axis, entry in axes.items() if isinstance(entry, dict)}
+
+
+LADDER: Dict[str, Dict[str, Any]] = _load_ladder()
+
+
+def ladder_threshold(axis: str) -> Optional[float]:
+    """The calibrated threshold for one axis, or ``None`` when it is not adopted."""
+    entry = LADDER.get(str(axis)) or {}
+    value = entry.get("threshold")
+    if entry.get("calibratable") is True and isinstance(value, (int, float)):
+        return float(value)
+    return None
+
 
 def reload_thresholds() -> Dict[str, Dict[str, Any]]:
     """Re-read the fixture in place (used after a corpus measurement run)."""
