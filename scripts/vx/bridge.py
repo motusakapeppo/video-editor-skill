@@ -1187,12 +1187,18 @@ def _restore_sentence(
             else "denoise assente (snr non misurato)"
         )
     if stabilize:
-        parts.append(f"stabilize deshake (jitter {jitter:.2f} >= {jitter_thr:.2f})")
+        # Nessun filtro deshake esiste in questo ponte: la riga dichiara una
+        # PROPOSTA, non un trattamento applicato. Scrivere "stabilize deshake"
+        # senza il filtro era un referto che mentiva sul lavoro fatto.
+        parts.append(
+            f"stabilize proposto (jitter {jitter:.2f} >= {jitter_thr:.2f}); "
+            "nessun filtro deshake applicato"
+        )
     else:
         parts.append(
-            f"stabilize assente (jitter {jitter:.2f} < {jitter_thr:.2f})"
+            f"stabilize non proposto (jitter {jitter:.2f} < {jitter_thr:.2f})"
             if jitter is not None
-            else "stabilize assente (jitter non misurato)"
+            else "stabilize non proposto (jitter non misurato)"
         )
     return "; ".join(parts)
 
@@ -1234,6 +1240,8 @@ def _declare_restore(
                 "source_id": clip.source_id,
                 "denoise": denoise,
                 "stabilize": stabilize,
+                #: True solo se un filtro deshake esiste davvero; oggi non esiste.
+                "stabilize_applied": False,
                 "noise_dbfs": round(floor, 2) if floor is not None else None,
                 "jitter": round(jitter, 3) if jitter is not None else None,
                 "snr_db": round(snr, 2) if snr is not None else None,

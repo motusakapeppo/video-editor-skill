@@ -63,9 +63,10 @@
     }
   ],
   "defect": {
-    "where": "scripts/vx/bridge.py:1224",
-    "what": "stabilize = jitter >= THRESHOLDS['jitter_shaky'] (1,0)",
-    "effect": "un pan a 1,717 fa partire 'stabilize deshake' su un movimento voluto",
-    "fix": "il gate non puo' vivere sul solo jitter: serve una dichiarazione di intenzione (il movimento era voluto?) oppure la stabilizzazione resta una proposta da approvare, non un'azione automatica. Cambiarlo cambia i piani gia' prodotti: task a se', con la sua prova."
+    "where": "scripts/vx/bridge.py:1224 e _restore_sentence",
+    "what": "stabilize = jitter >= THRESHOLDS['jitter_shaky'] (1,0), dichiarato come 'stabilize deshake'",
+    "effect": "nessun filtro deshake esiste: il referto dichiarava un trattamento inesistente, e avrebbe dichiarato 'stabilize' anche su una panoramica voluta (r2, 1,717)",
+    "fixed": "la riga dice 'proposto ...; nessun filtro deshake applicato', e il record porta stabilize_applied=False",
+    "still_open": "il flag resta una proposta: quando e se un filtro esistera', l'intenzione va dichiarata, perche' una panoramica e un tremore misurano uguale"
   }
 }

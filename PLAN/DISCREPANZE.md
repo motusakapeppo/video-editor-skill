@@ -141,13 +141,15 @@ r4 = 1,220, **fattore 2,12** — peggio del 2,46 della metrica in uso. Il motivo
 fisico, non algoritmico: una panoramica a mano libera oscilla davvero mentre
 panoramica. L'energia del movimento c'e' in entrambi i casi; cambia l'**intenzione**.
 
-**Il danno concreto.** `scripts/vx/bridge.py:1224` decide
-`stabilize = jitter >= THRESHOLDS["jitter_shaky"]` (1,0). La panoramica di r2, a 1,717,
-fa partire `stabilize deshake` su un movimento voluto: il classico effetto camera
-bloccata. Nessuna soglia su una misura di moto puo' sostituire la decisione del
-montatore: il jitter resta una descrizione con il suo numero, e il gate va rifatto
-(chiedere l'intenzione, o proporre la stabilizzazione invece di applicarla) in un task
-con la sua prova, perche' cambia i piani gia' prodotti.
+**Il danno concreto, e una correzione che devo a me stesso.** Avevo scritto che la
+panoramica di r2 (1,717) "fa partire `stabilize deshake`" e che si sarebbe vista una
+camera bloccata. **Falso, verificato nel codice:** nessun filtro `deshake` esiste in
+questo ponte. `stabilize` e' solo una dichiarazione nel referto, e la frase diceva
+"stabilize deshake (jitter ...)" come se il trattamento fosse stato fatto. Il danno non
+e' nel render: e' **un referto che dichiara un lavoro inesistente**. Corretto: la riga
+ora dice "stabilize proposto ...; nessun filtro deshake applicato", e il record porta
+`stabilize_applied: False`. Nessuna soglia su una misura di moto puo' sostituire la
+decisione del montatore: il jitter resta una descrizione con il suo numero.
 
 **Conseguenza.** La soglia del tremolio resta `null` e il task resta onesto: nessun
 numero. Il set di giudizi (5 clip, reali, con il valore misurato accanto) e' in

@@ -126,7 +126,7 @@ def main() -> int:
         [(item["snr_db"], item["noise_dbfs"]) for item in report.restore],
     )
     check(
-        "stabilize applicato quando jitter >= soglia",
+        "stabilize proposto quando jitter >= soglia",
         all(item["stabilize"] for item in report.restore)
         and all(item["jitter"] == 0.52 for item in report.restore),
         report.restore[0]["declared"],
@@ -152,7 +152,7 @@ def main() -> int:
         ),
     )
     check(
-        "denoise prima del gain, stabilize prima della geometria",
+        "denoise prima del gain, stabilize proposto prima della geometria",
         applied.index("afftdn") < applied.index("volume=")
         and all(
             part.index("deshake") < part.index("scale=")
