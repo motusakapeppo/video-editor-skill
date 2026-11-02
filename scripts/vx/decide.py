@@ -307,6 +307,23 @@ def calculate_specificity_score(prompt: str) -> tuple[float, dict]:
     return round(len(matches) / SPECIFICITY_TOTAL, 2), matches
 
 
+def requested_duration(text: str) -> Optional[float]:
+    """I secondi chiesti nel prompt, o ``None`` se non ce ne sono.
+
+    ``DURATION_RE`` esisteva solo per alzare il punteggio di specificita': il
+    numero veniva letto e buttato. Qui diventa un valore, e da qui entra nel
+    contratto.
+    """
+    match = DURATION_RE.search(str(text or ""))
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def select_mode(prompt: str) -> str:
     score, _ = calculate_specificity_score(prompt)
     return "strict" if score >= STRICT_THRESHOLD else "autonomous"
@@ -465,6 +482,9 @@ def parse_and_decide(
             "engine": engine,
         },
     }
+    seconds = requested_duration(text)
+    if seconds is not None:
+        payload["scene"]["duration_sec"] = seconds
     if asset_pool is not None and len(asset_pool) > 0:
         # Local import: asset_triage imports contract and probe, so a module-level
         # import here would risk a cycle.

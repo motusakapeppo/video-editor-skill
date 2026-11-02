@@ -1049,6 +1049,14 @@ def payload_to_edl_plan(
     a_clips: List[Any] = []
     dialogue_clips: List[Any] = []
     cursor = 0.0
+    scene_block = payload.get("scene")
+    requested = (
+        float(scene_block.get("duration_sec"))
+        if isinstance(scene_block, Mapping)
+        and isinstance(scene_block.get("duration_sec"), (int, float))
+        and float(scene_block.get("duration_sec")) > 0
+        else 0.0
+    )
     for index, entry in enumerate(a_entries):
         asset_id = entry.get("asset_id")
         if not isinstance(asset_id, str) or not asset_id:
@@ -1056,6 +1064,12 @@ def payload_to_edl_plan(
         ref = _source_ref(asset_id)
         media_duration = _media_duration(asset_id)
         length = min(_target(entry, asset_id), media_duration)
+        if requested > 0.0:
+            # La durata chiesta comanda: si taglia l'ultima clip e si chiude.
+            remaining = requested - cursor
+            if remaining <= 1e-3:
+                break
+            length = min(length, remaining)
         if length <= 0:
             raise VxError(f"asset {asset_id!r} has no usable duration")
         referenced[_source_id(asset_id)] = ref
