@@ -450,5 +450,20 @@
       "got": "absent",
       "ok": true
     }
-  ]
+  ],
+  "ladder": {
+    "file": "tests/fixtures/corpus_ladder.json",
+    "calibratable_axes": [
+      "cast",
+      "exposure"
+    ],
+    "uncalibratable_axes": [
+      "shake"
+    ],
+    "thresholds": {
+      "shake": null,
+      "exposure": 50.636,
+      "cast": 46.116
+    }
+  }
 }

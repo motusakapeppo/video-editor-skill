@@ -347,12 +347,86 @@ def check_real_corpus() -> None:
         )
 
 
+LADDER = FIXTURES / "corpus_ladder.json"
+
+
+def check_ladder() -> None:
+    """(g) the defect ladder: built levels, blind panel, derived threshold."""
+    print("(g) defect ladder")
+    if not LADDER.is_file():
+        skip("ladder", "corpus_ladder.json not present")
+        return
+    data = json.loads(LADDER.read_text(encoding="utf-8"))
+    axes = data.get("axes") or {}
+    check("the ladder covers the three axes", sorted(axes) == ["cast", "exposure", "shake"], sorted(axes))
+    check(
+        "the judge was blind to the construction",
+        (data.get("construction") or {}).get("panel_blind") is True,
+        str((data.get("construction") or {}).get("panel_blind")),
+    )
+    check(
+        "every axis has four levels",
+        all(len(entry.get("ladder") or []) == 4 for entry in axes.values()),
+        {axis: len(entry.get("ladder") or []) for axis, entry in axes.items()},
+    )
+    check(
+        "each level carries its measured value and its token",
+        all(
+            isinstance(row.get("value"), (int, float)) and isinstance(row.get("token"), str)
+            for entry in axes.values()
+            for row in entry.get("ladder") or []
+        ),
+        "",
+    )
+
+    for axis, entry in axes.items():
+        ladder = sorted(entry.get("ladder") or [], key=lambda row: row["level"])
+        values = [row["value"] for row in ladder]
+        if axis == "exposure":
+            ordered = all(values[i] >= values[i + 1] for i in range(len(values) - 1))
+        else:
+            ordered = all(values[i] <= values[i + 1] for i in range(len(values) - 1))
+        check(f"{axis}: the levels are monotone in the measured value", ordered, values)
+        if entry.get("calibratable"):
+            level = entry.get("level")
+            chosen = next((row for row in ladder if row["level"] == level), None)
+            check(
+                f"{axis}: the threshold is the measured value of the chosen level",
+                chosen is not None
+                and entry.get("threshold") == chosen["value"]
+                and entry.get("token") in ("dark", "very_dark", "evident", "unwatchable"),
+                f"livello {level} -> {entry.get('threshold')} ({entry.get('token')})",
+            )
+            check(f"{axis}: the threshold is not at the clean base", level not in (None, 0), str(level))
+        else:
+            check(
+                f"{axis}: an axis the panel cannot see declares it, with a reason",
+                entry.get("threshold") is None and bool(str(entry.get("reason") or "").strip()),
+                str(entry.get("reason"))[:70],
+            )
+
+    corpus_path = FIXTURES / "corpus_annotations.json"
+    if corpus_path.is_file():
+        corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+        declared = (corpus.get("ladder") or {})
+        check(
+            "the corpus points at the ladder and repeats its verdict",
+            declared.get("file") == "tests/fixtures/corpus_ladder.json"
+            and sorted(declared.get("calibratable_axes") or [])
+            == sorted(axis for axis, entry in axes.items() if entry.get("calibratable"))
+            and sorted(declared.get("uncalibratable_axes") or [])
+            == sorted(axis for axis, entry in axes.items() if not entry.get("calibratable")),
+            {axis: entry.get("calibratable") for axis, entry in axes.items()},
+        )
+
+
 def main() -> int:
     print(f"reader: {importer.reader_name()}")
     check_ledger_and_gate()
     check_sample_recomputation()
     check_shipped_module()
     check_real_corpus()
+    check_ladder()
     print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP")
     return 0 if FAIL == 0 else 1
 

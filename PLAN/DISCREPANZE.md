@@ -59,3 +59,46 @@ frame.
 Ogni nuova istruzione che citi file, moduli, prove o numeri viene confrontata con il
 repository **prima** di essere eseguita. Se non corrisponde, si aggiunge una riga
 qui e si procede con la realtà, non con l'istruzione.
+
+
+## D-23 — F0-T09: da giudici umani a panel di modelli e scala di difetti (chiusa il 2/11/2026)
+
+Il task chiedeva venti clip con giudizi umani. Ne esistevano sette, e l'utente ha
+detto di non essere competente e di delegare. La sostituzione e' dichiarata, non
+mascherata:
+
+- **i giudici sono modelli**, non persone: il corpus porta
+  `kind: "model panel (vision), not human"`, e il test lo pretende;
+- **l'accordo si misura**: 0,9875 fra i due lettori che hanno potuto leggere, due
+  celle contestate e scartate come `na`;
+- **i sette giudizi umani restano come controprova** e reggono (`c02` evident,
+  `c09` ok, `c08` noise absent).
+
+Il panel, da solo, non basta: sulle venti clip reali p33 = p67 = 0,0 su tutti e
+quattro gli assi, perche' diciotto clip sono pulite. Un corpus senza difetti non
+sa separare, e nessun giudice puo' collocare una soglia. Da qui la **scala di
+difetti** (`scripts/t09_ladder.py`): da una clip pulita si costruiscono quattro
+livelli per asse, si misurano, e un panel **cieco alla costruzione** dice a che
+livello il difetto diventa `evident`. La soglia e' il valore misurato di quel
+livello.
+
+**Risultato, con i numeri.**
+
+| asse | livelli misurati | token del panel | soglia |
+|---|---|---|---|
+| esposizione | 92,5 / 50,6 / 27,0 / 13,1 (luma) | ok / dark / very_dark / very_dark | **50,636** (livello 1) |
+| dominante | 20,4 / 27,5 / 36,7 / 46,1 | none / none / light / evident | **46,116** (livello 3) |
+| tremolio | 0,086 / 0,434 / 0,932 / 1,698 | ok / ok / ok / **ok** | **nessuna** |
+
+**Il tremolio non si calibra da fermo.** Il panel ha giudicato `ok` anche il
+livello 4, quello che la metrica chiama `shaky` a 1,698: tre fotogrammi fissi non
+mostrano un tremolio periodico a 9 Hz. Non e' un errore del giudice, e' un limite
+del mezzo: il tremolio si vede in movimento. La scala resta registrata come
+**non valida per quell'asse**, la soglia resta `null` con il motivo scritto, e il
+test impedisce di spacciarla per calibrata. Le bande misurate (0,4 / 1,0) restano
+quelle di D-21, con la separazione c02 (3,59) / c09 (0,85) che regge sui numeri.
+
+**Conseguenza sul consumatore.** Le soglie derivate stanno nel corpus
+(`tests/fixtures/corpus_ladder.json`) e sono esposte da `registry.provenance()`;
+il loro uso nel triage e' un task separato, perche' cambiare le bande cambia i
+verdetti e vuole la sua prova. Non si e' spacciato per fatto cio' che non lo e'.

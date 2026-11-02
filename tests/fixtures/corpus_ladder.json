@@ -1,0 +1,206 @@
+{
+  "schema": "vx.corpus_ladder/1",
+  "source": "D:\\video_work\\t09\\clips\\t09_03_WhatsApp_Video_2026-10-26_at_22.59.10_(1).mp4",
+  "construction": {
+    "levels": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "axes": [
+      "shake",
+      "exposure",
+      "cast"
+    ],
+    "panel_blind": true,
+    "frames": [
+      0.2,
+      0.5,
+      0.8
+    ]
+  },
+  "panel": {
+    "annotator": "L1",
+    "rubric": "t09-ladder/v1",
+    "tokens": {
+      "s01": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent"
+      },
+      "s02": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent"
+      },
+      "s03": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent"
+      },
+      "s04": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent"
+      },
+      "s05": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent"
+      },
+      "s06": {
+        "shake": "ok",
+        "exposure": "dark",
+        "cast": "none",
+        "noise": "light"
+      },
+      "s07": {
+        "shake": "ok",
+        "exposure": "very_dark",
+        "cast": "none",
+        "noise": "evident"
+      },
+      "s08": {
+        "shake": "ok",
+        "exposure": "very_dark",
+        "cast": "none",
+        "noise": "annoying"
+      },
+      "s09": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent"
+      },
+      "s10": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "none",
+        "noise": "absent"
+      },
+      "s11": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "light",
+        "noise": "absent"
+      },
+      "s12": {
+        "shake": "ok",
+        "exposure": "ok",
+        "cast": "evident",
+        "noise": "absent"
+      }
+    }
+  },
+  "axes": {
+    "shake": {
+      "threshold": null,
+      "level": null,
+      "token": null,
+      "ladder": [
+        {
+          "level": 0,
+          "id": "s01",
+          "value": 0.086,
+          "token": "ok"
+        },
+        {
+          "level": 1,
+          "id": "s02",
+          "value": 0.434,
+          "token": "ok"
+        },
+        {
+          "level": 2,
+          "id": "s03",
+          "value": 0.932,
+          "token": "ok"
+        },
+        {
+          "level": 3,
+          "id": "s04",
+          "value": 1.698,
+          "token": "ok"
+        }
+      ],
+      "calibratable": false,
+      "reason": "il panel cieco ha giudicato 'ok' tutti e quattro i livelli: tre fotogrammi fissi non mostrano un tremolio periodico. La scala non e' valida per questo asse e la soglia resta quella misurata, non confermata a vista.",
+      "basis": "nessun livello giudicato evident"
+    },
+    "exposure": {
+      "threshold": 50.636,
+      "level": 1,
+      "token": "dark",
+      "ladder": [
+        {
+          "level": 0,
+          "id": "s05",
+          "value": 92.539,
+          "token": "ok"
+        },
+        {
+          "level": 1,
+          "id": "s06",
+          "value": 50.636,
+          "token": "dark"
+        },
+        {
+          "level": 2,
+          "id": "s07",
+          "value": 26.986,
+          "token": "very_dark"
+        },
+        {
+          "level": 3,
+          "id": "s08",
+          "value": 13.139,
+          "token": "very_dark"
+        }
+      ],
+      "calibratable": true,
+      "basis": "valore misurato del primo livello giudicato evident dal panel cieco",
+      "light_threshold": null
+    },
+    "cast": {
+      "threshold": 46.116,
+      "level": 3,
+      "token": "evident",
+      "ladder": [
+        {
+          "level": 0,
+          "id": "s09",
+          "value": 20.392,
+          "token": "none"
+        },
+        {
+          "level": 1,
+          "id": "s10",
+          "value": 27.469,
+          "token": "none"
+        },
+        {
+          "level": 2,
+          "id": "s11",
+          "value": 36.731,
+          "token": "light"
+        },
+        {
+          "level": 3,
+          "id": "s12",
+          "value": 46.116,
+          "token": "evident"
+        }
+      ],
+      "calibratable": true,
+      "basis": "valore misurato del primo livello giudicato evident dal panel cieco",
+      "light_threshold": 36.731
+    }
+  },
+  "notes": "la scala costruisce il difetto, il panel lo giudica senza sapere il livello, la soglia e' il valore misurato del primo livello che il panel chiama evident. L'esposizione copre il lato scuro: il clipping e' un'altra faccia, non coperta."
+}
