@@ -51,8 +51,13 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
    parallelo a un render. **Vale anche per la suite stessa**: lanciare `run_all.py`
    e contemporaneamente estrarre fotogrammi o costruire clip fa cadere i test che
    rendono golden (`test_motion_golden` è caduto due volte così, e passa sempre
-   quando la macchina è dedicata). Se un golden fallisce, prima si guarda cosa
-   altro stava girando, poi si accusa il codice.
+   quando la macchina è dedicata).
+6. **`test_f17_crash.py` non è nella suite di default.** Misura la velocità della
+   macchina e uccide il processo a offset fissi: dopo 175 test la macchina è calda,
+   gli offset derivano e i kill si ammassano in una fase (misurato: loudness 45,
+   staging 0, lock 0, boot 0) — tre fasi non esercitate, cioè una prova in meno.
+   Si esegue a macchina ferma con `run_all.py --only f17_crash --heavy` (50 PASS,
+   267 s); il default lo salta e **lo dichiara** con una riga `[heavy] … SKIP`.
 
 ## Dove sono i pezzi
 
