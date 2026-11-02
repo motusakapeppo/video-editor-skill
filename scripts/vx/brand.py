@@ -327,6 +327,25 @@ def read(
     }
 
 
+def summarize(record: Mapping[str, Any]) -> Dict[str, Any]:
+    """The binary outcome of one read: complete, degraded, or refused.
+
+    ``refused`` is not returned here: a refused read raises ``brand_robots``
+    before there is a record to summarise. This function says whether what was
+    read is whole (``ok``) or lost something it had linked (``degraded``).
+    """
+    skipped = list(record.get("skipped") or [])
+    off_domain = [
+        item for item in skipped if "fuori dominio" in str(item.get("why") or "")
+    ]
+    return {
+        "outcome": "degraded" if skipped else "ok",
+        "assets": len(record.get("assets") or []),
+        "skipped": len(skipped),
+        "off_domain": len(off_domain),
+    }
+
+
 def write(record: Mapping[str, Any], destination: Path) -> Path:
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -345,5 +364,6 @@ __all__ = [
     "SCHEMA",
     "Store",
     "read",
+    "summarize",
     "write",
 ]

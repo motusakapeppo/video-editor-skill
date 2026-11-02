@@ -698,9 +698,11 @@
       "acceptance": "tre pagine di prova (brand completo, `robots.txt` che esclude, asset su altro dominio) danno tre esiti binari distinti; il render usa il logo e la palette e il test lo prova con MAD sul frame, non solo sul JSON; un `brand_ref` assente è rifiutato con il codice",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_branding.py 14 PASS: tre pagine di prova danno ok/degraded/refused (quest'ultimo brand_robots); brand_ref assente o appeso -> brand_ref_missing col file, documento rotto -> brand_invalid; palette in alto a sinistra MAD 3,88; logo localizzato dove dichiarato (252,500)-(303,551) contro (253,501)-(303,551), MAD 154,54 dentro il riquadro; output 70.823 byte",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

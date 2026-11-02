@@ -1,0 +1,12 @@
+@font-face {
+  font-family: 'Officina';
+  src: url(/officina.woff2) format('woff2');
+}
+body {
+  font-family: 'Officina', sans-serif;
+  color: #0a5cff;
+  background: #f4f1ea;
+}
+.accento {
+  color: #ff6600;
+}
