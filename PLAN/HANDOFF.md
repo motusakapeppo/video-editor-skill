@@ -10,8 +10,8 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
 
 - Skill V2 in `~/.config/opencode/skills/video-editor`; MCP `connected` (sei tool);
   `vx doctor` = ready.
-- Suite completa: **174 runner / 5652 assert / 0 fail / 2 skip in 1309,8 s**
-  (dopo `0cf9677`).
+- Suite completa: **176 runner / 5692 assert / 0 fail / 1 skip in 1698,8 s**
+  (commit `f816fc1`).
 - Board: **96 chiusi con prova, 0 aperti, 0 bloccati**. `F0-T09` è chiuso: corpus
   annotato, scala di difetti, soglie derivate e test che le verifica.
 - Fasi chiuse e taggate: F1, F2, F3, F4, F16, F26, F27, F28, **F25** (T01…T15).
