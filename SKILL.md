@@ -168,6 +168,27 @@ Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
 `out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. L'export multi-aspect non è
 implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`; `python tests/test_motion_golden.py` ricattura i 54 template della Motion Studio a tre istanti e li confronta byte per byte con `tests/fixtures/motion_golden/`.
 
+## Guardare mentre lavora (frase di attivazione)
+
+Se l'utente dice **"mostrami cosa succede"**, **"fammi vedere"**, **"segui il
+lavoro"**, **"guardiamo mentre lavora"** o nomina **"il pannello"**, si apre la
+vista prima di lanciare il render, non dopo.
+
+Due livelli, e vanno detti per quello che sono:
+
+1. **Pannello del lavoro** (acceso di default). `progress.html` nella workdir,
+   riscritto a ogni fase, ricarica ogni secondo: percentuale, fase in corso e
+   cosa sta facendo, in italiano. Si apre nel pannello di anteprima all'inizio.
+   `--no-panel` lo spegne; `--panel DIR` lo sposta.
+2. **UI locale** (`vx serve DIR --port N`). Serve tutti i lavori scoperti sotto
+   `DIR` (fino a due livelli, il piu' recente per primo), con selettore quando
+   sono piu' di uno, fotogrammi chiave, approvazione e il player del master su
+   `/result` — attivo solo quando il file esiste davvero (`master_ready`).
+
+Quello che **non** c'e': un'anteprima video del montaggio in corso. Il pannello
+mostra il progresso e i fotogrammi, non un playhead. Se l'utente chiede di vedere
+il montaggio mentre si compone, va detto che non esiste invece di improvvisarlo.
+
 ## Percorsi e sicurezza
 
 Il file sorgente non viene MAI modificato. L'ingest calcola lo sha256 e lo
