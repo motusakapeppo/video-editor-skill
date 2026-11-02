@@ -1,0 +1,20 @@
+{
+  "template": "whip_right",
+  "family": "whip",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "34033f688a18130202c377fc3a209c53f195b76d48a57b9f5f512281defdd6cc",
+    "63e22760740609dc4c0fb7dcc7cec96eb3568d6e7f7894835d46c4f5b64c84ee",
+    "40a8f8339dbae238602654182a950212f1c2f2b9bd91513ae975d838e423d5f7"
+  ]
+}

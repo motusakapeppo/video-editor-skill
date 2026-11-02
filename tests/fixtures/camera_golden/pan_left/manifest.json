@@ -1,0 +1,20 @@
+{
+  "template": "pan_left",
+  "family": "pan",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "c849b7d03a789e21ac085655f5be1eb5c41ab5a4c09d61f7bd5e7b56483cca95",
+    "a5b9acd6d06bfb47da007f059a6aa988ed4f6c171e58c4fcb0178d3da52add6c",
+    "c97a5d896d687c1ff52db564923bcd32d8475d7b0ae81bd0e4da691785d995e3"
+  ]
+}

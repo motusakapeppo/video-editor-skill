@@ -1,0 +1,20 @@
+{
+  "template": "zoom_out_slow",
+  "family": "zoom",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "96f76371305c5eb4ada1346ecdde7c499ecac64cc72a2ca8990af1f5bd1de887",
+    "5940206088436f79c49e3a9b75e76066ebbcdc95f61753c8a2b75454a4253976",
+    "4c456abc8a655e90565dc7b4ce1f1efb3132e690e06564f434562c932890c37f"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "template": "pull_out_wide",
+  "family": "pull",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "ef1cda67c4b6955097365051c00673a18a8ef81e2cf69eee5e5490c8fe52488f",
+    "42e0452bfe5de8080827e52609b1b77172ca53a9d03f046dc4792d632d9d183c",
+    "e1d4d630f72cd18b521c769ab4bebf687e21841ad3df3cc5d6194f6d00ecc3d0"
+  ]
+}

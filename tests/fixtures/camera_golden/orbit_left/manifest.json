@@ -1,0 +1,20 @@
+{
+  "template": "orbit_left",
+  "family": "orbit",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "4688618b5c3181354f0390063fe3d3072734c0b6f3595ca8e24a5406e4b919c6",
+    "c9d8b5be11c1d0afe82cde61b49b1d4fcae1299c71074e52664cd55a490f0ca0",
+    "017cb83361729374eaea6c8eb1633d3696d2280cae7ad51180b8913dcd7407f9"
+  ]
+}

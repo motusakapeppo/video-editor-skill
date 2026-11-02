@@ -63,6 +63,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import ffmpeg
+class _EmptyTrack:
+    """A track with no keys: the rect is static on that axis."""
+
+    keys: tuple = ()
+
+
 from .edl3 import (
     BACKENDS,
     EDL3_VERSION,
@@ -640,22 +646,48 @@ def _opacity_fragment(
     return f"colorchannelmixer=aa={_num(value)}", "static"
 
 
-def _crop_fragment(effect: Any) -> str:
-    """Normalised rect as a time-variable ``crop`` expression."""
+def _crop_fragment(
+    effect: Any, *, width: int, height: int, fps: float
+) -> str:
+    """The rect as a time-variable expression, on the filter that can animate it.
 
-    def axis(name: str, symbol: str, default: float) -> str:
+    ``crop`` evaluates ``w`` and ``h`` once, at initialisation, and only ``x``/``y``
+    per frame: a keyframed width therefore froze at its first value, and every move
+    that changes the scale (a push-out, a zoom, a crane) rendered the untouched
+    frame. ``zoompan`` evaluates ``z`` per frame, so an animated size becomes a
+    ``z`` expression instead: ``z = 1 / width`` because a full-frame crop is zoom 1.
+
+    A rect whose size is static stays a plain ``crop``: no need to pay for a
+    scaler, and its reference frames do not move.
+    """
+
+    def fraction(name: str, default: float, time_symbol: str = "t") -> str:
         track = effect.keyframes.get(name)
+        if track is not None and len(track.keys) > 1:
+            return _escape_commas(track_expression(track, time_symbol=time_symbol))
         if track is not None:
-            expression = track_expression(track, time_symbol="t")
-            return f"{symbol}*({_escape_commas(expression)})"
-        value = effect.params.get(name, default)
-        return f"{symbol}*{_num(value)}"
+            return _num(float(track.keys[0].value))
+        return _num(float(effect.params.get(name, default)))
 
-    width = axis("width", "iw", 1.0)
-    height = axis("height", "ih", 1.0)
-    x = axis("x", "iw", 0.0)
-    y = axis("y", "ih", 0.0)
-    return f"crop=w={width}:h={height}:x={x}:y={y}"
+    sized = any(
+        len((effect.keyframes.get(name) or _EmptyTrack()).keys) > 1
+        for name in ("width", "height")
+    )
+    if sized:
+        # zoompan's clock is the output frame index, so the same track expression
+        # is written against ``on / fps``.
+        clock = f"(on/{_num(float(fps))})"
+        zoom = fraction("width", 1.0, clock)
+        x = fraction("x", 0.0, clock)
+        y = fraction("y", 0.0, clock)
+        return (
+            f"zoompan=z='1/({zoom})':x='iw*({x})':y='ih*({y})':d=1:"
+            f"s={int(width)}x{int(height)}:fps={_num(float(fps))}"
+        )
+    return (
+        f"crop=w=iw*({fraction('width', 1.0)}):h=ih*({fraction('height', 1.0)}):"
+        f"x=iw*({fraction('x', 0.0)}):y=ih*({fraction('y', 0.0)})"
+    )
 
 
 def _color_fragment(
@@ -1062,7 +1094,11 @@ def _clip_plan(
     geometry: List[str] = []
     crop = effects.get("crop")
     if crop:
-        geometry.append(_crop_fragment(crop[0]))
+        geometry.append(
+            _crop_fragment(
+                crop[0], width=scaled_width, height=scaled_height, fps=fps
+            )
+        )
     geometry.append(
         f"scale={scaled_width}:{scaled_height}:"
         "force_original_aspect_ratio=decrease:flags=bicubic"

@@ -1,0 +1,20 @@
+{
+  "template": "whip_down",
+  "family": "whip",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "fcce8aa4e572e0f8358426fa852fc916ada79aa58ec91c5fa29f4e3cea8a1495",
+    "02fb8e182dfbec1683d48a389171c2bc6854a04522b613d5ee46c546d1f733d0",
+    "bedb68ff8291f801d0467c8b44f9f5273995e4782ed380bdd3bc6dcf31a8dbd2"
+  ]
+}

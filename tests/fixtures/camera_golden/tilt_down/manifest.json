@@ -1,0 +1,20 @@
+{
+  "template": "tilt_down",
+  "family": "tilt",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "6a64fe20a359fb5b7dd8952ee9fe534bec9d5dbe124aca9643fc3362ea74288e",
+    "5f5f3d081b1104962013a98f552be049ee16a7cb09b83eb2bd8537faf73609c7",
+    "d71461eab0474dea91e1a52239e019cef2a8231583308c9a03298bee68ec1aa8"
+  ]
+}

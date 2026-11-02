@@ -1,0 +1,20 @@
+{
+  "template": "shake_heavy",
+  "family": "handheld",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "10712b0bfd273fddd6ace04d47970cbed03055885485edaaf5ac7333e244e90d",
+    "4ab61a684c16ecaa891577f67ca2da9653341468244b1a79536766f20f39725c",
+    "562f98491abe1d82a324ef7e09a7fce0398e93c46abe0407279c2ebd4f75e082"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "template": "push_in",
+  "family": "push",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "8f53573986f0d08a06b4fb6f1520e3b2417614834793c786cfe1d0cc564cc41b",
+    "a5a89ba5a95b63c49be83850dc5e8f3a81d43bef1de38e5de93badad7604d82a",
+    "0daff76bcb6de5ab96740fc9eb48185bb59860c3cf3dadf7937bc2275d857bd5"
+  ]
+}

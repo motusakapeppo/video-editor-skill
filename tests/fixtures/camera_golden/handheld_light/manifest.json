@@ -1,0 +1,20 @@
+{
+  "template": "handheld_light",
+  "family": "handheld",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "565ddee9c0d439d5299da9a2663848e5ec898bef7eb20161099166c26a187bc8",
+    "59819df26897db3ed15105b7f90e0aa7de41d3f09260c41dd52762b764b0b51b",
+    "7f8f8a2d6c5735583d441d0032577077c7f1bba1dfbe5fbb5e9052c3a371d9ba"
+  ]
+}

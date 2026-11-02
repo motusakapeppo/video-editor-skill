@@ -1,0 +1,20 @@
+{
+  "template": "crane_up_wide",
+  "family": "crane",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "1992e3fd4b21adc236d6b91a87961e0280879891f06cd4cebad1b9ed1430bdc2",
+    "851cd74ef9e7e387eacace62c26392aa9df8a05a0c7c62f5fa35a8c5ac0e9e16",
+    "f750b22993c8a53e62412064ccbdf9f7d73aba4122c9a79e867205b525cc9c78"
+  ]
+}

@@ -572,9 +572,11 @@
       "acceptance": "due esecuzioni consecutive danno lo stesso frame hash per ogni preset; il numero di golden su disco coincide con il numero di voci del registro; un preset senza golden fa fallire il test",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_camera_golden.py 83 PASS: 41 strisce (3 istanti, manifest con sha256), ogni movimento cambia il fotogramma, il numero di strisce coincide con il registro; --write deterministico; D-22 chiusa col passaggio a zoompan (sei famiglie 7,7-43,1 MAD contro la clip non mossa)",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {

@@ -1,0 +1,20 @@
+{
+  "template": "reveal_up",
+  "family": "reveal",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "f6be23bff664b1065c51fad8d1bc049362fd28d80ecd598963f4ffd1578ae774",
+    "7d5d8de7dd851cf294164aceefd96069138c7f5ce8f674b1238461c59b5b6501",
+    "1d5ec76fc41c9737ea1232938d4f91cec4f5b0f076893d3efe517c5d51d068a5"
+  ]
+}

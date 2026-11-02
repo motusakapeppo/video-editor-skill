@@ -136,10 +136,16 @@ def main() -> int:
         ]
         check("S5 the document validates", not problems, problems)
         plan = edl3_render.compile_timeline(document, audio="drop")
+        # A size that animates cannot be a `crop` (it evaluates w/h once): the
+        # compiler writes a zoompan whose z is the inverse of the width track.
         check(
-            "S5 and the compiler emits the crop chain",
-            "crop" in plan["filter_script"],
-            [line for line in plan["filter_script"].splitlines() if "crop" in line][:1],
+            "S5 and the compiler emits an animated zoom, not a frozen crop",
+            "zoompan=z='1/" in plan["filter_script"],
+            [
+                line
+                for line in plan["filter_script"].splitlines()
+                if "zoompan" in line
+            ][:1],
         )
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")

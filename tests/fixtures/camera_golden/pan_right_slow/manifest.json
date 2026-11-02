@@ -1,0 +1,20 @@
+{
+  "template": "pan_right_slow",
+  "family": "pan",
+  "fps": 12,
+  "size": [
+    320,
+    568
+  ],
+  "shot": 2.0,
+  "instants": [
+    0.15,
+    0.5,
+    0.85
+  ],
+  "sha256": [
+    "b24adfb4bcda8142e948c20106e2d6801287b769ad20f32003063822d2e31c04",
+    "c99e5acb06dd282f950368851b056d305fe12e43b1f5031fbef024bac1edab53",
+    "0c507218e3c5584ee6ae56db70f359a7afbcdfeacea667d74a31dd29ef8cd8e9"
+  ]
+}
