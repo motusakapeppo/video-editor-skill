@@ -232,7 +232,7 @@ secondi di silenzio sotto il quadro.
 
 **Diagnosi corretta (2/11/2026, dopo la riproduzione minima).** Il punto 5 qui
 sopra diceva "l'audio esce comunque corto". **Non e' il codice: sono le sorgenti.**
-`D:\video_work\accept\master.mp4` e `accept3\master.mp4` hanno **6,443 s e 6,455 s
+i due master di `<WORK_DIR>/accept` e `<WORK_DIR>/accept3` hanno **6,443 s e 6,455 s
 di audio su 103,453 s e 115,285 s di video**: sono loro a essere rotti, e il reel di
 oggi li ha tagliati fedelmente. La prova che chiude: **sorgente sana** (1080x1920,
 40 s, audio 40 s) → master **video 30,000 s, audio 30,016 s**, con la durata chiesta
