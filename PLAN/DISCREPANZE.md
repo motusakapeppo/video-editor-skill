@@ -276,3 +276,33 @@ secondo di differenza, il referto porta `duration_shortfall` e il narratore lo d
 `tests/test_requested_duration.py` 7 PASS copre i tre casi (corto, uguale, nessuna
 richiesta). Non e' un cancello: e' una dichiarazione — la consegna resta possibile, ma
 non muta.
+
+
+## D-29 — il picco vero si controlla dopo la codifica (chiusa il 2/11/2026)
+
+Il limiter lavora **prima** dell'encode AAC, e l'encode aggiunge un sovrapicco che
+dipende dal materiale. Con `linear=true` il margine statico (0,1 + 0,2 dB) non basta:
+misurato su `reel30`, limite impostato -1,6 dB e picco in uscita **-0,54**. Peggio: la
+risposta del limiter in quella modalita' non e' monotona (limite -1,2 -> -0,56; limite
+-1,6 -> +0,62; limite -2,2 -> -2,05), quindi non e' una questione di "alzare il margine".
+
+**La correzione.** Dopo la codifica il picco viene **rimisurato**: se supera il tetto,
+lo stadio viene rifatto con il limite abbassato dell'eccedenza piu' 0,1 dB di sicurezza,
+e il ritentativo resta scritto in `04_loudness_retry.json`. Una volta sola: non e' un
+ciclo che insegue se stesso.
+
+**Prova sul materiale che sforava.**
+
+| giro | tetto | picco misurato |
+|---|---|---|
+| primo | -0,90 | **-0,83** (fuori) |
+| ritentativo | -1,07 | **-0,99** (dentro) |
+
+`tests/test_true_peak_retry.py` 4 PASS copre la formula (eccedenza, sicurezza, nessun
+rialzo del tetto). Sul materiale caldo di prova il ritentativo non e' scattato perche'
+il primo giro era gia' a -6,2 dBTP: la condizione esiste, e ora si sa che quando scatta
+funziona.
+
+**Cosa resta dichiarato.** La modalita' dinamica di `loudnorm` sarebbe piu' stabile
+(-1,35 dBTP con loudness a -14,09), ma cambierebbe il comportamento di ogni master
+prodotto: resta un cambio da fare con la sua prova, non una riga di nascosto.
