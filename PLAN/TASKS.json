@@ -558,9 +558,11 @@
       "acceptance": "il registro valida al 100% con 40 o più voci, ognuna con famiglia, schema dei parametri, tetto e innesco dichiarati; una voce senza innesco fa fallire il validatore; una pila di 4 movimenti è rifiutata con `STACK_TOO_DEEP`; un nome ignoto è rifiutato con il nome nel messaggio",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_camera_registry.py 14 PASS: 41 movimenti in 10 famiglie, validate() pulito, voce senza innesco rifiutata col nome, tre in pila legali e quattro STACK_TOO_DEEP con i nomi, nome ignoto CAMERA_UNKNOWN col nome, effetto crop con 4 tracce accettato dal compilatore (catena crop animata emessa), durata oltre il tetto CAMERA_TOO_LONG",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
