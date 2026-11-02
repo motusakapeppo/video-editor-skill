@@ -1447,6 +1447,18 @@ def _edl_normalise(
     )
 
 
+def retry_ceiling(measured_tp: float, ceiling_dbtp: float) -> float:
+    """Il limite da usare al secondo giro, dopo aver misurato lo sforamento.
+
+    Il limiter lavora prima della codifica AAC, e la codifica aggiunge un
+    sovrapicco che dipende dal materiale: con `linear=true` il margine statico non
+    basta (misurato: limite -1,6 dB, picco -0,54). Qui si misura il picco *dopo*
+    l'encode e si abbassa il limite dell'eccedenza piu' un decimo di sicurezza.
+    """
+    excess = float(measured_tp) - float(ceiling_dbtp)
+    return round(float(ceiling_dbtp) - max(0.0, excess) - 0.1, 3)
+
+
 def _true_peak_limiter(ceiling_dbtp: float) -> str:
     """Limiter chain whose output stays under the delivery ceiling after encoding.
 
@@ -1877,6 +1889,26 @@ def render_edl(
             raise RenderFailure(f"EDL loudness pass failed: {proc.tail(12)}")
         if not out.is_file() or out.stat().st_size == 0:
             raise RenderFailure("EDL loudness pass produced no file")
+        if ceiling_dbtp is not None:
+            # Misura il picco sul file CODIFICATO: il limiter non vede il
+            # sovrapicco che l'AAC aggiunge dopo di lui.
+            try:
+                encoded_tp = float(_measure_loudness(out).get("input_tp"))
+            except Exception:  # noqa: BLE001 - a missing measure is not a crash
+                encoded_tp = None
+            if encoded_tp is not None and encoded_tp > float(ceiling_dbtp):
+                retry = retry_ceiling(encoded_tp, float(ceiling_dbtp))
+                graph04 = edl_loudness_graph(af_args[1], ceiling_dbtp=retry)
+                write_script(graph04, work / "04_loudness_retry.txt")
+                second = list(args)
+                second[second.index(str(script04))] = str(work / "04_loudness_retry.txt")
+                proc = ff.run_ff(second, loglevel="error")
+                if not proc.ok:
+                    raise RenderFailure(f"EDL loudness retry failed: {proc.tail(12)}")
+                payload_retry = {"from": float(ceiling_dbtp), "to": retry}
+                (work / "04_loudness_retry.json").write_text(
+                    json.dumps(payload_retry, indent=2) + "\n", encoding="utf-8"
+                )
         if cache is not None:
             cache.miss(
                 "04_loudness",
