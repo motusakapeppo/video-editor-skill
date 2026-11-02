@@ -15,10 +15,9 @@ description: |-
   .m4v .mts e su ogni richiesta di editing o adattamento di formato.
 
   Vedere il lavoro mentre si fa: "mostrami cosa succede", "fammi vedere",
-  "fammi vedere mentre lavora", "segui il lavoro", "guardiamo mentre lavora",
-  "apri il pannello", "pannello live", "watch", "voglio vedere il progresso".
-  Con una di queste frasi il flag `--watch` e' OBBLIGATORIO e l'indirizzo
-  stampato va aperto nel pannello di anteprima PRIMA che parta il render.
+  "segui il lavoro", "guardiamo mentre lavora", "apri il pannello",
+  "pannello live", "watch", "voglio vedere il progresso". Con una di queste
+  frasi `--watch` e' OBBLIGATORIO e l'indirizzo va aperto PRIMA del render.
 license: MIT
 compatibility: opencode
 metadata:
@@ -154,25 +153,11 @@ LUFS e true peak, clipping, music ratio, volti/track/speaker (YuNet + IoU + MAR)
 WPM. Le soglie vivono in `scripts/vx/contract.py`; la tabella è read-only e
 `settings` è l'unico scrittore.
 
-## Trattamenti: cosa fa il codice
+## Trattamenti
 
-- **Sottotitoli verticali.** `BorderStyle=1`, `Outline=7`, `Shadow=4` a 1920 di
-  altezza, scalati su `out_h`; orizzontali `4/2` a 1080 (`subs.py`). Il ponte brucia i sottotitoli sulla tela con `margin_v = round(out_h*0.08)` clampato a [24, out_h/4] (`bridge.py`), non nella safe zone di piattaforma.
-- **Font.** Antonio è incluso in `assets/fonts/` con `OFL.txt`; libass riceve
-  `fontsdir`. Una sostituzione è un fallimento duro (`QCFailure`), non un warning.
-- **Fade audio.** `afade` di 12 ms a ogni giunto interno nel grafo finale, non
-  solo nel passaggio di rilevamento dello stadio 01 (`render.py`).
-- **Compress e denoise.** `compress` diventa `acompressor`; il fallback del
-  denoise è `highpass`; la stabilizzazione legge `shakiness`, `smoothing` e `zoom`
-  dal piano. Il ponte usa `afftdn` col noise floor misurato e `deshake` in una passata; l'EditPlan usa vidstab in due passate.
-- **Loudness.** `output.loudness` usa le chiavi minuscole `i/tp/lra`; `apple` e
-  `broadcast` sono rispettati. Il ponte misura il gain per clip sui tratti tenuti
-  (`audio.loudness_spans`), limita a [-60,+24] con `shortfall_lu`. Lo stadio 04
-  esegue `loudnorm` solo se attivo, altrimenti `04_remux`; il QC dichiara skip.
-- **Hook.** Il testo viene da `brief.hook_text` o dalle prime parole della
-  trascrizione; senza testo il trattamento è disattivato e dichiarato.
-- **Guardia trascrizione.** `subs.transcript_quality` richiede almeno 12 parole e
-  probabilità media almeno 0.55; sotto soglia `cli.cmd_run` disattiva i sottotitoli.
+Ogni trattamento e' nel codice e le soglie in `scripts/vx/contract.py`; il
+dettaglio di cosa fa ciascuno (sottotitoli, font, fade, compress, loudness,
+hook, guardia trascrizione) sta in `references/30-trattamenti.md`.
 
 ## Deliverable
 
@@ -181,82 +166,29 @@ Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
 `out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. L'export multi-aspect non è
 implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`; `python tests/test_motion_golden.py` ricattura i 54 template della Motion Studio a tre istanti e li confronta byte per byte con `tests/fixtures/motion_golden/`.
 
-## Il font lo sceglie il contesto (e tu lo confermi)
+## Font e vista
 
-Prima di renderizzare, `vx auto` costruisce una richiesta dai dati veri del
-lavoro (prompt, bpm, look, densita' dei tagli) e chiama
-`fontproposal.propose`: il catalogo ha 2.065 famiglie, l'intenzione viene
-tradotta in un piccolo insieme di famiglie note, quelle si scaricano (massimo
-12), si misurano sui byte reali e producono un campione PNG ciascuna. La
-proposta vive in `<workdir>/font_proposal.json`; la scelta in
-`<workdir>/font_choice.json`.
-
-Il render **non parte** finche' la scelta non c'e', ma non aspetta per sempre:
-`--font-wait SECONDS` (default 180). Le tre uscite sono dichiarate nel report,
-mai silenziose:
-
-| `font.selected_by` | quando |
-|---|---|
-| `user` | la scelta e' arrivata dalla vista o era gia' su disco |
-| `auto` | nessuna vista e nessuna attesa (`--autonomous`, `--no-font-gate`) |
-| `auto_after_timeout` | e' scaduta l'attesa: si prende la prima proposta, **e si scrive** |
-
-Senza rete il bacino e' solo locale (`pool: "local"`) e lo dichiara; se la
-proposta fallisce del tutto il montaggio prosegue col font del preset e il
-report porta `font.error`. La famiglia scelta arriva al `Fontname` dell'ASS
-anche nel percorso `auto` (`bridge.caption_ass`), con `fontsdir` sulla cartella
-del lavoro.
-
-## Guardare mentre lavora (frase di attivazione)
-
-Se l'utente dice **"mostrami cosa succede"**, **"fammi vedere"**, **"segui il
-lavoro"**, **"guardiamo mentre lavora"** o nomina **"il pannello"**, si apre la
-vista prima di lanciare il render, non dopo. Il comando e' uno solo:
-
-```powershell
-& $PY $VX auto --prompt "..." --assets "<cartella>" --out "<file>" --watch
-```
-
-Stampa `Lo guardi qui: http://127.0.0.1:<porta>/` all'inizio, e il server resta
-vivo dopo il render. Senza `--watch` il pannello resta un file nella workdir che
-nessuno apre.
-
-Due livelli, e vanno detti per quello che sono:
-
-1. **Pannello del lavoro** (acceso di default). `progress.html` nella workdir,
-   riscritto a ogni fase, ricarica ogni secondo: percentuale, fase in corso e
-   cosa sta facendo, in italiano. Si apre nel pannello di anteprima all'inizio.
-   `--no-panel` lo spegne; `--panel DIR` lo sposta.
-2. **UI locale** (`vx serve DIR --port N`). Serve tutti i lavori scoperti sotto
-   `DIR` (fino a due livelli, il piu' recente per primo), con selettore quando
-   sono piu' di uno, fotogrammi chiave, approvazione e il player del master su
-   `/result` — attivo solo quando il file esiste davvero (`master_ready`).
-
-Quello che **non** c'e': un'anteprima video del montaggio in corso. Il pannello
-mostra il progresso e i fotogrammi, non un playhead. Se l'utente chiede di vedere
-il montaggio mentre si compone, va detto che non esiste invece di improvvisarlo.
+Il font non si eredita da un default: `auto` propone dal contesto, scarica dal
+catalogo e aspetta la scelta, dichiarandola nel report. La vista locale ha
+selettore dei lavori, fotogrammi, approvazione, player e playhead vero.
+Dettaglio: `references/28-font-proposta-e-cancello.md`, `references/29-vedere-il-lavoro.md`.
 
 ## Percorsi e sicurezza
 
-Il file sorgente non viene MAI modificato. L'ingest calcola lo sha256 e lo
-registra in `source.json`; il QC riverifica `source_sha_unchanged` alla fine.
-Il renderer scrive `final_full.mp4` nella workdir che riceve e gli stadi in
-`stage/`; `run` gli passa `work/stage`, quindi il master è
-`work/stage/final_full.mp4`. I deliverable vanno in `work/out/` o nella cartella
-di uscita configurata. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`, con le
-sottocartelle `proxy`, `analysis`, `subs`, `stage`, `out`, `qc`; un lock per
-liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
+Il sorgente non viene MAI modificato: l'ingest scrive lo sha256 in `source.json`
+e il QC riverifica `source_sha_unchanged`. Il master è `work/stage/final_full.mp4`,
+i deliverable in `work/out/`. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`
+(`proxy`, `analysis`, `subs`, `stage`, `out`, `qc`); un lock per liveness
+(heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
 
-## Superficie opzionale, non normativa, non raggiungibile dalla CLI
+## Superficie opzionale, non normativa
 
-`board.py`, `pipeline.py`, `decide.py`, `creative.py` e `motion_browser.py` restano
-motore sperimentale di giuria. La Motion Studio (`motion.py`, 54 template in
-`assets/templates/`) non è più un'anteprima: un documento EDL 3 dichiara una clip
-`generator` e il render la compone con l'alfa. Nessun comando la raggiunge: si usa dall'API.
+`board.py`, `pipeline.py`, `decide.py`, `creative.py`, `motion_browser.py` sono
+motore sperimentale di giuria. La Motion Studio (54 template) si usa dall'API:
+un EDL 3 dichiara una clip `generator` e il render la compone con l'alfa.
 
 ## Riferimenti
 
-Si caricano su richiesta, non si incollano qui.
 
 - `references/01-ambiente.md` ambiente, dipendenze, GPU; `references/02-metriche-analisi.md` metriche e soglie
 - `references/03-matrice-decisionale.md` finding, gate, trattamento; `references/04-specifiche-social.md` safe zone, loudness, hook

@@ -660,8 +660,11 @@ def _say(msg: str) -> None:
 
     Con ``--json`` lo stdout e' il documento, quindi l'avviso non puo' finirci;
     il narratore invece parla proprio li' e la riga va letta insieme alle altre.
+    Chi ha gia' riservato lo stdout per i fatti suoi (il worker, che per
+    contratto deve restare muto) lo dichiara con ``VX_STDOUT_RESERVED``.
     """
-    stream = sys.stdout if _NARRATING else sys.stderr
+    reserved = os.environ.get("VX_STDOUT_RESERVED") == "1"
+    stream = sys.stdout if (_NARRATING and not reserved) else sys.stderr
     try:
         print(msg, file=stream, flush=True)
     except Exception:  # noqa: BLE001 - uno stream chiuso non ferma il montaggio
@@ -975,6 +978,15 @@ def _caption_font(workdir: Path) -> Dict[str, str]:
     """
     from . import cli as cli_mod  # noqa: PLC0415 -- cli importa auto a runtime
 
+    # La scelta esplicita vince anche quando non e' applicabile: se il file non
+    # c'e', si dichiara il ripiego invece di bruciare in silenzio il `chosen`
+    # della proposta con un `Fontname` che il report chiama diverso.
+    choice = cli_mod._maybe_json(Path(workdir) / FONT_CHOICE_NAME)
+    explicit = (
+        str(choice.get("family") or "").strip()
+        if isinstance(choice, Mapping)
+        else ""
+    )
     try:
         picked = cli_mod._job_font(Path(workdir))
     except Exception as exc:  # noqa: BLE001 - un font non ferma il montaggio
@@ -986,6 +998,15 @@ def _caption_font(workdir: Path) -> Dict[str, str]:
     family = str(picked.get("family") or "")
     fonts_dir = str(picked.get("fonts_dir") or "")
     note = str(picked.get("note") or "")
+    if explicit and family != explicit:
+        return {
+            "family": "",
+            "fonts_dir": "",
+            "fallback_reason": (
+                f"{explicit}: nessun file in {Path(workdir) / 'fonts'} "
+                "(o famiglia non fra i candidati), il master resta sul preset"
+            ),
+        }
     if not family:
         return {"family": "", "fonts_dir": "", "fallback_reason": note}
     if not Path(fonts_dir).is_dir():

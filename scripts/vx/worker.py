@@ -24,6 +24,9 @@ stage without ever overtaking the stage values auto emits afterwards.
 from __future__ import annotations
 
 import json
+
+#: Contratto del worker: niente su stdout, mai. Lo dichiara ad auto.
+os.environ.setdefault("VX_STDOUT_RESERVED", "1")
 import os
 import subprocess
 import sys
