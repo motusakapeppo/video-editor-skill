@@ -204,3 +204,40 @@ genere; oppure l'incoerenza va dichiarata prima del render, non dopo.
 
 Non l'ho corretto in fretta: cambia la scelta del piano per ogni prompt che nomina un
 formato, e vuole la sua prova sul parser e sui documenti gia' prodotti.
+
+
+## D-26 / D-27 / D-28 — tre difetti trovati facendo un lavoro vero (2/11/2026)
+
+Materiale: sei clip CC-BY scaricate, poi tre master verticali dell'utente (1080x1920,
+audio AAC). Il lavoro e' stato eseguito davvero, non simulato. Tre difetti, in ordine di
+gravita'.
+
+**D-26 — un `a_roll` senza audio fa esplodere il grafo.** Le clip scaricate non hanno
+traccia audio; il ruolo `a_roll` lo richiede (la regola e' scritta), ma il manifest lo
+forza comunque, e il render costruisce `[0:a]`, `[1:a]`, `[2:a]`: ffmpeg risponde
+`Stream specifier ':a' matches no streams` dopo quaranta righe di grafo. Il difetto non
+e' il rifiuto — e' che non ci sia un rifiuto: serve un codice (`NO_AUDIO_STREAM`, con il
+clip) prima del render, oppure un bus muto dichiarato.
+
+**D-27 — la durata chiesta nel prompt non viene applicata.** "30 secondi" produce
+**216,6 s** con `--montage` (le clip intere in sequenza) e **103,5 s** senza. Il numero
+c'e' nel contratto, non arriva alla timeline. Chi chiede 30 secondi riceve tre minuti e
+mezzo.
+
+**D-28 — l'audio puo' finire molto prima del quadro, e il QC non lo vedeva.**
+Sul reel da 103,5 s: **video 103,500 s, audio 6,554 s**. L'audio muore dopo sei secondi;
+il referto audio copre un solo frammento (`a0_0_0`). Il QC misurava il loudness di quello
+che c'e' — e il loudness era perfetto (-14,2 su -14,0). Il master passava con novantasei
+secondi di silenzio sotto il quadro.
+
+**Cosa e' stato chiuso subito.** Un check nuovo in `qc.py`,
+`master_audio_coverage`: audio e video devono coprirsi entro 0,5 s, altrimenti fail con
+i due numeri e la differenza. Sul reel rotto dice `audio=6.554s video=103.500s
+shortfall=96.946s` e lo mette nei `failures`. Un master muto (nessuna traccia) resta
+`skipped`, perche' il silenzio e' una scelta dichiarata altrove, non un difetto di
+copertura. `tests/test_qc_audio_coverage.py` 5 PASS: caso buono, caso corto, caso muto.
+
+**Cosa resta aperto.** La causa del bus troncato (perche' l'audio copre un frammento e
+non l'intero a_roll) e il limiter (true peak -0,5 dBTP contro -0,9 sul reel da 103 s,
+0,3 sul montage). Sono due lavori distinti, ognuno con la sua prova: il primo sta nel
+percorso audio del bridge, il secondo nella catena di normalizzazione.

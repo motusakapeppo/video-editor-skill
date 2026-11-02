@@ -131,8 +131,8 @@ def main() -> int:
         result = qc.audit_master(tone, target_lufs=measured_i, target_tp=target_tp)
         check("master conforme: ok True", result["ok"] is True, result["ok"])
         check(
-            "master conforme: cinque check pass",
-            len(result["checks"]) == 5
+            "master conforme: sei check, tutti pass",
+            len(result["checks"]) == 6
             and all(c["status"] == "pass" for c in result["checks"]),
             [c["status"] for c in result["checks"]],
         )

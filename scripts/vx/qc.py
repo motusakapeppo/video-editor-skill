@@ -75,6 +75,11 @@ LIMITS["cue_dur_max"] = float(THRESHOLDS["cue_dur_max"])
 LIMITS["upscale_warn"] = float(THRESHOLDS["upscale_warn"])
 
 
+#: L'audio puo' finire mezzo secondo prima del quadro; oltre, il master e' muto
+#: dove il video continua, e il loudness da solo non lo vede.
+AUDIO_COVERAGE_TOLERANCE = 0.5
+
+
 def true_peak_ceiling(target_tp: float) -> float:
     """The delivered true-peak ceiling: the target plus the gate's own margin."""
     return float(target_tp) + float(QC_DEFAULTS["true_peak_margin"])
@@ -599,6 +604,7 @@ def audit_master(
     if not (exists and size > 0):
         for code in (
             "master_audio",
+            "master_audio_coverage",
             "master_duration",
             "master_lufs",
             "master_true_peak",
@@ -626,6 +632,22 @@ def audit_master(
         add("master_duration", "pass", f"duration={duration:.3f}s")
     else:
         add("master_duration", "fail", f"container duration={duration:.3f}s")
+
+    if audio and duration > 0:
+        audio_duration = max((_num(item.get("duration"), 0.0) or 0.0) for item in audio)
+        shortfall = duration - audio_duration
+        add(
+            "master_audio_coverage",
+            "pass" if shortfall <= AUDIO_COVERAGE_TOLERANCE else "fail",
+            f"audio={audio_duration:.3f}s video={duration:.3f}s "
+            f"shortfall={shortfall:.3f}s (tolerance {AUDIO_COVERAGE_TOLERANCE:.1f})",
+        )
+    elif not audio:
+        add(
+            "master_audio_coverage",
+            "skipped",
+            "no audio stream: coverage not applicable",
+        )
 
     loud = lufs_of(target)
     measured_i = _num(loud.get("input_i"), None)
