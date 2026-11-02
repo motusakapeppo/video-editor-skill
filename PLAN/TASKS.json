@@ -203,6 +203,7 @@
       "status": "done",
       "evidence": "tests/test_parallel_chunks.py 4 PASS: quattro chunk in parallelo byte-identici alla serie (sha256 a8682c1e), serie 3,64 s vs parallelo 0,77 s (x4,75), report jobs 1/4",
       "commits": [
+        "08bb454",
         "pending"
       ],
       "note": ""
@@ -214,9 +215,11 @@
       "acceptance": "uno span identico viene coperto senza ricodifica solo se il test lo prova; un taglio non lo e' mai",
       "ledger_state": "todo",
       "ledger_note": "TODO",
-      "status": "todo",
-      "evidence": "",
-      "commits": [],
+      "status": "done",
+      "evidence": "tests/test_smart_render.py 7 PASS: seconda corsa identica riusa tutti i chunk e lascia il file byte-identico; cambiare il contenuto di una clip rifa' solo il suo chunk (rendered=[1], reused=[0,2,3]); un taglio rifa' e nessuno script di chunk porta -c copy (5 script esaminati)",
+      "commits": [
+        "pending"
+      ],
       "note": ""
     },
     {
