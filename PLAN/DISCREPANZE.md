@@ -151,6 +151,19 @@ ora dice "stabilize proposto ...; nessun filtro deshake applicato", e il record 
 `stabilize_applied: False`. Nessuna soglia su una misura di moto puo' sostituire la
 decisione del montatore: il jitter resta una descrizione con il suo numero.
 
+**La stabilizzazione, adesso, esiste ed e' misurata (2/11/2026).** `scripts/vx/stabilize.py`
+fa due passaggi `vidstab` (stima del moto, compensazione) e **rimisura** il jitter
+sull'output. Su un estratto che tremava davvero: 4,226 -> **1,853 (-56,2%)**. Su una clip
+gia' ferma il trattamento **peggiora** il numero (0,081 -> 0,236): per questo l'intento di
+default e' `propose`, non `apply`, e la proposta dice che il movimento puo' essere voluto.
+Chi forza `apply` su una clip ferma riceve `effective: False` e un `drop` negativo - il
+referto non puo' raccontare un successo che non c'e'.
+
+Resta da fare una cosa sola, e non e' la calibrazione: **agganciare `stabilize.apply` al
+percorso di render** (oggi il ponte dichiara e non applica, e ora lo dice). Quando sara'
+agganciato, l'intento va chiesto al momento del piano, non dedotto: e' l'unico modo per
+non stabilizzare una panoramica voluta.
+
 **Conseguenza.** La soglia del tremolio resta `null` e il task resta onesto: nessun
 numero. Il set di giudizi (5 clip, reali, con il valore misurato accanto) e' in
 `tests/fixtures/corpus_shake_real.json` ed e' la verita' di riferimento per il lavoro

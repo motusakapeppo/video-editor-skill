@@ -88,12 +88,14 @@ rifatta su quel set, non ereditata dal sintetico.
 Finché l'estimatore non cambia, la soglia del tremolio resta `null`, e nessun numero
 inventato prende il suo posto.
 
-**E c'è un danno da riparare, non solo una calibrazione da fare.** `bridge.py:1224`
-applica `stabilize deshake` quando `jitter >= 1,0`: la panoramica di r2, a 1,717, è
-una panoramica voluta e verrebbe stabilizzata — camera bloccata su un movimento che
-serviva. Il gate non può vivere sul solo jitter: o si chiede l'intenzione, o la
-stabilizzazione diventa una proposta da approvare. Cambiare questo cambia i piani già
-prodotti: task a sé, con la sua prova, non una riga infilata di fretta.
+**La stabilizzazione ora esiste e si misura.** `scripts/vx/stabilize.py`: due passaggi
+`vidstab`, e il jitter rimisurato sull'output — 4,226 → 1,853 (−56,2%) su un estratto che
+tremava; su una clip già ferma peggiora (0,081 → 0,236), per questo l'intento di default è
+`propose` e chi forza `apply` riceve `effective: False` col `drop` negativo.
+
+Resta **un solo lavoro**: agganciare `stabilize.apply` al percorso di render, chiedendo
+l'intento al momento del piano. Il ponte oggi dichiara e non applica — e lo dice, dopo la
+correzione in `c27091e`.
 
 ## Convenzioni di scrittura
 
