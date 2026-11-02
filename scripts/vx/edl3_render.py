@@ -77,6 +77,7 @@ from .edl3 import (
     PRESET_APPLIED_VERSION,
     RENDERABLE_EFFECTS,
     RENDERABLE_TRANSITIONS,
+    TRANSITION_RECIPES,
     Transition,
     Timeline3,
 )
@@ -1621,6 +1622,7 @@ def _crossfade_base(
     plans: Dict[int, Dict[str, Any]],
     joins: Dict[int, float],
     chains: List[str],
+    styles: Optional[Dict[int, str]] = None,
 ) -> str:
     """Chain the base layer, dissolving the runs where the document says so.
 
@@ -1656,8 +1658,17 @@ def _crossfade_base(
                 "clips",
             )
         out = f"xf{run_index}"
+        style = (styles or {}).get(first_position, "fade")
+        recipe = TRANSITION_RECIPES.get(style)
+        if recipe is None:
+            raise CompileError(
+                "TRANSITION_UNKNOWN",
+                f"unknown dissolve recipe {style!r}; the catalogue has "
+                f"{len(TRANSITION_RECIPES)}: {sorted(TRANSITION_RECIPES)}",
+                "clips",
+            )
         chains.append(
-            f"[{label}][{next_label}]xfade=transition=fade:"
+            f"[{label}][{next_label}]xfade=transition={recipe['ffmpeg']}:"
             f"duration={_num(seconds)}:offset={_num(max(0.0, offset))}[{out}]"
         )
         label = out
@@ -1938,7 +1949,9 @@ def compile_timeline(
     if len(base_clips) == 1:
         base_label = f"c{base_clips[0][0]}"
     elif joins:
-        base_label = _crossfade_base(base_clips, plans, joins, chains)
+        base_label = _crossfade_base(
+            base_clips, plans, joins, chains, timeline.crossfade_styles()
+        )
     else:
         inputs = "".join(f"[c{index}]" for index, _clip in base_clips)
         chains.append(f"{inputs}concat=n={len(base_clips)}:v=1:a=0[out]")

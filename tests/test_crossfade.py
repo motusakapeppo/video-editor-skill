@@ -189,6 +189,102 @@ def main() -> int:
                 f"red {r:.0f} blue {b:.0f}",
             )
 
+        recipes = edl3.TRANSITION_RECIPES
+        check(
+            "the catalogue has thirty names in four families",
+            len(recipes) == 30
+            and sorted({row["family"] for row in recipes.values()})
+            == ["forma", "morbide", "scorrimento", "tendina"],
+            len(recipes),
+        )
+
+        listing = subprocess.run(
+            [ff.ffmpeg(), "-hide_banner", "-h", "filter=xfade"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        ).stdout
+        missing = sorted(
+            name
+            for name, row in recipes.items()
+            if f" {row['ffmpeg']} " not in listing and f" {row['ffmpeg']}\n" not in listing
+        )
+        check(
+            "every recipe names a transition this ffmpeg can render",
+            not missing,
+            missing or f"{len(recipes)} checked",
+        )
+
+        styled = edl3.Timeline3(
+            fps=FPS,
+            size=SIZE,
+            clips=[
+                edl3.Clip3(id="red", source=str(red), src_in=0.0, src_out=2.0),
+                edl3.Clip3(
+                    id="blue",
+                    source=str(blue),
+                    src_in=0.0,
+                    src_out=2.0,
+                    transition_in=edl3.Transition("crossfade", DISSOLVE, "wipeleft"),
+                ),
+            ],
+            audio=[
+                edl3.AudioTrack3(
+                    role="dialogue",
+                    clips=[
+                        edl3.AudioClip3(
+                            source=str(red),
+                            src_in=0.0,
+                            src_out=2.0,
+                            dst_in=0.0,
+                            dst_out=2.0,
+                        ),
+                        edl3.AudioClip3(
+                            source=str(blue),
+                            src_in=0.0,
+                            src_out=2.0,
+                            dst_in=2.0,
+                            dst_out=4.0,
+                        ),
+                    ],
+                )
+            ],
+        )
+        styled_plan = edl3_render.compile_timeline(styled, audio="mix")
+        check(
+            "the style chooses the transition",
+            "xfade=transition=wipeleft:" in styled_plan["filter_script"],
+            [
+                line
+                for line in styled_plan["filter_script"].splitlines()
+                if "xfade" in line
+            ][:1],
+        )
+        wrong = edl3.Timeline3(
+            fps=FPS,
+            size=SIZE,
+            clips=[
+                edl3.Clip3(id="red", source=str(red), src_in=0.0, src_out=2.0),
+                edl3.Clip3(
+                    id="blue",
+                    source=str(blue),
+                    src_in=0.0,
+                    src_out=2.0,
+                    transition_in=edl3.Transition("crossfade", DISSOLVE, "teleport"),
+                ),
+            ],
+        )
+        check(
+            "a recipe outside the catalogue is refused with its name",
+            any(
+                problem["code"] == "TRANSITION_UNKNOWN"
+                and "teleport" in problem["detail"]
+                for problem in wrong.validate()
+            ),
+            [problem["code"] for problem in wrong.validate()],
+        )
+
         chunked = None
         try:
             from vx import edl3_chunks as chunks_mod

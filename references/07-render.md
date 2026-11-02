@@ -59,12 +59,19 @@ senza lo snap, `trim` produce un frame in più o in meno. `expected_frames` è
 | Costante | Valore | Effetto |
 |----------|--------|---------|
 | `FADE_MS` | 12 | `afade` in ingresso e in uscita a ogni giunto interno del grafo finale |
-| `acrossfade` | vietato | accorcia il totale della propria durata, circa 10 ms |
+| `acrossfade` | solo su dissolvenza dichiarata | accorcia il totale della propria durata: il piano la conta |
 
-`afade` non cambia la durata: il conteggio dei frame resta esatto. `acrossfade`
-sovrappone i segmenti e accorcia il risultato, rompendo la parità fra
-`expected_frames` e il file prodotto. Il fade di 12 ms è sotto la soglia di
-percezione e toglie il click al giunto.
+`afade` non cambia la durata: il conteggio dei frame resta esatto. Il renderer
+non inserisce **mai** un `acrossfade` di sua iniziativa, perche' sovrappone i
+segmenti e accorcerebbe il risultato rompendo la parita' fra `expected_frames` e
+il file prodotto: il fade di 12 ms e' sotto la soglia di percezione e toglie il
+click al giunto.
+
+Quando invece e' il **documento** a dichiarare una dissolvenza (`crossfade`), la
+sovrapposizione e' voluta e contata: due clip da 2 s con 0,5 s fanno 3,5 s
+esatti, la durata della timeline sottrae ogni giunto e `expected_frames` segue.
+In quel caso il bus dialogo riceve un `acrossfade` sugli stessi confini, cosi'
+suono e immagine si accorciano insieme.
 
 ## Stabilizzazione
 

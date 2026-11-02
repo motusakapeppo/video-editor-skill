@@ -57,6 +57,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .edl3_time import AudioPolicy
@@ -91,6 +92,48 @@ EFFECT_DENSITY_WINDOW = 10.0
 
 INTERPOLATIONS = frozenset({"linear", "hold", "bezier"})
 TRANSITION_KINDS = frozenset({"fade_in", "fade_out", "crossfade"})
+
+#: The dissolve catalogue: ``style`` -> the ``xfade`` transition that renders it,
+#: the family it belongs to and the reason a director reaches for it. Thirty
+#: recipes, all present in ffmpeg's own list (a test asks the binary).
+TRANSITION_RECIPES = MappingProxyType(
+    {
+        # morbide: the cut disappears and the two shots share the screen
+        "fade": {"ffmpeg": "fade", "family": "morbide", "why": "la dissolvenza neutra: due inquadrature che si sommano"},
+        "fadeslow": {"ffmpeg": "fadeslow", "family": "morbide", "why": "la stessa, piu' lenta: lascia respirare un passaggio di tempo"},
+        "fadefast": {"ffmpeg": "fadefast", "family": "morbide", "why": "un lampo breve: nasconde uno stacco senza fermare il ritmo"},
+        "dissolve": {"ffmpeg": "dissolve", "family": "morbide", "why": "dissolvenza a grana: due immagini che si sfaldano insieme"},
+        "smoothleft": {"ffmpeg": "smoothleft", "family": "morbide", "why": "scivolamento dolce a sinistra, senza tendina netta"},
+        "smoothright": {"ffmpeg": "smoothright", "family": "morbide", "why": "scivolamento dolce a destra"},
+        "smoothup": {"ffmpeg": "smoothup", "family": "morbide", "why": "salita dolce: accompagna un cambio di scena verso l'alto"},
+        "smoothdown": {"ffmpeg": "smoothdown", "family": "morbide", "why": "discesa dolce"},
+        # tendina: un bordo attraversa l'inquadratura
+        "wipeleft": {"ffmpeg": "wipeleft", "family": "tendina", "why": "tendina che spinge a sinistra: lettura da giornale"},
+        "wiperight": {"ffmpeg": "wiperight", "family": "tendina", "why": "tendina a destra"},
+        "wipeup": {"ffmpeg": "wipeup", "family": "tendina", "why": "tendina verso l'alto: apre un nuovo capitolo"},
+        "wipedown": {"ffmpeg": "wipedown", "family": "tendina", "why": "tendina verso il basso: chiude un capitolo"},
+        "wipebl": {"ffmpeg": "wipebl", "family": "tendina", "why": "tendina diagonale dal basso a sinistra"},
+        "wipebr": {"ffmpeg": "wipebr", "family": "tendina", "why": "tendina diagonale dal basso a destra"},
+        "wipetl": {"ffmpeg": "wipetl", "family": "tendina", "why": "tendina diagonale dall'alto a sinistra"},
+        "wipetr": {"ffmpeg": "wipetr", "family": "tendina", "why": "tendina diagonale dall'alto a destra"},
+        # scorrimento: la nuova inquadratura entra come una pagina
+        "slideleft": {"ffmpeg": "slideleft", "family": "scorrimento", "why": "la nuova clip entra da destra: carrello laterale finto"},
+        "slideright": {"ffmpeg": "slideright", "family": "scorrimento", "why": "la nuova clip entra da sinistra"},
+        "slideup": {"ffmpeg": "slideup", "family": "scorrimento", "why": "entra dal basso: verticale per i social"},
+        "slidedown": {"ffmpeg": "slidedown", "family": "scorrimento", "why": "entra dall'alto"},
+        "coverleft": {"ffmpeg": "coverleft", "family": "scorrimento", "why": "la vecchia scivola via e scopre la nuova"},
+        "coverright": {"ffmpeg": "coverright", "family": "scorrimento", "why": "la vecchia scivola via verso destra"},
+        # forma: e' la geometria a condurre il passaggio
+        "circleopen": {"ffmpeg": "circleopen", "family": "forma", "why": "un cerchio si apre: attenzione su un dettaglio"},
+        "circleclose": {"ffmpeg": "circleclose", "family": "forma", "why": "un cerchio si chiude: si isola un volto"},
+        "circlecrop": {"ffmpeg": "circlecrop", "family": "forma", "why": "ritaglio circolare: passaggio da un oggetto all'altro"},
+        "rectcrop": {"ffmpeg": "rectcrop", "family": "forma", "why": "ritaglio rettangolare: cornice che si allarga"},
+        "radial": {"ffmpeg": "radial", "family": "forma", "why": "apertura radiale: esplosione controllata"},
+        "vertopen": {"ffmpeg": "vertopen", "family": "forma", "why": "apertura verticale: tenda che si apre"},
+        "horzopen": {"ffmpeg": "horzopen", "family": "forma", "why": "apertura orizzontale"},
+        "diagtl": {"ffmpeg": "diagtl", "family": "forma", "why": "taglio diagonale dall'alto a sinistra: tensione"},
+    }
+)
 #: Generators: the third source kind. ``generator`` names a Motion Studio
 #: template plus the parameters that instantiate it; the frames are captured
 #: once (Chromium, or the Pillow raster fallback) and consumed as an input.
@@ -249,6 +292,7 @@ __all__ = [
     "MAX_NESTING_DEPTH",
     "INTERPOLATIONS",
     "TRANSITION_KINDS",
+    "TRANSITION_RECIPES",
     "BACKENDS",
     "EFFECT_REGISTRY",
     "EFFECT_KINDS",
@@ -867,13 +911,16 @@ class Transition:
 
     kind: str = "fade_in"
     duration: float = 0.0
+    #: Which recipe renders a ``crossfade``: a key of :data:`TRANSITION_RECIPES`.
+    style: str = "fade"
 
     def __post_init__(self) -> None:
         self.kind = str(self.kind)
         self.duration = _float(self.duration)
+        self.style = str(self.style or "fade")
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"kind": self.kind, "duration": self.duration}
+        return {"kind": self.kind, "duration": self.duration, "style": self.style}
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Transition":
@@ -882,6 +929,7 @@ class Transition:
         return cls(
             kind=str(data.get("kind", "fade_in")),
             duration=_float(data.get("duration", 0.0)),
+            style=str(data.get("style", "fade") or "fade"),
         )
 
 
@@ -1799,6 +1847,19 @@ class Timeline3:
                 joins.append((position, float(transition.duration)))
         return joins
 
+    def crossfade_styles(self) -> Dict[int, str]:
+        """Base position -> the recipe that renders that dissolve."""
+        styles: Dict[int, str] = {}
+        position = -1
+        for clip in self.clips:
+            if int(clip.layer) != 0:
+                continue
+            position += 1
+            transition = clip.transition_in
+            if transition is not None and transition.kind == "crossfade":
+                styles[position] = transition.style
+        return styles
+
     @property
     def duration(self) -> float:
         declared = [
@@ -2231,6 +2292,13 @@ class Timeline3:
                         f"{transition_where}.duration",
                         f"duration {transition.duration} exceeds clip duration "
                         f"{duration}",
+                    )
+                if transition.kind == "crossfade" and transition.style not in TRANSITION_RECIPES:
+                    add(
+                        "TRANSITION_UNKNOWN",
+                        f"{transition_where}.style",
+                        f"unknown dissolve recipe {transition.style!r}; the catalogue "
+                        f"has {len(TRANSITION_RECIPES)}: {sorted(TRANSITION_RECIPES)}",
                     )
                 if transition.kind != "crossfade":
                     continue

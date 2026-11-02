@@ -144,9 +144,18 @@ picture senza duplicare le clip.
 
 ### 2.6 Transizioni, velocita, PiP, maschere, blend
 
-- **Transizioni**: `cut`, `fade`, `dip`, `wipe`, `slide`, `zoom`, `whip`, `glitch`,
-  ognuna con parametri, durata e curva. Il renderer mappa su `xfade` quando
-  possibile, altrimenti su un grafo dedicato.
+- **Transizioni**: implementate `fade_in`, `fade_out` e `crossfade`, quest'ultima
+  con **30 ricette** in quattro famiglie (morbide, tendina, scorrimento, forma;
+  ogni ricetta e' una transizione che ffmpeg sa rendere, e un test lo chiede al
+  binario). Una dissolvenza e' un **accavallamento**: due clip da 2 s con 0,5 s
+  fanno **3,5 s esatti**, e la durata della timeline sottrae ogni giunto. Si
+  dichiara sulla clip che entra (`transition_in`), una per giunto, sulla base,
+  senza placement assoluto, e non puo' superare un quarto dell'inquadratura piu'
+  corta. Il bus dialogo fa `acrossfade` sugli stessi confini; una dissolvenza con
+  musica collocata in assoluto e' rifiutata (`TRANSITION_AUDIO_UNSUPPORTED`) e un
+  render a chunk rifiuta di tagliarla (`CHUNK_UNSUPPORTED`). `dip`, `wipe`,
+  `slide`, `zoom`, `whip`, `glitch` restano dichiarate e **non** implementate: il
+  compilatore le rifiuta con `UNSUPPORTED_TRANSITION`.
 - **Velocita**: `speed` per clip o `speed_map` con keyframe; il time remap cambia la
   durata, quindi la timeline va ricalcolata e l'audio va risincronizzato.
 - **PiP**: `placement` con rettangolo normalizzato, opacita, maschera, blend mode.
