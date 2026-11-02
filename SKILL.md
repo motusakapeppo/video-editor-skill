@@ -13,6 +13,12 @@ description: |-
   "stabilizza", "normalizza l'audio", "analizza il video", "qc", "consegna",
   "deliverables". Si attiva anche su qualsiasi file .mp4 .mov .mkv .avi .webm
   .m4v .mts e su ogni richiesta di editing o adattamento di formato.
+
+  Vedere il lavoro mentre si fa: "mostrami cosa succede", "fammi vedere",
+  "fammi vedere mentre lavora", "segui il lavoro", "guardiamo mentre lavora",
+  "apri il pannello", "pannello live", "watch", "voglio vedere il progresso".
+  Con una di queste frasi il flag `--watch` e' OBBLIGATORIO e l'indirizzo
+  stampato va aperto nel pannello di anteprima PRIMA che parta il render.
 license: MIT
 compatibility: opencode
 metadata:
@@ -60,6 +66,13 @@ $VX   = "<SKILL_DIR>\scripts\vx.py"
 ```powershell
 & $PY $VX doctor --json
 ```
+
+**1-bis. Se l'utente ha chiesto di vedere cosa accade**, `--watch` va aggiunto a
+`auto` e l'indirizzo stampato va aperto subito nel pannello di anteprima:
+`vx auto ... --watch` scrive `Lo guardi qui: http://127.0.0.1:<porta>/` prima del
+render, e il server resta vivo dopo la fine, cosi' il pulsante del risultato
+funziona anche a lavoro concluso. Senza `--watch` non si apre niente, e non si
+promette una vista che non c'e'.
 
 **2. Ingest.** Probe, proxy 640 px, pre-analisi, parlato, anteprime, triage.
 
@@ -172,7 +185,15 @@ implementato: non esistono varianti per piattaforma. Gate di regressione visiva:
 
 Se l'utente dice **"mostrami cosa succede"**, **"fammi vedere"**, **"segui il
 lavoro"**, **"guardiamo mentre lavora"** o nomina **"il pannello"**, si apre la
-vista prima di lanciare il render, non dopo.
+vista prima di lanciare il render, non dopo. Il comando e' uno solo:
+
+```powershell
+& $PY $VX auto --prompt "..." --assets "<cartella>" --out "<file>" --watch
+```
+
+Stampa `Lo guardi qui: http://127.0.0.1:<porta>/` all'inizio, e il server resta
+vivo dopo il render. Senza `--watch` il pannello resta un file nella workdir che
+nessuno apre.
 
 Due livelli, e vanno detti per quello che sono:
 

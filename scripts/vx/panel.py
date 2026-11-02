@@ -65,6 +65,9 @@ class Panel:
     elapsed: float = 0.0
     note: str = ""
     master: str = ""
+    #: Se c'e' un server acceso su questo lavoro, il pannello ci porta invece di
+    #: restare un mondo a parte: il pannello semplice e' un ripiego, non la vista.
+    watch_url: str = ""
 
     def record(self, percent: float, stage: str, *, elapsed: float = 0.0) -> None:
         key = str(stage)
@@ -134,11 +137,21 @@ class Panel:
             if head
             else ""
         )
+        target = html.escape(self.watch_url)
+        if target:
+            refresh = f'<meta http-equiv="refresh" content="1; url={target}">'
+            banner = (
+                '<p class="muted">Ti apro la vista completa: '
+                f'<a href="{target}">{target}</a></p>'
+            )
+        else:
+            refresh = f'<meta http-equiv="refresh" content="{REFRESH_S}">'
+            banner = ""
         return (
             "<!doctype html><html lang=\"it\"><head><meta charset=\"utf-8\">"
-            f'<meta http-equiv="refresh" content="{REFRESH_S}">'
-            "<title>vx - montaggio in corso</title><style>" + STYLE + "</style></head><body>"
-            f"<h1>{head or 'Montaggio in corso'}</h1>{meta}"
+            + refresh
+            + "<title>vx - montaggio in corso</title><style>" + STYLE + "</style></head><body>"
+            f"<h1>{head or 'Montaggio in corso'}</h1>{meta}{banner}"
             f'<div class="bar"><i style="width:{max(0.0, min(100.0, self.percent)):.1f}%"></i></div>'
             "<ol>" + "".join(rows) + "</ol>"
             f'<footer><b>{self.percent:.0f}%</b> · {self.elapsed:.0f} secondi'

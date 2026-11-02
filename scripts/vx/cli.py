@@ -1893,6 +1893,15 @@ def cmd_auto(args: argparse.Namespace) -> int:
                 clips=_media_count(getattr(args, "assets", "")),
                 phases=list(narrate.PHASES.items()),
             )
+            if getattr(args, "watch", False):
+                from . import watch as watch_mod
+
+                url = watch_mod.running(Path(target)) or watch_mod.spawn(Path(target))
+                if url:
+                    panel.watch_url = url
+                    print(f"Lo guardi qui: {url}", flush=True)
+                else:
+                    print("La vista non si e' aperta; il lavoro prosegue.", flush=True)
             panel.write()
         narrator = narrate.Narrator(panel=panel)
         count = _media_count(getattr(args, "assets", ""))
@@ -2259,6 +2268,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-panel",
         action="store_true",
         help="non scrivere il pannello: solo le righe di testo",
+    )
+    p.add_argument(
+        "--watch",
+        action="store_true",
+        help="apre la vista del lavoro e stampa l'indirizzo PRIMA del render: "
+        "pannello, fotogrammi, approvazione e player del risultato",
     )
     p.add_argument(
         "--subs",
