@@ -230,6 +230,24 @@ il referto audio copre un solo frammento (`a0_0_0`). Il QC misurava il loudness 
 che c'e' — e il loudness era perfetto (-14,2 su -14,0). Il master passava con novantasei
 secondi di silenzio sotto il quadro.
 
+**Diagnosi corretta (2/11/2026, dopo la riproduzione minima).** Il punto 5 qui
+sopra diceva "l'audio esce comunque corto". **Non e' il codice: sono le sorgenti.**
+`D:\video_work\accept\master.mp4` e `accept3\master.mp4` hanno **6,443 s e 6,455 s
+di audio su 103,453 s e 115,285 s di video**: sono loro a essere rotti, e il reel di
+oggi li ha tagliati fedelmente. La prova che chiude: **sorgente sana** (1080x1920,
+40 s, audio 40 s) → master **video 30,000 s, audio 30,016 s**, con la durata chiesta
+rispettata.
+
+La riproduzione minima ha pero' trovato **un difetto vero e piu' piccolo**: `apad`
+dopo un `amix` non allunga, perche' lo stream non ha formato ne' durata nota.
+Misurato: **4,019 s** su 6 richiesti senza `aformat`, **6,000 s** con `aformat`
+prima di `apad`. Corretto in entrambi i percorsi (`render.py`,
+`edl3_render.py`) e fermato da `tests/test_audio_pad_order.py` (4 PASS).
+
+Resta aperto **come** i due master siano nati con 6 secondi di audio: quel codice non
+e' piu' quello attuale e non ho il grafo di allora, quindi non lo attribuisco. I due
+file vanno rifatti dalle sorgenti in `stage_00`, che hanno audio corretto.
+
 **Cosa e' stato chiuso subito.** Un check nuovo in `qc.py`,
 `master_audio_coverage`: audio e video devono coprirsi entro 0,5 s, altrimenti fail con
 i due numeri e la differenza. Sul reel rotto dice `audio=6.554s video=103.500s

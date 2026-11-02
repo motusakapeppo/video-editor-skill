@@ -1439,8 +1439,13 @@ def _audio_bus(
     chains.append(f"{mixed}[aout_mix]")
 
     duration = float(timeline.duration)
+    # `aformat` prima di `apad`: dopo un `amix` lo stream non ha formato ne'
+    # durata nota, e `apad=whole_dur` non aggiunge silenzio. Misurato sul caso
+    # minimo: 4,019 s su 6 richiesti senza il formato, 6,000 s con.
     chains.append(
-        f"[aout_mix]apad=whole_dur={_num(duration)},"
+        f"[aout_mix]aformat=sample_fmts=fltp:sample_rates=48000:"
+        f"channel_layouts=stereo,"
+        f"apad=whole_dur={_num(duration)},"
         f"atrim=start=0.000000:end={_num(duration)},"
         "asetpts=PTS-STARTPTS[aout]"
     )

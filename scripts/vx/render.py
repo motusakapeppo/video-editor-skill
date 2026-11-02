@@ -1187,11 +1187,14 @@ def _edl_bus(
             f"{inputs}amix=inputs={len(labels)}:"
             f"dropout_transition=0:normalize=0[{bus}_bus]"
         ]
+    # `aformat` PRIMA di `apad`: dopo un `amix` lo stream non ha un formato
+    # fissato, e `apad=whole_dur` non allunga (misurato: 4,019 s su 6 richiesti).
+    # Con il formato dichiarato prima, il pad arriva a destinazione.
     parts.append(
-        f"[{bus}_bus]apad=whole_dur={duration:.6f},"
-        f"atrim=start=0:end={duration:.6f},"
-        f"aformat=sample_fmts=fltp:sample_rates=48000:"
-        f"channel_layouts=stereo[{bus}]"
+        f"[{bus}_bus]aformat=sample_fmts=fltp:sample_rates=48000:"
+        f"channel_layouts=stereo,"
+        f"apad=whole_dur={duration:.6f},"
+        f"atrim=start=0:end={duration:.6f}[{bus}]"
     )
     return parts
 
