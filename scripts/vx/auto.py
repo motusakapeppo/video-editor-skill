@@ -88,6 +88,33 @@ def _emit(log: Optional[Any], stage: str, status: str, detail: str = "") -> None
         pass
 
 
+#: Sotto questa differenza la durata consegnata e' quella chiesta.
+DURATION_SHORTFALL_TOLERANCE = 0.5
+
+
+def duration_shortfall(requested: Any, delivered: Any) -> Optional[Dict[str, Any]]:
+    """The gap between what was asked and what the timeline can deliver.
+
+    Una richiesta di 60 s su materiale che ne regge 21 non e' un successo: e' una
+    consegna piu' corta del chiesto, e va dichiarata con i due numeri.
+    """
+    try:
+        want = float(requested)
+        got = float(delivered)
+    except (TypeError, ValueError):
+        return None
+    if want <= 0 or got <= 0:
+        return None
+    gap = want - got
+    if gap <= DURATION_SHORTFALL_TOLERANCE:
+        return None
+    return {
+        "requested_sec": round(want, 3),
+        "delivered_sec": round(got, 3),
+        "shortfall_sec": round(gap, 3),
+    }
+
+
 def _notify(
     progress: Optional[Callable[[float, str], None]],
     percent: float,
@@ -834,6 +861,12 @@ def _run_locked(
         if isinstance(asset_id, str) and asset_id not in a_roll_indices:
             a_roll_indices[asset_id] = len(a_roll_indices)
 
+    scene_block = payload.get("scene") if isinstance(payload, dict) else None
+    requested_sec = (
+        scene_block.get("duration_sec") if isinstance(scene_block, dict) else None
+    )
+    shortfall = duration_shortfall(requested_sec, plan.duration_sec)
+
     report: Dict[str, Any] = {
         "ok": True,
         "payload_version": str(payload.get("contract_version") or contract.VERSION),
@@ -888,6 +921,12 @@ def _run_locked(
         "source_sha": source_sha,
         "sources_unchanged": True,
     }
+    if shortfall:
+        report["duration_shortfall"] = shortfall
+        report.setdefault("warnings", []).append(
+            "duration_shortfall: chiesti {requested_sec:g} s, consegnati "
+            "{delivered_sec:g} s".format(**shortfall)
+        )
     if render_cache:
         report["stage_cache"] = render_cache
     _emit(log, "run", "done", f"{len(produced)} consegne")

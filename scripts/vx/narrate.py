@@ -63,7 +63,7 @@ class Narrator:
         self._write(
             f"Fatto in {elapsed:.0f} s. Master di {seconds:.1f} s: {master}"
         )
-        warnings = report.get("failures") or []
+        warnings = list(report.get("failures") or []) + list(report.get("warnings") or [])
         if warnings:
             self._write(f"Da sapere: {', '.join(str(item) for item in warnings)}")
 

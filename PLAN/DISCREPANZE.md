@@ -259,3 +259,20 @@ copertura. `tests/test_qc_audio_coverage.py` 5 PASS: caso buono, caso corto, cas
 non l'intero a_roll) e il limiter (true peak -0,5 dBTP contro -0,9 sul reel da 103 s,
 0,3 sul montage). Sono due lavori distinti, ognuno con la sua prova: il primo sta nel
 percorso audio del bridge, il secondo nella catena di normalizzazione.
+
+
+### D-27 (seguito) — una consegna piu' corta del chiesto si dichiara (2/11/2026)
+
+Chiesti 60 s su materiale che ne regge 21: il master usciva a 21,09 s **senza dire
+niente**. Il numero non e' un errore di calcolo — due delle tre clip sono state scartate
+dal triage — ma il silenzio si': chi ha chiesto un minuto riceve venti secondi e lo
+scopre guardando.
+
+Ora `auto.duration_shortfall(requested, delivered)` confronta i due numeri e, oltre mezzo
+secondo di differenza, il referto porta `duration_shortfall` e il narratore lo dice:
+
+    Da sapere: duration_shortfall: chiesti 60 s, consegnati 21.09 s
+
+`tests/test_requested_duration.py` 7 PASS copre i tre casi (corto, uguale, nessuna
+richiesta). Non e' un cancello: e' una dichiarazione — la consegna resta possibile, ma
+non muta.

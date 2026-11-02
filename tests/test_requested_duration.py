@@ -88,6 +88,25 @@ def main() -> int:
         free.duration_sec,
     )
 
+    from vx import auto as auto_mod
+
+    short = auto_mod.duration_shortfall(60, 21.09)
+    check(
+        "S3 a delivery shorter than the request is declared with both numbers",
+        short is not None and abs(short["shortfall_sec"] - 38.91) < 0.01,
+        short,
+    )
+    check(
+        "S3 a delivery that matches is not a shortfall",
+        auto_mod.duration_shortfall(30, 30.016) is None,
+        auto_mod.duration_shortfall(30, 30.016),
+    )
+    check(
+        "S3 no request, nothing to declare",
+        auto_mod.duration_shortfall(None, 21) is None,
+        "",
+    )
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 
