@@ -49,6 +49,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 from . import (
     asset_triage,
     contract,
+    creative,
     decide,
     decisions,
     deliverables,
@@ -191,6 +192,7 @@ TIMING_STAGES = (
     "bridge",
     "coherence",
     "plan_choice",
+    "creative",
     "font",
     "keyframes",
     "render",
@@ -1732,6 +1734,147 @@ def _decision_effects(
     )
 
 
+def _creative_requirements(prompt: Any, payload: Any) -> Dict[str, Any]:
+    """Cosa il prompt chiede, nella forma che ``creative.score`` legge.
+
+    Solo fatti: la durata viene dallo ``scene`` gia' deciso, coro e titolo dalla
+    presenza delle parole nel prompt. ``chorus_present``/``titles_present``
+    restano ``None`` quando il giro non li ha misurati: valgono 0.5, mai un
+    premio inventato.
+    """
+    text = " ".join(str(prompt or "").lower().split())
+    scene = payload.get("scene") if isinstance(payload, Mapping) else None
+    requested = scene.get("duration_sec") if isinstance(scene, Mapping) else None
+    if not (
+        isinstance(requested, (int, float))
+        and not isinstance(requested, bool)
+        and requested > 0
+    ):
+        requested = None
+    return {
+        "duration_sec": float(requested) if requested is not None else None,
+        "chorus_required": any(
+            word in text for word in ("coro", "chorus", "ritornello")
+        ),
+        "chorus_present": None,
+        "titles_required": 1
+        if any(word in text for word in ("titolo", "title", "titoli"))
+        else 0,
+        "titles_present": None,
+        "prompt": str(prompt or ""),
+    }
+
+
+def _run_creative(
+    args: Any,
+    plan: Any,
+    coherence_section: Any,
+    estimate_section: Any,
+    payload: Any,
+    *,
+    captions: bool = False,
+) -> tuple[Dict[str, Any], Any]:
+    """Due piani leciti, un punteggio, una scelta. Restituisce (sezione, piano).
+
+    Con i sottotitoli il montaggio non si riordina (le caption sono ancorate
+    alla timeline): si offre un solo candidato e lo si dichiara. Senza
+    sottotitoli si offrono le varianti che il piano permette.
+    """
+    requirement = _creative_requirements(getattr(args, "prompt", ""), payload)
+    variants = creative.candidates(plan, n=1 if captions else 2)
+    scored = creative.score_variants(
+        variants, coherence_section, estimate_section, requirement
+    )
+    pick = creative.choose(scored)
+    chosen = next(
+        (item for item in scored if str(item.get("id")) == pick["chosen"]),
+        scored[0],
+    )
+    chosen_plan = chosen.get("plan") or plan
+    errors = list(chosen_plan.validate()) if hasattr(chosen_plan, "validate") else []
+    fallback = ""
+    if errors:
+        # Non deve succedere (le varianti si validano prima di entrare), ma una
+        # scelta non applicabile non si applica: si tiene il piano di partenza.
+        fallback = "scelta non applicata: " + "; ".join(str(item) for item in errors)
+        chosen_plan = plan
+    section = {
+        "chosen": str(pick["chosen"]),
+        "applied": str(chosen.get("id") or "base") if not errors else "base",
+        "thesis": str(chosen.get("thesis") or ""),
+        "why": str(pick["why"]),
+        "scores": pick["scores"],
+        "variants": [
+            {
+                "id": str(item.get("id") or ""),
+                "thesis": str(item.get("thesis") or ""),
+                "changes": [str(change) for change in item.get("changes") or ()],
+                "total": float(item.get("total") or 0.0),
+            }
+            for item in scored
+        ],
+        "requirement": requirement,
+        "captions": bool(captions),
+    }
+    if fallback:
+        section["fallback"] = fallback
+    return section, chosen_plan
+
+
+def _decision_creative(section: Any) -> Dict[str, Any]:
+    """La voce del registro: la variante scelta, i punteggi, l'alternativa."""
+    data = section if isinstance(section, Mapping) else {}
+    chosen = str(data.get("chosen") or "base")
+    scores = data.get("scores") if isinstance(data.get("scores"), Mapping) else {}
+    mine = scores.get(chosen) if isinstance(scores.get(chosen), Mapping) else {}
+    total = mine.get("total")
+    total_text = f"{float(total):.3f}" if isinstance(total, (int, float)) else "n/d"
+    parts = mine.get("parts") if isinstance(mine.get("parts"), Mapping) else {}
+    evidence = [f"punteggio {chosen}: {total_text}"]
+    for key in ("coherence", "prompt", "cost", "novelty"):
+        value = parts.get(key)
+        if isinstance(value, (int, float)):
+            evidence.append(f"{key} {float(value):.3f}")
+    variants = [
+        item for item in (data.get("variants") or ()) if isinstance(item, Mapping)
+    ]
+    others = [item for item in variants if str(item.get("id") or "") != chosen]
+    for item in others:
+        evidence.append(
+            f"alternativa {item.get('id')}: {float(item.get('total') or 0.0):.3f}"
+        )
+    if others:
+        alternatives = [
+            {
+                "option": str(item.get("id") or "alternativa"),
+                "why_not": str(item.get("thesis") or "punteggio piu' basso"),
+            }
+            for item in others
+        ]
+        alternatives_note = ""
+    else:
+        alternatives = []
+        alternatives_note = (
+            "un solo candidato: i sottotitoli sono ancorati alla timeline, "
+            "il montaggio non si riordina"
+            if data.get("captions")
+            else "il piano non ammetteva una seconda variante lecita"
+        )
+    return decisions.record(
+        id="creative",
+        question="quale variante del montaggio rendere?",
+        chosen=f"{chosen}: {data.get('thesis') or 'piano invariato'}",
+        evidence=evidence,
+        alternatives=alternatives,
+        alternatives_note=alternatives_note,
+        falsified_if=(
+            "la variante scelta non si valida o il suo punteggio rifatto sulle "
+            "stesse metriche non e' il piu' alto"
+        ),
+        by="auto",
+    )
+
+
 def build_decisions(
     *,
     font_section: Any = None,
@@ -1744,13 +1887,15 @@ def build_decisions(
     payload: Any = None,
     requirement: str = "",
     energy: float = 0.0,
+    creative_section: Any = None,
 ) -> List[Dict[str, Any]]:
-    """Il registro delle cinque decisioni di un giro, nell'ordine del report.
+    """Il registro delle decisioni di un giro, nell'ordine del report.
 
     Gli stessi punti che il giro attraversa (font, fotogrammi, piano,
-    coerenza, effetti) entrano qui gia' misurati. Se una sezione manca, la voce
-    corrispondente non si inventa: si registra che non c'e' una prova, con
-    ``confidence: low``.
+    coerenza, varianti, effetti) entrano qui gia' misurati. Se una sezione
+    manca, la voce corrispondente non si inventa: si registra che non c'e' una
+    prova, con ``confidence: low``. La voce ``creative`` compare solo se il giro
+    ha davvero confrontato due piani.
     """
     registry = decisions.Registry()
     builders = (
@@ -1782,6 +1927,16 @@ def build_decisions(
             lambda: _decision_effects(bridge_summary, estimate_section, payload),
         ),
     )
+    if creative_section is not None:
+        # La sesta voce esiste solo quando il giro ha davvero confrontato due
+        # piani: senza sezione non si inventa un confronto che non c'e' stato.
+        builders = builders[:4] + (
+            (
+                "creative",
+                "quale variante del montaggio rendere?",
+                lambda: _decision_creative(creative_section),
+            ),
+        ) + builders[4:]
     for decision_id, question, build in builders:
         try:
             registry.add(build())
@@ -2786,6 +2941,39 @@ def _run_locked(
         f"({plan_choice['plan_choice'].get('selected_by')})",
     )
 
+    # Punto 3: due piani leciti che competono su un punteggio unico, calcolato
+    # dalle metriche gia' misurate (coerenza, prompt, costo, novita'). Niente
+    # modello e niente rete: la scelta e' riproducibile e il registro la prova.
+    # Con i sottotitoli la timeline e' anche il tempo delle caption, quindi il
+    # montaggio non si riordina: un solo candidato, dichiarato.
+    has_captions = bool(
+        bridge_report is not None and getattr(bridge_report, "captions", None)
+    )
+    with clock.time("creative"):
+        creative_section, plan = _run_creative(
+            args,
+            plan,
+            coherence_section,
+            plan_choice["estimate"],
+            payload,
+            captions=has_captions,
+        )
+    _emit(
+        log,
+        "creative",
+        "done" if creative_section.get("chosen") else "skip",
+        f"{creative_section.get('chosen')}: {creative_section.get('thesis')}",
+    )
+    if plan is not plan_choice["plan"]:
+        # Il piano su disco deve essere quello che si rende, non quello di prima.
+        try:
+            (workdir / "plan.json").write_text(
+                json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001 - il referto resta la fonte della scelta
+            pass
+
     # Il piano esiste: ora si propongono i font e si aspetta la scelta, prima del
     # render. Il cancello e' aperto solo se c'e' una vista e non l'hanno spento:
     # in autonomia senza pannello si prende il ``chosen`` e lo si dichiara.
@@ -2954,6 +3142,7 @@ def _run_locked(
         payload=payload,
         requirement=font_requirement(getattr(args, "prompt", ""), payload, plan),
         energy=font_energy(payload, plan),
+        creative_section=creative_section,
     )
 
     report: Dict[str, Any] = {
@@ -2980,6 +3169,7 @@ def _run_locked(
         "coherence": coherence_section,
         "estimate": plan_choice["estimate"],
         "plan_choice": plan_choice["plan_choice"],
+        "creative": creative_section,
         "render_estimate": render_estimate,
         "audio": audio_summary(analyses, ceiling_dbtp),
         "music": music_summary(plan, bridge_report),
