@@ -783,6 +783,18 @@ def discover(root: Path) -> List[Path]:
                 continue
             found.append(candidate)
             known.append(resolved)
+    # Una cartella che contiene un lavoro pubblicato (progress.json) non e' un
+    # lavoro a sua volta: la figlia vince sul padre, altrimenti servendo la
+    # radice si vede lo stato dedotto vuoto invece del lavoro vero.
+    published = [path for path in found if (path / "progress.json").is_file()]
+    if published:
+        found = [
+            path
+            for path in found
+            if (path / "progress.json").is_file()
+            or not any(parent == path for job in published for parent in job.parents)
+        ]
+
     unique = {path.resolve(): path for path in found}
 
     def stamp(path: Path) -> float:
