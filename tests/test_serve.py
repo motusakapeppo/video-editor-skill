@@ -7,13 +7,18 @@ S2 - i fotogrammi si servono come PNG; un nome che non esiste e' 404, non un fil
 S3 - `POST /api/approve` scrive il record **nella forma di keygate**, con lo stesso
      digest del piano: `keygate.check` lo accetta.
 S4 - senza un piano da approvare il POST rifiuta, invece di scrivere un record vuoto.
+S15 - la vista iniziale e' il lavoro **attivo** (lock vivo o stato fresco), non
+      quello col ``progress.json`` toccato per ultimo; un concluso si mostra
+      solo con ``showing: "last_finished"`` e l'eta' vera accanto.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -713,6 +718,158 @@ def check_shots() -> None:
             server.stop()
 
 
+def check_activity() -> None:
+    """S15 - la vista iniziale e' cio' che gira, non cio' che e' stato toccato tardi.
+
+    Il caso vero: il lavoro di analisi era concluso, ma un file di stato toccato
+    per ultimo lo faceva sembrare "il piu' recente"; la pagina mostrava il suo
+    100% mentre il render nuovo lavorava. Qui l'attivo si riconosce dal lock vivo
+    e l'eta' vera resta scritta accanto alla percentuale.
+    """
+    now = time.time()
+
+    def panel(folder: Path, payload: dict, age_sec: float) -> Path:
+        """Un ``progress.json`` con un'eta' dichiarata, non lasciata al caso."""
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / "progress.json"
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        if age_sec > 0:
+            os.utime(target, (now - age_sec, now - age_sec))
+        return target
+
+    def master_for(folder: Path) -> Path:
+        master = folder / "out" / "master.mp4"
+        master.parent.mkdir(parents=True, exist_ok=True)
+        master.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"m" * 512)
+        return master
+
+    # -- 1. A e' concluso ma toccato adesso; B gira, con un lock vivo --------- #
+    with tempfile.TemporaryDirectory(prefix="vx-active-") as raw:
+        base = Path(raw)
+        finished = base / "analisi_conclusa"
+        panel(
+            finished,
+            {
+                "prompt": "analisi",
+                "percent": 100.0,
+                "current": None,
+                "note": "consegnato",
+                "master": str(master_for(finished)),
+            },
+            0.0,
+        )
+        working = base / "render_attivo"
+        panel(
+            working,
+            {"prompt": "reel in corso", "percent": 40.0, "current": "render", "note": ""},
+            120.0,
+        )
+        (working / ".lock").write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "token": "prova-attivo",
+                    "created": now - 120,
+                    "updated": now,
+                    "stage": "render",
+                    "host": "",
+                    # 0.0 = creation time non nota: vale il pid, che e' vivo.
+                    "created_process": 0.0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        view = serve.state(base)
+        check(
+            "S15 la vista iniziale e' il lavoro col lock vivo, non l'ultimo mtime",
+            view["job"] == "render_attivo" and view["showing"] == "active",
+            (view["job"], view["showing"]),
+        )
+        check(
+            "S15 il lavoro attivo dichiara active, running e l'eta' vera",
+            view["active"] is True
+            and view["locked"] is True
+            and view["state"] == "running"
+            and view["updated_sec"] is not None
+            and 100 <= view["updated_sec"] <= 200
+            and view["updated_at"].endswith("+00:00"),
+            {k: view[k] for k in ("active", "locked", "state", "updated_sec", "updated_at")},
+        )
+        by_name = {item["job"]: item for item in view["jobs"]}
+        check(
+            "S15 jobs[] porta active e updated_sec per ogni lavoro",
+            all(
+                "active" in item and "updated_sec" in item and "updated_at" in item
+                for item in view["jobs"]
+            )
+            and by_name["render_attivo"]["active"] is True
+            and by_name["analisi_conclusa"]["updated_sec"] is not None,
+            [(item["job"], item["active"], item["updated_sec"]) for item in view["jobs"]],
+        )
+        check(
+            "S15 l'analisi ha l'mtime piu' fresco ma non e' la vista: vince il lock",
+            by_name["analisi_conclusa"]["updated_sec"]
+            < by_name["render_attivo"]["updated_sec"]
+            and view["selected"] == by_name["render_attivo"]["index"],
+            (
+                by_name["analisi_conclusa"]["updated_sec"],
+                by_name["render_attivo"]["updated_sec"],
+                view["selected"],
+            ),
+        )
+
+    # -- 2. nessun attivo: l'ultimo concluso si mostra, ma lo dichiara -------- #
+    with tempfile.TemporaryDirectory(prefix="vx-finished-") as raw:
+        base = Path(raw)
+        last = base / "ultimo"
+        panel(
+            last,
+            {
+                "prompt": "ultimo finito",
+                "percent": 100.0,
+                "current": None,
+                "note": "consegnato",
+                "master": str(master_for(last)),
+            },
+            1200.0,
+        )
+        view = serve.state(base)
+        check(
+            "S15 senza niente in corso la vista mostra l'ultimo concluso, e lo dice",
+            view["job"] == "ultimo"
+            and view["showing"] == "last_finished"
+            and view["active"] is False
+            and view["percent"] == 100.0
+            and view["state"] == "finished",
+            {k: view[k] for k in ("job", "showing", "active", "state", "percent")},
+        )
+        check(
+            "S15 l'eta' non mente: un 100% vecchio si legge vecchio",
+            view["updated_sec"] is not None
+            and 1150 <= view["updated_sec"] <= 1300,
+            view["updated_sec"],
+        )
+
+    # -- 3. dieci minuti di silenzio, nessun lock: non e' attivo -------------- #
+    with tempfile.TemporaryDirectory(prefix="vx-quiet-") as raw:
+        base = Path(raw)
+        panel(
+            base / "fermo",
+            {"prompt": "fermo", "percent": 55.0, "current": "render", "note": ""},
+            600.0,
+        )
+        quiet = serve.state(base)
+        check(
+            "S15 dieci minuti senza lock: non attivo, ed e' l'eta' a dirlo",
+            quiet["active"] is False
+            and quiet["locked"] is False
+            and quiet["updated_sec"] is not None
+            and 570 <= quiet["updated_sec"] <= 630,
+            {k: quiet[k] for k in ("active", "locked", "updated_sec")},
+        )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx-serve-") as raw:
         job = Path(raw) / "lavoro"
@@ -1128,6 +1285,7 @@ def main() -> int:
     check_derived_jobs()
     check_outcome()
     check_shots()
+    check_activity()
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

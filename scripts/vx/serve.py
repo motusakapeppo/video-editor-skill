@@ -36,7 +36,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from . import feedback, guard, keygate
+from . import degrade, feedback, guard, keygate, lock
+from . import session as session_store
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 UI_FILES = {
@@ -77,6 +78,15 @@ SHOT_LIMIT = 60
 
 #: La cache dei fotogrammi estratti, dentro la workdir del lavoro.
 SHOT_DIR = "shots"
+
+#: Un lavoro e' **attivo** se il suo stato e' stato scritto da meno di cosi'
+#: secondi, oppure se un lock vivo dice che qualcuno ci sta lavorando adesso.
+#: L'eta' da sola non basta: un lavoro concluso toccato tardi non sta girando.
+ACTIVE_SEC = 90.0
+
+#: Un lavoro non attivo ma toccato da meno di cosi' e' "recente": non e' la
+#: vista iniziale, ma non e' nemmeno un lavoro chiuso da tempo.
+RECENT_SEC = 900.0
 
 #: I pezzi pubblicati da ``--live``: ``<workdir>/live/chunk_000.mp4`` + manifest.
 LIVE_DIR = "live"
@@ -150,6 +160,127 @@ def _looks_like_job(directory: Path) -> bool:
     if any((directory / name).is_dir() for name in JOB_MARKER_DIRS):
         return True
     return any((directory / name).is_file() for name in JOB_MARKER_FILES)
+
+
+def _iso_utc(stamp: float) -> str:
+    """L'istante di una scrittura in ISO 8601, o ``""`` se non si sa."""
+    if not stamp or stamp <= 0:
+        return ""
+    return datetime.fromtimestamp(stamp, timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _state_mtime(directory: Path) -> float:
+    """Quando il lavoro ha scritto lo stato l'ultima volta (0.0 se non lo dice).
+
+    Per un lavoro pubblicato e' ``progress.json``: e' l'ultimo fatto che il
+    lavoro ha raccontato. Per un lavoro dedotto sono i segni che lo rendono
+    riconoscibile, presi dal piu' recente. Non e' "quando e' finito": e' solo
+    "quanto tempo fa si e' fatto sentire".
+    """
+    panel = directory / "progress.json"
+    try:
+        if panel.is_file():
+            return panel.stat().st_mtime
+    except OSError:
+        pass
+    stamps: List[float] = []
+    for name in JOB_MARKER_DIRS + JOB_MARKER_FILES:
+        try:
+            stamps.append((directory / name).stat().st_mtime)
+        except OSError:
+            continue
+    return max(stamps) if stamps else 0.0
+
+
+def _lock_alive(directory: Path, data_dir: Optional[Path] = None) -> bool:
+    """Vero se la workdir ha un lock con un proprietario **vivo**.
+
+    La domanda non e' "il file ``.lock`` e' recente?" ma "chi lo tiene e'
+    ancora vivo?": la liveness la decide :mod:`vx.lock`, non l'eta' del file.
+    Un lock illeggibile o di un processo morto non rende attivo un lavoro.
+    """
+    folders = [directory, directory / "work"]
+    extra = _data_dir(directory) if data_dir is None else Path(data_dir)
+    if extra not in folders and directory in extra.parents:
+        folders.append(extra)
+    for folder in folders:
+        try:
+            snapshot = lock.state(folder)
+        except Exception:  # noqa: BLE001 - un lock rotto non e' un lavoro attivo
+            continue
+        if snapshot.get("present") and not snapshot.get("stale"):
+            return True
+    return False
+
+
+def _activity(directory: Path, *, data_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Da quanto il lavoro tace, e se sta lavorando: ``active`` non e' l'eta'.
+
+    ``active`` e' vero con lo stato scritto da meno di :data:`ACTIVE_SEC`
+    secondi **oppure** con un lock vivo nella workdir. ``state`` distingue il
+    lavoro in corso (``running``) da uno toccato da poco (``recent``) da uno
+    chiuso (``finished``); ``updated_sec`` e' la verita' sull'eta', cosi' un
+    100% vecchio si puo' leggere come vecchio.
+    """
+    stamp = _state_mtime(directory)
+    age = max(0.0, time.time() - stamp) if stamp > 0 else None
+    locked = _lock_alive(directory, data_dir)
+    active = bool(locked or (age is not None and age < ACTIVE_SEC))
+    if active:
+        status = "running"
+    elif age is not None and age < RECENT_SEC:
+        status = "recent"
+    else:
+        status = "finished"
+    return {
+        "active": active,
+        "locked": locked,
+        "updated_sec": None if age is None else round(age, 1),
+        "updated_at": _iso_utc(stamp),
+        "state": status,
+    }
+
+
+def _default_index(
+    jobs: List[Path], items: Optional[List[Mapping[str, Any]]] = None
+) -> int:
+    """Quale lavoro mostra la vista iniziale: quello che sta girando adesso.
+
+    Se c'e' almeno un lavoro attivo vince il piu' recente tra gli attivi, e un
+    **lock vivo** batte un mtime fresco: un lavoro concluso toccato tardi non
+    e' un lavoro in corso. Senza nessun attivo si torna al primo, cioe' al piu'
+    recente, che e' l'ultimo lavoro concluso.
+    """
+    if not jobs:
+        return 0
+    if items is None:
+        items = [_activity(path) for path in jobs]
+    best: Optional[tuple] = None
+    for position, item in enumerate(items):
+        if not item.get("active"):
+            continue
+        age = item.get("updated_sec")
+        rank = (
+            0 if item.get("locked") else 1,
+            float("inf") if age is None else float(age),
+        )
+        if best is None or rank < best[0]:
+            best = (rank, position)
+    return 0 if best is None else best[1]
+
+
+def _showing(items: List[Mapping[str, Any]], chosen: int) -> str:
+    """Come si deve leggere la vista, senza far passare un concluso per in corso.
+
+    ``active``: il lavoro scelto sta girando; ``last_finished``: non c'e' niente
+    in corso e si sta mostrando l'ultimo concluso (la UI lo deve dire);
+    ``selected``: c'e' un lavoro attivo, ma si sta guardando un altro.
+    """
+    if 0 <= chosen < len(items) and items[chosen].get("active"):
+        return "active"
+    if not any(item.get("active") for item in items):
+        return "last_finished"
+    return "selected"
 
 
 def _derived_phases(directory: Path) -> List[Dict[str, str]]:
@@ -752,7 +883,11 @@ def _ui(name: str) -> Optional[bytes]:
     if name not in UI_FILES:
         return None
     candidate = UI_DIR / name
-    return candidate.read_bytes() if candidate.is_file() else None
+    try:
+        return candidate.read_bytes() if candidate.is_file() else None
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return None
 
 
 def discover(root: Path) -> List[Path]:
@@ -762,7 +897,9 @@ def discover(root: Path) -> List[Path]:
     della skill (``stage_00/``, ``proxy/``, ``out/``, ``source.json``,
     ``report.json``, ``plan.json``): cosi' anche un lavoro condotto a mano con
     ``ingest`` compare, pur senza panel. L'ordine e' per data di modifica, il
-    piu' recente prima; per un lavoro dedotto vale il segno piu' recente.
+    piu' recente prima; per un lavoro dedotto vale il segno piu' recente. Non e'
+    pero' la scelta della vista: ``state`` parte dal lavoro **attivo**, non dal
+    file toccato per ultimo (vedi :func:`_default_index`).
     """
     root = Path(root)
     found: List[Path] = []
@@ -770,7 +907,12 @@ def discover(root: Path) -> List[Path]:
         found.append(root)
     known = [path.resolve() for path in found]
     for level in range(1, MAX_DEPTH + 1):
-        for candidate in root.glob("/".join(["*"] * level)):
+        try:
+            level_items = list(root.glob("/".join(["*"] * level)))
+        except OSError as exc:
+            degrade.note("serve", exc)
+            break
+        for candidate in level_items:
             if not candidate.is_dir() or not _looks_like_job(candidate):
                 continue
             resolved = candidate.resolve()
@@ -797,22 +939,7 @@ def discover(root: Path) -> List[Path]:
 
     unique = {path.resolve(): path for path in found}
 
-    def stamp(path: Path) -> float:
-        panel = path / "progress.json"
-        if panel.is_file():
-            try:
-                return panel.stat().st_mtime
-            except OSError:
-                return 0.0
-        stamps: List[float] = []
-        for name in JOB_MARKER_DIRS + JOB_MARKER_FILES:
-            try:
-                stamps.append((path / name).stat().st_mtime)
-            except OSError:
-                continue
-        return max(stamps) if stamps else 0.0
-
-    return sorted(unique.values(), key=stamp, reverse=True)
+    return sorted(unique.values(), key=_state_mtime, reverse=True)
 
 
 def _empty_approval(reason: str = "nessun piano di fotogrammi") -> Dict[str, Any]:
@@ -972,7 +1099,7 @@ def add_feedback(
     jobs = discover(root)
     if not jobs:
         return {"ok": False, "reason": "nessun lavoro"}
-    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
     directory = jobs[chosen]
     try:
         value = feedback.validate_rating(rating)
@@ -1043,6 +1170,25 @@ def _outcome(
     return "idle"
 
 
+def _ready_file(path: Optional[Path]) -> bool:
+    """Un file consegnabile esiste davvero e ha byte dentro; un errore e' ``no``."""
+    try:
+        return bool(path is not None and path.is_file() and path.stat().st_size > 0)
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return False
+
+
+def _size_of(path: Optional[Path]) -> int:
+    if path is None:
+        return 0
+    try:
+        return int(path.stat().st_size) if path.is_file() else 0
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return 0
+
+
 def _job_state(directory: Path) -> Dict[str, Any]:
     """Lo stato del lavoro: pubblicato se c'e' il panel, altrimenti dedotto.
 
@@ -1055,6 +1201,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     derived = not published
     progress = _read_json(directory / "progress.json") if published else {}
     data_dir = _data_dir(directory)
+    activity = _activity(directory, data_dir=data_dir)
     plan = _read_json(data_dir / "plan.json")
     report = _report_of(directory, data_dir)
     estimate = report.get("estimate") if isinstance(report.get("estimate"), Mapping) else {}
@@ -1098,6 +1245,11 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     return {
         "job": directory.name,
         "path": str(directory),
+        "active": activity["active"],
+        "locked": activity["locked"],
+        "updated_sec": activity["updated_sec"],
+        "updated_at": activity["updated_at"],
+        "state": activity["state"],
         "prompt": progress.get("prompt") or "",
         "clips": progress.get("clips") or 0,
         "percent": percent,
@@ -1127,13 +1279,241 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     }
 
 
+def _session_value(session_id: Optional[str] = None) -> Optional[session_store.Session]:
+    """Rilegge la sessione scelta (o l'ultima), senza mai scrivere."""
+    try:
+        return session_store.load(session_id)
+    except Exception:  # noqa: BLE001 - un registro rotto non ferma la vista
+        return None
+
+
+def _empty_session_state(reason: str = "nessuna sessione") -> Dict[str, Any]:
+    return {
+        "session": {
+            "schema": session_store.SCHEMA,
+            "id": "",
+            "kind": "",
+            "status": "absent",
+            "reason": reason,
+            "event_count": 0,
+            "decisions": [],
+        },
+        "events": [],
+        "artifacts": [],
+        "gates": [],
+        "live": {"ready": 0, "total": 0, "chunks": []},
+        "journal": [],
+    }
+
+
+def session_state(session_id: Optional[str] = None) -> Dict[str, Any]:
+    """Lo stato della sessione: eventi, file, cancelli, live e journal.
+
+    La forma e' quella promessa alla pagina: ``session`` e' lo snapshot
+    riassunto, ``events`` la storia completa. Tutto viene dal registro, non da
+    una cartella di lavoro: un ``vx doctor`` senza ``progress.json`` si vede.
+    """
+    session = _session_value(session_id)
+    if session is None:
+        return _empty_session_state()
+    snapshot = session.as_dict()
+    summary = {
+        key: snapshot.get(key)
+        for key in (
+            "schema",
+            "id",
+            "kind",
+            "argv",
+            "cwd",
+            "job",
+            "job_path",
+            "status",
+            "started_utc",
+            "t",
+            "event_count",
+            "counts",
+            "stage",
+            "stages",
+            "gate_state",
+            "errors",
+            "events_path",
+            "rotated",
+        )
+    }
+    summary["decisions"] = list(snapshot.get("decisions") or [])
+    return {
+        "session": summary,
+        "events": [dict(row) for row in session.events],
+        "artifacts": list(snapshot.get("artifacts") or []),
+        "gates": list(snapshot.get("gates") or []),
+        "live": snapshot.get("live") or {"ready": 0, "total": 0, "chunks": []},
+        "journal": list(snapshot.get("journal") or []),
+    }
+
+
+def _session_job(session_id: Optional[str] = None) -> Optional[Path]:
+    """La workdir dell'evento piu' recente che ne dichiara una.
+
+    Il registro puo' contenere piu' percorsi (report, proxy, chunk): si guarda
+    dal fondo, perche' l'ultimo evento e' quello che il lavoro sta vivendo. Se
+    il percorso dichiarato non esiste si prova un file prodotto, risalendo
+    alla cartella che sembra un lavoro.
+    """
+    session = _session_value(session_id)
+    if session is None:
+        return None
+    seen: List[Path] = []
+    for row in reversed(session.events):
+        raw = row.get("job_path")
+        if raw:
+            candidate = Path(str(raw))
+            if candidate not in seen:
+                seen.append(candidate)
+    snapshot = session.as_dict()
+    if snapshot.get("job_path"):
+        candidate = Path(str(snapshot["job_path"]))
+        if candidate not in seen:
+            seen.append(candidate)
+    for candidate in seen:
+        if candidate.is_dir():
+            return candidate
+    for row in reversed(session.events):
+        if str(row.get("type") or "") != "artifact":
+            continue
+        path = Path(str(row.get("path") or ""))
+        for parent in path.parents:
+            if any(
+                (parent / name).is_file()
+                for name in ("progress.json", "report.json", "auto_report.json", "plan.json")
+            ):
+                return parent
+    return seen[0] if seen else None
+
+
+def session_approve(session_id: Optional[str] = None) -> Dict[str, Any]:
+    job = _session_job(session_id)
+    if job is None:
+        return {"ok": False, "reason": "nessun lavoro nella sessione"}
+    return approve(job)
+
+
+def session_font_pick(session_id: Optional[str] = None, family: str = "") -> Dict[str, Any]:
+    job = _session_job(session_id)
+    if job is None:
+        return {"ok": False, "reason": "nessun lavoro nella sessione"}
+    return font_pick(job, family=family)
+
+
+def _write_plan_choice(directory: Path, choice: Any) -> Dict[str, Any]:
+    value = str(choice or "").strip().lower()
+    if value not in ("full", "fast"):
+        return {"ok": False, "reason": "scelta non valida: full o fast"}
+    payload = {
+        "schema": "vx.plan-choice/1",
+        "choice": value,
+        "chosen_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "from": "ui",
+    }
+    (directory / "plan_choice.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return {"ok": True, "choice": value, "job": directory.name}
+
+
+def session_plan_choice(session_id: Optional[str] = None, choice: Any = "") -> Dict[str, Any]:
+    job = _session_job(session_id)
+    if job is None:
+        return {"ok": False, "reason": "nessun lavoro nella sessione"}
+    return _write_plan_choice(_data_dir(job), choice)
+
+
+def session_feedback(
+    session_id: Optional[str] = None, rating: Any = None, note: str = ""
+) -> Dict[str, Any]:
+    job = _session_job(session_id)
+    if job is None:
+        return {"ok": False, "reason": "nessun lavoro nella sessione"}
+    return add_feedback(job, None, rating, note)
+
+
+def session_master(session_id: Optional[str] = None) -> Optional[Path]:
+    """Il master piu' recente registrato nella sessione, se esiste davvero."""
+    session = _session_value(session_id)
+    if session is not None:
+        for row in reversed(session.events):
+            if str(row.get("type") or "") != "artifact":
+                continue
+            if str(row.get("kind") or "") not in ("master", "output"):
+                continue
+            candidate = Path(str(row.get("path") or ""))
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return candidate
+    job = _session_job(session_id)
+    if job is None:
+        return None
+    path = _master_path(job, _read_json(job / "progress.json"))
+    return path if path is not None and path.is_file() else None
+
+
+def session_reveal(session_id: Optional[str] = None) -> Dict[str, Any]:
+    master = session_master(session_id)
+    if master is None:
+        return {"ok": False, "reason": "il master non esiste ancora"}
+    REVEAL(master)
+    return {"ok": True, "folder": str(master.parent), "name": master.name}
+
+
+def session_chunk(session_id: Optional[str], name: str) -> Optional[Path]:
+    """Un pezzo live dal manifesto della sessione, non da una cartella fissa."""
+    if not LIVE_NAME.fullmatch(name):
+        return None
+    session = _session_value(session_id)
+    if session is None:
+        return None
+    snapshot = session.as_dict()
+    folders: List[Path] = []
+    live = snapshot.get("live") if isinstance(snapshot.get("live"), Mapping) else {}
+    if live and live.get("directory"):
+        folders.append(Path(str(live["directory"])))
+    for row in reversed(session.events):
+        if str(row.get("type") or "") == "artifact" and Path(str(row.get("path") or "")).name == name:
+            candidate = Path(str(row.get("path") or ""))
+            if candidate.is_file():
+                return candidate
+    for folder in folders:
+        candidate = folder / name
+        try:
+            base = folder.resolve()
+            target = candidate.resolve()
+            if (target == base or base in target.parents) and candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
-    """Lo stato del lavoro scelto, piu' l'elenco di tutti quelli vivi."""
+    """Lo stato del lavoro scelto, piu' l'elenco di tutti quelli scoperti.
+
+    Senza ``?job`` la vista non parte dal file toccato per ultimo ma dal lavoro
+    che sta girando **adesso** (lock vivo o stato fresco): un lavoro concluso
+    con un ``progress.json`` toccato tardi non ruba piu' la schermata. Se non
+    c'e' niente in corso si mostra l'ultimo concluso, e ``showing`` lo dichiara
+    (``last_finished``) invece di far finta che stia lavorando.
+    """
     jobs = discover(root)
     if not jobs:
         return {
             "job": "",
             "path": str(root),
+            "active": False,
+            "locked": False,
+            "updated_sec": None,
+            "updated_at": "",
+            "state": "",
+            "showing": "none",
             "prompt": "",
             "clips": 0,
             "percent": 0.0,
@@ -1163,23 +1543,32 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "jobs": [],
             "selected": 0,
         }
-    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
-    payload = _job_state(jobs[chosen])
-    entries = []
-    for position, path in enumerate(jobs):
-        item = _job_state(path)
-        entries.append(
-            {
-                "index": position,
-                "job": item["job"],
-                "prompt": item["prompt"],
-                "percent": item["percent"],
-                "current": item["current"],
-                "progress_source": item["progress_source"],
-            }
-        )
+    items = [_job_state(path) for path in jobs]
+    chosen = (
+        _default_index(jobs, items)
+        if index is None
+        else max(0, min(int(index), len(jobs) - 1))
+    )
+    entries = [
+        {
+            "index": position,
+            "job": item["job"],
+            "prompt": item["prompt"],
+            "percent": item["percent"],
+            "current": item["current"],
+            "progress_source": item["progress_source"],
+            "active": item["active"],
+            "locked": item["locked"],
+            "updated_sec": item["updated_sec"],
+            "updated_at": item["updated_at"],
+            "state": item["state"],
+        }
+        for position, item in enumerate(items)
+    ]
+    payload = dict(items[chosen])
     payload["jobs"] = entries
     payload["selected"] = chosen
+    payload["showing"] = _showing(items, chosen)
     return payload
 
 
@@ -1209,7 +1598,7 @@ def reveal(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     jobs = discover(root)
     if not jobs:
         return {"ok": False, "reason": "nessun lavoro"}
-    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
     directory = jobs[chosen]
     master = _master_path(directory, _read_json(directory / "progress.json"))
     if master is None or not master.is_file():
@@ -1223,7 +1612,7 @@ def approve(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     jobs = discover(root)
     if not jobs:
         return {"ok": False, "reason": "nessun lavoro in corso"}
-    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
     directory = jobs[chosen]
     # Il piano e il record stanno dove sta ``plan.json`` (la workdir del job):
     # ``auto`` aspetta li', non nella cartella del pannello.
@@ -1260,7 +1649,7 @@ def font_pick(root: Path, index: Optional[int] = None, family: str = "") -> Dict
     jobs = discover(root)
     if not jobs:
         return {"ok": False, "reason": "nessun lavoro in corso"}
-    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
     directory = jobs[chosen]
     proposal = _read_json(directory / FONT_PROPOSAL_NAME)
     raw = proposal.get("candidates")
@@ -1300,7 +1689,7 @@ setInterval(async () => {
 """
 
 
-def make_handler(root: Path):
+def make_handler(root: Optional[Path], session_mode: bool = False):
     def query(path: str) -> tuple:
         parsed = urllib.parse.urlsplit(path)
         params = urllib.parse.parse_qs(parsed.query)
@@ -1311,9 +1700,23 @@ def make_handler(root: Path):
             index = None
         return parsed.path, index
 
+    def chosen_session(path: str) -> Optional[str]:
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        return (params.get("session") or [None])[0]
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # noqa: D102 - silence the console
             pass
+
+        def _session_id(self) -> Optional[str]:
+            return chosen_session(self.path)
+
+        def _root(self) -> Path:
+            """In modalita' sessione il lavoro e' quello dell'ultimo evento."""
+            if not session_mode:
+                return root if root is not None else Path.cwd()
+            job = _session_job(self._session_id())
+            return job if job is not None else Path.cwd()
 
         def _send(self, body: bytes, content_type: str, status: int = 200,
                   extra: Optional[Dict[str, str]] = None) -> None:
@@ -1340,7 +1743,11 @@ def make_handler(root: Path):
                 self._send(body, UI_FILES[name])
                 return
             if path == "/api/state":
-                self._send(json.dumps(state(root, index), ensure_ascii=False).encode("utf-8"),
+                if session_mode:
+                    payload = session_state(self._session_id())
+                else:
+                    payload = state(self._root(), index)
+                self._send(json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
             if path in ("/result", "/result.mp4"):
@@ -1367,11 +1774,11 @@ def make_handler(root: Path):
             un percorso con ``..`` non esce dalla cartella, un altro tipo di
             file non si serve.
             """
-            jobs = discover(root)
+            jobs = discover(self._root())
             if not jobs:
                 self._send(b"not found", "text/plain", status=404)
                 return
-            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
             name = Path(urllib.parse.unquote(raw)).name
             if not name.lower().endswith(".png"):
                 self._send(b"not found", "text/plain", status=404)
@@ -1383,11 +1790,11 @@ def make_handler(root: Path):
             self._send(candidate.read_bytes(), "image/png")
 
         def _frame(self, raw: str, index: Optional[int]) -> None:
-            jobs = discover(root)
+            jobs = discover(self._root())
             if not jobs:
                 self._send(b"not found", "text/plain", status=404)
                 return
-            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
             name = Path(urllib.parse.unquote(raw)).name
             candidate = _data_dir(jobs[chosen]) / "keyframes" / name
             if not candidate.is_file():
@@ -1402,12 +1809,12 @@ def make_handler(root: Path):
             un render non si estrae niente: ffmpeg ha gia' la CPU occupata, e la
             risposta lo dice invece di restare appesa.
             """
-            jobs = discover(root)
+            jobs = discover(self._root())
             if not jobs:
                 self._send("nessun lavoro".encode("utf-8"), "text/plain; charset=utf-8",
                            status=404)
                 return
-            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
             directory = jobs[chosen]
             data_dir = _data_dir(directory)
             plan = _read_json(data_dir / "plan.json")
@@ -1467,11 +1874,18 @@ def make_handler(root: Path):
             if not LIVE_NAME.fullmatch(name):
                 self._send(b"not found", "text/plain", status=404)
                 return
-            jobs = discover(root)
+            if session_mode:
+                candidate = session_chunk(self._session_id(), name)
+                if candidate is None:
+                    self._send(b"not found", "text/plain", status=404)
+                    return
+                self._serve_video(candidate)
+                return
+            jobs = discover(self._root())
             if not jobs:
                 self._send(b"not found", "text/plain", status=404)
                 return
-            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
             directory = jobs[chosen]
             data_dir = _data_dir(directory)
             folder = data_dir / LIVE_DIR
@@ -1532,11 +1946,18 @@ def make_handler(root: Path):
 
         def _result(self, index: Optional[int]) -> None:
             """Il master, con Range: il browser deve poter scorrere."""
-            jobs = discover(root)
+            if session_mode:
+                path = session_master(self._session_id())
+                if path is None:
+                    self._send(b"il master non esiste ancora", "text/plain", status=404)
+                    return
+                self._serve_video(path)
+                return
+            jobs = discover(self._root())
             if not jobs:
                 self._send(b"nessun lavoro", "text/plain", status=404)
                 return
-            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
             progress = _read_json(jobs[chosen] / "progress.json")
             path = _master_path(jobs[chosen], progress)
             if path is None or not path.is_file() or path.stat().st_size == 0:
@@ -1546,18 +1967,44 @@ def make_handler(root: Path):
 
         def do_POST(self):  # noqa: D102
             path, index = query(self.path)
+            session_id = self._session_id()
             if path == "/api/approve":
-                self._send(json.dumps(approve(root, index), ensure_ascii=False).encode("utf-8"),
+                answer = (
+                    session_approve(session_id)
+                    if session_mode
+                    else approve(self._root(), index)
+                )
+                self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
             if path == "/api/reveal":
-                self._send(json.dumps(reveal(root, index), ensure_ascii=False).encode("utf-8"),
+                answer = (
+                    session_reveal(session_id)
+                    if session_mode
+                    else reveal(self._root(), index)
+                )
+                self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
             if path == "/api/font-pick":
                 params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 family = (params.get("family") or [""])[0]
-                answer = font_pick(root, index, family)
+                answer = (
+                    session_font_pick(session_id, family)
+                    if session_mode
+                    else font_pick(self._root(), index, family)
+                )
+                self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
+            if path == "/api/plan-choice":
+                params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                choice = (params.get("choice") or [""])[0]
+                answer = (
+                    session_plan_choice(session_id, choice)
+                    if session_mode
+                    else _write_plan_choice(_data_dir(self._root()), choice)
+                )
                 self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
@@ -1565,7 +2012,11 @@ def make_handler(root: Path):
                 params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 rating = (params.get("rating") or [""])[0]
                 note = (params.get("note") or [""])[0]
-                answer = add_feedback(root, index, rating, note)
+                answer = (
+                    session_feedback(session_id, rating, note)
+                    if session_mode
+                    else add_feedback(self._root(), index, rating, note)
+                )
                 self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
@@ -1577,9 +2028,17 @@ def make_handler(root: Path):
 class Server:
     """The server, started in a background thread on port 0 by default."""
 
-    def __init__(self, root: Path, port: int = 0) -> None:
-        self.root = Path(root)
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", int(port)), make_handler(self.root))
+    def __init__(
+        self,
+        root: Optional[Path] = None,
+        port: int = 0,
+        session: bool = False,
+    ) -> None:
+        self.root = Path(root) if root is not None else None
+        self.session = bool(session) or self.root is None
+        self.httpd = ThreadingHTTPServer(
+            ("127.0.0.1", int(port)), make_handler(self.root, self.session)
+        )
         self.port = int(self.httpd.server_address[1])
         self.thread: Optional[threading.Thread] = None
 
@@ -1597,9 +2056,9 @@ class Server:
         self.httpd.server_close()
 
 
-__all__ = ["FONT_CHOICE_NAME", "FONT_CHOICE_SCHEMA", "FONT_PROPOSAL_NAME",
+__all__ = ["ACTIVE_SEC", "FONT_CHOICE_NAME", "FONT_CHOICE_SCHEMA", "FONT_PROPOSAL_NAME",
            "FONT_SAMPLE_PREFIX", "LIVE_DIR", "LIVE_MANIFEST", "LIVE_PREFIX",
-           "MAX_DEPTH", "PAGE", "REVEAL", "RENDER_FRESH_SEC",
+           "MAX_DEPTH", "PAGE", "RECENT_SEC", "REVEAL", "RENDER_FRESH_SEC",
            "SHOT_DIR", "SHOT_LIMIT", "Server", "UI_DIR", "UI_FILES", "add_feedback",
            "approve", "discover", "font_pick", "live_state", "make_handler",
            "render_state", "reveal", "reveal_native", "shots", "state", "timeline"]
