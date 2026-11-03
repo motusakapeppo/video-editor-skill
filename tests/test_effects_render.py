@@ -21,13 +21,22 @@ R5. ``blend`` executes against a second source and the mix curve changes the
     picture across time;
 R6. a bezier curve is refused instead of silently approximated;
 R7. ``/api/state`` exposes ``estimate`` and ``plan_choice`` from the report, and
-    returns empty mappings when there is nothing to show.
+    returns empty mappings when there is nothing to show;
+R9. ``mask`` renders through ``maskedmerge`` with a generated ellipse mask:
+    the centre keeps the source and the corners go black, ``invert`` swaps the
+    two regions (positive/negative difference reported);
+R10. ``time`` keeps the declared duration: ``freeze`` makes 0.2 s and 1.8 s
+    identical while the source differs, ``speed``/``reverse`` still render;
+R11. ``text`` draws bright pixels on a dark clip with the job's font,
+    ``tracking`` widens the line, and a text spec without a font is refused with
+    ``FONT_MISSING`` and no file.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -108,10 +117,10 @@ def frame(path: Path, at: float, destination: Path) -> np.ndarray:
             "-hide_banner",
             "-loglevel",
             "error",
-            "-ss",
-            f"{at:.3f}",
             "-i",
             str(path),
+            "-ss",
+            f"{at:.3f}",
             "-frames:v",
             "1",
             "-y",
@@ -515,6 +524,364 @@ def main() -> int:
                 key: bare_payload.get(key)
                 for key in ("estimate", "plan_choice")
             },
+        )
+
+        print("\nR9 -- mask: maskedmerge con maschera generata da geq")
+        mask_out = root / "mask" / "mask.mp4"
+        mask_spec = {
+            "id": "mask",
+            "duration": SECONDS,
+            "primitives": [
+                {
+                    "kind": "mask",
+                    "params": {
+                        "shape": "ellipse",
+                        "cx": 0.0,
+                        "cy": 0.0,
+                        "width": 0.6,
+                        "height": 0.6,
+                        "feather": 20.0,
+                    },
+                }
+            ],
+        }
+        mask_report = edl3_render.render_effect_spec(
+            mask_spec,
+            source,
+            mask_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "mask",
+        )
+        mask_probe = probe(mask_out)
+        check(
+            "R9 file mask prodotto, durata 2 s, 320x240",
+            mask_out.is_file()
+            and abs(mask_probe["duration"] - SECONDS) < 0.1
+            and (mask_probe["width"], mask_probe["height"]) == (WIDTH, HEIGHT),
+            mask_probe,
+        )
+        check(
+            "R9 il grafo usa maskedmerge con una maschera geq",
+            "maskedmerge" in mask_report["filter_script"]
+            and "geq=" in mask_report["filter_script"],
+        )
+        src_mid = frame(source, 0.9, root / "mask_src.png")
+        mask_mid = frame(mask_out, 0.9, root / "mask_mid.png")
+        mask_diff = mean_abs(src_mid, mask_mid)
+        mask_centre = mean_abs(src_mid[110:130, 150:170], mask_mid[110:130, 150:170])
+        mask_corner = mean_abs(src_mid[:40, :40], mask_mid[:40, :40])
+        check(
+            "R9 differenza media vs sorgente > 8/255",
+            mask_diff > 8.0,
+            f"diff={mask_diff:.3f}",
+        )
+        check(
+            "R9 il centro resta il sorgente (diff < 6/255)",
+            mask_centre < 6.0,
+            f"centre={mask_centre:.3f}",
+        )
+        check(
+            "R9 gli angoli sono neri (diff > 30/255)",
+            mask_corner > 30.0,
+            f"corner={mask_corner:.3f}",
+        )
+
+        inverted_out = root / "mask_invert" / "invert.mp4"
+        inverted_spec = {
+            "id": "mask_invert",
+            "duration": SECONDS,
+            "primitives": [
+                {
+                    "kind": "mask",
+                    "params": {
+                        "shape": "ellipse",
+                        "width": 0.6,
+                        "height": 0.6,
+                        "feather": 20.0,
+                        "invert": True,
+                    },
+                }
+            ],
+        }
+        edl3_render.render_effect_spec(
+            inverted_spec,
+            source,
+            inverted_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "mask_invert",
+        )
+        inverted_mid = frame(inverted_out, 0.9, root / "mask_inv.png")
+        inverted_centre = mean_abs(
+            src_mid[110:130, 150:170], inverted_mid[110:130, 150:170]
+        )
+        inverted_corner = mean_abs(src_mid[:40, :40], inverted_mid[:40, :40])
+        check(
+            "R9 invert: il centro e' nero (diff > 30/255)",
+            inverted_centre > 30.0,
+            f"centre={inverted_centre:.3f}",
+        )
+        check(
+            "R9 invert: gli angoli restano il sorgente (diff < 6/255)",
+            inverted_corner < 6.0,
+            f"corner={inverted_corner:.3f}",
+        )
+        signed_centre = float(
+            (mask_mid[110:130, 150:170] - inverted_mid[110:130, 150:170]).mean()
+        )
+        signed_corner = float(
+            (mask_mid[:40, :40] - inverted_mid[:40, :40]).mean()
+        )
+        check(
+            "R9 invert nei due sensi: centro positivo, angolo negativo",
+            signed_centre > 0.0 > signed_corner,
+            f"centre={signed_centre:.2f} corner={signed_corner:.2f}",
+        )
+
+        print("\nR10 -- time: freeze identico, durata dichiarata rispettata")
+        freeze_out = root / "freeze" / "freeze.mp4"
+        freeze_spec = {
+            "id": "freeze",
+            "duration": SECONDS,
+            "primitives": [
+                {"kind": "time", "params": {"mode": "freeze", "at": 0.0, "hold": 2.0}}
+            ],
+        }
+        freeze_report = edl3_render.render_effect_spec(
+            freeze_spec,
+            source,
+            freeze_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "freeze",
+        )
+        freeze_probe = probe(freeze_out)
+        check(
+            "R10 freeze prodotto, durata 2 s, 320x240",
+            freeze_out.is_file()
+            and abs(freeze_probe["duration"] - SECONDS) < 0.1
+            and (freeze_probe["width"], freeze_probe["height"]) == (WIDTH, HEIGHT),
+            freeze_probe,
+        )
+        check(
+            "R10 il grafo usa trim e tpad (durata tenuta)",
+            "tpad=" in freeze_report["filter_script"]
+            and "trim=" in freeze_report["filter_script"],
+        )
+        frozen_early = frame(freeze_out, 0.2, root / "freeze_early.png")
+        frozen_late = frame(freeze_out, 1.8, root / "freeze_late.png")
+        source_early = frame(source, 0.2, root / "freeze_src_early.png")
+        source_late = frame(source, 1.8, root / "freeze_src_late.png")
+        frozen_delta = mean_abs(frozen_early, frozen_late)
+        source_delta = mean_abs(source_early, source_late)
+        check(
+            "R10 freeze: 0.2 s e 1.8 s identici (diff ~0)",
+            frozen_delta < 1.0,
+            f"diff={frozen_delta:.4f}",
+        )
+        check(
+            "R10 il sorgente invece differisce (> 8/255)",
+            source_delta > 8.0,
+            f"diff={source_delta:.3f}",
+        )
+
+        mid_freeze_out = root / "freeze_mid" / "freeze_mid.mp4"
+        edl3_render.render_effect_spec(
+            {
+                "id": "freeze_mid",
+                "duration": SECONDS,
+                "primitives": [
+                    {"kind": "time", "params": {"mode": "freeze", "at": 0.6, "hold": 0.4}}
+                ],
+            },
+            source,
+            mid_freeze_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "freeze_mid",
+        )
+        mid_a = frame(mid_freeze_out, 0.75, root / "freeze_mid_a.png")
+        mid_b = frame(mid_freeze_out, 0.95, root / "freeze_mid_b.png")
+        mid_delta = mean_abs(mid_a, mid_b)
+        check(
+            "R10 freeze con at=0.6, hold=0.4: la finestra e' ferma",
+            mid_delta < 1.0,
+            f"diff={mid_delta:.4f}",
+        )
+
+        speed_out = root / "speed" / "speed.mp4"
+        speed_report = edl3_render.render_effect_spec(
+            {
+                "id": "speed",
+                "duration": SECONDS,
+                "primitives": [{"kind": "time", "params": {"mode": "speed", "rate": 2.0}}],
+            },
+            source,
+            speed_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "speed",
+        )
+        speed_probe = probe(speed_out)
+        speed_mid = frame(speed_out, 0.9, root / "speed_mid.png")
+        check(
+            "R10 speed 2x: durata resta 2 s e il quadro cambia",
+            abs(speed_probe["duration"] - SECONDS) < 0.1
+            and mean_abs(src_mid, speed_mid) > 8.0,
+            f"durata={speed_probe['duration']:.3f} diff={mean_abs(src_mid, speed_mid):.3f}",
+        )
+        check(
+            "R10 speed usa setpts",
+            "setpts=" in speed_report["filter_script"],
+        )
+
+        reverse_out = root / "reverse" / "reverse.mp4"
+        edl3_render.render_effect_spec(
+            {
+                "id": "reverse",
+                "duration": SECONDS,
+                "primitives": [{"kind": "time", "params": {"mode": "reverse"}}],
+            },
+            source,
+            reverse_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "reverse",
+        )
+        reverse_probe = probe(reverse_out)
+        reverse_mid = frame(reverse_out, 0.9, root / "reverse_mid.png")
+        check(
+            "R10 reverse: durata 2 s e il quadro e' invertito",
+            abs(reverse_probe["duration"] - SECONDS) < 0.1
+            and mean_abs(src_mid, reverse_mid) > 8.0,
+            f"durata={reverse_probe['duration']:.3f} diff={mean_abs(src_mid, reverse_mid):.3f}",
+        )
+
+        print("\nR11 -- text: font del lavoro, pixel chiari, tracking")
+        dark = root / "dark.mp4"
+        make_source(dark, SECONDS, pattern="color=c=black")
+        job_font_dir = root / "text" / "fonts"
+        job_font_dir.mkdir(parents=True, exist_ok=True)
+        job_font = job_font_dir / "Antonio-Bold.ttf"
+        shutil.copy2(ROOT / "assets" / "fonts" / "Antonio-Bold.ttf", job_font)
+
+        def text_spec(content: str, tracking: float) -> dict:
+            return {
+                "id": "text",
+                "duration": SECONDS,
+                "primitives": [
+                    {
+                        "kind": "text",
+                        "params": {
+                            "content": content,
+                            "size": 64.0,
+                            "color": "#FFFFFF",
+                            "align": "center",
+                            "x": 0.0,
+                            "y": 0.0,
+                            "tracking": tracking,
+                            "font": str(job_font),
+                        },
+                    }
+                ],
+            }
+
+        text_out = root / "text" / "text.mp4"
+        text_report = edl3_render.render_effect_spec(
+            text_spec("TITOLO", 0.0),
+            dark,
+            text_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "text",
+        )
+        text_probe = probe(text_out)
+        dark_frame = frame(dark, 0.9, root / "text_dark.png")
+        text_frame = frame(text_out, 0.9, root / "text_frame.png")
+        before = int((dark_frame.max(axis=2) > 200).sum())
+        after = int((text_frame.max(axis=2) > 200).sum())
+        check(
+            "R11 file text prodotto, durata 2 s",
+            text_out.is_file() and abs(text_probe["duration"] - SECONDS) < 0.1,
+            text_probe,
+        )
+        check(
+            "R11 pixel chiari dove prima non c'erano",
+            before == 0 and after > 1000,
+            f"before={before} after={after}",
+        )
+        check(
+            "R11 il grafo usa drawtext con il fontfile del lavoro",
+            "drawtext=" in text_report["filter_script"]
+            and "fontfile=" in text_report["filter_script"],
+        )
+
+        tracked_out = root / "text_tracked" / "tracked.mp4"
+        edl3_render.render_effect_spec(
+            text_spec("TITOLO", 8.0),
+            dark,
+            tracked_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "text_tracked",
+        )
+        tracked_frame = frame(tracked_out, 0.9, root / "text_tracked.png")
+        plain_columns = np.where((text_frame.max(axis=2) > 200).any(axis=0))[0]
+        tracked_columns = np.where((tracked_frame.max(axis=2) > 200).any(axis=0))[0]
+        plain_width = int(plain_columns.max() - plain_columns.min() + 1)
+        tracked_width = int(tracked_columns.max() - tracked_columns.min() + 1)
+        check(
+            "R11 tracking 8 px allarga la riga di ~5*8 px",
+            tracked_width > plain_width + 20,
+            f"plain={plain_width} tracked={tracked_width}",
+        )
+
+        no_font_out = root / "text_nofont" / "nofont.mp4"
+        no_font_error = None
+        try:
+            edl3_render.render_effect_spec(
+                {
+                    "id": "nofont",
+                    "duration": SECONDS,
+                    "primitives": [
+                        {"kind": "text", "params": {"content": "Titolo", "size": 48.0}}
+                    ],
+                },
+                dark,
+                no_font_out,
+                width=WIDTH,
+                height=HEIGHT,
+                fps=FPS,
+                duration=SECONDS,
+                workdir=root / "text_nofont",
+            )
+        except edl3_render.CompileError as exc:
+            no_font_error = exc
+        check(
+            "R11 senza font: codice FONT_MISSING",
+            no_font_error is not None and no_font_error.code == "FONT_MISSING",
+            "" if no_font_error is None else no_font_error.code,
+        )
+        check(
+            "R11 senza font: nessun file prodotto",
+            not no_font_out.exists(),
         )
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")

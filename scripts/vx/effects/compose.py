@@ -316,6 +316,7 @@ PRIMITIVES: Mapping[str, Primitive] = MappingProxyType(
                 y=Param("number", 0.0, -1.0, 1.0),
                 tracking=Param("number", 0.0, -10.0, 40.0),
                 weight=Param("int", 600, 100, 900),
+                font=Param("string", "", max_len=2048),
             ),
         ),
         "particles": Primitive(

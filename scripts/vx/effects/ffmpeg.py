@@ -37,6 +37,40 @@ Primitive -> filter
     source is ``self``, against a black canvas of the same geometry. ``mix`` is
     the ``all_opacity`` value, animated through ``sendcmd`` when it is a span.
 
+``mask``
+    ``maskedmerge`` between the clip and a generated black canvas, fed by an
+    alpha mask computed analytically per pixel by ``geq`` from ``shape``
+    (``ellipse``/``rect``/``linear``), ``cx``/``cy``, ``width``/``height``,
+    ``angle`` and ``feather``; ``invert`` flips it. A single-stream mask is a
+    *visibility* cut: outside the shape the picture is black, which is exactly
+    what the primitive means. ``luma`` and ``chroma`` are refused with
+    ``MASK_SHAPE_NOT_RENDERED``: a chroma key is a colour decision, not a
+    geometric shape, and the bridge will not pretend otherwise.
+
+``time``
+    ``freeze`` holds the frame at ``at`` for ``hold`` seconds (``frames``/fps
+    when ``hold`` is 0) through ``trim`` + ``tpad`` + ``concat``; ``speed`` is
+    ``setpts`` + ``fps``; ``reverse`` is ``reverse``; ``stutter`` repeats each
+    frame ``frames`` times. ``tpad``/``trim`` keep the output at the declared
+    duration instead of letting the retimed stream shorten it. ``echo`` is
+    refused with ``TIME_MODE_NOT_RENDERED``: a frame trail is a blend of
+    neighbouring frames, not a timestamp change.
+
+``text``
+    ``drawtext`` with ``fontfile`` pointing at the job's own font, declared in
+    ``params.font`` as an absolute path (or passed as ``plan_spec(font=...)``).
+    Without one the bridge refuses with ``FONT_MISSING``: it never falls back
+    to a system font silently. ``size``/``color``/``align``/``x``/``y`` map to
+    drawtext arguments and ``tracking`` is real letter spacing, drawn one glyph
+    at a time with advances measured from the font file (Pillow; otherwise
+    ``FONT_METRICS_MISSING``). ``weight`` is the font file's own weight: the
+    bridge does not synthesise a weight it cannot draw.
+
+``particles``
+    Declared and validated, never executed: a deterministic particle engine is
+    a renderer of its own, and a fake would be worse than a declared refusal.
+    It stays refused with ``PRIMITIVE_NOT_RENDERED``.
+
 Curves
 ------
 
@@ -59,6 +93,7 @@ two numbers in the sentence; it is never rendered at a lower quality quietly.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .compose import (
@@ -72,10 +107,18 @@ from .compose import (
     validate,
 )
 
-#: The four primitives this bridge actually executes.
-RENDERABLE_PRIMITIVES: Tuple[str, ...] = ("transform", "grade", "blur", "blend")
+#: The seven primitives this bridge actually executes.
+RENDERABLE_PRIMITIVES: Tuple[str, ...] = (
+    "transform",
+    "grade",
+    "blur",
+    "blend",
+    "mask",
+    "time",
+    "text",
+)
 #: Declared and validated, but deliberately not executed by this bridge.
-DECLARED_ONLY: Tuple[str, ...] = ("mask", "time", "text", "particles")
+DECLARED_ONLY: Tuple[str, ...] = ("particles",)
 #: A spec above this cost is refused instead of rendered.
 DEFAULT_BUDGET = 8.0
 #: ffmpeg blend mode names for the spec's vocabulary.
@@ -144,6 +187,35 @@ def _label(name: str) -> str:
 
 def _clamped(expression: str) -> str:
     return f"clip({expression},0,1)"
+
+
+def _quoted(value: str) -> str:
+    """One filter argument as an ffmpeg single-quoted string.
+
+    Inside quotes ``:`` still ends the option, so it is escaped; an apostrophe
+    closes the quote, escapes itself and reopens it, which is the only form
+    ffmpeg's parser accepts without a second level of guessing.
+    """
+    text = str(value).replace(":", "\\:").replace("'", "'\\''")
+    return f"'{text}'"
+
+
+def _font_argument(path: Path) -> str:
+    """An absolute font path ffmpeg can read on either platform."""
+    return _quoted(path.as_posix())
+
+
+def _text_argument(value: str) -> str:
+    """A literal drawtext payload: no expansion, no option delimiter."""
+    text = str(value).replace("\\", "\\\\").replace("'", "'\\''").replace(":", "\\:")
+    return f"'{text}'"
+
+
+def _color_literal(value: Any) -> str:
+    text = str(value or "#FFFFFF").strip()
+    if len(text) == 7 and text.startswith("#"):
+        return "0x" + text[1:]
+    return text
 
 
 # --------------------------------------------------------------------------- #
@@ -508,6 +580,329 @@ def _blur_filters(
 
 
 # --------------------------------------------------------------------------- #
+# mask, time, text
+# --------------------------------------------------------------------------- #
+
+
+def _mask_expression(
+    primitive: Mapping[str, Any], ordinal: int, *, width: int, height: int
+) -> str:
+    """The per-pixel alpha of the mask, in the ``geq`` expression language."""
+    params = primitive.get("params") or {}
+    shape = str(params.get("shape", "ellipse"))
+    if shape in ("luma", "chroma"):
+        raise RenderSpecError(
+            "MASK_SHAPE_NOT_RENDERED",
+            f"mask.shape={shape!r} non è una forma geometrica: una chiave di "
+            "luminanza o di cromia è una decisione di colore, non una maschera "
+            "con cx/cy/width/height. Usa ellipse, rect o linear.",
+            f"primitives[{ordinal}].params.shape",
+        )
+    if shape not in ("ellipse", "rect", "linear"):
+        raise RenderSpecError(
+            "MASK_SHAPE_NOT_RENDERED",
+            f"mask.shape={shape!r} non è eseguito dal ponte ffmpeg.",
+            f"primitives[{ordinal}].params.shape",
+        )
+
+    center_x = width / 2.0 + _scalar(params.get("cx"), 0.0) * width / 2.0
+    center_y = height / 2.0 + _scalar(params.get("cy"), 0.0) * height / 2.0
+    half_w = max(1e-6, _scalar(params.get("width"), 1.0) * width / 2.0)
+    half_h = max(1e-6, _scalar(params.get("height"), 1.0) * height / 2.0)
+    angle = math.radians(_scalar(params.get("angle"), 0.0))
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+    delta_x = f"(X-{_num(center_x)})"
+    delta_y = f"(Y-{_num(center_y)})"
+    u = f"({delta_x}*{_num(cos_a)}+{delta_y}*{_num(sin_a)})"
+    v = f"(-{delta_x}*{_num(sin_a)}+{delta_y}*{_num(cos_a)})"
+
+    if shape == "rect":
+        signed = f"min({_num(half_w)}-abs({u}),{_num(half_h)}-abs({v}))"
+    elif shape == "linear":
+        # A directional ramp: opaque on the side the rotated axis leaves
+        # visible, transparent past half_w; feather is the ramp in pixels and
+        # the height band keeps the gradient from running past the frame.
+        signed = f"min({_num(half_w)}-({u}),{_num(half_h)}-abs({v}))"
+    else:
+        distance = (
+            f"sqrt(pow({u}/{_num(half_w)},2)+pow({v}/{_num(half_h)},2))"
+        )
+        signed = f"((1-{distance})*{_num(min(half_w, half_h))})"
+
+    feather = max(0.0, _scalar(params.get("feather"), 0.0))
+    if feather <= 1e-9:
+        alpha = f"if(gte({signed},0),1,0)"
+    else:
+        alpha = f"clip({signed}/{_num(feather)}+0.5,0,1)"
+    if bool(params.get("invert", False)):
+        alpha = f"(1-({alpha}))"
+    return alpha
+
+
+def _mask_stage(
+    primitive: Mapping[str, Any],
+    ordinal: int,
+    *,
+    current: str,
+    next_label: str,
+    width: int,
+    height: int,
+    fps: float,
+    duration: float,
+    graph: List[str],
+) -> None:
+    """Append the masked merge of the clip against black, mask generated here."""
+    alpha = _mask_expression(primitive, ordinal, width=width, height=height)
+    black = f"[fxmaskbase{ordinal}]"
+    video = f"[fxmaskvid{ordinal}]"
+    mask = f"[fxmask{ordinal}]"
+    canvas = (
+        f"color=c=black:s={int(width)}x{int(height)}:r={_num(fps)}:"
+        f"d={_num(duration)}"
+    )
+    graph.append(f"{_label(current)}format=rgb24{video}")
+    graph.append(f"{canvas},format=rgb24{black}")
+    graph.append(
+        f"{canvas},format=rgb24,"
+        f"geq=r='255*({alpha})':g='255*({alpha})':b='255*({alpha})'{mask}"
+    )
+    graph.append(
+        f"{black}{video}{mask}maskedmerge,format=yuv420p{_label(next_label)}"
+    )
+
+
+def _time_filters(
+    primitive: Mapping[str, Any],
+    ordinal: int,
+    *,
+    fps: float,
+    duration: float,
+) -> Optional[List[str]]:
+    """Filters for speed/reverse/stutter; ``None`` means freeze owns the graph."""
+    params = primitive.get("params") or {}
+    mode = str(params.get("mode", "speed"))
+    at = _scalar(params.get("at"), 0.0)
+
+    if mode == "freeze":
+        return None
+    if mode == "echo":
+        raise RenderSpecError(
+            "TIME_MODE_NOT_RENDERED",
+            "time.mode='echo' non è eseguito dal ponte: una scia di fotogrammi "
+            "è una fusione fra istanti vicini, non un cambio di timestamp, e il "
+            "ponte non finge di averla.",
+            f"primitives[{ordinal}].params.mode",
+        )
+    if mode not in ("speed", "reverse", "stutter"):
+        raise RenderSpecError(
+            "TIME_MODE_NOT_RENDERED",
+            f"time.mode={mode!r} non è eseguito dal ponte ffmpeg.",
+            f"primitives[{ordinal}].params.mode",
+        )
+    if abs(at) > 1e-9:
+        raise RenderSpecError(
+            "PARAM_NOT_RENDERED",
+            f"time.at è usato da freeze, non da {mode}: su {mode} il ponte non "
+            "inventa un punto di partenza che la specifica non descrive.",
+            f"primitives[{ordinal}].params.at",
+        )
+
+    tail = [
+        f"tpad=stop_mode=clone:stop_duration={_num(duration)}",
+        f"trim=duration={_num(duration)}",
+        "setpts=PTS-STARTPTS",
+    ]
+    if mode == "reverse":
+        return ["reverse", "setpts=PTS-STARTPTS"]
+    if mode == "stutter":
+        frames = max(1, int(_scalar(params.get("frames"), 3.0)))
+        return [
+            f"setpts=N/({_num(fps)}*{int(frames)})/TB",
+            f"fps={_num(fps)}",
+            *tail,
+        ]
+    rate = _scalar(params.get("rate"), 1.0)
+    if abs(rate - 1.0) <= 1e-9:
+        return []
+    return [f"setpts=PTS/{_num(rate)}", f"fps={_num(fps)}", *tail]
+
+
+def _freeze_stage(
+    primitive: Mapping[str, Any],
+    ordinal: int,
+    *,
+    current: str,
+    next_label: str,
+    fps: float,
+    duration: float,
+    graph: List[str],
+) -> None:
+    """Hold one frame, then resume the clip without changing the duration."""
+    params = primitive.get("params") or {}
+    at = min(max(0.0, _scalar(params.get("at"), 0.0)), duration)
+    frames = max(1, int(_scalar(params.get("frames"), 3.0)))
+    hold = _scalar(params.get("hold"), 0.0)
+    if hold <= 1e-9:
+        hold = frames / max(1e-9, fps)
+    hold = max(0.0, min(hold, duration - at))
+    single = 1.0 / max(1e-9, fps)
+    if hold <= 1e-9:
+        raise RenderSpecError(
+            "TIME_FREEZE_EMPTY",
+            "time.freeze non ha una durata da tenere: hold e frames valgono "
+            "zero alla fine della clip.",
+            f"primitives[{ordinal}].params.hold",
+        )
+
+    branches: List[Tuple[str, str]] = []
+    if at > 1e-9:
+        branches.append(
+            ("pre", f"trim=start=0:duration={_num(at)},setpts=PTS-STARTPTS")
+        )
+    branches.append(
+        (
+            "frz",
+            f"trim=start={_num(at)}:duration={_num(single)},setpts=PTS-STARTPTS,"
+            f"tpad=stop_mode=clone:stop_duration={_num(hold)},"
+            f"trim=duration={_num(hold)},setpts=PTS-STARTPTS",
+        )
+    )
+    if hold < duration - at - 1e-9:
+        remaining = duration - at
+        branches.append(
+            (
+                "post",
+                f"trim=start={_num(at)}:duration={_num(remaining)},"
+                "setpts=PTS-STARTPTS",
+            )
+        )
+
+    if len(branches) == 1:
+        graph.append(
+            f"{_label(current)}{branches[0][1]},"
+            f"trim=duration={_num(duration)},setpts=PTS-STARTPTS{_label(next_label)}"
+        )
+        return
+
+    outputs = [f"[fxfreeze{ordinal}_{index}]" for index in range(len(branches))]
+    graph.append(f"{_label(current)}split={len(branches)}{''.join(outputs)}")
+    for output, (name, filters) in zip(outputs, branches):
+        graph.append(f"{output}{filters}[fxfrz{ordinal}_{name}]")
+    joined = "".join(f"[fxfrz{ordinal}_{name}]" for name, _ in branches)
+    graph.append(
+        f"{joined}concat=n={len(branches)}:v=1:a=0,"
+        f"trim=duration={_num(duration)},setpts=PTS-STARTPTS{_label(next_label)}"
+    )
+
+
+def _text_filters(
+    primitive: Mapping[str, Any],
+    ordinal: int,
+    *,
+    width: int,
+    height: int,
+    font: Optional[str],
+) -> List[str]:
+    """``drawtext`` with the job's font; tracking is drawn glyph by glyph."""
+    params = primitive.get("params") or {}
+    declared = str(params.get("font") or font or "").strip()
+    if not declared:
+        raise RenderSpecError(
+            "FONT_MISSING",
+            "text richiede il file del font del lavoro: dichiara "
+            "primitives[].params.font con il percorso assoluto del font scelto "
+            "(il ponte non usa un font di sistema come ripiego).",
+            f"primitives[{ordinal}].params.font",
+        )
+    path = Path(declared).expanduser()
+    if not path.is_absolute() or not path.is_file():
+        raise RenderSpecError(
+            "FONT_MISSING",
+            f"text: font del lavoro non trovato in {declared!r}: serve un file "
+            "esistente e un percorso assoluto, senza ripiego su un font di "
+            "sistema.",
+            f"primitives[{ordinal}].params.font",
+        )
+
+    content = str(params.get("content", ""))
+    if "\n" in content or "\r" in content:
+        raise RenderSpecError(
+            "PARAM_NOT_RENDERED",
+            "text.content con righe multiple non è eseguito dal ponte: drawtext "
+            "disegna una sola riga e il ponte non tronca il testo in silenzio.",
+            f"primitives[{ordinal}].params.content",
+        )
+    size = max(1, int(round(_scalar(params.get("size"), 64.0))))
+    color = _color_literal(params.get("color"))
+    align = str(params.get("align", "center"))
+    offset_x = _scalar(params.get("x"), 0.0)
+    offset_y = _scalar(params.get("y"), 0.0)
+    tracking = _scalar(params.get("tracking"), 0.0)
+    base = (
+        f"fontfile={_font_argument(path)}:fontcolor={color}:fontsize={int(size)}:"
+        "expansion=none"
+    )
+    anchor_x = f"{int(width)}/2+({_num(offset_x)})*{int(width)}/2"
+    anchor_y = f"{int(height)}/2-({_num(offset_y)})*{int(height)}/2"
+
+    if abs(tracking) <= 1e-9:
+        if align == "left":
+            text_x = anchor_x
+        elif align == "right":
+            text_x = f"{anchor_x}-text_w"
+        else:
+            text_x = f"{anchor_x}-text_w/2"
+        return [
+            f"drawtext={base}:text={_text_argument(content)}:"
+            f"x={text_x}:y={anchor_y}-text_h/2"
+        ]
+
+    try:
+        from PIL import ImageFont  # noqa: PLC0415 - only tracking needs metrics
+    except ImportError as exc:  # pragma: no cover - depends on the environment
+        raise RenderSpecError(
+            "FONT_METRICS_MISSING",
+            "text.tracking diverso da zero richiede Pillow per misurare le "
+            "avanzate dal file del font (pip install Pillow); il ponte non "
+            "inventa una spaziatura.",
+            f"primitives[{ordinal}].params.tracking",
+        ) from exc
+    try:
+        face = ImageFont.truetype(str(path), int(size))
+        ascent, descent = face.getmetrics()
+        advances = [float(face.getlength(character)) for character in content]
+    except (OSError, ValueError) as exc:
+        raise RenderSpecError(
+            "FONT_UNREADABLE",
+            f"text: il font {declared!r} non è leggibile per misurare il "
+            f"tracking ({exc}).",
+            f"primitives[{ordinal}].params.font",
+        ) from exc
+
+    total = sum(advances) + tracking * max(0, len(content) - 1)
+    anchor = width / 2.0 + offset_x * width / 2.0
+    if align == "left":
+        origin = anchor
+    elif align == "right":
+        origin = anchor - total
+    else:
+        origin = anchor - total / 2.0
+    baseline = height / 2.0 - offset_y * height / 2.0 + (ascent - descent) / 2.0
+
+    filters: List[str] = []
+    cursor = origin
+    for index, character in enumerate(content):
+        if character.strip():
+            filters.append(
+                f"drawtext={base}:text={_text_argument(character)}:"
+                f"x={_num(cursor)}:y={_num(baseline)}:y_align=baseline"
+            )
+        cursor += advances[index] + (tracking if index < len(content) - 1 else 0.0)
+    return filters
+
+
+# --------------------------------------------------------------------------- #
 # the plan
 # --------------------------------------------------------------------------- #
 
@@ -570,15 +965,17 @@ def plan_spec(
     source: str = "[0:v]",
     output: str = "[vout]",
     extra_sources: Optional[Mapping[str, Any]] = None,
+    font: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compile one spec into filters, or refuse it with a declared reason.
 
     ``duration`` defaults to the spec's own. ``extra_sources`` maps a blend's
     ``source`` name to an ffmpeg label (``"[1:v]"``); ``self`` blends against a
-    generated black canvas. Returns ``filters`` (the effect chain, embeddable
-    with commas when it has no blend), ``chain`` (``None`` when a blend needs a
-    multi-input graph), ``filter_complex`` (the complete graph), ``cost`` and
-    ``estimate``.
+    generated black canvas. ``font`` is the job's font file used by ``text``
+    when the primitive does not declare its own ``params.font``. Returns
+    ``filters`` (the effect chain, embeddable with commas when the spec needs
+    no multi-input graph), ``chain`` (``None`` when the graph needs labels),
+    ``filter_complex`` (the complete graph), ``cost`` and ``estimate``.
     """
     normalized = expand(spec)
 
@@ -642,7 +1039,7 @@ def plan_spec(
     current = "[fx0]"
     graph.append(f"{_label(source)}{_normalisation(width, height, rate, span)}{current}")
     serial = 0
-    has_blend = False
+    has_graph = False
 
     for index, primitive in enumerate(primitives):
         kind = primitive.get("kind")
@@ -668,7 +1065,7 @@ def plan_spec(
                 duration=span,
             )
         elif kind == "blend":
-            has_blend = True
+            has_graph = True
             stage = _blend_stage(
                 primitive,
                 index,
@@ -684,6 +1081,46 @@ def plan_spec(
             current = next_label
             serial += 1
             continue
+        elif kind == "mask":
+            has_graph = True
+            _mask_stage(
+                primitive,
+                index,
+                current=current,
+                next_label=next_label,
+                width=width,
+                height=height,
+                fps=rate,
+                duration=span,
+                graph=graph,
+            )
+            current = next_label
+            serial += 1
+            continue
+        elif kind == "time":
+            stage = _time_filters(primitive, index, fps=rate, duration=span)
+            if stage is None:
+                has_graph = True
+                _freeze_stage(
+                    primitive,
+                    index,
+                    current=current,
+                    next_label=next_label,
+                    fps=rate,
+                    duration=span,
+                    graph=graph,
+                )
+                current = next_label
+                serial += 1
+                continue
+        elif kind == "text":
+            stage = _text_filters(
+                primitive,
+                index,
+                width=width,
+                height=height,
+                font=font,
+            )
         else:  # pragma: no cover - checked above, kept as a guard
             raise RenderSpecError(
                 "PRIMITIVE_NOT_RENDERED",
@@ -702,9 +1139,10 @@ def plan_spec(
     return {
         "id": normalized.get("id", "custom"),
         "filters": filters,
-        "chain": None if has_blend else ",".join(filters),
+        "chain": None if has_graph else ",".join(filters),
         "filter_complex": ";\n".join(graph) + "\n",
-        "has_blend": has_blend,
+        "has_blend": has_graph,
+        "has_graph": has_graph,
         "cost": estimate,
         "budget": limit,
         "duration": span,
