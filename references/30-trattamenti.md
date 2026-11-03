@@ -25,3 +25,30 @@
 - **Guardia trascrizione.** `subs.transcript_quality` richiede almeno 12 parole
   e probabilita' media almeno 0.55; sotto soglia `cli.cmd_run` disattiva i
   sottotitoli.
+
+## Effetti componibili (algebra, non catalogo)
+
+`vx.effects` espone otto primitive tipizzate — `transform`, `grade`, `blur`,
+`mask`, `blend`, `time`, `text`, `particles` — con parametri che accettano uno
+scalare o uno span `[a, b]`, e curve `linear`/`in`/`out`/`in_out`/`bezier` o a
+chiavi multiple. Una transizione è una formula, non una voce: `whip` è
+`transform` + `blur` sulla stessa curva, `crossfade` è `blend` 0→1.
+
+* `validate(spec)` → issue in italiano col percorso del campo.
+* `cost(spec)` → peso 0–10; un costo dichiarato è un minimo, mai un ribasso.
+* `expand(nome)` → i 26 nomi storici diventano la stessa forma di una spec
+  scritta a mano, quindi il passato continua a funzionare.
+
+Al render arrivano `transform` (zoompan), `grade` (eq/sendcmd), `blur` (gblur) e
+`blend`. Le altre dichiarano `PRIMITIVE_NOT_RENDERED` e non producono file: un
+no chiaro, non un'omissione. Le curve non rappresentabili in ffmpeg vengono
+rifiutate invece di essere approssimate.
+
+## Coerenza e stima
+
+Prima del render `coherence` misura cinque cose (varietà, ripetizione, frame
+inutilizzabili, apertura debole, tagli senza ragione) e scrive
+`report["coherence"]`; `--free` le spegne e lo dichiara. `estimate` dichiara
+quanto ci vorrà con un intervallo e la scomposizione per stadio, calibrata sui
+tempi reali; sopra il budget (`--budget`) si sceglie fra versione completa e
+rapida, che cede effetti e risoluzione ma resta dentro gli stessi controlli.
