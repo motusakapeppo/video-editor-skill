@@ -3,6 +3,10 @@
 Dal parlato alla cue, dalla cue all'ASS, dall'ASS al burn-in. Ogni passaggio ha
 un limite misurabile.
 
+Per un documento EDL3, i sottotitoli non passano da qui: si dichiarano come
+`text_layers` e il compilatore li dipinge con `drawtext` sopra la timeline
+composta (`26-edl3-e-ponte.md`, §2.4.1: campi resi, campi rifiutati, esempio).
+
 ## Trascrizione
 
 | Voce | Valore |

@@ -27,6 +27,10 @@ Implemented end to end
 * adjustment layers, applied before each clip's own effects;
 * multi-layer video: layer 0 concatenates, every higher layer is one
   ``overlay`` gated by ``enable='between(t,start,end)'``;
+* text layers — one static ``drawtext`` per layer, drawn **after** the concat,
+  the transitions and the overlays, so the layer sits on the finished picture
+  and never inside a single clip; the font is the work's own file (bundled
+  ``assets/fonts`` or a pinned path), never a system fallback;
 * the audio bus: dialogue concatenated, music placed with ``adelay``, ducked by
   ``sidechaincompress`` keyed on the dialogue, summed with ``amix``.
 
@@ -38,8 +42,11 @@ Refused loudly, never skipped
 keys. A chromium node that qualifies while the engine is
 absent → ``BACKEND_UNAVAILABLE``; a chromium node with no fallback →
 ``BACKEND_REFUSED``; an unknown property or backend → ``BACKEND_PROPERTY`` /
-``BACKEND_UNKNOWN``. Two overlays on the same layer → ``LAYER_OVERLAP``. Text
-layers and caption tracks → ``UNSUPPORTED_EFFECT`` until F2-T07. Nested
+``BACKEND_UNKNOWN``. Two overlays on the same layer → ``LAYER_OVERLAP``. A text
+layer with a field the emitter does not render (``keyframes.*``, multi-line
+text) → ``PARAM_NOT_RENDERED`` naming the field; a family with no file of the
+work → ``FONT_MISSING``. Caption tracks stay ``UNSUPPORTED_EFFECT``: their
+contract declares no style, so painting them would mean inventing one. Nested
 sequences → ``UNSUPPORTED_SEQUENCE``. ``crossfade`` → ``UNSUPPORTED_TRANSITION``.
 Audio is ``UNSUPPORTED_AUDIO`` under the default ``audio="refuse"`` policy;
 ``audio="mix"`` builds the bus and ``audio="drop"`` states the picture-only
@@ -98,6 +105,7 @@ from .edl3_nested import resolve as resolve_nesting
 from .edl3_time import AudioPolicy, RemapCurve, audio_fragment, ramp_fragment
 from .effects import compose as effect_compose
 from .effects import ffmpeg as effect_ffmpeg
+from .fonts import font_file as bundled_font
 
 BACKEND_EXPR = "expr"
 BACKEND_SENDCMD = "sendcmd"
@@ -1090,6 +1098,7 @@ def _clip_plan(
     height: int,
     fps: int,
     spec_plan: Optional[Mapping[str, Any]] = None,
+    normalize_clock: bool = False,
 ) -> Dict[str, Any]:
     duration = clip.timeline_duration
     generator = clip.generator_declaration
@@ -1186,6 +1195,13 @@ def _clip_plan(
             compose_fragment = COMPOSE_BUILDERS[compose_op](**compose_params)
 
     canvas = [f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2", "setsar=1"]
+    if normalize_clock:
+        # A dissolve needs both links on the same clock. ``fps`` fixes the frame
+        # rate and ``settb`` the timebase: a 29.97 source and a 30 fps document
+        # (or two sources cut from different files) then meet xfade without the
+        # "timebase do not match" refusal. Documents without a dissolve keep
+        # their byte-identical graph.
+        canvas += [f"fps={fps}", f"settb=1/{fps}"]
     chains: List[str] = []
     if transform is None:
         clip_blocks = blocks + [
@@ -1323,8 +1339,13 @@ def _audio_clip_filters(
         filters.append(f"adelay={milliseconds}|{milliseconds}")
     elif duration > 0.0:
         fade = min(DIALOGUE_FADE_SEC, duration / 2.0)
-        filters.append(f"afade=t=in:st=0.000000:d={_num(fade)}")
-        filters.append(f"afade=t=out:st={_num(duration - fade)}:d={_num(fade)}")
+        # A sliced segment keeps a fade only on an edge that is also an edge of
+        # the original segment; ``False`` marks a chunk boundary, where the
+        # neighbour continues the same sound.
+        if getattr(clip, "fade_in", None) is not False:
+            filters.append(f"afade=t=in:st=0.000000:d={_num(fade)}")
+        if getattr(clip, "fade_out", None) is not False:
+            filters.append(f"afade=t=out:st={_num(duration - fade)}:d={_num(fade)}")
     return filters
 
 
@@ -1517,19 +1538,172 @@ def _audio_bus(
 # --------------------------------------------------------------- compiling
 
 
-def _refuse_unsupported(timeline: Timeline3, audio: str) -> None:
-    if timeline.text_layers:
+# --------------------------------------------------------------- text layers
+
+
+def _text_font_path(
+    layer: Any,
+    where: str,
+    font_files: Optional[Mapping[str, Any]],
+) -> Path:
+    """The work's font file for ``style.family``; never a system fallback.
+
+    Resolution order: an explicit ``font_files`` pin (family -> absolute path)
+    wins, then the font shipped in ``assets/fonts``. Anything else is
+    ``FONT_MISSING``: drawtext with no ``fontfile`` silently picks a system
+    face, which is exactly the substitution the skill promises never to make.
+    """
+    family = str(layer.style.family).strip()
+    pinned = None
+    for name, value in (font_files or {}).items():
+        if str(name).strip().casefold() == family.casefold():
+            pinned = str(value)
+            break
+    if pinned:
+        path = Path(pinned).expanduser()
+        if not path.is_absolute() or not path.is_file():
+            raise CompileError(
+                "FONT_MISSING",
+                f"text layer font {family!r} is pinned to {pinned!r}: an "
+                "absolute path to an existing file is required, with no "
+                "system-font fallback",
+                f"{where}.style.family",
+            )
+        return path
+    path = bundled_font(family)
+    if path is None or not path.is_file():
         raise CompileError(
-            "UNSUPPORTED_EFFECT",
-            "text layers are validated and serialised only; the Chromium/ASS "
-            "backend lands in F2-T07, so nothing is rendered silently",
-            "text_layers[0]",
+            "FONT_MISSING",
+            f"text layer font {family!r} is not a file of the work: ship it in "
+            "assets/fonts or pin it with font_files={family: absolute path}; "
+            "the compiler never falls back to a system font",
+            f"{where}.style.family",
         )
+    return path
+
+
+def _text_drawtext(
+    layer: Any,
+    index: int,
+    *,
+    width: int,
+    height: int,
+    font_path: Path,
+) -> Tuple[str, Dict[str, Any]]:
+    """One ``drawtext`` for a text layer, plus the record reported to callers.
+
+    The style's normalised position is the anchor: ``x`` follows the declared
+    alignment, ``y`` is the vertical centre. ``size`` and ``stroke`` are pixels.
+    """
+    where = f"text_layers[{index}]"
+    style = layer.style
+    content = str(layer.text)
+    if "\n" in content or "\r" in content:
+        raise CompileError(
+            "PARAM_NOT_RENDERED",
+            "text_layers[].text with multiple lines is not executed: drawtext "
+            "paints one line and the compiler does not truncate the text in "
+            "silence",
+            f"{where}.text",
+        )
+    if layer.keyframes:
+        name = sorted(layer.keyframes)[0]
+        raise CompileError(
+            "PARAM_NOT_RENDERED",
+            f"{where}.keyframes.{name}: the text emitter is one static drawtext "
+            "(declared tracks: opacity, position_x, position_y); animating a "
+            "text layer is not implemented, so the field is refused instead of "
+            "being ignored",
+            f"{where}.keyframes.{name}",
+        )
+    align = str(style.align)
+    if align not in {"left", "center", "right"}:
+        # Unreachable through a validated document; a guard, not a fallback.
+        raise CompileError(
+            "PARAM_NOT_RENDERED",
+            f"text layer align {align!r} has no drawtext anchor",
+            f"{where}.style.align",
+        )
+
+    size = max(1, int(round(float(style.size))))
+    color = effect_ffmpeg._color_literal(style.color)
+    anchor_x = float(style.position[0]) * width
+    anchor_y = float(style.position[1]) * height
+    if align == "left":
+        x_expression = _num(anchor_x)
+    elif align == "right":
+        x_expression = f"{_num(anchor_x)}-text_w"
+    else:
+        x_expression = f"{_num(anchor_x)}-text_w/2"
+    y_expression = f"{_num(anchor_y)}-text_h/2"
+
+    filters = [
+        f"fontfile={effect_ffmpeg._font_argument(font_path)}",
+        f"fontcolor={color}",
+        f"fontsize={size}",
+        "expansion=none",
+        f"text={effect_ffmpeg._text_argument(content)}",
+        f"x={x_expression}",
+        f"y={y_expression}",
+        f"enable='between(t,{_num(layer.time_in)},{_num(layer.time_out)})'",
+    ]
+    stroke = int(round(float(style.stroke)))
+    if stroke > 0:
+        filters.insert(3, f"borderw={stroke}")
+        filters.insert(4, "bordercolor=black")
+    record = {
+        "text": content,
+        "in": float(layer.time_in),
+        "out": float(layer.time_out),
+        "family": str(style.family),
+        "font": str(font_path),
+        "size": size,
+        "color": str(style.color),
+        "stroke": stroke,
+        "align": align,
+        "position": [float(style.position[0]), float(style.position[1])],
+    }
+    return "drawtext=" + ":".join(filters), record
+
+
+def _text_stage(
+    timeline: Timeline3,
+    base_label: str,
+    font_files: Optional[Mapping[str, Any]],
+) -> Tuple[List[str], List[Dict[str, Any]], str]:
+    """Draw every text layer over the finished picture.
+
+    Called after the concat, the crossfades and the overlay loop: the text
+    belongs to the composed timeline, not to a single clip, so a per-clip effect
+    or a transition cannot move it or cut it.
+    """
+    chains: List[str] = []
+    records: List[Dict[str, Any]] = []
+    current = base_label
+    for index, layer in enumerate(timeline.text_layers):
+        font_path = _text_font_path(layer, f"text_layers[{index}]", font_files)
+        fragment, record = _text_drawtext(
+            layer,
+            index,
+            width=timeline.width,
+            height=timeline.height,
+            font_path=font_path,
+        )
+        produced = f"tx{index}"
+        chains.append(f"[{current}]{fragment}[{produced}]")
+        record["where"] = f"text_layers[{index}]"
+        records.append(record)
+        current = produced
+    return chains, records, current
+
+
+def _refuse_unsupported(timeline: Timeline3, audio: str) -> None:
     if timeline.captions:
         raise CompileError(
             "UNSUPPORTED_EFFECT",
-            "caption tracks are validated and serialised only; the Chromium/ASS "
-            "backend lands in F2-T07, so nothing is rendered silently",
+            "caption tracks are validated and serialised only: a CaptionTrack "
+            "declares no style, so painting it would mean inventing a font, a "
+            "size and a position; declare the cues as text_layers instead",
             "captions[0]",
         )
     if timeline.audio and audio == "refuse":
@@ -2027,6 +2201,8 @@ def compile_timeline(
     nested_paths: Optional[Mapping[str, str]] = None,
     generator_paths: Optional[Mapping[str, str]] = None,
     effect_specs: Optional[Mapping[Any, Any]] = None,
+    font_files: Optional[Mapping[str, Any]] = None,
+    effect_budget: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Validate, route every effect, and return a compile plan.
 
@@ -2043,6 +2219,12 @@ def compile_timeline(
     :mod:`vx.effects.ffmpeg` bridge, and its chain joins that clip's geometry.
     A spec that the bridge refuses (unsupported primitive, budget, curve) fails
     the compile with the bridge's own code instead of being skipped.
+
+    ``font_files`` pins a text layer's family to an absolute font file (the
+    work's own). Without a pin the font is the one shipped in ``assets/fonts``;
+    a family with no file is ``FONT_MISSING``, never a system fallback. Text is
+    drawn after the concat and the overlays, so it belongs to the finished
+    timeline rather than to a clip.
     """
     if timeline.version not in EDL3_VERSIONS:
         raise CompileError(
@@ -2060,7 +2242,7 @@ def compile_timeline(
 
     nesting = resolve_nesting(timeline, max_depth=MAX_NESTING_DEPTH)
 
-    for problem in timeline.validate():
+    for problem in timeline.validate(effect_budget=effect_budget):
         if problem["code"] in HARD_CODES:
             raise CompileError(problem["code"], problem["detail"], problem["where"])
 
@@ -2097,6 +2279,10 @@ def compile_timeline(
             "clips",
         )
     _refuse_layer_overlap(overlay_clips)
+
+    # One dissolve is enough to make every base link share the document's clock
+    # (see ``_clip_plan``); without one the graph stays byte-identical.
+    normalize_clock = bool(timeline.crossfade_joins())
 
     backend = choose_backend(timeline)
 
@@ -2153,6 +2339,7 @@ def compile_timeline(
             timeline.height,
             timeline.fps,
             spec_plan,
+            normalize_clock=normalize_clock,
         )
         if clip_index in presets_applied:
             plans[clip_index]["preset"] = clip.preset_provenance()
@@ -2246,6 +2433,11 @@ def compile_timeline(
             )
         base_label = f"base{position}"
 
+    text_chains, text_records, base_label = _text_stage(
+        timeline, base_label, font_files
+    )
+    chains.extend(text_chains)
+
     audio_chains, audio_input_args, audio_label = _audio_bus(
         timeline, audio, len(timeline.clips)
     )
@@ -2331,6 +2523,7 @@ def compile_timeline(
         "map": f"[{base_label}]",
         "audio_map": f"[{audio_label}]" if audio_label else None,
         "overlays": len(overlay_clips),
+        "text_layers": text_records,
         "clips": clips_report,
         "backends": table,
         "chromium": chromium,
@@ -2542,6 +2735,7 @@ def _render_nested(
     timeout: Optional[int],
     audio: str,
     settings: Optional[Mapping[str, Any]],
+    font_files: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, str]:
     """Render every reachable inner sequence exactly once, children first."""
     plan = resolve_nesting(timeline, max_depth=MAX_NESTING_DEPTH)
@@ -2561,6 +2755,7 @@ def _render_nested(
                 audio=audio,
                 settings=settings,
                 nested_paths=dict(paths),
+                font_files=font_files,
             )
             _encode(inner_plan, destination, inner_dir, timeout)
         paths[virtual] = str(destination)
@@ -2678,6 +2873,8 @@ def render(
     benchmark: bool = False,
     jobs: int = 1,
     effect_specs: Optional[Mapping[Any, Any]] = None,
+    font_files: Optional[Mapping[str, Any]] = None,
+    effect_budget: Optional[int] = None,
     live: bool = False,
 ) -> Dict[str, Any]:
     """Render ``timeline`` to ``output`` and return the compile/run report.
@@ -2698,7 +2895,14 @@ def render(
     more pieces than layer-0 clips) unless the caller passed ``chunks``.
 
     ``effect_specs`` is forwarded to :func:`compile_timeline`; the chunk path
-    refuses it instead of dropping the per-clip specs.
+    refuses it instead of dropping the per-clip specs. ``font_files`` is
+    forwarded the same way.
+
+    A document with ``text_layers`` keeps the single graph: a chunk's
+    sub-document carries no text layers, so the chunk path would paint the
+    picture without them. An explicit ``chunks``/``live`` request is refused
+    with ``CHUNK_UNSUPPORTED`` instead of silently dropping the text; the
+    automatic path simply does not chunk, which only costs time.
     """
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -2713,6 +2917,7 @@ def render(
     else:
         settings_source = "declared"
     auto_chunked = False
+    has_text = bool(getattr(timeline, "text_layers", None))
     if live:
         from . import edl3_chunks  # noqa: PLC0415 - the resumable path only
 
@@ -2722,12 +2927,21 @@ def render(
                 float(getattr(timeline, "duration", 0.0) or 0.0),
                 clips=base_clips,
             )
-    elif chunks is None:
+    elif chunks is None and not has_text:
         decided = auto_chunks(float(getattr(timeline, "duration", 0.0) or 0.0))
         if decided is not None:
             chunks = decided
             auto_chunked = True
     if chunks is not None and int(chunks) > 1:
+        if has_text:
+            raise CompileError(
+                "CHUNK_UNSUPPORTED",
+                "text_layers non è collegato al percorso a blocchi: il "
+                "sottodocumento di un blocco non porta i livelli di testo, "
+                "quindi il render rifiuta invece di perdere il testo. Usa un "
+                "grafo unico (chunks=None).",
+                "text_layers",
+            )
         if effect_specs:
             raise CompileError(
                 "CHUNK_UNSUPPORTED",
@@ -2748,12 +2962,13 @@ def render(
             benchmark=benchmark,
             jobs=int(jobs),
             live=bool(live),
+            effect_budget=effect_budget,
         )
         report["settings_source"] = settings_source
         report["chunks_auto"] = auto_chunked
         report["jobs"] = max(1, int(jobs))
         return report
-    nested = _render_nested(timeline, script_dir, timeout, audio, settings)
+    nested = _render_nested(timeline, script_dir, timeout, audio, settings, font_files)
     generators = _materialize_generators(timeline, script_dir, probe)
     plan = compile_timeline(
         timeline,
@@ -2762,6 +2977,8 @@ def render(
         nested_paths=nested,
         generator_paths=generators,
         effect_specs=effect_specs,
+        font_files=font_files,
+        effect_budget=effect_budget,
     )
     proc, script_path = _encode(
         plan, destination, script_dir, timeout, benchmark=benchmark
@@ -2783,6 +3000,7 @@ def render(
         "map": plan["map"],
         "audio_map": plan["audio_map"],
         "overlays": plan["overlays"],
+        "text_layers": plan["text_layers"],
         "backends": plan["backends"],
         "chromium": plan["chromium"],
         "nested_sequences": plan["nested_sequences"],

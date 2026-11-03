@@ -697,18 +697,33 @@ def check_compiler_refusals() -> None:
         text_layers=[edl3.TextLayer(text="hi", time_in=0.0, time_out=1.0)]
     )
     check(
-        "a text layer is refused with UNSUPPORTED_EFFECT",
-        compile_code(text_doc) == "UNSUPPORTED_EFFECT",
+        "a text layer compiles instead of being refused",
+        compile_code(text_doc) == "",
         compile_code(text_doc),
     )
-    try:
-        edl3_render.compile_timeline(text_doc)
-    except edl3_render.CompileError as exc:
-        check(
-            "the text refusal names the F2-T07 backend",
-            "F2-T07" in exc.detail and exc.where.startswith("text_layers"),
-            exc.where,
-        )
+    text_plan = edl3_render.compile_timeline(text_doc)
+    check(
+        "the text layer is one drawtext over the composition",
+        "drawtext=" in text_plan["filter_script"]
+        and text_plan["map"].startswith("[tx")
+        and len(text_plan["text_layers"]) == 1,
+        text_plan["map"],
+    )
+    unknown_font = timeline(
+        text_layers=[
+            edl3.TextLayer(
+                text="hi",
+                style=edl3.TextStyle(family="NoSuchFont-XYZ"),
+                time_in=0.0,
+                time_out=1.0,
+            )
+        ]
+    )
+    check(
+        "a text font with no file of the work is FONT_MISSING",
+        compile_code(unknown_font) == "FONT_MISSING",
+        compile_code(unknown_font),
+    )
     caption_doc = timeline(
         captions=[edl3.CaptionTrack([edl3.CaptionCue("hi", 0.0, 1.0)])]
     )

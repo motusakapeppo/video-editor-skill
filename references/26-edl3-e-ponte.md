@@ -129,6 +129,74 @@ stile, con enfasi per parola. Il margine e un parametro del livello, non un nume
 fisso dentro uno stile globale: e questo che ha confinato i sottotitoli dentro la
 fascia nel caso studio.
 
+#### 2.4.1 Stato implementato: `text_layers` -> `drawtext`
+
+L'esempio qui sopra e il disegno del contratto, non la forma che il parser legge
+oggi. Il contratto reale (`vx/edl3.py`: `TextLayer` + `TextStyle`) e questo, e il
+compilatore lo rende con un `drawtext` per livello:
+
+```json
+{
+  "text_layers": [
+    {
+      "text": "QUELLA SERA",
+      "style": {"family": "Antonio", "size": 40, "color": "#ffffff",
+                "stroke": 2, "position": [0.5, 0.82], "align": "center"},
+      "in": 0.8,
+      "out": 5.2
+    },
+    {
+      "text": "SECONDO LIVELLO",
+      "style": {"family": "BebasNeue", "size": 28, "color": "#ffcc00",
+                "stroke": 0, "position": [0.08, 0.12], "align": "left"},
+      "in": 6.0,
+      "out": 9.0
+    }
+  ]
+}
+```
+
+Dove sta: **dopo** il `concat` (o l'`xfade`), dopo gli overlay dei livelli alti e
+dopo gli effetti di clip, subito prima del bus audio. Il testo appartiene alla
+timeline composta: un effetto per clip o una transizione non lo sposta e non lo
+taglia. Il report espone `text_layers` (testo, `in`/`out`, famiglia, percorso del
+font, `size`, colore, `stroke`, `align`, `position`); la mappa finale e `[txN]`
+dell'ultimo livello.
+
+| Campo dichiarato | Come e reso |
+|---|---|
+| `text` | `drawtext=text=...` con `expansion=none` (nessuna variabile `%` interpretata) |
+| `style.family` | `fontfile=` dal font del lavoro: `assets/fonts` o un pin `font_files={famiglia: percorso assoluto}`; nessun ripiego su un font di sistema |
+| `style.size` | `fontsize=` in pixel, arrotondato a intero, minimo 1 |
+| `style.color` | `#rrggbb` -> `fontcolor=0xrrggbb` |
+| `style.stroke` | `borderw=` in pixel (arrotondato) + `bordercolor=black`; 0 = nessun bordo |
+| `style.position` | ancora normalizzata `[x, y]`: `x` segue `align` (`left`: x, `center`: x - text_w/2, `right`: x - text_w), `y` e il centro verticale (`y - text_h/2`) |
+| `style.align` | `left`, `center`, `right` (gli unici valori che la validazione accetta) |
+| `in` / `out` | `enable='between(t,in,out)'` sul clock della timeline |
+
+Campi dichiarati e **non** resi, rifiutati con il nome del campo (mai ignorati):
+
+| Campo | Codice | Perche |
+|---|---|---|
+| `keyframes.opacity`, `keyframes.position_x`, `keyframes.position_y` | `PARAM_NOT_RENDERED` su `text_layers[i].keyframes.<nome>` | l'emettitore e un `drawtext` statico; l'animazione del testo non e implementata |
+| `text` con `\n` o `\r` | `PARAM_NOT_RENDERED` su `text_layers[i].text` | `drawtext` disegna una riga sola e il compilatore non tronca il testo in silenzio |
+| `captions` (`CaptionTrack`) | `UNSUPPORTED_EFFECT` su `captions[0]` | il contratto della caption non dichiara stile: dipingerla vorrebbe dire inventare font, corpo e posizione. I cue vanno dichiarati come `text_layers` |
+| `tracking` | non e un campo | `TextStyle` non lo dichiara: la spaziatura esiste solo nel ponte effetti (`primitives[].params.tracking`) e il compilatore EDL3 non la inventa |
+
+Font assente: `FONT_MISSING` su `text_layers[i].style.family`, nessun file scritto.
+Un pin `font_files` che non e un percorso assoluto esistente e lo stesso errore.
+
+Una timeline con `text_layers` resta su **un solo grafo**: il sottodocumento di un
+blocco non porta i livelli di testo, quindi `render(..., chunks=N>1)` (o `live`)
+rifiuta con `CHUNK_UNSUPPORTED` invece di perdere il testo; il percorso automatico
+non spezzetta e costa solo tempo.
+
+Prova misurata (`tests/test_edl3_text.py`, 320x568, 12 fps): due livelli su due
+clip diverse, sfondo `0x101010`. A 0,7 s il frame ha **813** pixel chiari contro
+**0** del render senza testo; a 2,7 s **1381** contro **0**; a 1,7 s e 3,7 s
+(fuori da ogni intervallo) **0** in entrambi. Con una dissolvenza e un effetto
+`color` per clip il testo sopra la giunzione dipinge **994** pixel chiari.
+
 ### 2.5 Nested sequence
 
 ```json
