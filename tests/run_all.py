@@ -37,6 +37,16 @@ Run:
     python tests/run_all.py --only ingest --only render --verbose
     python tests/run_all.py --jobs 1          # serial, e.g. to compare timings
     python tests/run_all.py --jobs 4 --timeout 1800
+    python tests/run_all.py --heavy           # + the heavy category (quiet machine)
+
+The heavy category (``HEAVY``) holds what cannot be measured next to five other
+children: the timing-sensitive ``test_f17_crash``, the byte-exact motion golden/
+slice/cache/fallback files and the temp-tree scan in ``test_temp_hygiene``. They
+are not flaky, they are simply not proof under load, so without ``--heavy`` they
+are skipped one named line at a time and the summary says how many were left out
+and which command brings them back. ``--only`` narrows both lists: asking for a
+heavy file without ``--heavy`` names the skip and says to add the flag, it never
+silently reports "no such test".
 """
 
 from __future__ import annotations
@@ -73,23 +83,47 @@ def discover() -> List[Path]:
     )
 
 
-#: Tests whose proof depends on wall-clock scheduling: they measure how fast the
-#: machine is and kill at fixed offsets from that. Run after 175 other tests the
-#: machine is warm, the offsets drift, and the kills pile into one phase
-#: (measured: loudness 45, staging 0, lock 0, boot 0). They run on a quiet
-#: machine with ``--heavy``, where they pass; mixing them silently would turn a
-#: real coverage gap into "flaky".
-HEAVY = ("test_f17_crash.py",)
+#: The heavy category: tests whose proof needs a quiet machine, not a busy one.
+#: ``test_f17_crash`` measures how fast this machine is and kills at fixed offsets
+#: from that (after 175 other tests the offsets drift and the kills pile into one
+#: phase); the motion golden/slice/cache/fallback files compare rendered bytes, so
+#: six concurrent children starve them and they go red without a defect; temp
+#: hygiene scans the whole temp tree, which is contended while other tests write
+#: there. None of them is flaky in isolation: they are simply not proof of
+#: anything while the other five children are running. Hence a category, skipped
+#: loudly by default and run together with the rest under ``--heavy``.
+HEAVY = (
+    "test_f17_crash.py",
+    "test_motion_golden.py",
+    "test_motion_slice.py",
+    "test_motion_cache.py",
+    "test_motion_fallback.py",
+    "test_temp_hygiene.py",
+)
+
+
+def _match(files: Sequence[Path], only: Optional[Sequence[str]]) -> List[Path]:
+    """Apply the ``--only`` substrings (case-insensitive) to an already filtered list."""
+    if not only:
+        return list(files)
+    needles = [needle.lower() for needle in only if needle]
+    return [path for path in files if any(n in path.name.lower() for n in needles)]
 
 
 def selected(only: Optional[Sequence[str]], *, heavy: bool = False) -> List[Path]:
     files = discover()
     if not heavy:
         files = [path for path in files if path.name not in HEAVY]
-    if not only:
-        return files
-    needles = [needle.lower() for needle in only if needle]
-    return [path for path in files if any(n in path.name.lower() for n in needles)]
+    return _match(files, only)
+
+
+def heavy_skipped(only: Optional[Sequence[str]] = None) -> List[Path]:
+    """The heavy files this run leaves out, honouring the same ``--only`` needles.
+
+    Returned rather than merely counted so the runner can name each one: a skip
+    nobody sees is a coverage gap wearing a green exit code.
+    """
+    return _match([path for path in discover() if path.name in HEAVY], only)
 
 
 def auto_jobs() -> int:
@@ -286,21 +320,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--heavy",
         action="store_true",
-        help="include the timing-sensitive tests (run on a quiet machine)",
+        help="also run the heavy category (timing-sensitive, run on a quiet machine)",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     files = selected(args.only, heavy=args.heavy)
+    skipped_heavy = [] if args.heavy else heavy_skipped(args.only)
     if args.list:
         for path in files:
             print(path.name)
+        for path in skipped_heavy:
+            print(f"{path.name}  (heavy, needs --heavy)")
         return 0
     if not files:
-        print(f"no test matched {args.only!r} in {TESTS}")
+        for path in skipped_heavy:
+            print(f"[heavy] {path.name:<38} SKIP heavy: run with --heavy", flush=True)
+        hint = " (it is heavy: add --heavy)" if skipped_heavy else ""
+        print(f"no test matched {args.only!r} in {TESTS}{hint}")
         return 2
 
     jobs = args.jobs if args.jobs > 0 else auto_jobs()
-    skipped_heavy = [] if args.heavy else [name for name in HEAVY if (TESTS / name).is_file()]
     total = len(files)
     print(
         f"run_all: {total} files from {TESTS} "
@@ -309,8 +348,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         flush=True,
     )
 
-    for name in skipped_heavy:
-        print(f"[heavy] {name:<38} SKIP    timing-sensitive: run with --heavy", flush=True)
+    for path in skipped_heavy:
+        print(f"[heavy] {path.name:<38} SKIP heavy: run with --heavy", flush=True)
 
     results: List[Dict[str, Any]] = []
     started = time.time()
@@ -370,6 +409,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"flake: {len(flaky_results)} file: "
             + ", ".join(result["name"] for result in flaky_results)
             + " (passed alone; not a defect)"
+        )
+    if skipped_heavy:
+        print(
+            f"skipped: 1 category (heavy, {len(skipped_heavy)} files) "
+            "| recover: python tests/run_all.py --heavy"
         )
     return 1 if failed_results else 0
 

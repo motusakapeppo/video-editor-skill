@@ -164,7 +164,7 @@ hook, guardia trascrizione) sta in `references/30-trattamenti.md`.
 Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
 `out/master.mp4` sempre; `out/subtitles.srt` solo se esiste parlato;
 `out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. L'export multi-aspect non è
-implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`; `python tests/test_motion_golden.py` ricattura i 54 template della Motion Studio a tre istanti e li confronta byte per byte con `tests/fixtures/motion_golden/`.
+implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`; `python tests/test_motion_golden.py` ricattura i 54 template della Motion Studio a tre istanti e li confronta byte per byte con `tests/fixtures/motion_golden/`. La suite intera è `python tests/run_all.py`; la categoria heavy (motion golden/slice/cache/fallback, igiene temp, crash f17) gira solo con `--heavy`.
 
 ## Font e vista
 
