@@ -188,8 +188,10 @@ per liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
 Ogni fase passa da un comando `vx` (`doctor`, `ingest`, `run`, `auto`, `edl`,
 `serve`). Niente ffmpeg a mano, niente script di pipeline, niente UI nuove: se
 una capacita' manca si dichiara e ci si ferma. `vx guard <dir>` dice se un
-lavoro e' passato davvero da qui; `board.py`/`pipeline.py`/`decide.py` restano
-sperimentali e non si raggiungono dalla CLI.
+lavoro e' passato davvero da qui. **All'inizio** si chiede, o si dichiara, se si
+lavora in autonomia o con le scelte dell'utente; in autonomia ogni scelta va
+motivata nel report, con l'alternativa scartata. `board.py`/`pipeline.py`/
+`decide.py` restano sperimentali.
 
 ## Riferimenti
 
