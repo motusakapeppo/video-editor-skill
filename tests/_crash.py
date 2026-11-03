@@ -61,15 +61,22 @@ The allowlist below is the layout a run actually produces, read off disk:
     <workdir>/plan.json                      the payload plan
     <workdir>/auto_report.json               the final report
     <workdir>/bridge_report.json             bridge analysis (not with --no-bridge)
+    <workdir>/feedback_request.json          the optional vote request written at the end
+    <workdir>/font_proposal.json             the proposed font (chosen by a human)
+    <workdir>/timing_history.jsonl           measured timings for the next estimate
     <workdir>/render_history.jsonl           one line per render
     <workdir>/stage_cache_report.json        cache statistics
     <workdir>/render/.vx-writes.jsonl        the write-ahead journal
     <workdir>/render/04_loudness.txt         loudnorm measurement
     <workdir>/render/edl_graph.txt           filtergraph text
     <workdir>/render/edl_render.json         render metadata
+    <workdir>/render/ffmpeg-progress.txt     render progress counter
     <workdir>/render/final_pre_loudness.mp4  pre-master render
     <workdir>/render/stage_cache/<key>.json  content-addressed cache entries
     <workdir>/out/{master.mp4,thumbnail.jpg,contact_sheet.jpg,subtitles.srt}
+    <workdir>/coherence/shot_NNN.png         frames sampled for the coherence pass
+    <workdir>/fonts/<...>                    the chosen font and its specimens
+    <workdir>/keyframes/{pending,waiting}.json  the framing gate
     <workdir>/stage_NN/<...>                 staged sources
     <workdir>/{checkpoints,cache,quarantine}/<...>   optional caches / sweeps
 
@@ -137,8 +144,21 @@ ALLOWED_TOP_FILES = {
     "bridge_report.json",
     "render_history.jsonl",
     "stage_cache_report.json",
+    "feedback_request.json",
+    "font_proposal.json",
+    "timing_history.jsonl",
 }
-ALLOWED_TOP_DIRS = {"out", "render", "quarantine", ".quarantine", "checkpoints", "cache"}
+ALLOWED_TOP_DIRS = {
+    "out",
+    "render",
+    "quarantine",
+    ".quarantine",
+    "checkpoints",
+    "cache",
+    "coherence",
+    "fonts",
+    "keyframes",
+}
 ALLOWED_TOP_DIR_PREFIXES = ("stage_",)
 ALLOWED_RENDER_FILES = {
     ".vx-writes.jsonl",
@@ -147,6 +167,7 @@ ALLOWED_RENDER_FILES = {
     "edl_render.json",
     "final_pre_loudness.mp4",
     "stage_cache_report.json",
+    "ffmpeg-progress.txt",
 }
 ALLOWED_RENDER_CACHE_SUFFIXES = (".json",)
 ALLOWED_OUT_FILES = {"master.mp4", "thumbnail.jpg", "contact_sheet.jpg", "subtitles.srt"}

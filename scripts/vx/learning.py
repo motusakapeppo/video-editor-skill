@@ -14,7 +14,7 @@ una policy cita.
 Layout sotto ``~/.vx/learning`` (o ``$VX_LEARNING_DIR``)::
 
     events/2026-11.jsonl            eventi append-only, uno per riga, per mese
-    archive/2026-10.jsonl.zst       mesi vecchi compressi (zstd, altrimenti gzip)
+    archive/2026-10.jsonl.gz        mesi vecchi compressi (gzip, stdlib)
     corpus/<job_id>/plan.json       il piano, testo
     corpus/<job_id>/metrics.json    coerenza, verifica, guard, stima, voto
     corpus/<job_id>/thumb_0..2.jpg  tre fotogrammi a 320 px, non di piu'
@@ -36,7 +36,6 @@ import os
 import re
 import shutil
 import struct
-import subprocess
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -386,73 +385,18 @@ def read_events(
 
 
 # --------------------------------------------------------------------------- #
-# compressione: zstd se c'e', altrimenti gzip
+# compressione: solo gzip (stdlib)
 # --------------------------------------------------------------------------- #
-
-
-def _zstd_module() -> Any:
-    try:  # pragma: no cover - dipende dall'ambiente, non dal codice
-        import zstandard  # type: ignore
-    except Exception:  # noqa: BLE001
-        return None
-    return zstandard
-
-
-def _zstd_exe() -> Optional[str]:
-    return shutil.which("zstd")
-
-
-def _zstd_compress(data: bytes) -> Optional[bytes]:
-    module = _zstd_module()
-    if module is not None:
-        try:
-            return module.ZstdCompressor(level=19).compress(data)
-        except Exception:  # noqa: BLE001
-            return None
-    exe = _zstd_exe()
-    if not exe:
-        return None
-    try:
-        done = subprocess.run(
-            [exe, "-q", "-19", "-c"],
-            input=data,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    except OSError:
-        return None
-    return done.stdout if done.returncode == 0 and done.stdout else None
-
-
-def _zstd_decompress(data: bytes) -> Optional[bytes]:
-    module = _zstd_module()
-    if module is not None:
-        try:
-            return module.ZstdDecompressor().decompress(data)
-        except Exception:  # noqa: BLE001
-            return None
-    exe = _zstd_exe()
-    if not exe:
-        return None
-    try:
-        done = subprocess.run(
-            [exe, "-q", "-d", "-c"],
-            input=data,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    except OSError:
-        return None
-    return done.stdout if done.returncode == 0 else None
+#
+# zstd e' stato valutato e rifiutato: il guadagno su qualche centinaio di KB di
+# JSONL non vale una dipendenza che la matrice delle licenze non puo' verificare
+# sui metadati di un pacchetto che qui non e' installato (``zstandard``) ne' su
+# un binario ``zstd`` assente dal PATH.  gzip e' nella stdlib, quindi niente riga
+# di licenza da inventare e nessun ramo morto.
 
 
 def compress_bytes(data: bytes) -> Tuple[bytes, str]:
-    """``(bytes compressi, estensione)``: zstd quando c'e', gzip altrimenti."""
-    compressed = _zstd_compress(data)
-    if compressed is not None:
-        return compressed, "zst"
+    """``(bytes compressi, estensione)``: sempre gzip, deterministico."""
     return gzip.compress(data, compresslevel=9, mtime=0), "gz"
 
 
@@ -466,8 +410,9 @@ def _decompress(path: Path) -> Optional[bytes]:
             return gzip.decompress(raw)
         except OSError:
             return None
-    if path.suffix == ".zst":
-        return _zstd_decompress(raw)
+    # Un ``.jsonl.zst`` puo' arrivare da una macchina che aveva zstd: qui non
+    # c'e' (ne' il modulo ne' il binario), quindi il mese resta non letto
+    # invece di essere decompresso a meta'.  Nessun archivio .zst in questo repo.
     return None
 
 
