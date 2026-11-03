@@ -2817,6 +2817,7 @@ def collect_triage_questions(
             "default": spec.get("default"),
             "value": spec.get("default"),
             "answered_by": "default",
+            "answered": False,
             "timed_out": False,
         }
         if error:
@@ -2880,6 +2881,7 @@ def collect_triage_questions(
             "default": spec.get("default"),
             "value": result.get("value"),
             "answered_by": str(result.get("answered_by") or "default"),
+            "answered": str(result.get("answered_by") or "") == "user",
             "timed_out": bool(result.get("timed_out")),
         }
         if result.get("error"):
