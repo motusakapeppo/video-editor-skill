@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -37,6 +38,15 @@ def check(label: str, ok: bool, detail: object = "") -> None:
 def get(url: str) -> bytes:
     with urllib.request.urlopen(url, timeout=10) as response:
         return response.read()
+
+
+def get_status(url: str) -> tuple:
+    """Lo status e il corpo, anche quando la risposta e' un 404."""
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
 
 
 def post(url: str) -> dict:
@@ -368,6 +378,11 @@ def check_derived_jobs() -> None:
             job["phases"],
         )
         check(
+            "S12 un lavoro dedotto non inventa un racconto: journal vuoto",
+            job["journal"] == [],
+            job["journal"],
+        )
+        check(
             "S11 il master vale solo perche' il file esiste",
             job["master_ready"] is True
             and job["master"] == "master.mp4"
@@ -436,6 +451,264 @@ def check_derived_jobs() -> None:
                 and normal["phases"] == [{"key": "render", "label": "Renderizzo"}],
                 {k: normal[k] for k in ("progress_source", "percent", "current")},
             )
+            check(
+                "S12 un progress.json vecchio, senza journal, risponde lista vuota",
+                normal["journal"] == [],
+                normal["journal"],
+            )
+        finally:
+            server.stop()
+
+
+def check_outcome() -> None:
+    """`outcome` dice come e' finita: la percentuale da sola mente.
+
+    Il caso vero: un lavoro fermato lasciava ``percent: 100`` con un master che
+    non esiste, e la UI lo annunciava concluso.
+    """
+    with tempfile.TemporaryDirectory(prefix="vx-outcome-") as raw:
+        base = Path(raw)
+
+        def state_for(name: str, payload: dict) -> dict:
+            folder = base / name
+            folder.mkdir(parents=True)
+            (folder / "progress.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+            return serve.state(folder)
+
+        missing = base / "out" / "master.mp4"
+        stopped = state_for(
+            "fermato",
+            {
+                "prompt": "reel interrotto",
+                "percent": 100.0,
+                "current": None,
+                "note": "fermato (4294967295)",
+                "master": str(missing),
+            },
+        )
+        check(
+            "S13 percent 100, note 'fermato', master assente: stopped, non done",
+            stopped["outcome"] == "stopped" and stopped["master_ready"] is False,
+            {k: stopped[k] for k in ("outcome", "master_ready", "note")},
+        )
+
+        empty = state_for(
+            "senza_master",
+            {"percent": 100.0, "current": None, "note": "consegnato", "master": ""},
+        )
+        check(
+            "S13 percent 100 senza master: incomplete",
+            empty["outcome"] == "incomplete" and empty["master_ready"] is False,
+            empty["outcome"],
+        )
+
+        real = base / "esiste" / "master.mp4"
+        real.parent.mkdir(parents=True)
+        real.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"m" * 512)
+        done = state_for(
+            "finito",
+            {
+                "percent": 100.0,
+                "current": None,
+                "note": "consegnato",
+                "master": str(real),
+            },
+        )
+        check(
+            "S13 percent 100 con un master che esiste: done",
+            done["outcome"] == "done" and done["master_ready"] is True,
+            {k: done[k] for k in ("outcome", "master_ready")},
+        )
+
+        running = state_for(
+            "in_corso",
+            {"percent": 60.0, "current": "render", "note": ""},
+        )
+        check(
+            "S13 una fase in corso resta running",
+            running["outcome"] == "running",
+            running["outcome"],
+        )
+
+        failed = state_for(
+            "fallito",
+            {
+                "percent": 40.0,
+                "current": None,
+                "note": "errore: il render non e' riuscito",
+            },
+        )
+        check(
+            "S13 una nota di errore e' failed",
+            failed["outcome"] == "failed",
+            failed["outcome"],
+        )
+
+
+def check_shots() -> None:
+    """S14 - gli shot del piano e il fotogramma rappresentativo servito.
+
+    Il piano a ``cuts`` prende gli effetti dai trattamenti globali; un documento
+    EDL3 li prende dal clip. Nessun ffmpeg: il caso "miniatura gia' pronta" e il
+    caso "render in corso" si provano con file finti.
+    """
+    with tempfile.TemporaryDirectory(prefix="vx-shots-") as raw:
+        base = Path(raw)
+        job = base / "lavoro"
+        (job / "analysis").mkdir(parents=True)
+        (job / "source.json").write_text(
+            json.dumps({"path": str(base / "IMG_9930.MOV")}), encoding="utf-8"
+        )
+        jpeg = b"\xff\xd8\xff\xe0" + b"j" * 80 + b"\xff\xd9"
+        (job / "analysis" / "thumb_00_002.500.jpg").write_bytes(jpeg)
+        (job / "plan.json").write_text(
+            json.dumps(
+                {
+                    "cuts": [
+                        {"in": 0.0, "out": 3.2},
+                        {"in": 5.0, "out": 7.5},
+                        {"in": 9.0, "out": 10.0},
+                    ],
+                    "treatments": [
+                        {"name": "zoom", "enabled": True, "params": {"amount": 0.15}},
+                        {"name": "lut", "enabled": True, "params": {"preset": "warm"}},
+                        {"name": "fade_in", "enabled": True, "params": {"duration": 0.3}},
+                        {"name": "denoise", "enabled": False, "params": {}},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        server = serve.Server(job).start()
+        try:
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            shots = data.get("shots")
+            check(
+                "S14 un piano con cuts espone uno shot per cut",
+                isinstance(shots, list) and [s["index"] for s in shots] == [0, 1, 2],
+                shots,
+            )
+            check(
+                "S14 durata e tempi vengono dai cuts",
+                [s["dur"] for s in shots] == [3.2, 2.5, 1.0]
+                and [s["t_in"] for s in shots] == [0.0, 5.0, 9.0]
+                and [s["t_out"] for s in shots] == [3.2, 7.5, 10.0],
+                [(s["t_in"], s["t_out"], s["dur"]) for s in shots],
+            )
+            check(
+                "S14 gli effetti vengono dai trattamenti globali accesi",
+                all(s["effects"] for s in shots)
+                and "zoom 1.15" in shots[0]["effects"]
+                and "lut warm" in shots[0]["effects"]
+                and "fade in 0.3s" in shots[0]["effects"]
+                and all("denoise" not in s["effects"] for s in shots),
+                shots[0]["effects"],
+            )
+            check(
+                "S14 source e' il nome del file, non un percorso inventato",
+                {s["source"] for s in shots} == {"IMG_9930.MOV"},
+                {s["source"] for s in shots},
+            )
+            check(
+                "S14 thumb punta a /shots/<i> e thumb_ready segue il file",
+                all(s["thumb"] == f"/shots/{s['index']}" and s["thumb_ready"] is True
+                    for s in shots),
+                [(s["thumb"], s["thumb_ready"]) for s in shots],
+            )
+
+            status, body = get_status(server.url + "shots/0")
+            check(
+                "S14 /shots/0 serve la miniatura gia' in analysis come JPEG",
+                status == 200 and body == jpeg,
+                (status, len(body)),
+            )
+            status, body = get_status(server.url + "shots/9")
+            check(
+                "S14 indice fuori intervallo: 404",
+                status == 404,
+                (status, body[:60]),
+            )
+
+            (job / "shots").mkdir()
+            cached = b"\xff\xd8\xff\xe0" + b"c" * 40 + b"\xff\xd9"
+            (job / "shots" / "0.jpg").write_bytes(cached)
+            (job / "analysis" / "thumb_00_002.500.jpg").unlink()
+            status, body = get_status(server.url + "shots/0")
+            check(
+                "S14 la cache estratta serve la seconda volta, senza ffmpeg",
+                status == 200 and body == cached,
+                (status, len(body)),
+            )
+            status, body = get_status(server.url + "shots/1")
+            check(
+                "S14 senza miniatura e senza sorgente: 404 italiano",
+                status == 404 and "sorgente" in body.decode("utf-8", "replace"),
+                (status, body.decode("utf-8", "replace")[:60]),
+            )
+
+            (job / "plan.json").write_text(
+                json.dumps(
+                    {
+                        "version": "vx.edl3/1.2",
+                        "clips": [
+                            {
+                                "id": "c0",
+                                "source": "b.mov",
+                                "src_in": 1.0,
+                                "src_out": 3.0,
+                                "dst_in": 0.0,
+                                "dst_out": 2.0,
+                                "layer": 0,
+                                "effects": [
+                                    {"kind": "lut", "params": {"preset": "warm"}},
+                                    {"kind": "fade_in", "params": {"duration": 0.3}},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            edl3 = data["shots"]
+            check(
+                "S14 un piano EDL3 prende gli effetti dal clip",
+                len(edl3) == 1
+                and edl3[0]["dur"] == 2.0
+                and edl3[0]["source"] == "b.mov"
+                and "lut warm" in edl3[0]["effects"]
+                and "fade in 0.3s" in edl3[0]["effects"],
+                edl3,
+            )
+        finally:
+            server.stop()
+
+    with tempfile.TemporaryDirectory(prefix="vx-shots-render-") as raw:
+        job = Path(raw) / "in_render"
+        (job / "render").mkdir(parents=True)
+        (job / "plan.json").write_text(
+            json.dumps({"cuts": [{"in": 0.0, "out": 1.5}]}), encoding="utf-8"
+        )
+        (job / "render" / "ffmpeg-progress.txt").write_text(
+            "out_time_us=0\nspeed=0.0x\nprogress=continue\n", encoding="utf-8"
+        )
+        server = serve.Server(job).start()
+        try:
+            status, body = get_status(server.url + "shots/0")
+            reason = body.decode("utf-8", "replace")
+            check(
+                "S14 durante un render non si estrae: 404 e il motivo",
+                status == 404 and "durante il render" in reason,
+                (status, reason[:60]),
+            )
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            check(
+                "S14 durante il render thumb_ready resta falso",
+                data["shots"] and data["shots"][0]["thumb_ready"] is False,
+                data["shots"],
+            )
         finally:
             server.stop()
 
@@ -455,6 +728,14 @@ def main() -> int:
                     "note": "",
                     "phases": [{"key": "triage", "label": "Guardo le clip"},
                                {"key": "render", "label": "Renderizzo"}],
+                    "journal": [
+                        {"t": 1.0, "phase": "triage",
+                         "line": "Misuro 12 clip: 4 scartate, 8 buone",
+                         "at": "2026-01-01T00:00:01+00:00"},
+                        {"t": 8.5, "phase": "render",
+                         "line": "Scrivo il master: 30,0 secondi",
+                         "at": "2026-01-01T00:00:08+00:00"},
+                    ],
                 }
             ),
             encoding="utf-8",
@@ -487,6 +768,26 @@ def main() -> int:
                 and [f["name"] for f in data["frames"]] == ["kf0.png"]
                 and data["approved"] is False,
                 {k: data[k] for k in ("percent", "current", "approved")},
+            )
+            check(
+                "S1b gate closed: not required, not waiting, and the state says why",
+                data["approval"]["required"] is False
+                and data["approval"]["waiting"] is False
+                and data["approval"]["approved"] is False
+                and bool(data["approval"]["reason"]),
+                data["approval"],
+            )
+
+            journal = data.get("journal")
+            check(
+                "S12 /api/state carries the journal written in progress.json",
+                isinstance(journal, list)
+                and [row["line"] for row in journal]
+                == ["Misuro 12 clip: 4 scartate, 8 buone",
+                    "Scrivo il master: 30,0 secondi"]
+                and [row["phase"] for row in journal] == ["triage", "render"]
+                and journal[1]["t"] == 8.5,
+                journal,
             )
 
             png = get(server.url + "frames/kf0.png")
@@ -591,6 +892,55 @@ def main() -> int:
             after = json.loads(get(server.url + "api/state").decode("utf-8"))
             check("S3 the state reflects the approval", after["approved"] is True, after["approved"])
 
+            # -- il cancello vero: il render fermo, e il POST che lo sblocca --- #
+            (job / "keyframes" / "waiting.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "vx.keygate-wait/1",
+                        "since_utc": "2026-11-03T01:00:00+00:00",
+                        "frames": [{"clip": "c0", "at": 1.0}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job / keygate.RECORD_NAME).unlink()
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            check(
+                "S3b waiting: the render is stopped there right now",
+                data["approval"] == {
+                    "required": True,
+                    "approved": False,
+                    "waiting": True,
+                    "reason": "",
+                },
+                data["approval"],
+            )
+            result = post(server.url + "api/approve")
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            check(
+                "S3b the POST approves and clears the wait",
+                result.get("ok") is True
+                and data["approval"]["approved"] is True
+                and data["approval"]["waiting"] is False
+                and data["approval"]["required"] is True
+                and not (job / "keyframes" / "waiting.json").exists(),
+                data["approval"],
+            )
+            mismatched = json.loads((job / keygate.RECORD_NAME).read_text(encoding="utf-8"))
+            mismatched["digest"] = "f" * 64
+            (job / keygate.RECORD_NAME).write_text(
+                json.dumps(mismatched), encoding="utf-8"
+            )
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            check(
+                "S3b an approval of another montage does not open this gate",
+                data["approval"]["approved"] is False
+                and data["approval"]["required"] is False
+                and bool(data["approval"]["reason"]),
+                data["approval"],
+            )
+            post(server.url + "api/approve")
+
             # -- il risultato: esiste solo quando c'e' davvero --------------- #
             master = Path(raw) / "master.mp4"
             master.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"v" * 3000)
@@ -664,6 +1014,14 @@ def main() -> int:
                 "S4 without a plan the POST refuses instead of writing nothing",
                 second.get("ok") is False,
                 second,
+            )
+            data = json.loads(get(server.url + "api/state").decode("utf-8"))
+            check(
+                "S4 without a plan the state says the gate does not apply",
+                data["approval"]["required"] is False
+                and data["approval"]["waiting"] is False
+                and "nessun piano di fotogrammi" in data["approval"]["reason"],
+                data["approval"],
             )
         finally:
             server.stop()
@@ -768,6 +1126,8 @@ def main() -> int:
         check_font_gate(raw3)
     check_ass_bridge()
     check_derived_jobs()
+    check_outcome()
+    check_shots()
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

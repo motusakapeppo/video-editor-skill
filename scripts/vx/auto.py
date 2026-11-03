@@ -22,8 +22,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
@@ -34,9 +37,11 @@ from . import (
     deliverables,
     edl_plan,
     estimate,
+    ffmpeg as ff,
     gates,
     grammar,
     ingest,
+    keygate,
     lock,
     probe,
     profile_master,
@@ -55,6 +60,18 @@ TARGET_TP = -1.0
 FONT_PROPOSAL_NAME = "font_proposal.json"
 FONT_CHOICE_NAME = "font_choice.json"
 FONT_WAIT_DEFAULT = 180.0
+
+#: Il cancello dei fotogrammi chiave: il piano che ``auto`` propone, il segnale
+#: che il render e' fermo in attesa, e il record che l'approvazione deposita.
+#: ``keyframes.json`` e' nella forma di ``keygate``: chi approva scrive li'.
+KEYFRAMES_DIR = "keyframes"
+KEYFRAMES_PENDING_NAME = "pending.json"
+KEYFRAMES_WAITING_NAME = "waiting.json"
+KEYFRAMES_WAIT_SCHEMA = "vx.keygate-wait/1"
+KEYFRAMES_PLAN_SCHEMA = "vx.keyframes-plan/1"
+KEY_GATE_WAIT_DEFAULT = FONT_WAIT_DEFAULT
+#: Tre fotogrammi: la regola di ``keygate`` (sotto tre non si vede un montaggio).
+KEYFRAME_PICKS = (0.25, 0.5, 0.75)
 
 
 def loudness_target(document: Any = None) -> tuple[float, float]:
@@ -969,6 +986,383 @@ def _run_font_gate(
     )
 
 
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> Path:
+    """Un JSON leggibile per intero anche mentre un altro processo lo guarda."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    temporary.replace(path)
+    return path
+
+
+def _plan_video_clips(plan: Any) -> List[Any]:
+    clips: List[Any] = []
+    for track in getattr(plan, "video_tracks", ()) or ():
+        for clip in getattr(track, "clips", ()) or ():
+            clips.append(clip)
+    return sorted(
+        clips,
+        key=lambda clip: (
+            float(getattr(clip, "dst_in", 0.0) or 0.0),
+            int(getattr(clip, "layer", 0) or 0),
+            str(getattr(clip, "clip_id", "")),
+        ),
+    )
+
+
+def _frame_choices(plan: Any) -> List[Dict[str, Any]]:
+    """Tre istanti del montaggio: 25%, 50% e 75% della timeline vera.
+
+    Ogni istante di destinazione si riporta nel tempo sorgente del clip che lo
+    copre: e' il fotogramma che si vedra' li', non il primo del materiale.
+    """
+    clips = _plan_video_clips(plan)
+    duration = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+    if not clips or duration <= 0:
+        return []
+    choices: List[Dict[str, Any]] = []
+    for fraction in KEYFRAME_PICKS:
+        at_dst = duration * fraction
+        clip = next(
+            (
+                item
+                for item in clips
+                if float(getattr(item, "dst_in", 0.0) or 0.0)
+                <= at_dst
+                < float(getattr(item, "dst_out", 0.0) or 0.0)
+            ),
+            clips[-1],
+        )
+        src_in = float(getattr(clip, "src_in", 0.0) or 0.0)
+        src_out = float(getattr(clip, "src_out", src_in) or src_in)
+        offset = max(0.0, at_dst - float(getattr(clip, "dst_in", 0.0) or 0.0))
+        choices.append(
+            {
+                "clip": str(getattr(clip, "clip_id", "")),
+                "source_id": str(getattr(clip, "source_id", "")),
+                "index": clips.index(clip),
+                "at": round(min(src_out, src_in + offset), 6),
+            }
+        )
+    return choices
+
+
+def _extract_keyframe(source: str, at: float, png: Path) -> str:
+    """Un PNG a un istante del sorgente, e il suo sha256; ``""`` se non riesce.
+
+    Un fotogramma che non si estrae non ferma il montaggio: il piano resta
+    valido con l'impronta vuota, e il report non finge un pixel che non c'e'.
+    """
+    png = Path(png)
+    png.parent.mkdir(parents=True, exist_ok=True)
+    temporary = png.with_name(png.name + ".tmp")
+    try:
+        proc = subprocess.run(
+            [
+                ff.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", f"{float(at):.3f}", "-i", str(source),
+                "-frames:v", "1", "-update", "1", str(temporary),
+            ],
+            capture_output=True,
+        )
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        return ""
+    if proc.returncode != 0 or not temporary.is_file():
+        temporary.unlink(missing_ok=True)
+        return ""
+    temporary.replace(png)
+    return hashlib.sha256(png.read_bytes()).hexdigest()
+
+
+def _timeline_fingerprint(plan: Any) -> str:
+    """L'impronta della timeline che si sta per rendere, senza i percorsi."""
+    clips = [
+        {
+            "clip_id": str(getattr(clip, "clip_id", "")),
+            "source_id": str(getattr(clip, "source_id", "")),
+            "src_in": float(getattr(clip, "src_in", 0.0) or 0.0),
+            "src_out": float(getattr(clip, "src_out", 0.0) or 0.0),
+            "dst_in": float(getattr(clip, "dst_in", 0.0) or 0.0),
+            "dst_out": float(getattr(clip, "dst_out", 0.0) or 0.0),
+            "layer": int(getattr(clip, "layer", 0) or 0),
+        }
+        for clip in _plan_video_clips(plan)
+    ]
+    payload = {
+        "fps": float(getattr(plan, "fps", 0.0) or 0.0),
+        "duration_sec": float(getattr(plan, "duration_sec", 0.0) or 0.0),
+        "resolution": [int(value) for value in (getattr(plan, "resolution", ()) or ())],
+        "clips": clips,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def propose_keyframes(workdir: Any, plan: Any) -> Dict[str, Any]:
+    """Il piano dei fotogrammi: tre PNG dalla timeline e un digest che li lega.
+
+    Il digest copre la timeline e i fotogrammi scelti (clip, istante, sha256 del
+    PNG): se il montaggio cambia dopo l'approvazione, il record non combacia piu'
+    e il cancello e' chiuso. Senza clip o senza durata non c'e' piano: ``{}``.
+    """
+    root = Path(workdir)
+    choices = _frame_choices(plan)
+    if not choices:
+        return {}
+    sources = {
+        str(key): str(getattr(ref, "path", "") or "")
+        for key, ref in (getattr(plan, "sources", {}) or {}).items()
+    }
+    frames: List[Dict[str, Any]] = []
+    for position, choice in enumerate(choices):
+        png = root / KEYFRAMES_DIR / f"kf{position}.png"
+        source = sources.get(choice["source_id"], "")
+        sha = _extract_keyframe(source, choice["at"], png) if source else ""
+        frames.append(
+            {
+                "clip": choice["clip"],
+                "index": choice["index"],
+                "at": choice["at"],
+                "sha256": sha,
+                "path": str(png),
+            }
+        )
+    timeline_sha = _timeline_fingerprint(plan)
+    fingerprint = [
+        {
+            "clip": item["clip"],
+            "index": item["index"],
+            "at": item["at"],
+            "sha256": item["sha256"],
+        }
+        for item in frames
+    ]
+    digest = hashlib.sha256(
+        json.dumps(
+            {
+                "schema": KEYFRAMES_PLAN_SCHEMA,
+                "timeline": timeline_sha,
+                "frames": fingerprint,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema": KEYFRAMES_PLAN_SCHEMA,
+        "timeline_digest": timeline_sha,
+        "digest": digest,
+        "count": len(frames),
+        "frames": frames,
+    }
+
+
+def keyframe_gate(
+    workdir: Any,
+    *,
+    plan: Any = None,
+    wait: float = KEY_GATE_WAIT_DEFAULT,
+    gate: bool = True,
+    view_url: str = "",
+    reason_when_closed: str = "",
+    propose: Optional[Callable[[Path, Any], Mapping[str, Any]]] = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    notify: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Ferma il render sui fotogrammi chiave finche' qualcuno li approva.
+
+    Ordine dei casi, tutti finiti:
+
+    1. senza piano (``plan`` nullo e nessun ``propose``) il cancello non si apre
+       e non aspetta: ``required=False`` e la ragione in italiano;
+    2. un ``keyframes.json`` gia' coerente col piano apre subito
+       (``approved=True``, ``selected_by="user"``), nessuna attesa;
+    3. col cancello aperto si scrive ``<workdir>/keyframes/waiting.json`` e si
+       guarda ``<workdir>/keyframes.json`` ogni secondo, al massimo ``wait``
+       secondi; all'approvazione il file d'attesa sparisce;
+    4. allo scadere il render prosegue e il report dichiara
+       ``selected_by="timeout"``: un'attesa finita non e' un blocco;
+    5. cancello chiuso (``--no-key-gate``, nessuna vista) nessuna attesa:
+       ``selected_by="auto"``.
+
+    ``propose``, ``clock`` e ``sleep`` sono iniettabili per provare il cancello
+    senza render e senza aspettare davvero.
+    """
+    root = Path(workdir)
+    say = notify if notify is not None else _say
+    section: Dict[str, Any] = {
+        "required": False,
+        "approved": False,
+        "waiting": False,
+        "selected_by": "none",
+        "count": 0,
+        "digest": "",
+        "waited_sec": 0.0,
+        "frames": [],
+        "reason": "",
+    }
+    runner = propose if propose is not None else propose_keyframes
+    proposal: Any = {}
+    if plan is not None or propose is not None:
+        try:
+            proposal = runner(root, plan)
+        except Exception as exc:  # noqa: BLE001 - un piano mancante non ferma il render
+            section["error"] = f"piano dei fotogrammi non disponibile: {exc}"
+    if not isinstance(proposal, Mapping):
+        if hasattr(proposal, "as_dict"):
+            proposal = proposal.as_dict()
+        else:
+            proposal = {}
+    digest = str(proposal.get("digest") or "")
+    count = int(proposal.get("count") or 0)
+    if not digest or count <= 0:
+        section["reason"] = str(
+            section.get("error") or "nessun piano di fotogrammi"
+        )
+        say(f"Fotogrammi: {section['reason']}")
+        return section
+
+    frames = [dict(item) for item in (proposal.get("frames") or []) if isinstance(item, Mapping)]
+    _write_json_atomic(
+        root / KEYFRAMES_DIR / KEYFRAMES_PENDING_NAME,
+        {
+            "schema": KEYFRAMES_PLAN_SCHEMA,
+            "digest": digest,
+            "timeline_digest": str(proposal.get("timeline_digest") or ""),
+            "count": count,
+            "frames": frames,
+        },
+    )
+    section.update({"count": count, "digest": digest, "frames": frames})
+
+    record_path = root / keygate.RECORD_NAME
+    waiting_path = root / KEYFRAMES_DIR / KEYFRAMES_WAITING_NAME
+
+    def approved_now() -> bool:
+        payload = keygate.read(record_path)
+        return bool(
+            payload
+            and payload.get("approved") is True
+            and str(payload.get("digest") or "") == digest
+        )
+
+    started = clock()
+    approved = approved_now()
+    waited = 0.0
+    if approved:
+        # Il caso di un giro ripreso: l'approvazione c'e' gia' e vale per questo piano.
+        waiting_path.unlink(missing_ok=True)
+        section.update(
+            {"required": True, "approved": True, "selected_by": "user", "reason": ""}
+        )
+        say("Fotogrammi: approvati, si va al render.")
+    elif gate and float(wait) > 0:
+        _write_json_atomic(
+            waiting_path,
+            {
+                "schema": KEYFRAMES_WAIT_SCHEMA,
+                "since_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "frames": frames,
+            },
+        )
+        section.update({"required": True, "waiting": True})
+        if str(view_url or "").strip():
+            say(f"Guarda e approva i fotogrammi nella vista: {view_url}")
+        else:
+            say(
+                "Guarda e approva i fotogrammi: "
+                f"{root} (file {keygate.RECORD_NAME})"
+            )
+        deadline = started + float(wait)
+        # Un orologio fermo non deve diventare un blocco: il numero di giri e'
+        # limitato dal tempo chiesto, non solo dal suo avanzare.
+        attempts = int(float(wait)) + 2
+        while attempts > 0:
+            attempts -= 1
+            remaining = deadline - clock()
+            if remaining <= 0:
+                break
+            sleep(min(1.0, remaining))
+            if approved_now():
+                approved = True
+                break
+        waited = max(0.0, clock() - started)
+        waiting_path.unlink(missing_ok=True)
+        section["waiting"] = False
+        if approved:
+            section.update(
+                {"approved": True, "selected_by": "user", "reason": ""}
+            )
+            say("Fotogrammi: approvati nella vista, si va al render.")
+        else:
+            section.update(
+                {
+                    "approved": False,
+                    "selected_by": "timeout",
+                    "reason": f"nessuna approvazione in {float(wait):g} s",
+                }
+            )
+            say(
+                f"Fotogrammi: nessuna approvazione in {float(wait):g} s — "
+                "il render prosegue e il report lo dichiara."
+            )
+    else:
+        # Nessuno aspetta: un ``waiting.json`` di un giro precedente direbbe il falso.
+        waiting_path.unlink(missing_ok=True)
+        section.update(
+            {
+                "approved": False,
+                "selected_by": "auto",
+                "reason": reason_when_closed
+                or "cancello dei fotogrammi chiuso: nessuna attesa",
+            }
+        )
+        say(f"Fotogrammi: {section['reason']}")
+    section["waited_sec"] = round(waited, 3)
+    return section
+
+
+def _run_key_gate(
+    args: Any,
+    workdir: Path,
+    plan: Any,
+    *,
+    view_url: str = "",
+    view_active: bool = False,
+) -> Dict[str, Any]:
+    """Legge i flag, decide se il cancello e' aperto, e restituisce la sezione."""
+    wait = getattr(args, "key_wait", None)
+    if wait is None:
+        wait = float(settings.get("key.wait_sec", KEY_GATE_WAIT_DEFAULT))
+    explicit = getattr(args, "key_gate", None)
+    gate = bool(view_active) if explicit is None else bool(explicit)
+    if not gate:
+        closed_reason = (
+            "cancello dei fotogrammi spento (--no-key-gate)"
+            if explicit is False
+            else "nessuna vista: il cancello dei fotogrammi non aspetta nessuno"
+        )
+    else:
+        closed_reason = ""
+    return keyframe_gate(
+        workdir,
+        plan=plan,
+        wait=float(wait),
+        gate=gate,
+        view_url=str(view_url or ""),
+        reason_when_closed=closed_reason,
+        notify=_say,
+    )
+
+
 def _caption_font(workdir: Path) -> Dict[str, str]:
     """Famiglia scelta e cartella font per l'ASS dell'auto; vuota = preset.
 
@@ -1222,6 +1616,20 @@ def _run_locked(
 
     gate1 = gates.validate_gate1_durations(plan, media_by_source, fps=fps)
 
+    # Il cancello dei fotogrammi: la timeline e' valida e il render sta per
+    # partire. Con una vista si aspetta l'approvazione, al massimo `--key-wait`;
+    # senza vista non si aspetta nessuno. Allo scadere si prosegue e lo si
+    # dichiara nel report: un'attesa finita non e' un blocco.
+    key_section = _run_key_gate(
+        args, workdir, plan, view_url=view_url, view_active=view_active
+    )
+    _emit(
+        log,
+        "keyframes",
+        "done" if key_section.get("approved") else "skip",
+        str(key_section.get("selected_by") or key_section.get("reason") or ""),
+    )
+
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     staged_paths = {
@@ -1310,6 +1718,7 @@ def _run_locked(
         },
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "font": font_section,
+        "keyframes_gate": key_section,
         "bridge": bridge_summary,
         "render_estimate": render_estimate,
         "audio": audio_summary(analyses, ceiling_dbtp),

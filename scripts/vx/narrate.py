@@ -58,9 +58,13 @@ class Narrator:
         if key in self.seen:
             return
         self.seen[key] = float(percent)
-        self._write(f"{float(percent):5.1f}%  {PHASES.get(key, key)}")
+        sentence = PHASES.get(key, key)
+        self._write(f"{float(percent):5.1f}%  {sentence}")
         if self.panel is not None:
             try:
+                # La stessa frase che stampa finisce nel journal: una riga per
+                # fase, cosi' la vista racconta e non solo segna il punto.
+                self.panel.say(sentence, phase=key)
                 self.panel.record(float(percent), key, elapsed=self.clock() - self.started)
             except Exception:  # noqa: BLE001 - the panel is a viewer, not a gate
                 pass
@@ -72,14 +76,14 @@ class Narrator:
         seconds = float(report.get("timeline_sec") or 0.0)
         master = report.get("master") or ""
         elapsed = self.clock() - self.started
-        self._write(
-            f"Fatto in {elapsed:.0f} s. Master di {seconds:.1f} s: {master}"
-        )
+        closing = f"Fatto in {elapsed:.0f} s. Master di {seconds:.1f} s: {master}"
+        self._write(closing)
         warnings = list(report.get("failures") or []) + list(report.get("warnings") or [])
         if warnings:
             self._write(f"Da sapere: {', '.join(str(item) for item in warnings)}")
         if self.panel is not None:
             try:
+                self.panel.say(closing, phase="done")
                 self.panel.finish(
                     ", ".join(str(item) for item in warnings) or "consegnato",
                     elapsed=elapsed,

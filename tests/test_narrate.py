@@ -11,18 +11,22 @@ S3 - una fase sconosciuta si stampa con il suo nome, senza inventare una
 S4 - l'intestazione dice quante clip e quale richiesta; il riepilogo dice tempo
      impiegato, durata del master e gli avvisi, se ci sono.
 S5 - uno stream chiuso non fa esplodere il render: il narratore tace.
+S6 - la frase italiana di ogni fase finisce anche nel journal del pannello, una
+     volta sola, con la fase e il tempo.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from vx import narrate  # noqa: E402
+from vx import narrate, panel  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -108,8 +112,40 @@ def main() -> int:
         closed_ok = False
     check("S5 a closed stream never breaks a render", closed_ok, "nessuna eccezione")
 
+    check_journal()
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
+
+
+def check_journal() -> None:
+    """Il pannello racconta la stessa frase che il narratore stampa."""
+    with tempfile.TemporaryDirectory(prefix="vx-narrate-") as raw:
+        target = Path(raw) / "progress.html"
+        board = panel.Panel(target, phases=[("triage", "Guardo le clip")])
+        stream = io.StringIO()
+        narrator = narrate.Narrator(stream, panel=board, clock=lambda: 5.0)
+        narrator(5.0, "triage")
+        narrator(5.0, "triage")  # ripetuta: non deve diventare una seconda riga
+        narrator(20.0, "ingest")
+        narrator.summary({"timeline_sec": 30.0, "master": "out/master.mp4"})
+
+        rows = json.loads((Path(raw) / "progress.json").read_text(encoding="utf-8"))[
+            "journal"
+        ]
+        triage = [row for row in rows if row["phase"] == "triage"]
+        check(
+            "S6 the Italian sentence of the phase reaches the journal, once",
+            len(triage) == 1 and triage[0]["line"] == narrate.PHASES["triage"],
+            triage,
+        )
+        check(
+            "S6 the journal follows the narration, one row per phase plus the close",
+            len(rows) == 3
+            and [row["phase"] for row in rows] == ["triage", "ingest", "done"]
+            and all(isinstance(row["t"], float) for row in rows),
+            [row["phase"] for row in rows],
+        )
 
 
 if __name__ == "__main__":

@@ -15,11 +15,17 @@ from __future__ import annotations
 import html
 import json
 import os
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 REFRESH_S = 1
+
+#: Quante righe di racconto il json porta con se'. Il tetto tiene le **ultime**:
+#: un lavoro lungo racconta la coda, non l'inizio, e il file non cresce senza fine.
+MAX_JOURNAL = 200
 
 STYLE = """
 :root { color-scheme: dark; }
@@ -51,6 +57,14 @@ def _atomic(path: Path, text: str) -> None:
     os.replace(temporary, path)
 
 
+def _real_file(path: Path) -> bool:
+    """Un file c'e' solo se ha byte dentro: un percorso nudo non e' un master."""
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 @dataclass
 class Panel:
     """One HTML file, rewritten at every phase, that reloads itself."""
@@ -65,9 +79,43 @@ class Panel:
     elapsed: float = 0.0
     note: str = ""
     master: str = ""
+    #: Le righe di racconto, in ordine: cosa sta succedendo, non solo dove siamo.
+    journal: List[Dict[str, Any]] = field(default_factory=list)
+    clock: Callable[[], float] = time.monotonic
+    started: Optional[float] = None
     #: Se c'e' un server acceso su questo lavoro, il pannello ci porta invece di
     #: restare un mondo a parte: il pannello semplice e' un ripiego, non la vista.
     watch_url: str = ""
+
+    def __post_init__(self) -> None:
+        if self.started is None:
+            self.started = self.clock()
+
+    def say(self, line: str, *, phase: Optional[str] = None) -> Dict[str, Any]:
+        """Accoda una riga di italiano e la pubblica nel json.
+
+        Il journal e' **dati**, non console: chi stampa e' chi chiama. La riga
+        porta il tempo trascorso dall'inizio del lavoro, la fase e il momento in
+        cui e' stata scritta; due righe identiche di fila non si duplicano, e
+        oltre :data:`MAX_JOURNAL` restano le ultime.
+        """
+        text = str(line).strip()
+        if not text:
+            return {}
+        now = self.clock()
+        base = self.started if self.started is not None else now
+        row: Dict[str, Any] = {
+            "t": round(max(0.0, now - base), 1),
+            "phase": str(phase or self.current or ""),
+            "line": text,
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        if not (self.journal and str(self.journal[-1].get("line", "")) == text):
+            self.journal.append(row)
+            if len(self.journal) > MAX_JOURNAL:
+                del self.journal[: len(self.journal) - MAX_JOURNAL]
+        self.write()
+        return row
 
     def record(self, percent: float, stage: str, *, elapsed: float = 0.0) -> None:
         key = str(stage)
@@ -80,12 +128,37 @@ class Panel:
         self.elapsed = float(elapsed)
         self.write()
 
-    def finish(self, note: str = "", *, elapsed: float = 0.0, master: str = "") -> None:
+    def finish(
+        self, note: str = "", *, elapsed: float = 0.0, master: str = ""
+    ) -> None:
+        """Chiude il lavoro, ma solo quando il lavoro e' davvero finito.
+
+        La barra arriva al 100% **solo** con un master che esiste su disco: un
+        percorso annunciato e assente non si registra, la percentuale resta
+        dov'era e la nota dice il motivo. Un lavoro che si e' fermato a meta'
+        non puo' quindi piu' dichiararsi concluso.
+        """
         self.current = None
-        self.percent = 100.0
         self.elapsed = float(elapsed)
-        self.note = note
-        self.master = str(master or "")
+        text = str(note or "")
+        claimed = str(master or "")
+        if claimed and not _real_file(Path(claimed)):
+            self.master = ""
+            reason = f"fermato prima della fine: il master non esiste ({claimed})"
+            self.note = f"{text} - {reason}" if text else reason
+            self.write()
+            return
+        self.master = claimed
+        self.percent = 100.0
+        self.note = text
+        self.write()
+
+    def stop(self, note: str = "", *, elapsed: Optional[float] = None) -> None:
+        """Il lavoro si e' fermato: la percentuale resta, il master non si inventa."""
+        self.current = None
+        if elapsed is not None:
+            self.elapsed = float(elapsed)
+        self.note = str(note or "")
         self.write()
 
     def write(self) -> Path:
@@ -115,6 +188,7 @@ class Panel:
             "note": self.note,
             "master": self.master,
             "phases": [{"key": key, "label": label} for key, label in self.phases],
+            "journal": [dict(row) for row in self.journal],
         }
 
     def html(self) -> str:
@@ -160,4 +234,4 @@ class Panel:
         )
 
 
-__all__ = ["Panel", "REFRESH_S"]
+__all__ = ["Panel", "REFRESH_S", "MAX_JOURNAL"]

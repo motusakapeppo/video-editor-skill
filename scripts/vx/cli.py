@@ -1376,6 +1376,12 @@ _RUN_PHASES = _INGEST_PHASES + (
 )
 
 
+#: Il pannello dell'ultimo comando ancora in corso. Se il processo esce per un
+#: errore o per Ctrl+C, ``main`` lo chiude dicendo la verita' invece di lasciare
+#: l'ultima percentuale a far credere che il lavoro sia finito.
+_ACTIVE_PROGRESS: Optional["_Progress"] = None
+
+
 class _Progress:
     """Il pannello dei comandi che non passano da ``auto``.
 
@@ -1392,6 +1398,7 @@ class _Progress:
     ) -> None:
         from . import panel as panel_mod
 
+        global _ACTIVE_PROGRESS
         self.labels = {str(key): str(label) for key, label in phases}
         self.started = time.monotonic()
         self.panel = panel_mod.Panel(
@@ -1401,22 +1408,50 @@ class _Progress:
             phases=list(phases),
         )
         self.panel.write()
+        _ACTIVE_PROGRESS = self
 
     def __call__(self, percent: float, stage: str, *, note: str = "") -> None:
         key = str(stage)
         try:
-            self.panel.note = note or self.labels.get(key, key)
+            line = note or self.labels.get(key, key)
+            self.panel.note = line
             self.panel.record(
                 float(percent), key, elapsed=time.monotonic() - self.started
             )
+            # La riga che la vista mostra finisce anche nel journal: si racconta
+            # cosa succede, non solo a che punto siamo.
+            self.panel.say(line, phase=key)
         except Exception:  # noqa: BLE001 - the panel is a viewer, not a gate
             pass
 
     def finish(self, note: str, *, master: str = "") -> None:
+        global _ACTIVE_PROGRESS
         try:
+            self.panel.say(note, phase="done")
             self.panel.finish(
                 note, elapsed=time.monotonic() - self.started, master=master
             )
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            _ACTIVE_PROGRESS = None
+
+    def abort(self, note: str, *, claim_master_missing: bool = False) -> None:
+        """Il lavoro si e' fermato a meta': la percentuale resta, la nota dice cosa.
+
+        Un comando che esce per un errore non ha un master: il pannello non lo
+        dichiara concluso, non registra il file e racconta in italiano dove si
+        e' fermato. Solo chi sa che il master non e' stato scritto lo dice
+        (``claim_master_missing``): altrove la nota non afferma cio' che non sa.
+        """
+        global _ACTIVE_PROGRESS
+        _ACTIVE_PROGRESS = None
+        text = str(note or "fermato prima della fine")
+        if claim_master_missing:
+            text = f"{text}: il master non esiste"
+        try:
+            self.panel.say(text, phase="stop")
+            self.panel.stop(text, elapsed=time.monotonic() - self.started)
         except Exception:  # noqa: BLE001
             pass
 
@@ -1424,9 +1459,17 @@ class _Progress:
         """Il lavoro aspetta l'umano: la percentuale resta, la nota lo dice."""
         try:
             self.panel.note = note
+            self.panel.say(note, phase="wait")
             self.panel.write()
         except Exception:  # noqa: BLE001
             pass
+
+
+def _stop_active(note: str, *, claim_master_missing: bool = False) -> None:
+    """Chiude il pannello del comando attivo, se c'e', dicendo come e' andata."""
+    progress = _ACTIVE_PROGRESS
+    if progress is not None:
+        progress.abort(note, claim_master_missing=claim_master_missing)
 
 
 def _publish_progress(
@@ -2636,6 +2679,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="nessuna attesa: si prende subito il font proposto dalla classifica",
     )
     p.add_argument(
+        "--key-gate",
+        dest="key_gate",
+        action="store_true",
+        default=None,
+        help="apre il cancello dei fotogrammi chiave anche senza vista "
+        "(default: aperto quando c'e' una vista)",
+    )
+    p.add_argument(
+        "--no-key-gate",
+        dest="key_gate",
+        action="store_false",
+        help="nessuna attesa sui fotogrammi: il render parte subito e lo dichiara",
+    )
+    p.add_argument(
+        "--key-wait",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="quanto si aspetta l'approvazione dei fotogrammi chiave (default: 180); "
+        "allo scadere il render prosegue e il report lo dichiara",
+    )
+    p.add_argument(
         "--subs",
         action="store_true",
         help=(
@@ -2715,28 +2780,40 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    global _ACTIVE_PROGRESS
+    _ACTIVE_PROGRESS = None
     try:
         _apply_settings(args)
         return int(args.func(args))
     except TriageRequired as exc:
+        _stop_active("fermato prima della fine: serve una risposta del triage")
         _out(exc.request)
         return EXIT_NEEDS_INPUT
     except MissingDependency as exc:
+        _stop_active(f"fermato: manca una dipendenza ({exc})")
         _log(f"[missing] {exc}")
         return EXIT_MISSING_DEP
     except QCFailure as exc:
+        _stop_active("errore: il controllo qualita non passa")
         _out(exc.result)
         return int(getattr(exc, "exit_code", EXIT_QC_FAIL))
     except RenderFailure as exc:
+        _stop_active(f"errore: il render non e' riuscito ({exc})")
         _log(f"[render] {exc}")
         return EXIT_RENDER_FAIL
     except VxError as exc:
+        _stop_active(f"errore: {exc}")
         _log(f"[error] {exc}")
         return EXIT_USAGE
     except KeyboardInterrupt:
+        _stop_active(
+            "fermato prima della fine: il lavoro e' stato interrotto",
+            claim_master_missing=True,
+        )
         _log("[aborted]")
         return EXIT_USAGE
     except Exception as exc:  # noqa: BLE001 - no raw traceback may escape the CLI
+        _stop_active(f"errore interno: {type(exc).__name__}: {exc}")
         _log(f"[internal] {type(exc).__name__}: {exc}")
         _log(traceback.format_exc())
         return EXIT_RENDER_FAIL
