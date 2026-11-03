@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -159,16 +160,33 @@ def child_creation_flags() -> int:
     return flags
 
 
-def ffmpeg_threads() -> Optional[int]:
-    """Explicit thread count for ffmpeg when the caller declared one."""
-    raw = os.environ.get("VX_FFMPEG_THREADS", "").strip()
-    if not raw:
-        return None
+#: Il pin dei thread ffmpeg vive nello scope che lo dichiara, mai nell'ambiente
+#: del processo: una variabile globale seguita fino all'encode cambierebbe il
+#: bitstream e i golden byte-a-byte non sarebbero piu' gli stessi.
+_THREADS = threading.local()
+
+
+@contextmanager
+def ffmpeg_thread_limit(count: Optional[int]) -> Iterator[None]:
+    """Pin ffmpeg threads for the caller's own block, then put them back.
+
+    Nessuna variabile d'ambiente: il render che parte dopo non eredita il pin
+    delle misure, anche quando gira nello stesso processo.
+    """
+    previous = getattr(_THREADS, "value", None)
+    _THREADS.value = count
     try:
-        value = int(raw)
-    except ValueError:
+        yield
+    finally:
+        _THREADS.value = previous
+
+
+def ffmpeg_threads() -> Optional[int]:
+    """Explicit thread count for ffmpeg when the caller scoped one."""
+    value = getattr(_THREADS, "value", None)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return None
-    return value if value > 0 else None
+    return value
 
 
 def worker_budget(

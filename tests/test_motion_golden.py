@@ -27,8 +27,13 @@ g. the library is incomplete without crashing: a template with no fixture is a
 
 The whole file skips only when ``motion.available()`` reports no system browser,
 which is the same optional-dependency rule the other suites use. A missing
-manifest, a stale fixture, a version drift or a corrupted pixel is a failure,
-never a skip. Re-bless with::
+manifest, a stale fixture or a corrupted pixel is a failure, never a skip.
+
+Pixels and metadata are judged separately. A pixel mismatch -- a different
+sha256, a different byte size, a frame that moved -- is a FAIL. A manifest whose
+bytes still match but whose ``engine_version`` differs from the running browser
+is a WARN: the guard judges images, not build numbers, so the suite stays green
+and both versions are printed. Re-bless with::
 
     python tests/motion_golden.py --write
 """
@@ -44,7 +49,7 @@ import tempfile
 import time
 import zlib
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -61,7 +66,6 @@ EXPECTED_ENGINE = motion_golden.ENGINE
 EXPECTED_FPS = motion_golden.FPS
 INSTANT_COUNT = motion_golden.INSTANT_COUNT
 CEILING_SECONDS = 900.0
-REBLESS = "python tests/motion_golden.py --write"
 
 #: Built from parts so the checker never contains the literal path it rejects.
 _DRIVE = re.compile("^[A-Za-z]" + ":" + r"[\\/]")
@@ -70,6 +74,9 @@ _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PASS = 0
 FAIL = 0
 SKIP = 0
+WARN = 0
+IMAGES = 0
+DRIFTS: List[Tuple[str, str]] = []
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -77,6 +84,19 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     PASS += int(bool(ok))
     FAIL += int(not ok)
     print(f"    [{'PASS' if ok else 'FAIL'}] {label:<58} {detail}")
+
+
+def warn(label: str, detail: str = "") -> None:
+    """A tolerated drift: the pixels agree, only the build number moved.
+
+    It counts as a pass -- the suite stays green -- and in the warn tally so the
+    verdict can say how much of the green is metadata drift rather than a clean
+    match.
+    """
+    global PASS, WARN
+    PASS += 1
+    WARN += 1
+    print(f"    [WARN] {label:<58} {detail}")
 
 
 def skip(label: str, reason: str) -> None:
@@ -116,6 +136,57 @@ def _absolute_hit(value: str) -> bool:
     return bool(_DRIVE.match(value)) or value.startswith("/")
 
 
+def version_drift(recorded: Any, current: Optional[str]) -> Optional[Tuple[str, str]]:
+    """The metadata half of the comparison, isolated and pure.
+
+    Returns ``(blessed, running)`` when the manifest was sealed on a different
+    browser build, ``None`` when the versions agree or the browser could not be
+    read. It never looks at a pixel: that is ``compare_instant``'s job.
+    """
+    if current is None:
+        return None
+    blessed = str(recorded or "")
+    if blessed == current:
+        return None
+    return blessed or "(empty)", current
+
+
+def judge(
+    pixel_problems: Sequence[str],
+    drift: Optional[Tuple[str, str]],
+) -> Tuple[str, str]:
+    """Decide a check from two independent facts: pixels first, version second.
+
+    * any pixel problem -> ``("fail", detail)``, even when the versions match;
+    * matching pixels and a version drift -> ``("warn", detail)``;
+    * matching pixels and matching versions -> ``("pass", "")``.
+    """
+    if pixel_problems:
+        return "fail", "; ".join(list(pixel_problems)[:2])
+    if drift is not None:
+        return "warn", f"engine {drift[0]} -> {drift[1]}"
+    return "pass", ""
+
+
+def report(
+    label: str,
+    pixel_problems: Sequence[str],
+    drift: Optional[Tuple[str, str]],
+    pass_detail: str = "",
+) -> None:
+    """Print one check, routing pixel failures to FAIL and drift only to WARN."""
+    kind, detail = judge(pixel_problems, drift)
+    if kind == "fail":
+        check(label, False, detail)
+        return
+    if drift is not None and drift not in DRIFTS:
+        DRIFTS.append(drift)
+    if kind == "warn":
+        warn(label, detail)
+    else:
+        check(label, True, pass_detail)
+
+
 def compare_instant(instant: Mapping[str, Any], directory: Path) -> List[str]:
     """The sha256/byte comparison, isolated so the guard can be proven on a copy."""
     file_name = instant.get("file")
@@ -146,20 +217,18 @@ def verify_manifest(
     name: str,
     manifest: Mapping[str, Any],
     directory: Path,
-    current_version: Optional[str],
 ) -> List[str]:
+    """Everything the manifest must get right to prove the pixels.
+
+    ``engine_version`` is deliberately absent: it is metadata drift, judged by
+    ``version_drift``/``judge`` and reported as a WARN, never as a pixel failure.
+    """
     problems: List[str] = []
     if manifest.get("template") != name:
         problems.append(f"template is {manifest.get('template')!r}, expected {name!r}")
     if manifest.get("engine") != EXPECTED_ENGINE:
         problems.append(
             f"engine is {manifest.get('engine')!r}, expected {EXPECTED_ENGINE!r}"
-        )
-    recorded_version = str(manifest.get("engine_version", "") or "")
-    if current_version is not None and recorded_version != current_version:
-        problems.append(
-            f"engine_version {recorded_version or '(empty)'} != current browser "
-            f"{current_version}; re-bless with `{REBLESS}`"
         )
     fps = manifest.get("fps")
     numeric_fps = isinstance(fps, (int, float)) and not isinstance(fps, bool)
@@ -230,20 +299,14 @@ def verify_manifest(
 def verify_index(
     index: Mapping[str, Any],
     manifests: Mapping[str, Mapping[str, Any]],
-    current_version: Optional[str],
 ) -> List[str]:
+    """The structural half of index.json; its ``engine_version`` is drift, not fail."""
     problems: List[str] = []
     if index.get("schema") != SCHEMA:
         problems.append(f"schema is {index.get('schema')!r}, expected {SCHEMA!r}")
     if index.get("engine") != EXPECTED_ENGINE:
         problems.append(
             f"engine is {index.get('engine')!r}, expected {EXPECTED_ENGINE!r}"
-        )
-    recorded_version = str(index.get("engine_version", "") or "")
-    if current_version is not None and recorded_version != current_version:
-        problems.append(
-            f"engine_version {recorded_version or '(empty)'} != current browser "
-            f"{current_version}; re-bless with `{REBLESS}`"
         )
     if index.get("templates") != len(manifests):
         problems.append(
@@ -335,6 +398,60 @@ def prove_guard(work: Path) -> None:
     )
 
 
+def prove_judgement(work: Path) -> None:
+    """Prove the pixel/metadata split with no browser and no fixture.
+
+    One manifest, blessed on an older build, is compared twice: once against the
+    bytes it records (identical frames) and once against a single flipped byte.
+    The version mismatch is the same in both cases, so the only thing that can
+    change the verdict is the pixel: identical -> WARN, changed -> FAIL.
+    """
+    directory = work / "judgement"
+    directory.mkdir(parents=True, exist_ok=True)
+    data = _tiny_png()
+    target = directory / "instant-00.png"
+    target.write_bytes(data)
+    manifest: Dict[str, Any] = {
+        "engine_version": "156.0.8078.74",
+        "instants": [
+            {
+                "index": 0,
+                "t": 0.0,
+                "file": target.name,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "bytes": len(data),
+            }
+        ],
+    }
+    running = "156.0.8078.80"
+    drift = version_drift(manifest["engine_version"], running)
+    identical = compare_instant(manifest["instants"][0], directory)
+    kind, detail = judge(identical, drift)
+    check(
+        "judgement: identical frames + version drift is a warn",
+        kind == "warn" and not identical,
+        f"{kind}: {detail}",
+    )
+    kind, detail = judge(
+        identical, version_drift(manifest["engine_version"], "156.0.8078.74")
+    )
+    check(
+        "judgement: identical frames + same version is a pass",
+        kind == "pass" and not identical,
+        f"{kind}: {'no drift' if kind == 'pass' else detail}",
+    )
+    damaged = bytearray(data)
+    damaged[len(damaged) // 2] ^= 0xFF
+    target.write_bytes(bytes(damaged))
+    moved = compare_instant(manifest["instants"][0], directory)
+    kind, detail = judge(moved, drift)
+    check(
+        "judgement: different frames stay a fail despite the drift",
+        kind == "fail" and bool(moved),
+        f"{kind}: {detail}",
+    )
+
+
 def run(work: Path) -> None:
     registry = Registry()
     names = registry.names()
@@ -392,21 +509,21 @@ def run(work: Path) -> None:
             check(f"{name}: manifest parses", False, _relative(manifest_path))
             continue
         manifests[name] = payload
-        problems = verify_manifest(name, payload, FIXTURES / name, comparable_version)
-        check(
+        problems = verify_manifest(name, payload, FIXTURES / name)
+        report(
             f"{name}: manifest matches its instants",
-            not problems,
-            "; ".join(problems[:2])
-            if problems
-            else "3 instants, sha256 and bytes agree",
+            problems,
+            version_drift(payload.get("engine_version"), comparable_version),
+            "3 instants, sha256 and bytes agree",
         )
 
     if isinstance(index, dict):
-        problems = verify_index(index, manifests, comparable_version)
-        check(
+        problems = verify_index(index, manifests)
+        report(
             "index.json matches the per-template manifests",
-            not problems,
-            "; ".join(problems[:3]) if problems else "counts, engine and date agree",
+            problems,
+            version_drift(index.get("engine_version"), comparable_version),
+            "counts, engine and date agree",
         )
 
     payloads: List[Tuple[str, Any]] = []
@@ -438,7 +555,12 @@ def re_render(work: Path, manifests: Mapping[str, Mapping[str, Any]]) -> None:
     about the engine: it only proves the files have not been edited. The seal is
     real only if the browser is asked for the same instants today and answers
     with the same bytes. `workdir=None` keeps the frame cache out of it.
+
+    This check is pixels only: a different sha256 is a FAIL. Version drift is
+    already declared once, by the manifest check, so it is not repeated here --
+    that keeps one WARN per drifted manifest instead of two.
     """
+    global IMAGES
     registry = Registry()
     for name, manifest in sorted(manifests.items()):
         entry = registry.get(name)
@@ -476,6 +598,7 @@ def re_render(work: Path, manifests: Mapping[str, Mapping[str, Any]]) -> None:
             if index >= len(live):
                 problems.append(f"instant {index} beyond {len(live)} live frames")
                 continue
+            IMAGES += 1
             digest = hashlib.sha256(live[index].read_bytes()).hexdigest()
             if digest != instant["sha256"]:
                 problems.append(
@@ -489,13 +612,25 @@ def re_render(work: Path, manifests: Mapping[str, Mapping[str, Any]]) -> None:
         )
 
 
+def _drift_note() -> str:
+    """The single engine-version pair the verdict must declare, if any."""
+    if not DRIFTS:
+        return ""
+    pairs = sorted(set(DRIFTS))
+    return " (engine " + ", ".join(f"{old} -> {new}" for old, new in pairs) + ")"
+
+
 def main() -> int:
-    global PASS, FAIL, SKIP
+    global PASS, FAIL, SKIP, WARN
     started = time.perf_counter()
+    with tempfile.TemporaryDirectory(
+        prefix="vx_motion_judge_", ignore_cleanup_errors=True
+    ) as judgement_tmp:
+        prove_judgement(Path(judgement_tmp))
     probe = motion.available()
     if not probe["available"]:
         skip("motion golden gate", str(probe.get("reason") or "no system browser"))
-        print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP")
+        print(f"\n{PASS} PASS / {FAIL} FAIL / {WARN} warn / {SKIP} SKIP")
         return 0
     try:
         with tempfile.TemporaryDirectory(
@@ -508,7 +643,8 @@ def main() -> int:
     elapsed = time.perf_counter() - started
     slow = elapsed > CEILING_SECONDS
     print(
-        f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP, {elapsed:.1f}s "
+        f"\n{PASS} PASS / {FAIL} FAIL / {WARN} warn / {SKIP} SKIP, "
+        f"{IMAGES} images compared{_drift_note()}, {elapsed:.1f}s "
         f"(ceiling {CEILING_SECONDS:.0f}s)"
     )
     if slow:

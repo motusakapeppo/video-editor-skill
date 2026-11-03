@@ -136,6 +136,7 @@ TIMING_STAGES = (
     "measure_wall",
     "plan",
     "bridge",
+    "coherence",
     "font",
     "keyframes",
     "render",
@@ -609,7 +610,6 @@ def _measure_task(job: Any) -> Dict[str, Any]:
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
-    os.environ.setdefault("VX_FFMPEG_THREADS", str(WORKER_FFMPEG_THREADS))
     try:
         try:  # OpenCV crea i suoi thread: uno per processo e' la regola.
             import cv2  # type: ignore
@@ -620,22 +620,26 @@ def _measure_task(job: Any) -> Dict[str, Any]:
         from . import settings as settings_mod
 
         settings_mod.apply(dict(settings_blob))
-        if kind == "audio":
-            from . import audio
+        # Il pin vale per questa misura e basta: nessun ``VX_FFMPEG_THREADS``
+        # nell'ambiente, che resterebbe attivo anche per il render successivo
+        # nello stesso processo e cambierebbe il bitstream.
+        with resources.ffmpeg_thread_limit(WORKER_FFMPEG_THREADS):
+            if kind == "audio":
+                from . import audio
 
-            value: Any = audio.analyze_audio(path)
-        elif kind == "analysis":
-            from . import analyze
+                value: Any = audio.analyze_audio(path)
+            elif kind == "analysis":
+                from . import analyze
 
-            value = analyze.analyze_video(path)
-        elif kind == "faces":
-            from . import faces
+                value = analyze.analyze_video(path)
+            elif kind == "faces":
+                from . import faces
 
-            value = faces.detect_faces_tracked(
-                path, sample_fps=contract.SAMPLE_FPS_FACE
-            )
-        else:  # pragma: no cover - guarded by MEASURE_KINDS
-            raise ValueError(f"misura sconosciuta: {kind!r}")
+                value = faces.detect_faces_tracked(
+                    path, sample_fps=contract.SAMPLE_FPS_FACE
+                )
+            else:  # pragma: no cover - guarded by MEASURE_KINDS
+                raise ValueError(f"misura sconosciuta: {kind!r}")
     except Exception as exc:  # noqa: BLE001 - the bridge turns it into a declaration
         return {
             "kind": kind,
@@ -960,6 +964,47 @@ def _render_effects(report: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
         for item in getattr(report, "restore", ())
     }
     return reframe, restore
+
+
+def _coherence_section(
+    args: Any,
+    workdir: Path,
+    plan: Any,
+    bridge_report: Any,
+) -> Dict[str, Any]:
+    """Il referto di coerenza, calcolato prima del render.
+
+    Senza flag il lavoro prosegue anche con violazioni: il report e la
+    narrazione devono dire quali sono, non bloccare in silenzio ne' fingere un
+    successo pulito. ``--free``/``--no-coherence`` spegne i controlli e lo
+    dichiara (``disabled``), perche' un ``ok`` senza controllo non e' un ``ok``.
+    """
+    from . import coherence
+
+    if bool(getattr(args, "free", False) or getattr(args, "no_coherence", False)):
+        section = coherence.disabled("--free/--no-coherence")
+        _say(f"Coerenza: {section['reason']}")
+        return section
+    frames = coherence.sample_frames(plan, workdir / "coherence")
+    section = coherence.evaluate(
+        plan,
+        bridge=bridge_report,
+        frames=frames,
+        text_required=bool(getattr(args, "subs", False)),
+    )
+    metrics = section.get("metrics") or {}
+    if section.get("ok"):
+        _say(
+            "Coerenza: ok "
+            f"({metrics.get('shots')} shot, varieta' {metrics.get('variety')}, "
+            f"{metrics.get('justified_cuts')}/{metrics.get('cuts')} tagli giustificati)"
+        )
+    else:
+        codes = ", ".join(str(item.get("code")) for item in section["violations"])
+        _say(f"Coerenza: {len(section['violations'])} violazioni — {codes}")
+        for item in section["violations"]:
+            _say(f"  {item.get('code')}: {item.get('evidence')}")
+    return section
 
 
 def _say(msg: str) -> None:
@@ -1908,6 +1953,21 @@ def _run_locked(
             encoding="utf-8",
         )
 
+    # Il montaggio deve avere un senso per default: il referto si calcola qui,
+    # prima del render, e finisce in ``report["coherence"]``. Le violazioni non
+    # fermano il lavoro, ma non possono sparire nel silenzio.
+    with clock.time("coherence"):
+        coherence_section = _coherence_section(args, workdir, plan, bridge_report)
+    _emit(
+        log,
+        "coherence",
+        "done" if coherence_section.get("ok") else "warn",
+        ", ".join(
+            str(item.get("code")) for item in coherence_section.get("violations") or ()
+        )
+        or str(coherence_section.get("reason") or "ok"),
+    )
+
     # Il piano esiste: ora si propongono i font e si aspetta la scelta, prima del
     # render. Il cancello e' aperto solo se c'e' una vista e non l'hanno spento:
     # in autonomia senza pannello si prende il ``chosen`` e lo si dichiara.
@@ -2083,6 +2143,7 @@ def _run_locked(
         "font": font_section,
         "keyframes_gate": key_section,
         "bridge": bridge_summary,
+        "coherence": coherence_section,
         "render_estimate": render_estimate,
         "audio": audio_summary(analyses, ceiling_dbtp),
         "music": music_summary(plan, bridge_report),
@@ -2129,6 +2190,12 @@ def _run_locked(
         )
     if render_cache:
         report["stage_cache"] = render_cache
+    violations = coherence_section.get("violations") or []
+    if violations:
+        report.setdefault("warnings", []).append(
+            "coherence: "
+            + ", ".join(str(item.get("code")) for item in violations)
+        )
     timings = report["timings"]
     _log(
         "[auto] tempi: "

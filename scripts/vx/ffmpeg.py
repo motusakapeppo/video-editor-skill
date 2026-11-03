@@ -137,8 +137,8 @@ def run_ff(
     from . import resources
 
     base = [ffmpeg(), "-hide_banner", "-nostdin", "-y", "-loglevel", loglevel]
-    # Thread espliciti solo quando il chiamante li dichiara (i worker di misura):
-    # un valore scelto dal figlio non e' un valore lasciato al caso.
+    # Thread espliciti solo dentro lo scope che li dichiara (i worker di misura):
+    # il percorso di encode non entra in quello scope e resta sul default.
     threads = resources.ffmpeg_threads()
     if threads:
         base += ["-threads", str(threads)]
