@@ -16,6 +16,21 @@ The source folder is read-only. Every staged file, render and report lives
 under ``--workdir``; the master is the only file written outside it, at
 ``--out``. The sha256 of every input is taken before staging and re-checked at
 the end: a changed source is a hard QC failure, never a warning.
+
+Crash injection, for the recovery tests only
+--------------------------------------------
+Every stage boundary in this module goes through ``_emit`` (or ``_notify``,
+which writes the event and then calls the observer). When ``VX_CRASH_AFTER``
+is set, the process dies there with ``os._exit(70)``: no ``finally``, no lock
+release, no journal close - a real crash, not an exception.
+
+    VX_CRASH_AFTER=qc           die right after the ``qc`` boundary is written
+    VX_CRASH_AFTER=render:2     die after the 2nd boundary named ``render``
+
+The value is ``<stage>[:<n>]``; ``n`` defaults to 1. The boundary is written
+to ``events.jsonl`` and flushed *before* the exit, so the file says exactly
+where the process died and the exit code 70 says it died on purpose. Unset,
+``_crash_point`` returns on its first lookup and nothing else runs.
 """
 
 from __future__ import annotations
@@ -111,14 +126,49 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-def _emit(log: Optional[Any], stage: str, status: str, detail: str = "") -> None:
-    """Write one boundary to the event log; a broken log never breaks a render."""
-    if log is None:
+#: Crash injection for the recovery tests: ``<stage>[:<n>]``, see the module
+#: docstring. It is a test switch, not a feature: unset, nothing happens here.
+CRASH_AFTER_ENV = "VX_CRASH_AFTER"
+CRASH_EXIT_CODE = 70
+
+#: Boundaries already seen by ``_crash_point`` in this process, per stage name.
+#: Used only to resolve ``render:2``; with the variable unset the dict is never
+#: touched, which is also how the test proves the switch is inert.
+_CRASH_SEEN: Dict[str, int] = {}
+
+
+def _crash_point(stage: str) -> None:
+    """Die at this stage boundary when ``VX_CRASH_AFTER`` names it.
+
+    Called by ``_emit`` *after* the event is written and flushed, so the log
+    on disk ends with the boundary the process died on. ``os._exit`` skips
+    every ``finally``, the lock release and the journal close on purpose: the
+    test needs a real crash, not a tidy exception.
+    """
+    spec = os.environ.get(CRASH_AFTER_ENV)
+    if not spec:
+        return
+    name, _, occurrence = spec.partition(":")
+    if name.strip() != str(stage):
         return
     try:
-        log.emit(stage, f"auto.{stage}", status, detail=detail)
-    except Exception:  # noqa: BLE001
-        pass
+        wanted = max(1, int(occurrence.strip() or 1))
+    except ValueError:
+        wanted = 1
+    seen = _CRASH_SEEN.get(stage, 0) + 1
+    _CRASH_SEEN[stage] = seen
+    if seen >= wanted:
+        os._exit(CRASH_EXIT_CODE)
+
+
+def _emit(log: Optional[Any], stage: str, status: str, detail: str = "") -> None:
+    """Write one boundary to the event log; a broken log never breaks a render."""
+    if log is not None:
+        try:
+            log.emit(stage, f"auto.{stage}", status, detail=detail)
+        except Exception:  # noqa: BLE001
+            pass
+    _crash_point(stage)
 
 
 #: Sotto questa differenza la durata consegnata e' quella chiesta.

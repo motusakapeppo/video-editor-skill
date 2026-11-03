@@ -1,25 +1,37 @@
-"""Crash harness for F17-B: a real ``vx auto`` run killed from the outside.
+"""Crash harness for F17-B: a real ``vx auto`` run that dies at a stage edge.
 
-The child is the real CLI.  The parent never imports the pipeline: it builds a
-tiny corpus, spawns ``vx.cli auto`` in its own session, waits a seeded delay,
-and kills the whole process tree with ``taskkill /F /T`` (POSIX:
-``killpg(SIGKILL)``).  What the killed run left on disk is then checked against
-the invariants a crash-safe pipeline owes its caller, and the same workdir is
-resumed to completion.
+Two ways to make the child die, and only one of them is evidence of coverage:
+
+* **deterministic (default)** - ``VX_CRASH_AFTER=<stage>[:<n>]`` (see
+  ``vx.auto``) makes the child call ``os._exit(70)`` right after the n-th
+  boundary named ``<stage>`` is flushed to ``events.jsonl``. Exit code 70 *is*
+  the proof that the requested boundary was reached, the last line of the
+  journal says where, and no wall clock is involved anywhere.
+* **timed (optional smoke)** - ``run_kill`` waits a seeded delay (or a phase
+  marker), then kills the tree with ``taskkill /F /T`` (POSIX:
+  ``killpg(SIGKILL)``). A ``render`` stage lasts ~125-188 ms on the reference
+  box and a tree kill takes ~125-171 ms to land, so whether a timed kill hits
+  a short stage is chance: useful as a smoke sample, useless as coverage.
+
+Either way the parent never imports the pipeline: it builds a tiny corpus,
+spawns ``vx.cli auto``, and then checks what the dead run left on disk against
+the invariants a crash-safe pipeline owes its caller, and resumes the same
+workdir to completion.
 
 Why the invocation differs from ``tests/test_cli_auto.py``
------------------------------------------------------------
+----------------------------------------------------------
 ``test_cli_auto.py`` builds its pool at the delivery canvas (1080x1920) because
 the triage gate rejects any source that would need more than 1.5x upscale.
 That is the right fixture for an e2e proof and the wrong one here: the same
-pool takes ~11 s per run, and 50 kills plus 50 resumes would blow the 600 s
-ceiling.  This harness keeps the 9:16 shape, shrinks the frame to 320x568 (a
-3.4x upscale from the canvas) and raises ``triage_max_upscale`` to 4 so the
+pool takes ~11 s per run, and a matrix of crash-plus-resume samples would blow
+the ceiling.  This harness keeps the 9:16 shape, shrinks the frame to 320x568
+(a 3.4x upscale from the canvas) and raises ``triage_max_upscale`` to 4 so the
 gate still decides on a real rule instead of being bypassed by a fixture that
 already matches the canvas.  ``--no-bridge`` removes the analysis pass before
-assembly; every other stage - triage, ingest, staging, plan, render, loudness,
-stage cache, master write, QC, deliverables, report - still runs.  One run is
-~3.4 s on the reference machine.
+assembly (``bridge=True`` keeps it, for the case that must reach the
+``bridge`` boundary); ``--no-subs`` keeps ASR out.  Every other stage -
+triage, ingest, staging, plan, render, loudness, stage cache, master write, QC,
+deliverables, report - still runs.  One run is ~3.4 s on the reference machine.
 
 The write-ahead journal is opt-in by presence (``vx.artifacts``: "Callers that
 want the safety net call this once at the start of a run, or write the same
@@ -117,6 +129,12 @@ from vx import artifacts, events  # noqa: E402
 FFMPEG = os.environ.get("VX_FFMPEG") or ""
 MASTER_NAME = "master.mp4"
 
+#: The switch ``vx.auto`` reads at every stage boundary: ``<stage>[:<n>]``.
+#: A child started with it dies with ``os._exit(70)`` right after that boundary
+#: is flushed to ``events.jsonl``, so the exit code *is* the proof of coverage.
+CRASH_ENV = "VX_CRASH_AFTER"
+CRASH_EXIT = 70
+
 # -- fixture shape ---------------------------------------------------------- #
 CLIP_W, CLIP_H = 320, 568
 CLIP_SEC = 1.5
@@ -179,6 +197,7 @@ INVARIANT_KEYS = (
     "no_stray_files",
     "resume_completes",
     "sweep_removes_leftovers",
+    "progress_forward",
 )
 
 
@@ -366,6 +385,69 @@ def phase_guess(workdir: str | Path) -> str:
     return "boot"
 
 
+#: The stage boundaries ``vx.auto`` writes through ``_emit``, in pipeline order.
+#: ``run`` appears twice (start and end) and is ranked at the start.
+BOUNDARY_ORDER = (
+    "run",
+    "triage",
+    "ingest",
+    "bridge",
+    "coherence",
+    "plan_choice",
+    "font",
+    "keyframes",
+    "render",
+    "render_done",
+    "qc",
+    "deliverables",
+    "guard",
+    "timings",
+)
+
+
+def boundary_rank(stage: str) -> int:
+    """Where a boundary sits in the pipeline; unknown labels rank at the front."""
+    try:
+        return BOUNDARY_ORDER.index(stage)
+    except ValueError:
+        return 0
+
+
+def event_boundaries(workdir: str | Path) -> List[Dict[str, Any]]:
+    """Every stage boundary on disk, in write order, as ``stage``/``status``.
+
+    The journal is the only record of *which* boundary a crashed run reached:
+    the exit code says the crash was asked for, the last event here says where
+    it happened.  Read through ``vx.events`` so a torn final line is dropped
+    instead of raising.
+    """
+    records = events.read(Path(workdir) / "events.jsonl")
+    out: List[Dict[str, Any]] = []
+    for record in records:
+        stage = str(record.get("stage") or "")
+        if stage not in BOUNDARY_ORDER:
+            continue
+        out.append(
+            {
+                "seq": int(record.get("seq") or 0),
+                "stage": stage,
+                "status": str(record.get("status") or ""),
+            }
+        )
+    return out
+
+
+def progress_rank(workdir: str | Path) -> int:
+    """The furthest boundary reached, as an index into ``BOUNDARY_ORDER``.
+
+    Monotone by construction: a resume that starts over writes its own early
+    boundaries but cannot lower the maximum already on disk, so a *decrease*
+    after a resume would mean the journal was rewritten or truncated.
+    """
+    marks = event_boundaries(workdir)
+    return max((boundary_rank(item["stage"]) for item in marks), default=-1)
+
+
 def wait_for_phase(
     workdir: str | Path,
     target: str,
@@ -464,18 +546,34 @@ def mp4_complete(path: str | Path) -> bool:
 # --------------------------------------------------------------------------- #
 # child process
 # --------------------------------------------------------------------------- #
-def _env() -> Dict[str, str]:
+def _env(crash_after: Optional[str] = None) -> Dict[str, str]:
+    """Child environment; the crash switch is never inherited from the shell.
+
+    ``VX_CRASH_AFTER`` is removed unconditionally and re-added only for the
+    child that must die: a developer who exported it to reproduce a case by
+    hand must not turn every resume into a crash.
+    """
     env = os.environ.copy()
+    env.pop(CRASH_ENV, None)
     env["PYTHONPATH"] = str(SCRIPTS)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     if FFMPEG:
         env["VX_FFMPEG"] = FFMPEG
+    if crash_after:
+        env[CRASH_ENV] = str(crash_after)
     return env
 
 
-def auto_argv(pool: str | Path, workdir: str | Path) -> List[str]:
-    """The exact child command line; the resume run uses the same list."""
+def auto_argv(
+    pool: str | Path, workdir: str | Path, *, bridge: bool = False
+) -> List[str]:
+    """The exact child command line; the resume run uses the same list.
+
+    ``bridge=False`` keeps ``--no-bridge`` (the cheap fixture every kill case
+    uses). ``bridge=True`` runs the analysis pass, which is the only way to
+    reach the ``bridge`` boundary and the ``analysis`` stage behind it.
+    """
     out = Path(workdir).parent / MASTER_NAME
     argv = [
         sys.executable,
@@ -492,8 +590,9 @@ def auto_argv(pool: str | Path, workdir: str | Path) -> List[str]:
         str(workdir),
         "--no-subs",
         "--autonomous",
-        "--no-bridge",
     ]
+    if not bridge:
+        argv.append("--no-bridge")
     for override in OVERRIDES:
         argv.extend(["--override", override])
     argv.append("--json")
@@ -509,7 +608,13 @@ def delivered_path(workdir: str | Path) -> Path:
     return Path(workdir) / "out" / MASTER_NAME
 
 
-def spawn_auto(pool: str | Path, workdir: str | Path):
+def spawn_auto(
+    pool: str | Path,
+    workdir: str | Path,
+    *,
+    crash_after: Optional[str] = None,
+    bridge: bool = False,
+):
     """Spawn the real CLI in its own session; return ``(proc, out, argv)``.
 
     ``start_new_session`` is what makes the kill a tree kill: on POSIX the
@@ -517,17 +622,21 @@ def spawn_auto(pool: str | Path, workdir: str | Path):
     child tree.  ``stdout=PIPE`` is drained by a thread: the run prints a JSON
     report, and a full pipe buffer would otherwise block the child and make a
     deadlock look like a slow run.
+
+    ``crash_after`` is the only thing that reaches the child through
+    ``VX_CRASH_AFTER``; the child then dies by itself at that boundary, which
+    is what makes the recovery cases deterministic instead of timed.
     """
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
     (work / "render").mkdir(exist_ok=True)
     # Documented opt-in: the journal is on when the file exists.
     artifacts.enable(work / "render")
-    argv = auto_argv(pool, work)
+    argv = auto_argv(pool, work, bridge=bridge)
     proc = subprocess.Popen(
         argv,
         cwd=str(ROOT),
-        env=_env(),
+        env=_env(crash_after),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         start_new_session=True,
@@ -742,11 +851,88 @@ def run_kill(
     }
 
 
+def run_crash(
+    seed: int,
+    index: int,
+    base_dir: Optional[str | Path] = None,
+    *,
+    boundary: str,
+    bridge: bool = False,
+    timeout: float = 180.0,
+) -> Dict[str, Any]:
+    """Spawn the CLI, let it crash itself at ``boundary``, report the site.
+
+    No clock, no trigger, no ``taskkill``: the child reads ``VX_CRASH_AFTER``
+    and calls ``os._exit(70)`` at the requested boundary, so an exit code of
+    70 is proof that the boundary was reached.  Anything else
+    (``0`` = the run finished before that boundary, another code = a real
+    failure) is a coverage miss the caller must report, not a flake to retry.
+
+    ``timeout`` only bounds a hang; a normal run is seconds, and the crash is
+    instant because it happens inside the child.
+
+    Returns the same shape ``run_kill`` returns, plus ``boundary`` (what was
+    asked), ``crashed`` (the child exited 70), ``last_boundary`` (the last
+    stage boundary in the journal) and ``boundaries`` (the whole sequence).
+    """
+    if base_dir is None:
+        base_dir = tempfile.mkdtemp(prefix="vx-f17b-run-")
+        atexit.register(shutil.rmtree, str(base_dir), True)
+    run_dir = Path(base_dir) / f"crash_{index:02d}_{boundary.replace(':', '-')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    pool = clone_pool(run_dir / "pool")
+    workdir = run_dir / "work"
+    baseline = sha_map(pool)
+
+    started = time.monotonic()
+    proc, out, _argv = spawn_auto(
+        pool, workdir, crash_after=boundary, bridge=bridge
+    )
+    try:
+        exit_code = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        exit_code = -1
+    try:
+        if proc.stdout is not None:
+            proc.stdout.close()
+    except OSError:
+        pass
+    elapsed_ms = int(round((time.monotonic() - started) * 1000.0))
+
+    delivered = delivered_path(workdir)
+    marks = event_boundaries(workdir)
+    return {
+        "seed": seed,
+        "index": index,
+        "boundary": boundary,
+        "bridge": bridge,
+        "exit_code": int(exit_code),
+        "crashed": int(exit_code) == CRASH_EXIT,
+        "elapsed_ms": elapsed_ms,
+        "boundaries": marks,
+        "last_boundary": marks[-1]["stage"] if marks else "",
+        "progress_rank": progress_rank(workdir),
+        "finished": exit_code == 0 or (Path(workdir) / "auto_report.json").is_file(),
+        "master_present": out.exists(),
+        "master_bytes": out.stat().st_size if out.is_file() else 0,
+        "master_complete": mp4_complete(out),
+        "delivered": delivered.is_file(),
+        "delivered_complete": mp4_complete(delivered),
+        "phase": phase_guess(workdir),
+        "pool": pool,
+        "workdir": workdir,
+        "baseline": baseline,
+        "master": out,
+    }
+
+
 def measure_run(
     base_dir: Optional[str | Path] = None,
     *,
     timeout: float = 180.0,
     label: str = "calibration",
+    bridge: bool = False,
 ) -> Dict[str, Any]:
     """Time ONE real, uninterrupted ``vx auto`` run from spawn to exit.
 
@@ -778,7 +964,7 @@ def measure_run(
     workdir = run_dir / "work"
 
     started = time.monotonic()
-    proc, out, _argv = spawn_auto(pool, workdir)
+    proc, out, _argv = spawn_auto(pool, workdir, bridge=bridge)
     timeline: List[Dict[str, Any]] = []
     current: Optional[str] = None
     entered = 0.0
@@ -958,8 +1144,8 @@ def _classify_all(workdir: Path):
     return ok, orphans, missing, journals
 
 
-def _resume(pool: Path, workdir: Path, timeout: float):
-    argv = auto_argv(pool, workdir)
+def _resume(pool: Path, workdir: Path, timeout: float, *, bridge: bool = False):
+    argv = auto_argv(pool, workdir, bridge=bridge)
     try:
         proc = subprocess.run(
             argv,
@@ -982,17 +1168,20 @@ def invariants(
     *,
     baseline: Optional[Dict[str, str]] = None,
     timeout: float = 180.0,
+    bridge: bool = False,
 ) -> Dict[str, Any]:
-    """The five invariants a crash-safe auto run owes, plus diagnostics.
+    """The invariants a crash-safe auto run owes, plus diagnostics.
 
     Order matters: the kill-state checks are taken before the resume, because
     the resume is allowed to heal what the crash damaged, and the post-resume
     checks are taken after, because a resume that leaves debris behind is a
-    failure.
+    failure.  ``bridge`` must match the crashed run's argv, or the resume would
+    be a different pipeline than the one that crashed.
     """
     pool = Path(pool)
     work = Path(workdir)
     delivered = delivered_path(work)
+    progress_before = progress_rank(work)
 
     sources_ok = True
     if baseline is not None:
@@ -1001,7 +1190,8 @@ def invariants(
     readable_before, torn_before, jsonl_before = _jsonl_state(work)
     strays_before = _strays(work)
 
-    resume_code, resume_tail = _resume(pool, work, timeout)
+    resume_code, resume_tail = _resume(pool, work, timeout, bridge=bridge)
+    progress_after = progress_rank(work)
 
     readable_after, torn_after, jsonl_after = _jsonl_state(work)
     strays_after = _strays(work)
@@ -1017,8 +1207,13 @@ def invariants(
         "no_stray_files": bool(not strays_before and not strays_after),
         "resume_completes": resume_completes,
         "sweep_removes_leftovers": bool(classify_ok and orphans_after == 0),
+        # The journal is append-only, so the furthest boundary can only grow:
+        # a lower rank after the resume means the crash site was rewritten.
+        "progress_forward": bool(progress_after >= progress_before),
         # -- diagnostics ---------------------------------------------------- #
         "detail": {
+            "progress_before": progress_before,
+            "progress_after": progress_after,
             "strays_before": strays_before,
             "strays_after": strays_after,
             "jsonl_before": jsonl_before,

@@ -211,6 +211,10 @@ lock per liveness: il file `.lock` porta PID, token, creazione del processo e
 heartbeat; un owner vivo tiene il lock, un owner morto viene reclamato. Il
 heartbeat è di 30 s.
 
+Per i test di recupero, `VX_CRASH_AFTER=<stadio>[:<n>]` fa morire il processo
+(`os._exit(70)`, nessun cleanup) subito dopo l'n-esimo confine di quello stadio
+in `events.jsonl`; senza la variabile il controllo non fa nulla.
+
 ## Limiti dichiarati
 
 - Nessun rilevamento di stesso soggetto o near-duplicate: servirebbe la visione.
