@@ -170,16 +170,18 @@ implementato: non esistono varianti per piattaforma. Gate di regressione visiva:
 
 Il font non si eredita da un default: `auto` propone dal contesto, scarica dal
 catalogo e aspetta la scelta, dichiarandola nel report. La vista locale ha
-selettore dei lavori, fotogrammi, approvazione, player e playhead vero.
-Dettaglio: `references/28-font-proposta-e-cancello.md`, `references/29-vedere-il-lavoro.md`.
+selettore, fotogrammi, approvazione, player e playhead vero: si usa quella,
+`vx serve DIR`. **Non si scrive una UI nuova**: se il lavoro non e' un job `vx`
+(niente `progress.json`/`plan.json`) va detto e si propone di farlo passare da
+`vx auto`, non di improvvisare una pagina. Dettaglio:
+`references/28-font-proposta-e-cancello.md`, `references/29-vedere-il-lavoro.md`.
 
 ## Percorsi e sicurezza
 
 Il sorgente non viene MAI modificato: l'ingest scrive lo sha256 in `source.json`
 e il QC riverifica `source_sha_unchanged`. Il master è `work/stage/final_full.mp4`,
-i deliverable in `work/out/`. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`
-(`proxy`, `analysis`, `subs`, `stage`, `out`, `qc`); un lock per liveness
-(heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
+i deliverable in `work/out/`. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`; un lock
+per liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
 
 ## Superficie opzionale, non normativa
 
@@ -190,10 +192,8 @@ un EDL 3 dichiara una clip `generator` e il render la compone con l'alfa.
 ## Riferimenti
 
 
-- `references/01-ambiente.md` ambiente, dipendenze, GPU; `references/02-metriche-analisi.md` metriche e soglie
-- `references/03-matrice-decisionale.md` finding, gate, trattamento; `references/04-specifiche-social.md` safe zone, loudness, hook
-- `references/05-auto-framing.md` tracking volti e crop; `references/06-sottotitoli-ass.md` whisper, cue, ASS
-- `references/07-render.md` stadi, tagli, loudnorm; `references/08-qc-e-consegna.md` codici QC e deliverable
+- `references/01-ambiente.md` ambiente, dipendenze, GPU; `references/02-metriche-analisi.md` metriche e soglie `references/03-matrice-decisionale.md` finding, gate, trattamento; `references/04-specifiche-social.md` safe zone, loudness, hook
+- `references/05-auto-framing.md` tracking volti e crop; `references/06-sottotitoli-ass.md` whisper, cue, ASS `references/07-render.md` stadi, tagli, loudnorm; `references/08-qc-e-consegna.md` codici QC e deliverable
 - `references/09-accelerazione-e-vad.md` hardware e VAD; `references/10-grammatica-del-montaggio.md` grammatica e ritmo
 - `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
 - `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap; `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo
