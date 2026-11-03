@@ -19,7 +19,10 @@ R4. a spec whose ``cost`` exceeds the budget of 8 is refused with the two
     numbers in the sentence, and no file is produced;
 R5. ``blend`` executes against a second source and the mix curve changes the
     picture across time;
-R6. a bezier curve is refused instead of silently approximated;
+R6. a ``bezier`` curve is sampled at 24 points into a ``t``-dependent expression,
+    and the measured difference from the exact curve is under the declared 1%
+    (R6 also renders the curve and compares the frame at a node with the frame a
+    static transform at the expected value produces);
 R7. ``/api/state`` exposes ``estimate`` and ``plan_choice`` from the report, and
     returns empty mappings when there is nothing to show;
 R9. ``mask`` renders through ``maskedmerge`` with a generated ellipse mask:
@@ -30,6 +33,14 @@ R10. ``time`` keeps the declared duration: ``freeze`` makes 0.2 s and 1.8 s
 R11. ``text`` draws bright pixels on a dark clip with the job's font,
     ``tracking`` widens the line, and a text spec without a font is refused with
     ``FONT_MISSING`` and no file.
+R12. ``mask`` composes inside the *timeline* path (a multi-input stage spliced
+    into one clip's chain): two frames differ, the corners are black;
+R13. ``freeze`` composes inside the timeline path, both as a single branch and
+    as a ``split``/``concat`` fan-out, and two held frames are identical;
+R14. what is still refused is refused by name: a timeline ``blend`` with a
+    second source (``BLEND_INPUT_UNAVAILABLE``), a rotation
+    (``PARAM_NOT_RENDERED`` on ``params.rotate``) and a bezier without points
+    (``CURVE_NOT_REPRESENTABLE``).
 """
 
 from __future__ import annotations
@@ -49,7 +60,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from vx import edl3, edl3_render, ffmpeg, serve  # noqa: E402
-from vx.effects import cost, expand  # noqa: E402
+from vx.effects import cost, expand, sample_curve  # noqa: E402
+from vx.effects import ffmpeg as bridge  # noqa: E402
 from vx.effects.ffmpeg import RenderSpecError  # noqa: E402
 
 WIDTH = 320
@@ -310,7 +322,7 @@ def main() -> int:
             "R8 il grafo della clip contiene i tre filtri della specifica",
             all(
                 token in compiled["filter_script"]
-                for token in ("zoompan", "eq@fxgrade", "gblur@fxblur")
+                for token in ("zoompan", "eq@", "gblur@")
             ),
         )
         integrated_out = root / "integrated" / "master.mp4"
@@ -446,41 +458,95 @@ def main() -> int:
             f"diff={mean_abs(blend_early, blend_late):.3f}",
         )
 
-        print("\nR6 -- bezier: rifiuto dichiarato, non approssimazione")
-        bezier_out = root / "bezier" / "bezier.mp4"
-        bezier_error = None
-        try:
-            edl3_render.render_effect_spec(
-                {
-                    "id": "bezier",
-                    "duration": SECONDS,
-                    "primitives": [
-                        {
-                            "kind": "blur",
-                            "params": {"sigma": [0.0, 4.0]},
-                            "curve": {
-                                "easing": "bezier",
-                                "points": [[0.42, 0.0], [0.58, 1.0]],
-                            },
-                        }
-                    ],
-                },
-                source,
-                bezier_out,
-                width=WIDTH,
-                height=HEIGHT,
-                fps=FPS,
-                duration=SECONDS,
-            )
-        except (edl3_render.CompileError, RenderSpecError) as exc:
-            bezier_error = exc
+        print("\nR6 -- bezier: campionata a 24 punti, errore misurato < 1%")
+        bezier_curve = {"easing": "bezier", "points": [[0.42, 0.0], [0.58, 1.0]]}
+        sampling = bridge.bezier_error(bezier_curve)
         check(
-            "R6 codice CURVE_NOT_REPRESENTABLE",
-            bezier_error is not None
-            and getattr(bezier_error, "code", "") == "CURVE_NOT_REPRESENTABLE",
-            "" if bezier_error is None else getattr(bezier_error, "code", ""),
+            "R6 errore massimo del campionamento < 1% del tratto",
+            sampling["max_relative"] < sampling["tolerance"],
+            f"max={sampling['max_relative'] * 100:.4f}% "
+            f"(tolleranza {sampling['tolerance'] * 100:.1f}%, "
+            f"{sampling['samples']} campioni)",
         )
-        check("R6 nessun file prodotto", not bezier_out.exists())
+        stops = bridge.bezier_samples(bezier_curve)
+        node_error = max(
+            abs(bridge.sampled_bezier(stops, u) - sample_curve(bezier_curve, u))
+            for u, _ in stops
+        )
+        check(
+            "R6 ai nodi la curva campionata coincide con quella esatta",
+            node_error < 1e-12,
+            f"errore nodi={node_error:.2e}",
+        )
+
+        bezier_spec = {
+            "id": "bezier",
+            "duration": SECONDS,
+            "primitives": [
+                {
+                    "kind": "transform",
+                    "params": {"scale": [1.0, 1.4]},
+                    "curve": bezier_curve,
+                }
+            ],
+        }
+        bezier_out = root / "bezier" / "bezier.mp4"
+        bezier_report = edl3_render.render_effect_spec(
+            bezier_spec,
+            source,
+            bezier_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "bezier",
+        )
+        check(
+            "R6 bezier non e' piu' rifiutata: il file esce",
+            bezier_out.is_file() and bezier_out.stat().st_size > 0,
+            bezier_out.stat().st_size if bezier_out.is_file() else 0,
+        )
+        check(
+            "R6 il grafo campiona la curva come funzione del tempo",
+            "if(lt(" in bezier_report["filter_script"]
+            and "zoompan" in bezier_report["filter_script"],
+        )
+        bezier_early = frame(bezier_out, 0.1, root / "bezier_early.png")
+        bezier_late = frame(bezier_out, 1.9, root / "bezier_late.png")
+        check(
+            "R6 la curva anima il quadro (> 8/255 fra 0.1 e 1.9 s)",
+            mean_abs(bezier_early, bezier_late) > 8.0,
+            f"diff={mean_abs(bezier_early, bezier_late):.3f}",
+        )
+
+        expected_scale = 1.0 + 0.4 * sample_curve(bezier_curve, 0.5)
+        node_static_spec = {
+            "id": "bezier_node",
+            "duration": SECONDS,
+            "primitives": [
+                {"kind": "transform", "params": {"scale": expected_scale}}
+            ],
+        }
+        node_static_out = root / "bezier_node" / "node.mp4"
+        edl3_render.render_effect_spec(
+            node_static_spec,
+            source,
+            node_static_out,
+            width=WIDTH,
+            height=HEIGHT,
+            fps=FPS,
+            duration=SECONDS,
+            workdir=root / "bezier_node",
+        )
+        node_rendered = frame(bezier_out, 1.0, root / "bezier_node.png")
+        node_expected = frame(node_static_out, 1.0, root / "bezier_node_ref.png")
+        node_diff = mean_abs(node_rendered, node_expected)
+        check(
+            "R6 al nodo u=0.5 la resa differisce < 1% da quella attesa",
+            node_diff < 255.0 * 0.01,
+            f"diff={node_diff:.3f}/255 = {node_diff / 255 * 100:.3f}% "
+            f"(scale attesa {expected_scale:.4f})",
+        )
 
         print("\nR7 -- /api/state espone estimate e plan_choice")
         job = root / "job"
@@ -882,6 +948,224 @@ def main() -> int:
         check(
             "R11 senza font: nessun file prodotto",
             not no_font_out.exists(),
+        )
+
+        print("\nR12 -- mask dentro il percorso timeline (stadio a piu' ingressi)")
+        timeline_mask_spec = {
+            "id": "mask_timeline",
+            "duration": SECONDS,
+            "primitives": [
+                {
+                    "kind": "mask",
+                    "params": {
+                        "shape": "ellipse",
+                        "width": 1.0,
+                        "height": 1.0,
+                        "feather": 8.0,
+                    },
+                }
+            ],
+        }
+        timeline_mask = edl3.Timeline3(
+            fps=FPS,
+            size=(WIDTH, HEIGHT),
+            clips=[
+                edl3.Clip3(
+                    id="masked",
+                    source=str(source),
+                    src_in=0.0,
+                    src_out=SECONDS,
+                )
+            ],
+        )
+        mask_planned = edl3_render.compile_timeline(
+            timeline_mask, effect_specs={"masked": timeline_mask_spec}
+        )
+        mask_entry = mask_planned["clips"][0]["effect_spec"]
+        check(
+            "R12 il compilatore timeline accetta la mask",
+            "maskedmerge" in mask_planned["filter_script"]
+            and "geq=" in mask_planned["filter_script"],
+            None,
+        )
+        check(
+            "R12 la clip dichiara lo stadio multi-ingresso",
+            isinstance(mask_entry, dict) and mask_entry.get("multi_input") is True,
+            mask_entry,
+        )
+        timeline_mask_out = root / "timeline_mask" / "mask.mp4"
+        edl3_render.render(
+            timeline_mask,
+            timeline_mask_out,
+            workdir=root / "timeline_mask",
+            effect_specs={"masked": timeline_mask_spec},
+        )
+        tm_early = frame(timeline_mask_out, 0.1, root / "tl_mask_a.png")
+        tm_late = frame(timeline_mask_out, 1.9, root / "tl_mask_b.png")
+        tm_source = frame(source, 0.1, root / "tl_mask_src.png")
+        tm_delta = mean_abs(tm_early, tm_late)
+        tm_corner = mean_abs(tm_source[:30, :30], tm_early[:30, :30])
+        check(
+            "R12 due fotogrammi della clip mascherata differiscono > 8/255",
+            tm_delta > 8.0,
+            f"diff={tm_delta:.3f}",
+        )
+        check(
+            "R12 la mask taglia davvero: angoli neri (diff > 30/255)",
+            tm_corner > 30.0,
+            f"corner={tm_corner:.3f}",
+        )
+
+        print("\nR13 -- freeze dentro il percorso timeline")
+        timeline_freeze = edl3.Timeline3(
+            fps=FPS,
+            size=(WIDTH, HEIGHT),
+            clips=[
+                edl3.Clip3(
+                    id="frozen",
+                    source=str(source),
+                    src_in=0.0,
+                    src_out=SECONDS,
+                )
+            ],
+        )
+        freeze_spec_tl = {
+            "id": "freeze_timeline",
+            "duration": SECONDS,
+            "primitives": [
+                {"kind": "time", "params": {"mode": "freeze", "at": 0.0, "hold": 2.0}}
+            ],
+        }
+        freeze_planned = edl3_render.compile_timeline(
+            timeline_freeze, effect_specs={"frozen": freeze_spec_tl}
+        )
+        check(
+            "R13 il compilatore timeline accetta il freeze",
+            "tpad=" in freeze_planned["filter_script"]
+            and "trim=" in freeze_planned["filter_script"],
+        )
+        timeline_freeze_out = root / "timeline_freeze" / "freeze.mp4"
+        edl3_render.render(
+            timeline_freeze,
+            timeline_freeze_out,
+            workdir=root / "timeline_freeze",
+            effect_specs={"frozen": freeze_spec_tl},
+        )
+        tl_frozen_early = frame(timeline_freeze_out, 0.2, root / "tl_frz_a.png")
+        tl_frozen_late = frame(timeline_freeze_out, 1.8, root / "tl_frz_b.png")
+        tl_frozen_delta = mean_abs(tl_frozen_early, tl_frozen_late)
+        check(
+            "R13 freeze nella timeline: 0.2 s e 1.8 s identici (diff < 1)",
+            tl_frozen_delta < 1.0,
+            f"diff={tl_frozen_delta:.4f}",
+        )
+        check(
+            "R13 il sorgente invece differisce (> 8/255)",
+            source_delta > 8.0,
+            f"diff={source_delta:.3f}",
+        )
+
+        freeze_split_spec = {
+            "id": "freeze_split",
+            "duration": SECONDS,
+            "primitives": [
+                {"kind": "time", "params": {"mode": "freeze", "at": 0.4, "hold": 0.9}}
+            ],
+        }
+        split_planned = edl3_render.compile_timeline(
+            timeline_freeze, effect_specs={"frozen": freeze_split_spec}
+        )
+        split_out = root / "timeline_freeze_split" / "freeze.mp4"
+        edl3_render.render(
+            timeline_freeze,
+            split_out,
+            workdir=root / "timeline_freeze_split",
+            effect_specs={"frozen": freeze_split_spec},
+        )
+        split_a = frame(split_out, 0.6, root / "tl_frz_split_a.png")
+        split_b = frame(split_out, 1.1, root / "tl_frz_split_b.png")
+        split_delta = mean_abs(split_a, split_b)
+        check(
+            "R13 freeze centrale: il grafo si apre in split + concat",
+            "split=3" in split_planned["filter_script"]
+            and "concat=n=3" in split_planned["filter_script"],
+            None,
+        )
+        check(
+            "R13 la finestra ferma e' identica (diff < 1)",
+            split_delta < 1.0,
+            f"diff={split_delta:.4f}",
+        )
+
+        print("\nR14 -- cio' che resta impossibile, con il suo codice")
+        blend_error = None
+        try:
+            edl3_render.compile_timeline(
+                timeline_freeze,
+                effect_specs={
+                    "frozen": {
+                        "id": "blend_tl",
+                        "duration": SECONDS,
+                        "primitives": [
+                            {
+                                "kind": "blend",
+                                "params": {"mode": "screen", "source": "bg"},
+                            }
+                        ],
+                    }
+                },
+            )
+        except edl3_render.CompileError as exc:
+            blend_error = exc
+        check(
+            "R14 blend con seconda sorgente nella timeline: BLEND_INPUT_UNAVAILABLE",
+            blend_error is not None
+            and blend_error.code == "BLEND_INPUT_UNAVAILABLE",
+            "" if blend_error is None else blend_error.code,
+        )
+
+        rotate_error = None
+        try:
+            edl3_render.render_effect_spec(
+                {
+                    "id": "rotate",
+                    "duration": SECONDS,
+                    "primitives": [
+                        {
+                            "kind": "transform",
+                            "params": {"rotate": 12.0},
+                            "curve": bezier_curve,
+                        }
+                    ],
+                },
+                source,
+                root / "rotate" / "rotate.mp4",
+                width=WIDTH,
+                height=HEIGHT,
+                fps=FPS,
+                duration=SECONDS,
+            )
+        except (edl3_render.CompileError, RenderSpecError) as exc:
+            rotate_error = exc
+        check(
+            "R14 rotate resta PARAM_NOT_RENDERED, sul parametro preciso",
+            rotate_error is not None
+            and getattr(rotate_error, "code", "") == "PARAM_NOT_RENDERED"
+            and "params.rotate" in getattr(rotate_error, "where", ""),
+            "" if rotate_error is None else f"{rotate_error.code} @ {rotate_error.where}",
+        )
+
+        points_error = None
+        try:
+            bridge.curve_expression({"easing": "bezier"}, "T")
+        except RenderSpecError as exc:
+            points_error = exc
+        check(
+            "R14 bezier senza punti: CURVE_NOT_REPRESENTABLE su curve.points",
+            points_error is not None
+            and points_error.code == "CURVE_NOT_REPRESENTABLE"
+            and points_error.where == "curve.points",
+            "" if points_error is None else f"{points_error.code} @ {points_error.where}",
         )
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")

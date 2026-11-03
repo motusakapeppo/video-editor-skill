@@ -307,6 +307,16 @@ REFUSAL_CODES = frozenset(
         "CURVE_NOT_REPRESENTABLE",
         "BLUR_STYLE_NOT_RENDERED",
         "PARAM_NOT_RENDERED",
+        "PARAM_NOT_ANIMATABLE",
+        "MASK_SHAPE_NOT_RENDERED",
+        "TIME_MODE_NOT_RENDERED",
+        "TIME_FREEZE_EMPTY",
+        "BLEND_MODE_NOT_RENDERED",
+        "BLEND_SOURCE_MISSING",
+        "BLEND_INPUT_UNAVAILABLE",
+        "FONT_MISSING",
+        "FONT_METRICS_MISSING",
+        "FONT_UNREADABLE",
     }
 )
 
@@ -913,11 +923,14 @@ def _render_blocks(
 ) -> List[str]:
     """Emit a clip pipeline as ``-filter_complex_script`` lines.
 
-    Two block kinds, in the order the document declares them:
+    Three block kinds, in the order the document declares them:
 
     * ``filters`` — appends to the current chain;
     * ``fanout``  — ``split``, one branch per segment, ``concat`` back (reverse
-      and freeze are linear; a freeze or a multi-segment ramp fans out).
+      and freeze are linear; a freeze or a multi-segment ramp fans out);
+    * ``graph``   — a stage that needs more than one stream (a mask against a
+      generated canvas, a freeze against a ``split``): its own labelled lines,
+      starting from ``input`` and ending at ``output``.
 
     The emitter is what enforces the canonical order: it never sorts, so the
     chain order is exactly the block order the caller built.
@@ -931,6 +944,18 @@ def _render_blocks(
         kind = block["kind"]
         if kind == "filters":
             pending.extend(block["filters"])
+            continue
+
+        if kind == "graph":
+            # Flush the pending chain into the label the stage reads, then take
+            # the label it produced as the head of the next chain.
+            input_label = str(block["input"])
+            output_label = str(block["output"])
+            lines.append(label + ",".join(pending or ["null"]) + input_label)
+            lines.extend(str(line) for line in block["lines"])
+            label = output_label
+            pending = []
+            serial += 1
             continue
 
         if kind == "fanout":
@@ -1113,26 +1138,26 @@ def _clip_plan(
         f"scale={scaled_width}:{scaled_height}:"
         "force_original_aspect_ratio=decrease:flags=bicubic"
     )
-    # The composed spec runs as one ordered chain. It comes before the
-    # historical per-kind effects so its transform is a real first stage, while
-    # a document that never declares a spec keeps the exact graph it had.
-    if spec_plan is not None:
-        if spec_plan.get("chain") is None:
-            raise CompileError(
-                "UNSUPPORTED_EFFECT",
-                "la specifica usa 'blend', che richiede una seconda sorgente; il "
-                "percorso clip di edl3_render non la collega. Usa "
-                "render_effect_spec con extra_inputs.",
-                f"clips[{index}].effect_spec",
-            )
-        if spec_plan["chain"]:
-            geometry.append(str(spec_plan["chain"]))
+    # The composed spec runs as its own set of stages. They come before the
+    # historical per-kind effects so the spec's transform is a real first stage,
+    # while a document that never declares a spec keeps the exact graph it had.
+    # A stage that needs more than one stream (mask, freeze) enters the block
+    # list as a labelled sub-graph instead of one comma-joined chain.
+    spec_blocks: List[Dict[str, Any]] = (
+        [] if spec_plan is None else _effect_spec_blocks(spec_plan, index)
+    )
+    tail: List[str] = []
     for ordinal, color in enumerate(effects.get("color") or []):
-        geometry.append(_color_fragment(index, ordinal, color, fps, duration))
+        tail.append(_color_fragment(index, ordinal, color, fps, duration))
     for blur in effects.get("blur") or []:
-        geometry.append(_blur_fragment(blur))
-    geometry.extend(_filter_stage(effects, (scaled_width, scaled_height), fps))
-    blocks.append({"kind": "filters", "filters": geometry})
+        tail.append(_blur_fragment(blur))
+    tail.extend(_filter_stage(effects, (scaled_width, scaled_height), fps))
+    if spec_blocks:
+        blocks.append({"kind": "filters", "filters": geometry})
+        blocks.extend(spec_blocks)
+        blocks.append({"kind": "filters", "filters": tail})
+    else:
+        blocks.append({"kind": "filters", "filters": geometry + tail})
 
     opacity_filter: Optional[str] = None
     opacity_mode = "none"
@@ -1225,6 +1250,8 @@ def _clip_plan(
                 "budget": spec_plan.get("budget"),
                 "primitives": list(spec_plan.get("primitives") or []),
                 "filters": str(spec_plan.get("chain") or ""),
+                "multi_input": spec_plan.get("chain") is None,
+                "stages": len(spec_plan.get("stages") or []),
             }
         ),
         "generator": (
@@ -1910,12 +1937,17 @@ def _compile_effect_spec(
     fps: float,
     duration: float,
     where: str,
+    namespace: str = "",
 ) -> Dict[str, Any]:
     """Resolve a compose spec (or a historical name) into a validated plan.
 
     ``expand`` is the one owner of history: ``"zoom"`` and a hand-written
     ``transform`` spec reach the bridge through the same normalisation, so a
     legacy name cannot drift from its canonical formula.
+
+    ``namespace`` prefixes the plan's labels and filter instance names, so a
+    spec spliced into a timeline keeps its streams distinct from every other
+    clip's.
     """
     try:
         normalized = effect_compose.expand(effect)
@@ -1925,11 +1957,66 @@ def _compile_effect_spec(
             height=height,
             fps=fps,
             duration=duration,
+            namespace=namespace,
         )
     except effect_compose.SpecError as exc:
         raise CompileError("SPEC_INVALID", str(exc), where) from exc
     except effect_ffmpeg.RenderSpecError as exc:
+        if exc.code == "BLEND_SOURCE_MISSING":
+            # The bridge is right: no such source was supplied. In a document
+            # that is structural, because one clip carries one source.
+            raise CompileError(
+                "BLEND_INPUT_UNAVAILABLE",
+                exc.message
+                + " In un documento una clip ha una sola sorgente: usa "
+                "render_effect_spec(extra_inputs=...) per quel blend, oppure "
+                "params.source='self'.",
+                exc.where or where,
+            ) from exc
         raise CompileError(exc.code, exc.message, exc.where or where) from exc
+
+
+def _effect_spec_blocks(
+    spec_plan: Mapping[str, Any], index: int
+) -> List[Dict[str, Any]]:
+    """Turn a bridge plan into render blocks for one clip.
+
+    A plan whose stages are all single-stream becomes one ``filters`` block, i.e.
+    the historical comma-joined chain. A plan with a multi-stream stage (``mask``
+    or ``time`` freeze, which synthesize their extra streams) becomes a
+    ``graph`` block carrying the stage's own labelled lines. Only a stage that
+    needs an input the clip does not have — ``blend`` against a named source —
+    is still refused, because a timeline clip has exactly one source.
+    """
+    if not spec_plan.get("timeline_safe", True):
+        sources = list(spec_plan.get("extra_inputs") or [])
+        raise CompileError(
+            "BLEND_INPUT_UNAVAILABLE",
+            "la specifica fonde una seconda sorgente "
+            f"({', '.join(sources)}), ma una clip del documento ha una sola "
+            "sorgente: usa render_effect_spec(extra_inputs=...) per quel blend, "
+            "oppure params.source='self'.",
+            f"clips[{index}].effect_spec",
+        )
+    chain = spec_plan.get("chain")
+    if chain is not None:
+        return [] if not chain else [{"kind": "filters", "filters": [str(chain)]}]
+    blocks: List[Dict[str, Any]] = []
+    for stage in spec_plan.get("stages") or []:
+        if stage.get("kind") == "graph":
+            blocks.append(
+                {
+                    "kind": "graph",
+                    "input": str(stage["input"]),
+                    "output": str(stage["output"]),
+                    "lines": [str(line) for line in stage.get("lines") or []],
+                }
+            )
+        else:
+            filters = [str(item) for item in stage.get("filters") or []]
+            if filters:
+                blocks.append({"kind": "filters", "filters": filters})
+    return blocks
 
 
 def compile_timeline(
@@ -2041,6 +2128,7 @@ def compile_timeline(
                 fps=float(timeline.fps),
                 duration=clip.timeline_duration,
                 where=f"{clip_where}.effect_spec",
+                namespace=f"fx{clip_index}_",
             )
         )
         for slot, transition in (

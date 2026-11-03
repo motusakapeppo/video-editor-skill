@@ -56,6 +56,21 @@ Primitive -> filter
     refused with ``TIME_MODE_NOT_RENDERED``: a frame trail is a blend of
     neighbouring frames, not a timestamp change.
 
+Multi-input stages
+------------------
+
+``mask`` and a ``freeze`` that needs a ``split`` read more than one stream, so
+they cannot be a comma-joined chain. :func:`plan_spec` emits them as *stages*:
+each stage is either ``{"kind": "chain", "filters": [...]}`` or
+``{"kind": "graph", "input", "output", "lines"}``, and a host compiler (the
+timeline path in :mod:`vx.edl3_render`) splices the labelled lines between the
+clip's own chain fragments. Every primitive declares what it consumes in
+:data:`EXTRA_STREAMS`, and how much of that must arrive as an ffmpeg input in
+:data:`EXTRA_INPUTS`: only ``blend`` needs one, because ``mask``/``time``
+synthesize their extra streams (a generated canvas, a ``split``). ``namespace``
+prefixes every label and filter instance, so several plans can share one
+``filter_complex``.
+
 ``text``
     ``drawtext`` with ``fontfile`` pointing at the job's own font, declared in
     ``params.font`` as an absolute path (or passed as ``plan_spec(font=...)``).
@@ -77,10 +92,20 @@ Curves
 ``linear``, ``in``, ``out`` and ``in_out`` are written as the same closed forms
 :func:`vx.effects.compose.sample_curve` uses, so the graph samples the declared
 maths rather than a lookalike. A ``keys`` track is a piecewise expression: one
-polynomial segment per key, exactly as ``sample_curve`` interpolates it. A
-``bezier`` curve is **refused** with ``CURVE_NOT_REPRESENTABLE``: inverting the
-cubic x(t) for a general t is not an ffmpeg expression, and sampling it into
-many linear steps would be an approximation the spec did not declare.
+polynomial segment per key, exactly as ``sample_curve`` interpolates it.
+
+A ``bezier`` curve is evaluated at :data:`BEZIER_SAMPLES` (24) equally spaced
+``u`` and emitted as a piecewise-linear expression of ``u``; the tolerance is
+:data:`BEZIER_TOLERANCE` (1% of the ``from -> to`` envelope) and
+:func:`bezier_error` measures the real deviation against
+:func:`vx.effects.compose.sample_curve`, so the approximation is declared and
+checkable rather than silent. A ``bezier`` without ``points`` is still refused
+with ``CURVE_NOT_REPRESENTABLE``: there is no curve to sample.
+
+A primitive whose parameter is evaluated once, at graph construction, cannot
+animate: a span on ``mask``/``text``/``time`` params is refused with
+``PARAM_NOT_ANIMATABLE`` naming the parameter, because the graph would flatten
+it to its first value.
 
 Budget
 ------
@@ -103,6 +128,7 @@ from .compose import (
     canonical_easing,
     cost,
     expand,
+    sample_curve,
     sample_param,
     validate,
 )
@@ -119,6 +145,66 @@ RENDERABLE_PRIMITIVES: Tuple[str, ...] = (
 )
 #: Declared and validated, but deliberately not executed by this bridge.
 DECLARED_ONLY: Tuple[str, ...] = ("particles",)
+#: Primitives whose stage the timeline compiler can splice into one clip's
+#: chain. ``blend`` is absent because it needs a second *source*, which a clip
+#: in the timeline path does not have; ``mask``/``time`` only need streams this
+#: bridge synthesizes itself (a black canvas, a ``split``).
+TIMELINE_PRIMITIVES: Tuple[str, ...] = (
+    "transform",
+    "grade",
+    "blur",
+    "mask",
+    "time",
+    "text",
+)
+#: Extra streams a primitive consumes beyond the clip itself. ``mask`` reads a
+#: generated canvas, ``time`` fans the clip out, ``blend`` reads a second input.
+EXTRA_STREAMS: Mapping[str, int] = {
+    "transform": 0,
+    "grade": 0,
+    "blur": 0,
+    "text": 0,
+    "mask": 1,
+    "time": 1,
+    "blend": 1,
+}
+#: How many of those streams come from *outside* the clip, i.e. as an ffmpeg
+#: input the caller must supply. Only ``blend`` has one.
+EXTRA_INPUTS: Mapping[str, int] = {
+    kind: (1 if kind == "blend" else 0) for kind in RENDERABLE_PRIMITIVES
+}
+#: Parameters the bridge evaluates once, when the graph is built. A span on one
+#: of them would be silently flattened to its first value, so it is refused.
+STATIC_PARAMS: Mapping[str, Tuple[str, ...]] = {
+    "mask": (
+        "shape",
+        "feather",
+        "cx",
+        "cy",
+        "width",
+        "height",
+        "angle",
+        "invert",
+    ),
+    "text": (
+        "content",
+        "size",
+        "color",
+        "align",
+        "x",
+        "y",
+        "tracking",
+        "weight",
+        "font",
+    ),
+    "time": ("mode", "rate", "at", "frames", "hold"),
+}
+#: Points used to sample a bezier curve into a piecewise-linear expression.
+BEZIER_SAMPLES = 24
+#: Declared tolerance of that sampling, as a fraction of the ``from -> to``
+#: envelope. :func:`bezier_error` measures the real maximum against it.
+BEZIER_TOLERANCE = 0.01
+
 #: A spec above this cost is refused instead of rendered.
 DEFAULT_BUDGET = 8.0
 #: ffmpeg blend mode names for the spec's vocabulary.
@@ -234,12 +320,90 @@ def _ease_expression(name: str, u: str) -> str:
         return f"(1-(1-{u})*(1-{u}))"
     if canonical == "in_out":
         return f"({u}*{u}*(3-2*{u}))"
-    raise RenderSpecError(
-        "CURVE_NOT_REPRESENTABLE",
-        "la curva 'bezier' non è rappresentabile come espressione ffmpeg: "
-        "invertire x(t) per un t generico non è una formula del linguaggio. "
-        "Usa linear, in, out, in_out oppure una curva a chiavi.",
-    )
+    # bezier is not a closed form: ``curve_expression`` samples it instead.
+    return u
+
+
+def bezier_samples(
+    curve: Mapping[str, Any], samples: int = BEZIER_SAMPLES
+) -> List[Tuple[float, float]]:
+    """``(u, sample_curve(u))`` at ``samples + 1`` equally spaced points."""
+    count = max(2, int(samples))
+    return [
+        (index / float(count), float(sample_curve(curve, index / float(count))))
+        for index in range(count + 1)
+    ]
+
+
+def _bezier_expression(
+    curve: Mapping[str, Any], u: str, samples: int = BEZIER_SAMPLES
+) -> str:
+    """A bezier envelope as a piecewise-linear expression of ``u``.
+
+    ``sample_curve`` inverts x(t) by bisection; the expression language cannot.
+    Sampling keeps the declared maths at the nodes and interpolates between
+    them: the error is bounded by the curve's own second derivative and is
+    measured by :func:`bezier_error`, never assumed.
+    """
+    points = curve.get("points") or ()
+    if len(points) < 2:
+        raise RenderSpecError(
+            "CURVE_NOT_REPRESENTABLE",
+            "la curva 'bezier' senza 'points' non ha una forma da campionare: "
+            "servono due punti di controllo [[x1, y1], [x2, y2]].",
+            "curve.points",
+        )
+    stops = bezier_samples(curve, samples)
+    raw = _num(stops[-1][1])
+    for index in range(len(stops) - 2, -1, -1):
+        t0, v0 = stops[index]
+        t1, v1 = stops[index + 1]
+        span = t1 - t0
+        local = "0" if span <= 0 else f"(({u})-{_num(t0)})/{_num(span)}"
+        segment = f"({_num(v0)}+({_num(v1 - v0)})*{local})"
+        raw = f"if(lt({u},{_num(t1)}),{segment},{raw})"
+    return raw
+
+
+def sampled_bezier(stops: Sequence[Tuple[float, float]], u: float) -> float:
+    """The very piecewise-linear function the graph evaluates, in Python."""
+    u = min(1.0, max(0.0, float(u)))
+    if u >= stops[-1][0]:
+        return float(stops[-1][1])
+    for (t0, v0), (t1, v1) in zip(stops, stops[1:]):
+        if t0 <= u <= t1:
+            span = t1 - t0
+            return v0 if span <= 0 else v0 + (v1 - v0) * (u - t0) / span
+    return float(stops[-1][1])
+
+
+def bezier_error(
+    curve: Mapping[str, Any],
+    samples: int = BEZIER_SAMPLES,
+    probes: int = 2001,
+) -> Dict[str, Any]:
+    """Measure the sampled curve against the exact one, in absolute and %.
+
+    Returns ``max_abs`` (envelope units), ``max_relative`` (fraction of the
+    declared ``from -> to`` span, the tolerance's unit), the sample count and
+    the tolerance this bridge declares.
+    """
+    stops = bezier_samples(curve, samples)
+    exact = [float(sample_curve(curve, index / float(probes - 1))) for index in range(probes)]
+    sampled = [
+        sampled_bezier(stops, index / float(probes - 1)) for index in range(probes)
+    ]
+    deviations = [abs(left - right) for left, right in zip(exact, sampled)]
+    worst = max(deviations) if deviations else 0.0
+    start = float(curve.get("from", 0.0))
+    end = float(curve.get("to", 1.0))
+    span = abs(end - start) or 1.0
+    return {
+        "samples": int(max(2, samples)),
+        "max_abs": worst,
+        "max_relative": worst / span,
+        "tolerance": BEZIER_TOLERANCE,
+    }
 
 
 def curve_expression(curve: Optional[Mapping[str, Any]], u_expression: str) -> str:
@@ -281,6 +445,11 @@ def curve_expression(curve: Optional[Mapping[str, Any]], u_expression: str) -> s
         # sample_curve returns the keys' own values: from/to are not applied to
         # a piecewise track, and the graph must agree with the declared maths.
         return f"if(lt({u},{_num(stops[0][0])}),{_num(stops[0][1])},{raw})"
+
+    if canonical_easing(easing) == "bezier":
+        # The sampled envelope already carries from/to: sample_curve applies
+        # them, and applying them twice would double the declared span.
+        return _bezier_expression(curve, u)
 
     raw = _ease_expression(str(easing), u)
     start = float(curve.get("from", 0.0))
@@ -489,6 +658,7 @@ def _grade_filters(
     *,
     fps: float,
     duration: float,
+    prefix: str = "fx",
 ) -> List[str]:
     params = primitive.get("params") or {}
     filters: List[str] = _lut_filters(str(params.get("lut", "none")))
@@ -509,7 +679,7 @@ def _grade_filters(
 
     names = ("brightness", "contrast", "saturation", "gamma")
     animated = [name for name in names if _animated(params.get(name))]
-    target = f"eq@fxgrade{ordinal}"
+    target = f"eq@{prefix}grade{ordinal}"
     initial = {name: _scalar(params.get(name), 0.0) for name in names}
     settings = ":".join(f"{name}={_num(value)}" for name, value in initial.items())
 
@@ -530,6 +700,7 @@ def _blur_filters(
     height: int,
     fps: float,
     duration: float,
+    prefix: str = "fx",
 ) -> List[str]:
     params = primitive.get("params") or {}
     style = str(params.get("style", "gaussian"))
@@ -556,7 +727,7 @@ def _blur_filters(
         )
 
     sigma_raw = params.get("sigma", 4.0)
-    target = f"gblur@fxblur{ordinal}"
+    target = f"gblur@{prefix}blur{ordinal}"
     if style == "box":
         if _animated(sigma_raw):
             raise RenderSpecError(
@@ -651,12 +822,13 @@ def _mask_stage(
     fps: float,
     duration: float,
     graph: List[str],
+    prefix: str = "fx",
 ) -> None:
     """Append the masked merge of the clip against black, mask generated here."""
     alpha = _mask_expression(primitive, ordinal, width=width, height=height)
-    black = f"[fxmaskbase{ordinal}]"
-    video = f"[fxmaskvid{ordinal}]"
-    mask = f"[fxmask{ordinal}]"
+    black = f"[{prefix}maskbase{ordinal}]"
+    video = f"[{prefix}maskvid{ordinal}]"
+    mask = f"[{prefix}mask{ordinal}]"
     canvas = (
         f"color=c=black:s={int(width)}x{int(height)}:r={_num(fps)}:"
         f"d={_num(duration)}"
@@ -737,6 +909,7 @@ def _freeze_stage(
     fps: float,
     duration: float,
     graph: List[str],
+    prefix: str = "fx",
 ) -> None:
     """Hold one frame, then resume the clip without changing the duration."""
     params = primitive.get("params") or {}
@@ -785,11 +958,11 @@ def _freeze_stage(
         )
         return
 
-    outputs = [f"[fxfreeze{ordinal}_{index}]" for index in range(len(branches))]
+    outputs = [f"[{prefix}freeze{ordinal}_{index}]" for index in range(len(branches))]
     graph.append(f"{_label(current)}split={len(branches)}{''.join(outputs)}")
     for output, (name, filters) in zip(outputs, branches):
-        graph.append(f"{output}{filters}[fxfrz{ordinal}_{name}]")
-    joined = "".join(f"[fxfrz{ordinal}_{name}]" for name, _ in branches)
+        graph.append(f"{output}{filters}[{prefix}frz{ordinal}_{name}]")
+    joined = "".join(f"[{prefix}frz{ordinal}_{name}]" for name, _ in branches)
     graph.append(
         f"{joined}concat=n={len(branches)}:v=1:a=0,"
         f"trim=duration={_num(duration)},setpts=PTS-STARTPTS{_label(next_label)}"
@@ -939,6 +1112,7 @@ def _other_source(
     fps: float,
     duration: float,
     extra_sources: Mapping[str, Any],
+    prefix: str = "fx",
 ) -> Tuple[str, bool]:
     """Return ``(label, is_generated)`` for a blend's second input."""
     name = str(source_name or "self")
@@ -951,7 +1125,22 @@ def _other_source(
             f"(disponibili: {sorted(str(key) for key in extra_sources) or 'nessuna'}).",
             f"primitives[{ordinal}].params.source",
         )
-    return f"[fxblack{ordinal}]", True
+    return f"[{prefix}black{ordinal}]", True
+
+
+def _refuse_static_animation(primitive: Mapping[str, Any], ordinal: int) -> None:
+    """Refuse a span on a parameter the graph reads once, naming the parameter."""
+    kind = str(primitive.get("kind"))
+    params = primitive.get("params") or {}
+    for name in STATIC_PARAMS.get(kind, ()):
+        if _animated(params.get(name)):
+            raise RenderSpecError(
+                "PARAM_NOT_ANIMATABLE",
+                f"{kind}.{name} è valutato una sola volta quando il grafo è "
+                "costruito: una coppia [inizio, fine] verrebbe appiattita sul "
+                "primo valore. Usa un valore statico, o togli la curva.",
+                f"primitives[{ordinal}].params.{name}",
+            )
 
 
 def plan_spec(
@@ -966,16 +1155,27 @@ def plan_spec(
     output: str = "[vout]",
     extra_sources: Optional[Mapping[str, Any]] = None,
     font: Optional[str] = None,
+    namespace: str = "",
 ) -> Dict[str, Any]:
     """Compile one spec into filters, or refuse it with a declared reason.
 
     ``duration`` defaults to the spec's own. ``extra_sources`` maps a blend's
     ``source`` name to an ffmpeg label (``"[1:v]"``); ``self`` blends against a
     generated black canvas. ``font`` is the job's font file used by ``text``
-    when the primitive does not declare its own ``params.font``. Returns
-    ``filters`` (the effect chain, embeddable with commas when the spec needs
-    no multi-input graph), ``chain`` (``None`` when the graph needs labels),
-    ``filter_complex`` (the complete graph), ``cost`` and ``estimate``.
+    when the primitive does not declare its own ``params.font``.
+
+    ``namespace`` prefixes every label and filter instance this plan creates
+    (``"fx3_"`` -> ``[fx3_0]``). A caller that splices several plans into one
+    ``filter_complex`` must pass a distinct namespace per clip; the default
+    keeps the historical single-plan labels.
+
+    Returns ``filters`` (the effect chain, embeddable with commas when the spec
+    needs no multi-input graph), ``chain`` (``None`` when a stage needs more
+    than one stream), ``filter_complex`` (the complete graph), ``stages`` (the
+    per-primitive fragments a host compiler splices, each one either
+    ``{"kind": "chain"}`` or ``{"kind": "graph"}``), ``extra_inputs`` (the
+    blend sources the caller must still supply), ``timeline_safe`` (no stage
+    needs an input from outside the clip), ``cost`` and ``estimate``.
     """
     normalized = expand(spec)
 
@@ -1020,30 +1220,36 @@ def plan_spec(
         if (
             isinstance(curve, Mapping)
             and canonical_easing(curve.get("easing", "linear")) == "bezier"
+            and not (curve.get("points") or ())
         ):
             raise RenderSpecError(
                 "CURVE_NOT_REPRESENTABLE",
-                "la curva 'bezier' non è rappresentabile come espressione ffmpeg: "
-                "invertire x(t) per un t generico non è una formula del linguaggio "
-                "e campionarla sarebbe un'approssimazione non dichiarata. Usa "
-                "linear, in, out, in_out oppure una curva a chiavi.",
-                f"primitives[{index}].curve.easing",
+                "la curva 'bezier' senza 'points' non è campionabile: servono due "
+                "punti di controllo [[x1, y1], [x2, y2]].",
+                f"primitives[{index}].curve.points",
             )
+        _refuse_static_animation(primitive, index)
 
+    prefix = str(namespace) if namespace else "fx"
     width = int(width)
     height = int(height)
     rate = float(fps)
     extra = dict(extra_sources or {})
     filters: List[str] = []
     graph: List[str] = []
-    current = "[fx0]"
+    stages: List[Dict[str, Any]] = []
+    external: List[str] = []
+    current = f"[{prefix}0]"
     graph.append(f"{_label(source)}{_normalisation(width, height, rate, span)}{current}")
     serial = 0
     has_graph = False
 
     for index, primitive in enumerate(primitives):
         kind = primitive.get("kind")
-        next_label = f"[fx{serial + 1}]"
+        next_label = f"[{prefix}{serial + 1}]"
+        graph_start = len(graph)
+        stage: List[str] = []
+        stage_kind = "chain"
         if kind == "transform":
             stage = _transform_filters(
                 primitive,
@@ -1054,7 +1260,9 @@ def plan_spec(
                 duration=span,
             )
         elif kind == "grade":
-            stage = _grade_filters(primitive, index, fps=rate, duration=span)
+            stage = _grade_filters(
+                primitive, index, fps=rate, duration=span, prefix=prefix
+            )
         elif kind == "blur":
             stage = _blur_filters(
                 primitive,
@@ -1063,9 +1271,11 @@ def plan_spec(
                 height=height,
                 fps=rate,
                 duration=span,
+                prefix=prefix,
             )
         elif kind == "blend":
             has_graph = True
+            stage_kind = "graph"
             stage = _blend_stage(
                 primitive,
                 index,
@@ -1077,12 +1287,12 @@ def plan_spec(
                 duration=span,
                 extra=extra,
                 graph=graph,
+                prefix=prefix,
+                external=external,
             )
-            current = next_label
-            serial += 1
-            continue
         elif kind == "mask":
             has_graph = True
+            stage_kind = "graph"
             _mask_stage(
                 primitive,
                 index,
@@ -1093,14 +1303,13 @@ def plan_spec(
                 fps=rate,
                 duration=span,
                 graph=graph,
+                prefix=prefix,
             )
-            current = next_label
-            serial += 1
-            continue
         elif kind == "time":
             stage = _time_filters(primitive, index, fps=rate, duration=span)
             if stage is None:
                 has_graph = True
+                stage_kind = "graph"
                 _freeze_stage(
                     primitive,
                     index,
@@ -1109,10 +1318,8 @@ def plan_spec(
                     fps=rate,
                     duration=span,
                     graph=graph,
+                    prefix=prefix,
                 )
-                current = next_label
-                serial += 1
-                continue
         elif kind == "text":
             stage = _text_filters(
                 primitive,
@@ -1128,10 +1335,36 @@ def plan_spec(
                 f"primitives[{index}].kind",
             )
 
+        if stage_kind == "graph":
+            # The stage wrote its own labelled lines; the clip chain continues
+            # from the label it produced.
+            stages.append(
+                {
+                    "kind": "graph",
+                    "input": current,
+                    "output": next_label,
+                    "lines": graph[graph_start:],
+                    "primitive": kind,
+                    "ordinal": index,
+                    "extra_streams": int(EXTRA_STREAMS.get(kind, 0)),
+                }
+            )
+            current = next_label
+            serial += 1
+            continue
+
         if not stage:
             continue
         filters.extend(stage)
         graph.append(f"{current}{','.join(stage)}{next_label}")
+        stages.append(
+            {
+                "kind": "chain",
+                "filters": list(stage),
+                "primitive": kind,
+                "ordinal": index,
+            }
+        )
         current = next_label
         serial += 1
 
@@ -1143,6 +1376,10 @@ def plan_spec(
         "filter_complex": ";\n".join(graph) + "\n",
         "has_blend": has_graph,
         "has_graph": has_graph,
+        "stages": stages,
+        "extra_inputs": sorted(set(external)),
+        "timeline_safe": not external,
+        "namespace": prefix,
         "cost": estimate,
         "budget": limit,
         "duration": span,
@@ -1171,6 +1408,8 @@ def _blend_stage(
     duration: float,
     extra: Mapping[str, Any],
     graph: List[str],
+    prefix: str = "fx",
+    external: Optional[List[str]] = None,
 ) -> List[str]:
     params = primitive.get("params") or {}
     mode = BLEND_MODES.get(str(params.get("mode", "normal")))
@@ -1188,6 +1427,7 @@ def _blend_stage(
         fps=fps,
         duration=duration,
         extra_sources=extra,
+        prefix=prefix,
     )
     if generated:
         graph.append(
@@ -1196,13 +1436,16 @@ def _blend_stage(
         )
     else:
         graph.append(
-            f"{other}{_normalisation(width, height, fps, duration)}[fxother{ordinal}]"
+            f"{other}{_normalisation(width, height, fps, duration)}[{prefix}other{ordinal}]"
         )
+        if external is not None:
+            # The caller must supply this one as an ffmpeg input.
+            external.append(str(params.get("source")))
 
     # mix is the blend's all_opacity; opacity scales it further.
     mix_raw = params.get("mix", 1.0)
     opacity = _scalar(params.get("opacity", 1.0), 1.0)
-    target = f"blend@fxblend{ordinal}"
+    target = f"blend@{prefix}blend{ordinal}"
     if _animated(mix_raw):
         rows = _frame_table(primitive, ("mix",), duration, fps)
         scaled = [
@@ -1217,14 +1460,14 @@ def _blend_stage(
             for t, values in rows
         ]
         commands = _sendcmd(target, scaled)
-        graph.append(f"{current}{commands}[fxblendin{ordinal}]")
-        current = f"[fxblendin{ordinal}]"
+        graph.append(f"{current}{commands}[{prefix}blendin{ordinal}]")
+        current = f"[{prefix}blendin{ordinal}]"
         initial = max(0.0, min(1.0, _scalar(mix_raw, 1.0) * opacity))
         opacity_arg = f":all_opacity={_num(initial)}"
     else:
         opacity_arg = f":all_opacity={_num(max(0.0, min(1.0, _scalar(mix_raw, 1.0) * opacity)))}"
 
-    other_label = other if generated else f"[fxother{ordinal}]"
+    other_label = other if generated else f"[{prefix}other{ordinal}]"
     graph.append(
         f"{current}{other_label}{target}=all_mode={mode}{opacity_arg}{next_label}"
     )
@@ -1232,11 +1475,20 @@ def _blend_stage(
 
 
 __all__ = [
+    "BEZIER_SAMPLES",
+    "BEZIER_TOLERANCE",
     "BLEND_MODES",
     "DECLARED_ONLY",
     "DEFAULT_BUDGET",
+    "EXTRA_INPUTS",
+    "EXTRA_STREAMS",
     "RENDERABLE_PRIMITIVES",
     "RenderSpecError",
+    "STATIC_PARAMS",
+    "TIMELINE_PRIMITIVES",
+    "bezier_error",
+    "bezier_samples",
     "curve_expression",
     "plan_spec",
+    "sampled_bezier",
 ]
