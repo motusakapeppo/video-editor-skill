@@ -6,8 +6,8 @@ Un server stdlib su `127.0.0.1`. Con **un** lavoro si comporta come sempre; con
 
 * ``/``                    la pagina, che chiede lo stato ogni secondo;
 * ``/api/state?job=N``     lo stato: fase, percentuale, fotogrammi, approvazione,
-                           il master, gli ``shots`` con sorgente ed effetti, e la
-                           lista ``jobs``;
+                           il master, gli ``shots`` con sorgente ed effetti, il
+                           registro ``decisions`` e la lista ``jobs``;
 * ``/api/approve?job=N``   POST che scrive il record **nella forma di keygate**;
 * ``/frames/<nome>?job=N`` il PNG di un fotogramma;
 * ``/shots/<i>?job=N``     il JPEG dello shot ``i``: miniatura pronta, cache o un
@@ -890,6 +890,12 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         report = _read_json(data_dir / "report.json")
     estimate = report.get("estimate") if isinstance(report.get("estimate"), Mapping) else {}
     plan_choice = report.get("plan_choice") if isinstance(report.get("plan_choice"), Mapping) else {}
+    raw_decisions = report.get("decisions")
+    decision_log = (
+        [dict(item) for item in raw_decisions if isinstance(item, Mapping)]
+        if isinstance(raw_decisions, list)
+        else []
+    )
     if not estimate and isinstance(progress.get("estimate"), Mapping):
         estimate = progress.get("estimate")
     if not plan_choice and isinstance(progress.get("plan_choice"), Mapping):
@@ -926,6 +932,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "note": note,
         "estimate": estimate,
         "plan_choice": plan_choice,
+        "decisions": decision_log,
         "outcome": outcome,
         "phases": _derived_phases(directory) if derived else (progress.get("phases") or []),
         "journal": [] if derived else list(progress.get("journal") or []),
@@ -959,6 +966,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "note": "",
             "estimate": {},
             "plan_choice": {},
+            "decisions": [],
             "outcome": "idle",
             "phases": [],
             "journal": [],

@@ -35,6 +35,7 @@ from . import (
     asset_triage,
     contract,
     decide,
+    decisions,
     deliverables,
     edl_plan,
     estimate,
@@ -1065,6 +1066,581 @@ def _rationale(payload: Any) -> Mapping[str, Any]:
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+# ----------------------------------------------------------- the decision log
+
+
+def _display(value: Any, unit: str = "") -> str:
+    """Un numero leggibile in una prova; ``n/d`` quando non c'e' misura."""
+    try:
+        return f"{float(value):g}{unit}"
+    except (TypeError, ValueError):
+        return "n/d"
+
+
+def _decider(selected_by: Any) -> str:
+    """Traduce la provenienza della sezione in ``auto``/``user``/``timeout``."""
+    text = str(selected_by or "").strip().lower()
+    if text == "user":
+        return "user"
+    if "timeout" in text:
+        return "timeout"
+    return "auto"
+
+
+def _decision_font(
+    section: Any,
+    *,
+    requirement: str,
+    energy: float,
+    plan: Any,
+) -> Dict[str, Any]:
+    """La famiglia scelta, con i punteggi e la licenza che l'hanno sostenuta."""
+    data = section if isinstance(section, Mapping) else {}
+    candidates = [
+        item for item in (data.get("candidates") or ()) if isinstance(item, Mapping)
+    ]
+    family = str(data.get("family") or "").strip()
+    pool = str(data.get("pool") or "locale")
+    selected_by = str(data.get("selected_by") or "auto")
+    resolution = tuple(getattr(plan, "resolution", ()) or ())
+    width = int(resolution[0]) if len(resolution) > 0 else 0
+    height = int(resolution[1]) if len(resolution) > 1 else 0
+    frame = f"{width}x{height}" if width and height else "il formato di consegna"
+    falsified = (
+        f"il titolo a {frame} risulta illeggibile o fuori tono rispetto al brief"
+    )
+    if family:
+        item = next(
+            (c for c in candidates if str(c.get("family") or "") == family), {}
+        )
+        score = item.get("score")
+        evidence = [
+            f"richiesta '{requirement or 'montaggio'}' con energia {float(energy):.3f}",
+            f"{len(candidates)} candidati commerciali dal pool {pool}; "
+            f"{family} score {_display(score)}",
+        ]
+        licence = str(data.get("licence") or "").strip()
+        if licence:
+            evidence.append(f"licenza {licence} dichiarata dalla proposta")
+        waited = float(data.get("waited_sec") or 0.0)
+        if waited > 0:
+            evidence.append(
+                f"attesa {waited:g} s prima della scelta ({selected_by})"
+            )
+        fallback = str(data.get("fallback_reason") or "").strip()
+        if fallback:
+            evidence.append(f"ripiego sul preset: {fallback}")
+        confidence = (
+            "high"
+            if len(candidates) >= 2 and score is not None and not fallback
+            else "medium"
+        )
+        if selected_by == "auto_after_timeout":
+            confidence = "medium"
+        alternatives = [
+            {
+                "option": str(other.get("family") or ""),
+                "why_not": (
+                    f"score {_display(other.get('score'))} contro "
+                    f"{_display(score)}"
+                ),
+            }
+            for other in candidates
+            if str(other.get("family") or "") != family
+        ]
+        return decisions.record(
+            id="font",
+            question=f"quale famiglia per {requirement or 'il montaggio'}?",
+            chosen=family,
+            confidence=confidence,
+            evidence=evidence,
+            alternatives=alternatives,
+            alternatives_note=(
+                ""
+                if alternatives
+                else "un solo candidato commerciale utilizzabile: nessuna alternativa reale"
+            ),
+            falsified_if=falsified,
+            by=_decider(selected_by),
+        )
+    error = str(data.get("error") or "nessun font proposto").strip()
+    return decisions.record(
+        id="font",
+        question=f"quale famiglia per {requirement or 'il montaggio'}?",
+        chosen="preset del contratto",
+        confidence="low",
+        evidence=[
+            f"0 candidati utilizzabili dal pool {pool}",
+            f"motivo: {error}",
+        ],
+        alternatives=[
+            {
+                "option": "forzare un font del catalogo",
+                "why_not": "nessuna licenza commerciale verificata nella proposta",
+            }
+        ],
+        falsified_if=falsified,
+        by=_decider(selected_by),
+    )
+
+
+def _decision_keyframes(section: Any, plan: Any) -> Dict[str, Any]:
+    """I fotogrammi: quanti, a che istanti, e se qualcuno li ha approvati."""
+    data = section if isinstance(section, Mapping) else {}
+    count = int(data.get("count") or 0)
+    approved = bool(data.get("approved"))
+    selected_by = str(data.get("selected_by") or "none")
+    duration = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+    digest = str(data.get("digest") or "")
+    waited = float(data.get("waited_sec") or 0.0)
+    reason = str(data.get("reason") or "").strip()
+    falsified = (
+        "un fotogramma approvato non corrisponde al clip/istante dichiarato "
+        "o il digest non copre la timeline renderizzata"
+    )
+    if count <= 0:
+        return decisions.record(
+            id="keyframes",
+            question="quali fotogrammi mostrare prima del render?",
+            chosen="nessun fotogramma: si prosegue",
+            confidence="low",
+            evidence=[
+                f"0 fotogrammi proposti su una timeline di {duration:.2f} s",
+                f"motivo: {reason or 'piano dei fotogrammi non disponibile'}",
+            ],
+            alternatives=[],
+            alternatives_note=(
+                "nessun piano da approvare: non c'erano fotogrammi fra cui scegliere"
+            ),
+            falsified_if=falsified,
+            by=_decider(selected_by),
+        )
+    chosen = (
+        f"{count} fotogrammi approvati"
+        if approved
+        else f"{count} fotogrammi, render senza approvazione"
+    )
+    evidence = [
+        f"{count} fotogrammi ai quartili 25/50/75% di {duration:.2f} s",
+        f"digest {digest[:12] or 'n/d'} su {len(data.get('frames') or ())} PNG",
+    ]
+    if waited > 0:
+        evidence.append(f"attesa {waited:g} s ({selected_by})")
+    if not approved and reason:
+        evidence.append(f"nessuna approvazione: {reason}")
+    confidence = "high" if approved else ("low" if selected_by == "timeout" else "medium")
+    return decisions.record(
+        id="keyframes",
+        question="quali fotogrammi mostrare prima del render?",
+        chosen=chosen,
+        confidence=confidence,
+        evidence=evidence,
+        alternatives=(
+            [
+                {
+                    "option": "aspettare oltre il tetto",
+                    "why_not": f"il render sarebbe rimasto fermo oltre {waited:g} s",
+                }
+            ]
+            if selected_by == "timeout"
+            else []
+        ),
+        alternatives_note=(
+            ""
+            if selected_by == "timeout"
+            else "nessuna alternativa reale: il cancello ha un tetto e non blocca il render"
+        ),
+        falsified_if=falsified,
+        by=_decider(selected_by),
+    )
+
+
+def _decision_plan(plan_choice: Any, estimate_section: Any) -> Dict[str, Any]:
+    """Full o fast: la stima, il tetto e cosa si e' rinunciato a fare."""
+    choice = plan_choice if isinstance(plan_choice, Mapping) else {}
+    info = estimate_section if isinstance(estimate_section, Mapping) else {}
+    chosen = str(choice.get("chosen") or "full")
+    selected_by = str(choice.get("selected_by") or "budget")
+    budget = choice.get("budget_seconds")
+    high = info.get("high")
+    low = info.get("low")
+    resolution = info.get("resolution") or ()
+    if len(resolution) >= 2:
+        frame = f"{int(resolution[0])}x{int(resolution[1])}"
+    else:
+        frame = "n/d"
+    evidence = []
+    if high is not None and budget is not None:
+        evidence.append(
+            f"stima {_display(low)}-{_display(high)} s contro budget "
+            f"{_display(budget)} s"
+        )
+    evidence.append(
+        f"preset {info.get('preset') or 'n/d'}, risoluzione {frame}, "
+        f"calibrato={bool(info.get('calibrated'))}"
+    )
+    traded = list(choice.get("traded") or ())
+    if chosen == "fast":
+        evidence.append(
+            f"risparmio stimato {_display(choice.get('saved_seconds_estimate'), ' s')}; "
+            f"{len(traded)} compromessi: {', '.join(str(item) for item in traded[:3])}"
+        )
+    else:
+        evidence.append(
+            f"piano completo: {_display(info.get('seconds'), ' s')} stimati, "
+            f"{int(choice.get('asked') and 1 or 0)} domande poste"
+        )
+    if selected_by == "timeout":
+        confidence = "low"
+    elif selected_by == "user":
+        confidence = "medium"
+    elif high is not None and budget is not None and float(high) <= float(budget):
+        confidence = "high"
+    else:
+        confidence = "medium"
+    falsified = (
+        f"il master supera il budget di {_display(budget, ' s')} o la versione "
+        "rapida cambia la struttura di layer 0"
+    )
+    if chosen == "fast":
+        alternatives = [
+            {
+                "option": "full",
+                "why_not": (
+                    f"la stima alta {_display(high, ' s')} supera il budget di "
+                    f"{_display(budget, ' s')}"
+                ),
+            }
+        ]
+    elif selected_by == "budget":
+        alternatives = [
+            {
+                "option": "fast",
+                "why_not": "il piano completo sta nel budget: la versione rapida non serviva",
+            }
+        ]
+    else:
+        alternatives = [
+            {
+                "option": "fast",
+                "why_not": "la scelta umana ha tenuto il piano completo; la versione "
+                "rapida avrebbe abbassato risoluzione e preset",
+            }
+        ]
+    return decisions.record(
+        id="plan",
+        question="piano completo o versione rapida?",
+        chosen=f"{chosen} ({selected_by})",
+        confidence=confidence,
+        evidence=evidence,
+        alternatives=alternatives,
+        falsified_if=falsified,
+        by=_decider(selected_by),
+    )
+
+
+def _decision_coherence(section: Any) -> Dict[str, Any]:
+    """Le violazioni trovate e la scelta fra accettare, correggere e spegnere."""
+    data = section if isinstance(section, Mapping) else {}
+    metrics = data.get("metrics") if isinstance(data.get("metrics"), Mapping) else {}
+    violations = [
+        item for item in (data.get("violations") or ()) if isinstance(item, Mapping)
+    ]
+    unknown = list(metrics.get("unknown") or ())
+    checked = not unknown and metrics.get("variety") is not None
+    falsified = (
+        "un controllo rifatto sul master trova una violazione che il referto non elenca"
+    )
+    if data.get("disabled"):
+        return decisions.record(
+            id="coherence",
+            question="il montaggio rispetta le regole di coerenza?",
+            chosen="--free: controlli spenti",
+            confidence="low",
+            evidence=[
+                "0 controlli eseguiti e 0 fotogrammi misurati: nessuna prova disponibile",
+                f"motivo dichiarato: {data.get('reason') or '--free'}",
+            ],
+            alternatives=[
+                {
+                    "option": "eseguire i controlli",
+                    "why_not": "la richiesta esplicita li ha spenti per questo giro",
+                }
+            ],
+            falsified_if=falsified,
+            by="user",
+        )
+    if data.get("error"):
+        return decisions.record(
+            id="coherence",
+            question="il montaggio rispetta le regole di coerenza?",
+            chosen="referto non calcolato: si prosegue",
+            confidence="low",
+            evidence=[
+                f"errore: {data.get('error')}",
+                "0 violazioni lette perche' il referto non esiste",
+            ],
+            alternatives=[
+                {
+                    "option": "fermare il render",
+                    "why_not": "un referto rotto non e' una violazione del montaggio",
+                }
+            ],
+            falsified_if=falsified,
+            by="auto",
+        )
+    shots = metrics.get("shots")
+    variety = metrics.get("variety")
+    justified = metrics.get("justified_cuts")
+    cuts = metrics.get("cuts")
+    if violations:
+        codes = ", ".join(str(item.get("code")) for item in violations)
+        evidence = [
+            f"{len(violations)} violazioni: {codes}",
+            f"{_display(shots)} shot, varieta' {_display(variety)}, "
+            f"{_display(justified)}/{_display(cuts)} tagli giustificati",
+        ]
+        if unknown:
+            evidence.append(
+                f"controllo parziale: {len(unknown)} verifiche non eseguite "
+                f"({', '.join(str(item.get('check')) for item in unknown[:3])})"
+            )
+        chosen = f"accettare {len(violations)} violazioni e dichiararle"
+        confidence = "medium" if checked else "low"
+        alternatives = [
+            {
+                "option": "correggere il piano",
+                "why_not": "auto non riscrive la timeline dopo il cancello: servirebbe un nuovo giro",
+            },
+            {
+                "option": "--free",
+                "why_not": "spegnere il controllo lascerebbe la violazione nel master",
+            },
+        ]
+    else:
+        evidence = [
+            f"0 violazioni su {_display(shots)} shot; varieta' {_display(variety)}",
+            f"{_display(justified)}/{_display(cuts)} tagli giustificati",
+        ]
+        if unknown:
+            evidence.append(
+                f"controllo parziale: {len(unknown)} verifiche non eseguite "
+                f"({', '.join(str(item.get('check')) for item in unknown[:3])})"
+            )
+        chosen = "accettare il piano: 0 violazioni"
+        confidence = "high" if checked else "low"
+        alternatives = [
+            {
+                "option": "--free",
+                "why_not": "non serviva spegnere un controllo che non ha trovato violazioni",
+            }
+        ]
+    return decisions.record(
+        id="coherence",
+        question="il montaggio rispetta le regole di coerenza?",
+        chosen=chosen,
+        confidence=confidence,
+        evidence=evidence,
+        alternatives=alternatives,
+        falsified_if=falsified,
+        by="auto",
+    )
+
+
+def _decision_effects(
+    bridge: Any,
+    estimate_section: Any,
+    payload: Any,
+) -> Dict[str, Any]:
+    """La composizione degli effetti: cosa serviva, quanto costa, con quale tesi."""
+    data = bridge if isinstance(bridge, Mapping) else {}
+    info = estimate_section if isinstance(estimate_section, Mapping) else {}
+    effects = info.get("effects") if isinstance(info.get("effects"), Mapping) else {}
+    enabled = bool(data.get("enabled"))
+    cuts = int(data.get("cuts") or 0)
+    reframe = int(data.get("reframe") or 0)
+    restore = int(data.get("restore") or 0)
+    captions = int(data.get("captions") or 0)
+    count = int(effects.get("count") or 0)
+    cost = effects.get("cost")
+    cost_seconds = effects.get("cost_seconds")
+    factor = effects.get("factor")
+    rationale = _rationale(payload)
+    pacing = rationale.get("pacing") if isinstance(rationale.get("pacing"), Mapping) else {}
+    color = (
+        rationale.get("color_palette")
+        if isinstance(rationale.get("color_palette"), Mapping)
+        else {}
+    )
+    thesis = [
+        str(rationale.get("genre_detected") or "").strip(),
+        f"{int(float(pacing.get('bpm_target') or 0))} bpm"
+        if pacing.get("bpm_target")
+        else "",
+        f"taglio {pacing.get('cut_policy')}".strip()
+        if pacing.get("cut_policy")
+        else "",
+        f"palette {color.get('type')}".strip() if color.get("type") else "",
+    ]
+    thesis_text = ", ".join(item for item in thesis if item) or (
+        "nessuna tesi dichiarata nel payload"
+    )
+    cost_line = (
+        f"costo effetti {_display(cost)} -> {_display(cost_seconds, ' s')} "
+        f"(fattore {_display(factor)})"
+    )
+    falsified = (
+        f"il costo misurato nel render supera {_display(cost_seconds, ' s')} "
+        "o un effetto dichiarato non si vede nel master"
+    )
+    if not enabled:
+        return decisions.record(
+            id="effects",
+            question="quale composizione di effetti serve al montaggio?",
+            chosen="nessun effetto del ponte (--no-bridge)",
+            confidence="low",
+            evidence=[
+                f"0 tagli, 0 gain e 0 caption dal ponte; {count} effetti nel piano",
+                cost_line,
+                f"tesi: {thesis_text}",
+            ],
+            alternatives=[
+                {
+                    "option": "passare dal ponte",
+                    "why_not": "--no-bridge lo esclude per questo giro",
+                }
+            ],
+            falsified_if=falsified,
+            by="auto",
+        )
+    needs = []
+    if reframe:
+        needs.append(f"reframe su {reframe} clip")
+    if restore:
+        needs.append(f"restore su {restore} clip")
+    if captions:
+        needs.append(f"caption su {captions} clip")
+    chosen = (
+        " + ".join(
+            part
+            for part in (
+                f"reframe {reframe}" if reframe else "",
+                f"restore {restore}" if restore else "",
+                f"caption {captions}" if captions else "",
+            )
+            if part
+        )
+        or "nessun effetto extra"
+    )
+    evidence = [
+        f"{reframe} reframe, {restore} restore, {captions} caption su {cuts} tagli",
+        cost_line,
+        f"serviva: {', '.join(needs) if needs else 'nessun effetto richiesto dal ponte'}",
+        f"tesi: {thesis_text}",
+    ]
+    confidence = "high" if count > 0 and cost_seconds is not None else "medium"
+    alternatives = (
+        [
+            {
+                "option": "nessun effetto",
+                "why_not": f"serviva {', '.join(needs)}",
+            }
+        ]
+        if needs
+        else [
+            {
+                "option": "applicare tutti gli effetti",
+                "why_not": f"il costo {_display(cost_seconds, ' s')} non era giustificato",
+            }
+        ]
+    )
+    return decisions.record(
+        id="effects",
+        question="quale composizione di effetti serve al montaggio?",
+        chosen=chosen,
+        confidence=confidence,
+        evidence=evidence,
+        alternatives=alternatives,
+        falsified_if=falsified,
+        by="auto",
+    )
+
+
+def build_decisions(
+    *,
+    font_section: Any = None,
+    key_section: Any = None,
+    plan_choice: Any = None,
+    estimate_section: Any = None,
+    coherence_section: Any = None,
+    bridge_summary: Any = None,
+    plan: Any = None,
+    payload: Any = None,
+    requirement: str = "",
+    energy: float = 0.0,
+) -> List[Dict[str, Any]]:
+    """Il registro delle cinque decisioni di un giro, nell'ordine del report.
+
+    Gli stessi punti che il giro attraversa (font, fotogrammi, piano,
+    coerenza, effetti) entrano qui gia' misurati. Se una sezione manca, la voce
+    corrispondente non si inventa: si registra che non c'e' una prova, con
+    ``confidence: low``.
+    """
+    registry = decisions.Registry()
+    builders = (
+        (
+            "font",
+            f"quale famiglia per {requirement or 'il montaggio'}?",
+            lambda: _decision_font(
+                font_section, requirement=requirement, energy=energy, plan=plan
+            ),
+        ),
+        (
+            "keyframes",
+            "quali fotogrammi mostrare prima del render?",
+            lambda: _decision_keyframes(key_section, plan),
+        ),
+        (
+            "plan",
+            "piano completo o versione rapida?",
+            lambda: _decision_plan(plan_choice, estimate_section),
+        ),
+        (
+            "coherence",
+            "il montaggio rispetta le regole di coerenza?",
+            lambda: _decision_coherence(coherence_section),
+        ),
+        (
+            "effects",
+            "quale composizione di effetti serve al montaggio?",
+            lambda: _decision_effects(bridge_summary, estimate_section, payload),
+        ),
+    )
+    for decision_id, question, build in builders:
+        try:
+            registry.add(build())
+        except Exception as exc:  # noqa: BLE001 - un registro rotto non ferma il render
+            registry.add(
+                decisions.record(
+                    id=decision_id,
+                    question=question,
+                    chosen="non registrata",
+                    confidence="low",
+                    evidence=[
+                        f"costruzione fallita: {type(exc).__name__}: {exc}",
+                    ],
+                    alternatives_note=(
+                        "nessuna alternativa registrata: la voce non si e' potuta costruire"
+                    ),
+                    falsified_if=(
+                        "la decisione non e' verificabile finche' la voce non viene ricostruita"
+                    ),
+                    by="auto",
+                )
+            )
+    return registry.as_list()
 
 
 def font_requirement(prompt: Any, payload: Any, plan: Any) -> str:
@@ -2201,6 +2777,21 @@ def _run_locked(
     )
     shortfall = duration_shortfall(requested_sec, plan.duration_sec)
 
+    # Le cinque scelte del giro, con la prova che le sostiene. Il registro si
+    # costruisce qui, quando tutte le sezioni hanno gia' i loro numeri.
+    decision_log = build_decisions(
+        font_section=font_section,
+        key_section=key_section,
+        plan_choice=plan_choice["plan_choice"],
+        estimate_section=plan_choice["estimate"],
+        coherence_section=coherence_section,
+        bridge_summary=bridge_summary,
+        plan=plan,
+        payload=payload,
+        requirement=font_requirement(getattr(args, "prompt", ""), payload, plan),
+        energy=font_energy(payload, plan),
+    )
+
     report: Dict[str, Any] = {
         "ok": True,
         "payload_version": str(payload.get("contract_version") or contract.VERSION),
@@ -2220,6 +2811,7 @@ def _run_locked(
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "font": font_section,
         "keyframes_gate": key_section,
+        "decisions": decision_log,
         "bridge": bridge_summary,
         "coherence": coherence_section,
         "estimate": plan_choice["estimate"],
