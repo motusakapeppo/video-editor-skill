@@ -29,8 +29,12 @@ The whole file skips only when ``motion.available()`` reports no system browser,
 which is the same optional-dependency rule the other suites use. A missing
 manifest, a stale fixture or a corrupted pixel is a failure, never a skip.
 
-Pixels and metadata are judged separately. A pixel mismatch -- a different
-sha256, a different byte size, a frame that moved -- is a FAIL. A manifest whose
+Pixels and metadata are judged separately. On a text-free template a pixel
+mismatch -- a different sha256, a different byte size, a frame that moved -- is
+still a FAIL. A template that renders copy may miss by antialias only when both
+limits hold: max channel delta <= 8/255 and <= 0.02% of the frame changed.
+Anything larger is a FAIL with the measured delta and pixel count, and every
+tolerated image is named with those numbers in the verdict. A manifest whose
 bytes still match but whose ``engine_version`` differs from the running browser
 is a WARN: the guard judges images, not build numbers, so the suite stays green
 and both versions are printed. Re-bless with::
@@ -48,6 +52,7 @@ import sys
 import tempfile
 import time
 import zlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
@@ -67,9 +72,18 @@ EXPECTED_FPS = motion_golden.FPS
 INSTANT_COUNT = motion_golden.INSTANT_COUNT
 CEILING_SECONDS = 900.0
 
+#: Only a template that renders copy may drift by a hairline of antialias.
+#: The two limits are ANDed: one channel may move by at most 8/255 and at most
+#: 0.02% of the frame may change (414 px at 1080x1920). A template with no text
+#: gets neither limit and stays byte-identical.
+MAX_TEXT_CHANNEL_DELTA = 8
+MAX_TEXT_CHANGED_FRACTION = 0.0002
+
 #: Built from parts so the checker never contains the literal path it rejects.
 _DRIVE = re.compile("^[A-Za-z]" + ":" + r"[\\/]")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TEXT_MARKUP = re.compile(r"\.(?:textContent|innerText|innerHTML)\s*=")
+_LETTER = re.compile(r"[^\W\d_]", re.UNICODE)
 
 PASS = 0
 FAIL = 0
@@ -77,6 +91,34 @@ SKIP = 0
 WARN = 0
 IMAGES = 0
 DRIFTS: List[Tuple[str, str]] = []
+
+
+@dataclass(frozen=True)
+class FrameDiff:
+    """What a pixel comparison measured, before any limit is applied."""
+
+    max_delta: int
+    changed: int
+    total: int
+
+    @property
+    def percent(self) -> float:
+        return (self.changed * 100.0 / self.total) if self.total else 0.0
+
+
+@dataclass(frozen=True)
+class ToleranceNote:
+    """One image that only passed because the text-template limit applied."""
+
+    template: str
+    index: int
+    max_delta: int
+    changed: int
+    total: int
+    engine_version: str
+
+
+TOLERANCE_NOTES: List[ToleranceNote] = []
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -134,6 +176,232 @@ def _walk_strings(payload: Any, prefix: str = "") -> Iterator[Tuple[str, str]]:
 
 def _absolute_hit(value: str) -> bool:
     return bool(_DRIVE.match(value)) or value.startswith("/")
+
+
+def template_has_text(directory: Path) -> Tuple[bool, str]:
+    """Does this template render copy, and therefore earn the antialias limit?
+
+    The declaration wins: a ``string`` parameter that is not an enumerated word
+    (``font``, ``palette``, ``align`` all carry ``values``) and has a default
+    containing a letter is copy the template will typeset. Backgrounds and
+    transitions declare only ``font``/``palette``/colours/numbers and are
+    text-free. The HTML is the fallback, for a template that fills a node
+    without declaring a text parameter.
+    """
+    manifest = _load_json(Path(directory) / "template.json")
+    if isinstance(manifest, dict):
+        params = manifest.get("params")
+        if isinstance(params, dict):
+            for key, spec in params.items():
+                if not isinstance(spec, dict) or spec.get("type") != "string":
+                    continue
+                if "values" in spec:
+                    continue
+                default = spec.get("default")
+                if isinstance(default, str) and _LETTER.search(default):
+                    return True, f"template.json declares text param {key!r}"
+    try:
+        markup = (Path(directory) / "index.html").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        markup = ""
+    if markup and _TEXT_MARKUP.search(markup):
+        return True, "index.html fills a text node"
+    return False, "no text parameter and no rendered text"
+
+
+def _paeth(left: int, above: int, upper_left: int) -> int:
+    estimate = left + above - upper_left
+    dist_left = abs(estimate - left)
+    dist_above = abs(estimate - above)
+    dist_upper = abs(estimate - upper_left)
+    if dist_left <= dist_above and dist_left <= dist_upper:
+        return left
+    if dist_above <= dist_upper:
+        return above
+    return upper_left
+
+
+def _unfilter(raw: bytes, width: int, height: int, channels: int) -> bytearray:
+    """Undo the five PNG scanline filters. 8-bit, non-interlaced only."""
+    stride = width * channels
+    expected = (stride + 1) * height
+    if len(raw) < expected:
+        raise ValueError(f"PNG holds {len(raw)} bytes, needs {expected}")
+    bpp = channels
+    output = bytearray(stride * height)
+    previous = bytearray(stride)
+    cursor = 0
+    for row in range(height):
+        kind = raw[cursor]
+        cursor += 1
+        line = bytearray(raw[cursor : cursor + stride])
+        cursor += stride
+        if kind == 0:
+            pass
+        elif kind == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 0xFF
+        elif kind == 2:
+            for i in range(stride):
+                line[i] = (line[i] + previous[i]) & 0xFF
+        elif kind == 3:
+            for i in range(stride):
+                left = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((left + previous[i]) >> 1)) & 0xFF
+        elif kind == 4:
+            for i in range(stride):
+                left = line[i - bpp] if i >= bpp else 0
+                upper = previous[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + _paeth(left, previous[i], upper)) & 0xFF
+        else:
+            raise ValueError(f"unknown PNG filter {kind} on row {row}")
+        output[row * stride : (row + 1) * stride] = line
+        previous = line
+    return output
+
+
+def _to_rgba(pixels: bytearray, width: int, height: int, colour: int) -> bytearray:
+    """Normalise an 8-bit PNG sample stream to RGBA, so comparisons line up."""
+    count = width * height
+    if colour == 6:
+        return pixels
+    rgba = bytearray(count * 4)
+    if colour == 2:
+        rgba[0::4] = pixels[0::3]
+        rgba[1::4] = pixels[1::3]
+        rgba[2::4] = pixels[2::3]
+        rgba[3::4] = b"\xff" * count
+    elif colour == 0:
+        rgba[0::4] = pixels
+        rgba[1::4] = pixels
+        rgba[2::4] = pixels
+        rgba[3::4] = b"\xff" * count
+    elif colour == 4:
+        rgba[0::4] = pixels[0::2]
+        rgba[1::4] = pixels[0::2]
+        rgba[2::4] = pixels[0::2]
+        rgba[3::4] = pixels[1::2]
+    else:
+        raise ValueError(f"unsupported PNG colour type {colour}")
+    return rgba
+
+
+def read_png(path: Path) -> Tuple[int, int, bytearray]:
+    """Decode an 8-bit PNG to (width, height, RGBA bytes), stdlib only."""
+    data = Path(path).read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    cursor = 8
+    header: Optional[Tuple[int, int, int, int, int, int, int]] = None
+    compressed = bytearray()
+    while cursor + 8 <= len(data):
+        length = struct.unpack(">I", data[cursor : cursor + 4])[0]
+        tag = data[cursor + 4 : cursor + 8]
+        body = data[cursor + 8 : cursor + 8 + length]
+        cursor += 12 + length
+        if tag == b"IHDR":
+            if len(body) != 13:
+                raise ValueError("malformed IHDR")
+            header = struct.unpack(">IIBBBBB", body)
+        elif tag == b"IDAT":
+            compressed.extend(body)
+        elif tag == b"IEND":
+            break
+    if header is None:
+        raise ValueError("PNG has no IHDR")
+    width, height, depth, colour, compression, filtering, interlace = header
+    if depth != 8 or compression != 0 or filtering != 0 or interlace != 0:
+        raise ValueError(
+            f"unsupported PNG (depth={depth}, compression={compression}, "
+            f"filter={filtering}, interlace={interlace})"
+        )
+    channels = {0: 1, 2: 3, 4: 2, 6: 4}.get(colour)
+    if channels is None:
+        raise ValueError(f"unsupported PNG colour type {colour}")
+    pixels = _unfilter(
+        zlib.decompress(bytes(compressed)), width, height, channels
+    )
+    return width, height, _to_rgba(pixels, width, height, colour)
+
+
+def pixel_difference(golden: Path, live: Path) -> FrameDiff:
+    """The measured distance between two frames; no verdict, no limits."""
+    width, height, left = read_png(golden)
+    other_width, other_height, right = read_png(live)
+    if (width, height) != (other_width, other_height):
+        raise ValueError(
+            f"size {other_width}x{other_height} != golden {width}x{height}"
+        )
+    total = width * height
+    max_delta = 0
+    changed = 0
+    for i in range(0, total * 4, 4):
+        delta = max(
+            abs(left[i] - right[i]),
+            abs(left[i + 1] - right[i + 1]),
+            abs(left[i + 2] - right[i + 2]),
+            abs(left[i + 3] - right[i + 3]),
+        )
+        if delta:
+            changed += 1
+            if delta > max_delta:
+                max_delta = delta
+    return FrameDiff(max_delta=max_delta, changed=changed, total=total)
+
+
+def changed_limit(total: int) -> int:
+    """The largest number of changed pixels a text frame may show."""
+    return int(total * MAX_TEXT_CHANGED_FRACTION)
+
+
+def frame_detail(diff: Optional[FrameDiff]) -> str:
+    if diff is None:
+        return "no pixel measurement"
+    return (
+        f"delta={diff.max_delta}/255, {diff.changed}/{diff.total} px "
+        f"({diff.percent:.5f}%)"
+    )
+
+
+def judge_frame(
+    golden: Path,
+    live: Path,
+    *,
+    text_template: bool,
+) -> Tuple[List[str], Optional[FrameDiff], bool]:
+    """Judge one mismatched frame; return (problems, measurement, tolerated).
+
+    A text template passes only when both limits hold. A text-free template
+    never reaches the tolerance: the caller already knows the bytes differ, so
+    the frame is a failure even if the decoded pixels happened to agree.
+    """
+    try:
+        diff = pixel_difference(golden, live)
+    except (OSError, ValueError, zlib.error) as exc:
+        return [f"pixel comparison failed: {type(exc).__name__}: {exc}"], None, False
+    limit = changed_limit(diff.total)
+    if not text_template:
+        return (
+            [
+                f"{frame_detail(diff)} -- text-free template, byte identity "
+                "is required"
+            ],
+            diff,
+            False,
+        )
+    if diff.max_delta <= MAX_TEXT_CHANNEL_DELTA and diff.changed <= limit:
+        return [], diff, True
+    return (
+        [
+            f"{frame_detail(diff)} exceeds max delta "
+            f"{MAX_TEXT_CHANNEL_DELTA}/255 or max {limit} changed px "
+            f"({MAX_TEXT_CHANGED_FRACTION * 100:g}%)"
+        ],
+        diff,
+        False,
+    )
 
 
 def version_drift(recorded: Any, current: Optional[str]) -> Optional[Tuple[str, str]]:
@@ -364,6 +632,141 @@ def _tiny_png() -> bytes:
     )
 
 
+def _png_chunk(tag: bytes, data: bytes) -> bytes:
+    return (
+        struct.pack(">I", len(data))
+        + tag
+        + data
+        + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    )
+
+
+def _png_bytes(width: int, height: int, rgba: bytes) -> bytes:
+    """Encode 8-bit RGBA as a filter-0 PNG, for the synthetic tolerance proofs."""
+    stride = width * 4
+    raw = bytearray()
+    for row in range(height):
+        raw.append(0)
+        raw.extend(rgba[row * stride : (row + 1) * stride])
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def _blank_rgba(width: int, height: int) -> bytearray:
+    return bytearray(bytes((18, 18, 22, 255)) * (width * height))
+
+
+def _set_pixel(
+    rgba: bytearray, width: int, x: int, y: int, value: Tuple[int, int, int, int]
+) -> None:
+    at = (y * width + x) * 4
+    rgba[at : at + 4] = bytes(value)
+
+
+def _fill_block(
+    rgba: bytearray,
+    width: int,
+    x0: int,
+    y0: int,
+    block_width: int,
+    block_height: int,
+    value: Tuple[int, int, int, int],
+) -> None:
+    for y in range(y0, y0 + block_height):
+        for x in range(x0, x0 + block_width):
+            _set_pixel(rgba, width, x, y, value)
+
+
+def _write_frame(directory: Path, name: str, width: int, height: int, rgba: bytes) -> Path:
+    target = directory / name
+    target.write_bytes(_png_bytes(width, height, rgba))
+    return target
+
+
+def prove_tolerance(work: Path) -> None:
+    """Prove the antialias tolerance is a ruler, not a blanket amnesty.
+
+    Four synthetic images, no browser: a one-pixel hairline passes only on a
+    text template; a solid block, a moved glyph and the same hairline on a
+    text-free template all fail, each with its measured values.
+    """
+    directory = work / "tolerance"
+    directory.mkdir(parents=True, exist_ok=True)
+    width = height = 200
+
+    base = _blank_rgba(width, height)
+    golden = _write_frame(directory, "base.png", width, height, base)
+
+    hairline = bytearray(base)
+    _set_pixel(hairline, width, 10, 10, (20, 18, 22, 255))
+    hairline_path = _write_frame(directory, "hairline.png", width, height, hairline)
+    problems, diff, tolerated = judge_frame(
+        golden, hairline_path, text_template=True
+    )
+    check(
+        "tolerance: 1 px delta 2 on a text template passes",
+        not problems and tolerated and diff is not None
+        and diff.max_delta == 2
+        and diff.changed == 1,
+        frame_detail(diff) + " (tolerated)",
+    )
+
+    block = bytearray(base)
+    _fill_block(block, width, 20, 20, 10, 10, (146, 18, 22, 255))
+    block_path = _write_frame(directory, "block.png", width, height, block)
+    problems, diff, tolerated = judge_frame(golden, block_path, text_template=True)
+    check(
+        "tolerance: 10x10 block delta 128 on a text template fails",
+        bool(problems) and not tolerated and diff is not None
+        and diff.max_delta == 128
+        and diff.changed == 100,
+        frame_detail(diff),
+    )
+
+    glyph = bytearray(base)
+    _fill_block(glyph, width, 20, 60, 12, 24, (255, 255, 255, 255))
+    glyph_path = _write_frame(directory, "glyph-a.png", width, height, glyph)
+    moved = bytearray(base)
+    _fill_block(moved, width, 40, 60, 12, 24, (255, 255, 255, 255))
+    moved_path = _write_frame(directory, "glyph-b.png", width, height, moved)
+    problems, diff, tolerated = judge_frame(
+        glyph_path, moved_path, text_template=True
+    )
+    check(
+        "tolerance: a moved glyph fails",
+        bool(problems) and not tolerated and diff is not None
+        and diff.max_delta > MAX_TEXT_CHANNEL_DELTA
+        and diff.changed > changed_limit(diff.total),
+        frame_detail(diff),
+    )
+
+    text_free, _why = template_has_text(
+        ROOT / "assets" / "templates" / "vx-background-bokeh"
+    )
+    problems, diff, tolerated = judge_frame(
+        golden, hairline_path, text_template=text_free
+    )
+    check(
+        "tolerance: 1 px delta 2 on a text-free template fails",
+        bool(problems) and not tolerated,
+        frame_detail(diff),
+    )
+    text_template, _why = template_has_text(
+        ROOT / "assets" / "templates" / "vx-title-kicker"
+    )
+    check(
+        "tolerance: the title opts in and the background stays text-free",
+        text_template and not text_free,
+        f"vx-title-kicker={'text' if text_template else 'text-free'}, "
+        f"vx-background-bokeh={'text' if text_free else 'text-free'}",
+    )
+
+
 def prove_guard(work: Path) -> None:
     """Copy one fixture into a temp dir, corrupt it, and show the check sees it."""
     candidates = sorted(FIXTURES.glob("*/instant-*.png")) if FIXTURES.is_dir() else []
@@ -556,9 +959,12 @@ def re_render(work: Path, manifests: Mapping[str, Mapping[str, Any]]) -> None:
     real only if the browser is asked for the same instants today and answers
     with the same bytes. `workdir=None` keeps the frame cache out of it.
 
-    This check is pixels only: a different sha256 is a FAIL. Version drift is
-    already declared once, by the manifest check, so it is not repeated here --
-    that keeps one WARN per drifted manifest instead of two.
+    This check is pixels only: a different sha256 on a text-free template is a
+    FAIL. A text template may miss by the antialias limits only: delta <= 8/255
+    and <= 0.02% of the frame. Every tolerated image is recorded with its
+    measurement so the verdict can name it. Version drift is already declared
+    once, by the manifest check, so it is not repeated here -- that keeps one
+    WARN per drifted manifest instead of two.
     """
     global IMAGES
     registry = Registry()
@@ -571,6 +977,7 @@ def re_render(work: Path, manifests: Mapping[str, Mapping[str, Any]]) -> None:
                 "the manifest names a template the registry no longer admits",
             )
             continue
+        text_template, text_reason = template_has_text(Path(entry.directory))
         size = manifest.get("size") or [0, 0]
         try:
             result = motion.capture(
@@ -592,7 +999,11 @@ def re_render(work: Path, manifests: Mapping[str, Mapping[str, Any]]) -> None:
             )
             continue
         live = [Path(item) for item in result["frames"]]
+        engine_version = str(
+            result.get("engine_version") or manifest.get("engine_version") or ""
+        )
         problems: List[str] = []
+        tolerated_here = 0
         for instant in manifest.get("instants") or ():
             index = int(instant["index"])
             if index >= len(live):
@@ -600,16 +1011,65 @@ def re_render(work: Path, manifests: Mapping[str, Mapping[str, Any]]) -> None:
                 continue
             IMAGES += 1
             digest = hashlib.sha256(live[index].read_bytes()).hexdigest()
-            if digest != instant["sha256"]:
+            if digest == instant["sha256"]:
+                continue
+            if not text_template:
                 problems.append(
                     f"instant {index} at t={instant['t']}: "
-                    f"{digest[:12]} != {instant['sha256'][:12]}"
+                    f"{digest[:12]} != {instant['sha256'][:12]} "
+                    "(text-free, byte identity required)"
                 )
-        check(
-            f"{name}: live re-render is byte-identical",
-            not problems,
-            "; ".join(problems[:2]) if problems else f"{len(live)} frames re-rendered",
+                continue
+            golden = FIXTURES / name / instant["file"]
+            pixel_problems, diff, tolerated = judge_frame(
+                golden, live[index], text_template=True
+            )
+            if tolerated and diff is not None:
+                tolerated_here += 1
+                TOLERANCE_NOTES.append(
+                    ToleranceNote(
+                        template=name,
+                        index=index,
+                        max_delta=diff.max_delta,
+                        changed=diff.changed,
+                        total=diff.total,
+                        engine_version=engine_version,
+                    )
+                )
+                continue
+            problems.extend(
+                f"instant {index} at t={instant['t']}: {problem}"
+                for problem in (pixel_problems or ["pixel comparison refused"])
+            )
+        if problems:
+            detail = "; ".join(problems[:2])
+        elif tolerated_here:
+            detail = (
+                f"{len(live)} frames re-rendered, {tolerated_here} within "
+                f"antialias tolerance ({text_reason})"
+            )
+        else:
+            detail = f"{len(live)} frames re-rendered, byte-identical"
+        check(f"{name}: live re-render matches its golden", not problems, detail)
+
+
+def _tolerance_note() -> str:
+    """Name every image that passed only because it renders text."""
+    if not TOLERANCE_NOTES:
+        return ""
+    parts = [
+        (
+            f"{note.template} instant {note.index}: delta={note.max_delta}/255, "
+            f"{note.changed} px ({note.changed * 100.0 / note.total:.5f}%), "
+            f"engine {note.engine_version or 'unknown'}"
         )
+        for note in TOLERANCE_NOTES
+    ]
+    return (
+        f", {len(TOLERANCE_NOTES)} within antialias tolerance ("
+        + "; ".join(parts)
+        + ")"
+    )
 
 
 def _drift_note() -> str:
@@ -627,6 +1087,7 @@ def main() -> int:
         prefix="vx_motion_judge_", ignore_cleanup_errors=True
     ) as judgement_tmp:
         prove_judgement(Path(judgement_tmp))
+        prove_tolerance(Path(judgement_tmp))
     probe = motion.available()
     if not probe["available"]:
         skip("motion golden gate", str(probe.get("reason") or "no system browser"))
@@ -644,8 +1105,8 @@ def main() -> int:
     slow = elapsed > CEILING_SECONDS
     print(
         f"\n{PASS} PASS / {FAIL} FAIL / {WARN} warn / {SKIP} SKIP, "
-        f"{IMAGES} images compared{_drift_note()}, {elapsed:.1f}s "
-        f"(ceiling {CEILING_SECONDS:.0f}s)"
+        f"{IMAGES} images compared{_tolerance_note()}{_drift_note()}, "
+        f"{elapsed:.1f}s (ceiling {CEILING_SECONDS:.0f}s)"
     )
     if slow:
         print(f"FAIL: suite took {elapsed:.1f}s, above the ceiling")
