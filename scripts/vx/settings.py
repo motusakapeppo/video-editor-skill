@@ -139,6 +139,11 @@ DEFAULTS: Dict[str, Any] = {
         "crf": 18,
         "preset": "medium",
         "audio_bitrate": "192k",
+        # EDL3 anti-pattern budget: at most N library looks may *start* inside
+        # any 10 s window of one timeline (0 disables the cap). The canonical
+        # value is vx.edl3.EFFECT_DENSITY_LIMIT; this key is the declared copy
+        # `vx edl3 render --effect-budget` falls back to.
+        "effect_budget": 3,
     },
     "lock": {
         "heartbeat_seconds": 30,
@@ -272,6 +277,17 @@ def _validate_ranges(settings: Dict[str, Any]) -> List[str]:
             low, high = RANGES[key]
             if not (low <= number <= high):
                 problems.append(f"audio.{key}={number} outside [{low}, {high}]")
+    budget = (settings.get("render") or {}).get("effect_budget")
+    if budget is not None:
+        try:
+            value = int(budget)
+        except (TypeError, ValueError):
+            problems.append(f"render.effect_budget is not an integer: {budget!r}")
+        else:
+            if value < 0:
+                problems.append(
+                    f"render.effect_budget={value} must be >= 0 (0 disables the cap)"
+                )
     return problems
 
 

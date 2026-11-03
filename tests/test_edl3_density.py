@@ -353,6 +353,54 @@ def main() -> int:
         over_details,
     )
 
+    print("\n(10) the budget is declared: a setting and a flag, not a wall")
+    eight = timeline(
+        [
+            clip(f"e{index}", 1, src_out=1.0, dst=(float(index), index + 1.0))
+            for index in range(8)
+        ]
+    )
+    check(
+        "(a) eight looks in ten seconds are refused by the default budget",
+        bool(density(eight)) and "8 effect instances" in density(eight)[0]["detail"],
+        density(eight)[0]["detail"][:80] if density(eight) else "no violation",
+    )
+    hinted = details(eight)[0] if details(eight) else ""
+    check(
+        "(b) the refusal names the way out: --effect-budget and render.effect_budget",
+        "--effect-budget" in hinted and "render.effect_budget" in hinted,
+        hinted,
+    )
+    check(
+        "(c) validate(effect_budget=10) allows the same document",
+        [p for p in eight.validate(effect_budget=10) if p["code"] == CODE] == [],
+    )
+    check(
+        "(d) compile_timeline(effect_budget=10) compiles it",
+        edl3_render.compile_timeline(eight, effect_budget=10)["clips"] != [],
+    )
+    check(
+        "(e) effect_budget=0 removes the cap",
+        [p for p in eight.validate(effect_budget=0) if p["code"] == CODE] == [],
+    )
+    from vx import cli  # noqa: E402 - the parser is the declared surface
+
+    parsed = cli.build_parser().parse_args(
+        ["edl3", "render", "--plan", "p.json", "--out", "o.mp4", "--effect-budget", "10"]
+    )
+    check(
+        "(f) `vx edl3 render --effect-budget 10` reaches the renderer",
+        parsed.effect_budget == 10,
+        parsed.effect_budget,
+    )
+    from vx import settings  # noqa: E402 - the declared default lives here too
+
+    check(
+        "(g) settings declares render.effect_budget with the same default",
+        settings.DEFAULTS["render"]["effect_budget"] == edl3.EFFECT_DENSITY_LIMIT,
+        settings.DEFAULTS["render"]["effect_budget"],
+    )
+
     print(f"\n{PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 

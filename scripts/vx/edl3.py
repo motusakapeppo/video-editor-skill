@@ -1529,6 +1529,11 @@ class AudioClip3:
     dst_in: float = 0.0
     dst_out: float = 0.0
     gain_db: float = 0.0
+    #: ``None`` keeps the legacy behaviour (a dialogue segment fades at both
+    #: ends); ``False`` removes that edge. Chunk slicing uses it so a boundary
+    #: cut in the middle of a segment is not heard as a fade.
+    fade_in: Optional[bool] = None
+    fade_out: Optional[bool] = None
 
     def __post_init__(self) -> None:
         self.source = str(self.source)
@@ -1537,9 +1542,11 @@ class AudioClip3:
         self.dst_in = _float(self.dst_in)
         self.dst_out = _float(self.dst_out)
         self.gain_db = _float(self.gain_db)
+        self.fade_in = None if self.fade_in is None else bool(self.fade_in)
+        self.fade_out = None if self.fade_out is None else bool(self.fade_out)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "source": self.source,
             "src_in": self.src_in,
             "src_out": self.src_out,
@@ -1547,6 +1554,13 @@ class AudioClip3:
             "dst_out": self.dst_out,
             "gain_db": self.gain_db,
         }
+        # Only a declared edge is written, so a document that never mentions the
+        # fields serialises exactly as before.
+        if self.fade_in is not None:
+            data["fade_in"] = self.fade_in
+        if self.fade_out is not None:
+            data["fade_out"] = self.fade_out
+        return data
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "AudioClip3":
@@ -1559,6 +1573,8 @@ class AudioClip3:
             dst_in=_float(data.get("dst_in", 0.0)),
             dst_out=_float(data.get("dst_out", 0.0)),
             gain_db=_float(data.get("gain_db", 0.0)),
+            fade_in=data.get("fade_in"),
+            fade_out=data.get("fade_out"),
         )
 
 
@@ -1733,7 +1749,9 @@ def check_effect_density(
         )
         problems.append(
             f"{len(windowed)} effect instances start between {start:.3f}s and "
-            f"{start + window:.3f}s, at most {limit} per {window:g}s (on {target})"
+            f"{start + window:.3f}s, at most {limit} per {window:g}s (on {target}); "
+            "raise the budget with --effect-budget N or settings render.effect_budget "
+            "(0 disables the cap)"
         )
     return problems
 
@@ -1876,8 +1894,21 @@ class Timeline3:
         return max(0.0, total - overlap)
 
     # -- validation -------------------------------------------------------
-    def validate(self, *, depth: int = 0, prefix: str = "") -> List[Dict[str, str]]:
-        """Return every problem, never raising. ``depth`` is used for nesting."""
+    def validate(
+        self,
+        *,
+        depth: int = 0,
+        prefix: str = "",
+        effect_budget: Optional[int] = None,
+    ) -> List[Dict[str, str]]:
+        """Return every problem, never raising. ``depth`` is used for nesting.
+
+        ``effect_budget`` replaces :data:`EFFECT_DENSITY_LIMIT` for this call
+        only: the declared default stays the rule, and a caller who asked for
+        "many transitions" can raise (or disable, with ``0``) the cap explicitly
+        instead of hitting a wall that lives only in the code. The value is
+        propagated to nested timelines, which are measured on their own clock.
+        """
         problems: List[Dict[str, str]] = []
 
         def add(code: str, where: str, detail: str) -> None:
@@ -1889,7 +1920,7 @@ class Timeline3:
         self._validate_template_params(add)
         self._validate_preset_ref(add)
         self._validate_clips(add, depth, problems)
-        self._validate_effect_density(add)
+        self._validate_effect_density(add, effect_budget)
         self._validate_extras(add)
         self._validate_structure(add)
         self._validate_adjustments(add)
@@ -2154,7 +2185,13 @@ class Timeline3:
                 )
                 break
 
-    def _validate_clips(self, add, depth: int, problems: List[Dict[str, str]]) -> None:
+    def _validate_clips(
+        self,
+        add,
+        depth: int,
+        problems: List[Dict[str, str]],
+        effect_budget: Optional[int] = None,
+    ) -> None:
         declared = [
             clip
             for clip in self.clips
@@ -2355,7 +2392,7 @@ class Timeline3:
                                 f"({shorter:.3f} s): the dissolve would eat it",
                             )
 
-        self._validate_sequences(add, depth, problems)
+        self._validate_sequences(add, depth, problems, effect_budget)
 
     def _validate_generator(self, clip: Clip3, where: str, add) -> None:
         """The generator declaration, its placement and its exclusivity.
@@ -2517,8 +2554,9 @@ class Timeline3:
                 f"({0.5 / self.fps if self.fps > 0 else 0.0:.6f}s)",
             )
 
-    def _validate_effect_density(self, add) -> None:
-        for detail in check_effect_density(self):
+    def _validate_effect_density(self, add, effect_budget: Optional[int] = None) -> None:
+        limit = EFFECT_DENSITY_LIMIT if effect_budget is None else int(effect_budget)
+        for detail in check_effect_density(self, limit=limit):
             add("EFFECT_DENSITY", "clips", detail)
 
     def _validate_structure(self, add) -> None:
@@ -2571,7 +2609,11 @@ class Timeline3:
             cursor = max(cursor, clip.dst_out)
 
     def _validate_sequences(
-        self, add, depth: int, problems: List[Dict[str, str]]
+        self,
+        add,
+        depth: int,
+        problems: List[Dict[str, str]],
+        effect_budget: Optional[int] = None,
     ) -> None:
         for key, sequence in self.sequences.items():
             where = f"sequences.{key}"
@@ -2584,7 +2626,9 @@ class Timeline3:
                 )
                 continue
             already_prefixed = sequence.timeline.validate(
-                depth=depth + 1, prefix=f"sequences.{key}.timeline."
+                depth=depth + 1,
+                prefix=f"sequences.{key}.timeline.",
+                effect_budget=effect_budget,
             )
             problems.extend(already_prefixed)
 

@@ -247,6 +247,92 @@ Perche cambia la forma del documento: livelli tipizzati, effetti, ancore, sequen
 annidate. Una 2.3 sarebbe una bugia di compatibilita. La 2.2 resta valida e
 leggibile; la 3.0 e un nuovo contratto con un migratore esplicito.
 
+### 2.9 I vincoli veri del render: xfade, densita, `--live`
+
+Tre regole non si vedono nel documento ma decidono se il render riesce. Sono
+qui, misurate, con la via d'uscita.
+
+**Timebase di `xfade`.** `xfade` esige che i due ingressi abbiano lo stesso
+timebase e lo stesso frame rate. Il documento dichiara `fps`, ma una sorgente a
+29,97 su una timeline a 30 non e' "abbastanza vicina": ffmpeg rifiuta con
+`First input link main timebase (1/30) do not match ... xfade timebase
+(1/29903)`. Quando la timeline contiene almeno una dissolvenza, ogni catena
+della base riceve `fps=<fps>,settb=1/<fps>` prima del formato, quindi tutte le
+clip arrivano a `xfade` sullo stesso orologio. Il caso reale (una clip 30 fps,
+una 29,97, `crossfade` 0,5 s) renderizza 3,5 s. Un documento **senza**
+dissolvenza non riceve la normalizzazione: il suo grafo resta byte-identico.
+
+**Densita degli effetti.** `EFFECT_DENSITY` limita a **3** i look della libreria
+che possono *iniziare* dentro una finestra scorrevole di **10 s** (bordi
+inclusi). Non e' un muro: e' un parametro dichiarato.
+
+- `vx edl3 render --plan doc.json --out master.mp4 --effect-budget 10`
+- oppure `settings.json`: `{"render": {"effect_budget": 10}}`
+- `0` toglie il tetto (un montaggio "tantissime transizioni" e' una scelta
+  dell'autore, non un errore).
+
+Il rifiuto nomina sempre la via d'uscita: `... at most 3 per 10s (on clips ...);
+raise the budget with --effect-budget N or settings render.effect_budget (0
+disables the cap)`. Le primitive (`transform`, `crop`, `color`, `blur`,
+`chroma_key`) non contano: sono lo stack di composizione, non look.
+
+**`--live` e `--chunks` con audio e senza placement.** Il percorso a blocchi
+accetta ora quello che prima rifiutava:
+
+- un **bus audio** viene tagliato al confine di chunk (`edl3_slice.slice_audio`):
+  ogni segmento contribuisce la parte che cade nella finestra, con `src_in`
+  avanzato dello stesso offset. Un taglio interno non aggiunge `afade`: il fade
+  resta solo sui bordi veri del segmento;
+- una clip di layer 0 **senza `dst_in`/`dst_out`** riceve il cursore di
+  concatenazione come placement (`edl3_slice.placements`), lo stesso che usa
+  `Timeline3.duration`;
+- la giunzione non e' un `-c copy` dell'audio: l'AAC di ogni chunk porta il
+  priming del suo encoder e la copia aggiungerebbe un frame per pezzo. Il video
+  va in copia, l'audio viene decodificato, tagliato alla durata dichiarata di
+  ogni pezzo e ricodificato una volta sola. Misurato sul caso audio: 192512
+  campioni sia nel master sia nella somma, errore medio 0,000581.
+
+Restano rifiutati, con `CHUNK_UNSUPPORTED` e il motivo: `crossfade` (un confine
+taglierebbe la dissolvenza), `ducking` (un inviluppo sidechain per l'intero bus,
+che un confine farebbe ripartire), sequenze annidate, generator, text layer e
+caption, `profile_ref`, un overlay senza placement o a cavallo di un confine.
+
+**Esempio minimo ma renderizzabile** (`tests/fixtures/edl3_minimal/doc.json`,
+reso da `tests/test_effects_render.py` R15b): due clip su orologi diversi, una
+dissolvenza, nessun `dst_in`/`dst_out` e un bus dialogo. Con una dissolvenza il
+bus dialogo deve avere **un segmento per clip di base**, della stessa durata:
+e' la condizione con cui `acrossfade` puo' seguire la stessa giunzione.
+
+```json
+{
+  "version": "vx.edl3/1.2",
+  "fps": 30,
+  "size": [320, 240],
+  "clips": [
+    {"id": "a", "source": "a.mp4", "src_in": 0.0, "src_out": 2.0, "layer": 0},
+    {"id": "b", "source": "b.mp4", "src_in": 0.0, "src_out": 2.0, "layer": 0,
+     "transition_in": {"kind": "crossfade", "duration": 0.5, "style": "fade"}}
+  ],
+  "audio": [
+    {"role": "dialogue", "clips": [
+      {"source": "bed.m4a", "src_in": 0.0, "src_out": 2.0, "dst_in": 0.0, "dst_out": 2.0},
+      {"source": "bed.m4a", "src_in": 1.5, "src_out": 3.5, "dst_in": 2.0, "dst_out": 4.0}
+    ]}
+  ]
+}
+```
+
+```text
+# le sorgenti: due clock diversi e un letto audio di 3,5 s
+ffmpeg -f lavfi -i testsrc2=s=320x240:r=30:d=2 -c:v libx264 -pix_fmt yuv420p -an a.mp4
+ffmpeg -f lavfi -i testsrc2=s=320x240:r=30000/1001:d=2 -c:v libx264 -pix_fmt yuv420p -an b.mp4
+ffmpeg -f lavfi -i sine=frequency=440:sample_rate=48000:duration=3.5 -c:a aac bed.m4a
+vx edl3 render --plan doc.json --out master.mp4 --audio mix --effect-budget 10
+```
+
+Il master dura 3,5 s (2 + 2 - 0,5) e porta il bus audio. Il fixture committato
+usa `<base>` al posto della cartella: il test lo sostituisce e lo rende com'e'.
+
 ---
 
 ## 3. Il registro degli effetti

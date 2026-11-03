@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from . import ffmpeg, stagecache
 from .edl3 import Timeline3
+from .edl3_render import AUDIO_BITRATE, AUDIO_RATE
 from .edl3_slice import canonical, document, plan_windows, sha256, source_hashes
 
 #: Cache stage name. The key covers the (sub-document hash, source hashes, chunk
@@ -199,6 +200,9 @@ class Run:
     total: int
     #: Source content hashes, shared across chunks so a file is read once.
     memo: Dict[str, str]
+    #: ``EFFECT_DENSITY`` budget forwarded to every chunk's validation; ``None``
+    #: keeps the declared default (see :data:`vx.edl3.EFFECT_DENSITY_LIMIT`).
+    effect_budget: Optional[int] = None
 
 
 def _concat_path(path: Path) -> str:
@@ -237,7 +241,10 @@ def _render_one(
         CHUNK_VERSION,
     )
     plan = edl3_render.compile_timeline(
-        Timeline3.from_dict(sub_document), audio=run.audio, settings=run.settings
+        Timeline3.from_dict(sub_document),
+        audio=run.audio,
+        settings=run.settings,
+        effect_budget=run.effect_budget,
     )
     artifact = run.chunk_dir / f"{index:03d}" / f"{CHUNK_PREFIX}{index:03d}.mp4"
     record: Dict[str, Any] = {
@@ -305,18 +312,98 @@ def _render_one(
 
 
 def _join(run: Run, paths: List[Path]) -> Any:
-    """Join the chunk artifacts with the concat demuxer; return its ``Proc``."""
+    """Join the chunk artifacts; return the ``Proc`` that wrote the master.
+
+    Picture is concatenated by stream copy. Audio cannot be: an AAC chunk starts
+    with its encoder's priming frame, and the concat demuxer keeps one per file,
+    so a copied join is a whole frame longer than the master and drifts at every
+    boundary. The join therefore concatenates the decoded chunk audio with the
+    ``concat`` filter and encodes it once, which is what makes the pieces add up
+    to the master sample for sample.
+    """
     list_path = run.chunk_dir / CONCAT_LIST
     list_path.write_text(
         "\n".join(f"file '{_concat_path(path)}'" for path in paths) + "\n",
         encoding="utf-8",
         newline="\n",
     )
-    args = ["-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy"]
+    has_audio = _carries_audio(paths)
+    video_path = run.chunk_dir / "join_video.mp4" if has_audio else run.destination
+    args = ["-f", "concat", "-safe", "0", "-i", str(list_path)]
+    if has_audio:
+        args += ["-map", "0:v:0", "-c:v", "copy", "-an", str(video_path)]
+    else:
+        args += ["-c", "copy", str(video_path)]
     if run.benchmark:
         args.insert(0, "-benchmark")
     proc = ffmpeg.run_ff(
-        args + [str(run.destination)],
+        args,
+        loglevel="info" if run.benchmark else "error",
+        timeout=run.timeout,
+        step="render",
+    )
+    if not proc.ok:
+        from .edl3_render import CompileError  # noqa: PLC0415 - failure path only
+
+        raise CompileError("RENDER_FAILED", proc.tail(), str(run.destination))
+    if not video_path.exists() or video_path.stat().st_size == 0:
+        from .edl3_render import CompileError  # noqa: PLC0415 - failure path only
+
+        raise CompileError(
+            "RENDER_FAILED",
+            "the concat demuxer reported success but wrote no output",
+            str(run.destination),
+        )
+    if not has_audio:
+        return proc
+
+    inputs: List[str] = []
+    for path in paths:
+        inputs.extend(["-i", str(path)])
+    durations = _audio_seconds(paths)
+    filters: List[str] = []
+    labels_list: List[str] = []
+    for index, seconds in enumerate(durations):
+        label = f"a{index}"
+        if seconds > 0.0:
+            # A decoded AAC chunk is padded up to its frame grid; trimming each
+            # piece to the duration it declares puts the boundary back where the
+            # master has it, instead of 5 ms later at every join.
+            filters.append(
+                f"[{index}:a:0]atrim=0:{seconds:.6f},"
+                f"asetpts=PTS-STARTPTS[{label}]"
+            )
+        else:
+            filters.append(f"[{index}:a:0]asetpts=PTS-STARTPTS[{label}]")
+        labels_list.append(f"[{label}]")
+    filters.append(
+        "".join(labels_list) + f"concat=n={len(paths)}:v=0:a=1[aout]"
+    )
+    audio_args = (
+        inputs
+        + [
+            "-i",
+            str(video_path),
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            f"{len(paths)}:v:0",
+            "-map",
+            "[aout]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            AUDIO_BITRATE,
+            "-ar",
+            str(AUDIO_RATE),
+        ]
+    )
+    if run.benchmark:
+        audio_args.insert(0, "-benchmark")
+    proc = ffmpeg.run_ff(
+        audio_args + [str(run.destination)],
         loglevel="info" if run.benchmark else "error",
         timeout=run.timeout,
         step="render",
@@ -330,10 +417,35 @@ def _join(run: Run, paths: List[Path]) -> Any:
 
         raise CompileError(
             "RENDER_FAILED",
-            "the concat demuxer reported success but wrote no output",
+            "the audio join reported success but wrote no output",
             str(run.destination),
         )
     return proc
+
+
+def _carries_audio(paths: List[Path]) -> bool:
+    """True when the pieces carry an audio stream (all pieces share the policy)."""
+    from . import probe as probe_module  # noqa: PLC0415 - join only
+
+    if not paths:
+        return False
+    try:
+        return bool(probe_module.probe(str(paths[0])).has_audio)
+    except Exception:  # noqa: BLE001 - an unreadable piece falls back to copy
+        return False
+
+
+def _audio_seconds(paths: List[Path]) -> List[float]:
+    """Declared duration of each piece, or zeros when it cannot be read."""
+    from . import probe as probe_module  # noqa: PLC0415 - join only
+
+    found: List[float] = []
+    for path in paths:
+        try:
+            found.append(max(0.0, float(probe_module.probe(str(path)).duration)))
+        except Exception:  # noqa: BLE001 - an unknown length is left untrimmed
+            found.append(0.0)
+    return found
 
 
 def render_chunked(
@@ -348,6 +460,7 @@ def render_chunked(
     benchmark: bool = False,
     jobs: int = 1,
     live: bool = False,
+    effect_budget: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Render ``timeline`` as ``chunks`` resumable pieces, then join them.
 
@@ -383,6 +496,7 @@ def render_chunked(
         benchmark=bool(benchmark),
         total=len(windows),
         memo={},
+        effect_budget=effect_budget,
     )
     publisher = LivePublisher(root / LIVE_DIR, windows) if live else None
     on_ready: Optional[Callable[[Mapping[str, Any]], None]] = (

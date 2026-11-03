@@ -6,17 +6,21 @@ an atomically replaced ``manifest.json`` (``vx.live/1``) says which ones are
 ready. ``vx serve`` exposes that manifest as ``live`` in ``/api/state`` and serves
 the pieces with Range, from ``<workdir>/live`` only.
 
-No network and no ffmpeg: the publisher, the manifest and the HTTP contract are
-exercised with copies of a tiny local file.
+No network. The publisher, the manifest and the HTTP contract are exercised with
+copies of a tiny local file; one final section runs real ffmpeg to prove that a
+document with an audio bus and no ``dst_in``/``dst_out`` renders through the
+chunk path and that its pieces add up to the single-pass master.
 
 python tests/test_live.py
 """
 
 from __future__ import annotations
 
+import array
 import hashlib
 import http.client
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -25,7 +29,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from vx import edl3_chunks, serve  # noqa: E402
+from vx import edl3, edl3_chunks, edl3_render, ffmpeg, probe, serve  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -116,6 +120,155 @@ def _fake_render(timeline, output, **kwargs):
     finally:
         edl3_chunks.plan_windows, edl3_chunks._render_one, edl3_chunks._join = real
     return report, calls
+
+
+def _video(path: Path, pattern: str) -> None:
+    subprocess.run(
+        [
+            ffmpeg.ffmpeg(), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+            "-i", f"{pattern}=s=160x120:r=12:d=1", "-c:v", "libx264",
+            "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", "-an",
+            "-y", str(path),
+        ],
+        check=True,
+    )
+
+
+def _audio(path: Path, seconds: float) -> None:
+    subprocess.run(
+        [
+            ffmpeg.ffmpeg(), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+            "-i", f"sine=frequency=440:sample_rate=48000:duration={seconds}",
+            "-c:a", "aac", "-b:a", "128k", "-y", str(path),
+        ],
+        check=True,
+    )
+
+
+def _pcm(path: Path) -> "array.array":
+    target = path.with_suffix(".f32")
+    subprocess.run(
+        [
+            ffmpeg.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path),
+            "-map", "0:a:0", "-f", "f32le", "-ac", "1", "-ar", "48000", "-y",
+            str(target),
+        ],
+        check=True,
+    )
+    return array.array("f", target.read_bytes())
+
+
+def live_audio_case(raw: Path) -> None:
+    """``--live`` accepts an audio bus and clips without dst_in/dst_out."""
+    print("\n-- live: audio bus e clip senza dst, la somma resta il master")
+    try:
+        ffmpeg.ffmpeg()
+    except Exception as exc:  # noqa: BLE001 - the rest of the file needs no binary
+        print(f"    [SKIP] no ffmpeg: {type(exc).__name__}")
+        return
+    work = raw / "audio_job"
+    work.mkdir()
+    patterns = ["testsrc2", "smptebars", "testsrc", "rgbtestsrc"]
+    sources = []
+    for index, pattern in enumerate(patterns):
+        path = work / f"v{index}.mp4"
+        _video(path, pattern)
+        sources.append(path)
+    bed = work / "bed.m4a"
+    _audio(bed, 4.0)
+
+    document = edl3.Timeline3(
+        fps=12,
+        size=(160, 120),
+        clips=[
+            edl3.Clip3(id=f"c{index}", source=str(source), src_in=0.0, src_out=1.0)
+            for index, source in enumerate(sources)
+        ],
+        audio=[
+            edl3.AudioTrack3(
+                role="dialogue",
+                clips=[
+                    edl3.AudioClip3(
+                        source=str(bed), src_in=0.0, src_out=4.0,
+                        dst_in=0.0, dst_out=4.0,
+                    )
+                ],
+            )
+        ],
+    )
+    check(
+        "i tempi si derivano dal cursore, senza dst_in/dst_out",
+        all(clip.dst_in is None for clip in document.clips),
+        [clip.timeline_duration for clip in document.clips],
+    )
+    windows = edl3_chunks.plan_windows(document, 2)
+    check(
+        "i due chunk coprono 0..2 e 2..4 derivando la concatenazione",
+        [(window["t0"], window["t1"]) for window in windows] == [(0.0, 2.0), (2.0, 4.0)],
+        [(window["t0"], window["t1"]) for window in windows],
+    )
+    pieces = [
+        edl3_chunks.document(document, window).get("audio") or [] for window in windows
+    ]
+    check(
+        "ogni chunk porta la sua fetta di bus audio",
+        all(len(track) == 1 and track[0]["clips"] for track in pieces)
+        and all(
+            abs(
+                (float(track[0]["clips"][0]["src_out"])
+                 - float(track[0]["clips"][0]["src_in"])) - 2.0
+            )
+            < 1e-9
+            for track in pieces
+        ),
+        [track[0]["clips"][0]["src_in"] for track in pieces if track],
+    )
+
+    master = work / "master.mp4"
+    edl3_render.render(document, master, workdir=work / "master_wd", audio="mix")
+    joined = work / "live_master.mp4"
+    report = edl3_chunks.render_chunked(
+        document,
+        joined,
+        workdir=work / "chunk_wd",
+        audio="mix",
+        chunks=2,
+        live=True,
+    )
+    check(
+        "il render a chunk con audio e live completa i due pezzi",
+        report["chunks"]["count"] == 2
+        and report.get("live", {}).get("ready") == 2,
+        report.get("live", {}).get("ready"),
+    )
+    check(
+        "ogni chunk compila il bus audio ([aout])",
+        report["filter_script"].count("[aout]") == 2,
+        report["filter_script"].count("[aout]"),
+    )
+    check(
+        "master e somma dei chunk hanno la stessa durata",
+        abs(probe.probe(str(master)).duration - probe.probe(str(joined)).duration) <= 0.05,
+        f"{probe.probe(str(master)).duration:.3f} vs {probe.probe(str(joined)).duration:.3f}",
+    )
+    expected = _pcm(master)
+    actual = _pcm(joined)
+    count = min(len(expected), len(actual))
+    error = (
+        sum(abs(expected[i] - actual[i]) for i in range(count)) / count
+        if count
+        else 1.0
+    )
+    check(
+        "la somma dei campioni audio e' il master (errore medio < 0.005)",
+        count > 0 and abs(len(expected) - len(actual)) <= 2048 and error < 0.005,
+        f"{len(actual)} vs {len(expected)} campioni, errore medio {error:.6f}",
+    )
+    check(
+        "l'audio non e' stato rifiutato ne' scartato",
+        report["audio_policy"] == "mix" and joined.stat().st_size > 0,
+        report["audio_policy"],
+    )
 
 
 def main() -> int:
@@ -284,6 +437,8 @@ def main() -> int:
                   response.status)
         finally:
             server.stop()
+
+        live_audio_case(Path(raw))
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

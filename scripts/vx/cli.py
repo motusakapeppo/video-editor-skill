@@ -2457,6 +2457,18 @@ def cmd_edl3(args: argparse.Namespace) -> int:
         budget = settings_module.get(
             "render.effect_budget", edl3.EFFECT_DENSITY_LIMIT
         )
+    try:
+        budget = int(budget)
+    except (TypeError, ValueError):
+        budget = edl3.EFFECT_DENSITY_LIMIT
+    if budget < 0:
+        message = (
+            f"--effect-budget must be >= 0 (0 disables the cap), got {budget}"
+        )
+        if session is not None:
+            session.error(message)
+        _out({"ok": False, "error": message})
+        return EXIT_USAGE
     if session is not None:
         session.set_job(work)
         session.stage("render", 0.0, f"Compilo {Path(args.plan).name}")

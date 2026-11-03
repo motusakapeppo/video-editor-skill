@@ -40,7 +40,13 @@ R13. ``freeze`` composes inside the timeline path, both as a single branch and
 R14. what is still refused is refused by name: a timeline ``blend`` with a
     second source (``BLEND_INPUT_UNAVAILABLE``), a rotation
     (``PARAM_NOT_RENDERED`` on ``params.rotate``) and a bezier without points
-    (``CURVE_NOT_REPRESENTABLE``).
+    (``CURVE_NOT_REPRESENTABLE``);
+R15. two sources on different clocks (30 fps and 29.97) meet in a crossfade:
+    every input is normalised to the document's clock, the render finishes and
+    the dissolve lasts 3.5 s; a document without a dissolve keeps the graph it
+    had (no normalisation is inserted);
+R15b. ``tests/fixtures/edl3_minimal/doc.json`` — the documented example — renders
+    as written: audio bus, crossfade, clips without ``dst_in``/``dst_out``.
 """
 
 from __future__ import annotations
@@ -92,10 +98,14 @@ def run(command: list[str]) -> None:
 
 
 def make_source(path: Path, seconds: float, pattern: str = "testsrc2") -> None:
+    make_source_at(path, seconds, FPS, pattern)
+
+
+def make_source_at(path: Path, seconds: float, rate: object, pattern: str = "testsrc2") -> None:
     graph = (
-        f"{pattern}:s={WIDTH}x{HEIGHT}:r={FPS}:d={seconds}"
+        f"{pattern}:s={WIDTH}x{HEIGHT}:r={rate}:d={seconds}"
         if pattern.startswith("color=")
-        else f"{pattern}=s={WIDTH}x{HEIGHT}:r={FPS}:d={seconds}"
+        else f"{pattern}=s={WIDTH}x{HEIGHT}:r={rate}:d={seconds}"
     )
     run(
         [
@@ -1166,6 +1176,105 @@ def main() -> int:
             and points_error.code == "CURVE_NOT_REPRESENTABLE"
             and points_error.where == "curve.points",
             "" if points_error is None else f"{points_error.code} @ {points_error.where}",
+        )
+
+        print("\nR15 -- due clock diversi e una dissolvenza: il timebase si normalizza")
+        clock30 = root / "clock30.mp4"
+        clock2997 = root / "clock2997.mp4"
+        make_source_at(clock30, SECONDS, 30)
+        make_source_at(clock2997, SECONDS, "30000/1001")
+        clock_doc = edl3.Timeline3(
+            fps=30,
+            size=(WIDTH, HEIGHT),
+            clips=[
+                edl3.Clip3(id="a", source=str(clock30), src_in=0.0, src_out=SECONDS),
+                edl3.Clip3(
+                    id="b",
+                    source=str(clock2997),
+                    src_in=0.0,
+                    src_out=SECONDS,
+                    transition_in=edl3.Transition(
+                        kind="crossfade", duration=0.5, style="fade"
+                    ),
+                ),
+            ],
+        )
+        clock_plan = edl3_render.compile_timeline(clock_doc)
+        check(
+            "R15 ogni ingresso porta fps=30 e settb=1/30",
+            clock_plan["filter_script"].count("fps=30,settb=1/30") == 2,
+            [line for line in clock_plan["filter_script"].splitlines() if "settb" in line],
+        )
+        clock_out = root / "clock" / "master.mp4"
+        clock_error = None
+        try:
+            edl3_render.render(clock_doc, clock_out, workdir=root / "clock")
+        except edl3_render.CompileError as exc:  # pragma: no cover - the defect
+            clock_error = exc
+        check(
+            "R15 30 fps + 29.97 + crossfade renderizza (niente 'timebase do not match')",
+            clock_error is None and clock_out.is_file() and clock_out.stat().st_size > 0,
+            "" if clock_error is None else str(clock_error)[:120],
+        )
+        check(
+            "R15 la dissolvenza dura 3.5 s, non 4",
+            clock_out.is_file()
+            and abs(probe(clock_out)["duration"] - (2 * SECONDS - 0.5))
+            <= 1.0 / 30 + 1e-6,
+            probe(clock_out)["duration"] if clock_out.is_file() else "no file",
+        )
+        plain_doc = edl3.Timeline3(
+            fps=30,
+            size=(WIDTH, HEIGHT),
+            clips=[edl3.Clip3(id="only", source=str(clock30), src_in=0.0, src_out=SECONDS)],
+        )
+        check(
+            "R15 un documento senza dissolvenza resta senza normalizzazione (byte identici)",
+            "settb" not in edl3_render.compile_timeline(plain_doc)["filter_script"],
+        )
+
+        print("\nR15b -- il fixture edl3_minimal renderizza com'e' scritto")
+        fixture_dir = ROOT / "tests" / "fixtures" / "edl3_minimal"
+        portable = json.loads((fixture_dir / "doc.json").read_text(encoding="utf-8"))
+        base = root / "fixture"
+        base.mkdir()
+        shutil.copyfile(clock30, base / "a.mp4")
+        shutil.copyfile(clock2997, base / "b.mp4")
+        subprocess.run(
+            [
+                ffmpeg.ffmpeg(), "-hide_banner", "-loglevel", "error", "-f",
+                "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=3.5",
+                "-c:a", "aac", "-b:a", "128k", "-y", str(base / "bed.m4a"),
+            ],
+            check=True,
+        )
+        resolved = json.loads(
+            json.dumps(portable).replace("<base>", str(base).replace("\\", "/"))
+        )
+        fixture_doc = edl3.Timeline3.from_dict(resolved)
+        fixture_error = None
+        try:
+            fixture_report = edl3_render.render(
+                fixture_doc,
+                base / "master.mp4",
+                workdir=base / "wd",
+                audio="mix",
+            )
+        except edl3_render.CompileError as exc:  # pragma: no cover - the defect
+            fixture_error = exc
+        check(
+            "R15b il fixture con audio, crossfade e clip senza dst arriva in fondo",
+            fixture_error is None and (base / "master.mp4").is_file(),
+            "" if fixture_error is None else str(fixture_error)[:120],
+        )
+        check(
+            "R15b dura 3.5 s e porta il bus audio",
+            fixture_error is None
+            and (base / "master.mp4").is_file()
+            and abs(float(fixture_report["duration"]) - 3.5) < 1e-9
+            and fixture_report["audio_map"] == "[aout]"
+            and abs(probe(base / "master.mp4")["duration"] - 3.5) <= 1.0 / 30 + 1e-6,
+            (base / "master.mp4").stat().st_size if (base / "master.mp4").is_file() else 0,
         )
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")

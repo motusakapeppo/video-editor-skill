@@ -1,0 +1,50 @@
+{
+  "version": "vx.edl3/1.2",
+  "fps": 30,
+  "size": [
+    320,
+    240
+  ],
+  "clips": [
+    {
+      "id": "a",
+      "source": "<base>/a.mp4",
+      "src_in": 0.0,
+      "src_out": 2.0,
+      "layer": 0
+    },
+    {
+      "id": "b",
+      "source": "<base>/b.mp4",
+      "src_in": 0.0,
+      "src_out": 2.0,
+      "layer": 0,
+      "transition_in": {
+        "kind": "crossfade",
+        "duration": 0.5,
+        "style": "fade"
+      }
+    }
+  ],
+  "audio": [
+    {
+      "role": "dialogue",
+      "clips": [
+        {
+          "source": "<base>/bed.m4a",
+          "src_in": 0.0,
+          "src_out": 2.0,
+          "dst_in": 0.0,
+          "dst_out": 2.0
+        },
+        {
+          "source": "<base>/bed.m4a",
+          "src_in": 1.5,
+          "src_out": 3.5,
+          "dst_in": 2.0,
+          "dst_out": 4.0
+        }
+      ]
+    }
+  ]
+}
