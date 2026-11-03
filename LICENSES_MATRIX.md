@@ -3,7 +3,7 @@
 Regola: nessun modello, libreria o binario nuovo entra senza una riga qui.
 Ogni riga dichiara versione, licenza, data di verifica e tipo d'uso. "Verificata"
 significa letta dai metadati del pacchetto installato o dal binario stesso, non
-ricordata a memoria. Data della verifica: 27/10/2026.
+ricordata a memoria. Data della verifica: 03/11/2026.
 
 Tipi d'uso ammessi: **libreria** (importata nel processo), **processo esterno**
 (lanciata come eseguibile, mai distribuita), **opzionale** (non necessaria al
@@ -35,6 +35,28 @@ percorso normale).
 | JetBrains Mono (variabile, font incluso) | 1 TTF variabile | OFL-1.1 | `assets/fonts/JetBrainsMono-OFL.txt`, google/fonts/ofl/jetbrainsmono | libreria |
 | Bebas Neue (font incluso) | 1 TTF, Regular | OFL-1.1 | `assets/fonts/BebasNeue-OFL.txt`, google/fonts/ofl/bebasneue | libreria |
 | Catalogo google/fonts (indice, non pesi) | 2.065 famiglie, 414 KB | OFL-1.1 / Apache-2.0 / Ubuntu-1.0 per famiglia | `assets/fonts/catalogue.json`, generato da github.com/google/fonts | opzionale |
+
+## Font scaricati dal catalogo
+
+| Famiglia | File | Licenza | Fonte | sha256 | Verificata il |
+|---|---|---|---|---|---|
+| abrilfatface | AbrilFatface-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/abrilfatface) | 5971d4a3758a922a… | 03/11/2026 |
+| alfaslabone | AlfaSlabOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/alfaslabone) | 28664afa698a3393… | 03/11/2026 |
+| archivo | Archivo-Italic[wdth,wght].ttf<br>Archivo[wdth,wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/archivo) | 305d13b4eb80e62f… | 03/11/2026 |
+| archivoblack | ArchivoBlack-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/archivoblack) | dd9a89a019b4849f… | 03/11/2026 |
+| archivonarrow | ArchivoNarrow-Italic[wght].ttf<br>ArchivoNarrow[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/archivonarrow) | 147c09214be086bf… | 03/11/2026 |
+| barlowcondensed | 18 file | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/barlowcondensed) | e74b750df582c608… | 03/11/2026 |
+| blackopsone | BlackOpsOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/blackopsone) | 282a825b5f294377… | 03/11/2026 |
+| bungee | Bungee-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/bungee) | c4f5361ce120af3e… | 03/11/2026 |
+| butcherman | Butcherman-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/butcherman) | b8cee5e2cdc71f44… | 03/11/2026 |
+| creepster | Creepster-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/creepster) | 402aeb734586c74a… | 03/11/2026 |
+| fjallaone | FjallaOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/fjallaone) | ce3b299625abe3c7… | 03/11/2026 |
+| lobster | Lobster-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/lobster) | d6568e697fd50ced… | 03/11/2026 |
+| nosifer | Nosifer-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/nosifer) | 09c5ac35e34dc7a3… | 03/11/2026 |
+| oswald | Oswald[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/oswald) | 5b38c246e255a12f… | 03/11/2026 |
+| rubikglitch | RubikGlitch-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/rubikglitch) | 260245012483d569… | 03/11/2026 |
+| squadaone | SquadaOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/squadaone) | 5b34a1633dbc48db… | 03/11/2026 |
+| staatliches | Staatliches-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/staatliches) | 8395212aa4c6c353… | 03/11/2026 |
 
 ## Da verificare prima dell'integrazione
 

@@ -2331,6 +2331,11 @@ def cmd_auto(args: argparse.Namespace) -> int:
         _out(report)
     elif narrator is not None:
         narrator.summary(report)
+        # La riga della guardia e' l'ultima parola: un master che esiste non e'
+        # un lavoro consegnabile, e chi guarda lo deve sapere senza aprire JSON.
+        verdict = auto.guard_line(report.get("guard"))
+        if verdict:
+            narrator._write(verdict)
     else:
         _log(
             f"[auto] ok: {report['master']} "
@@ -2385,6 +2390,33 @@ def cmd_guard(args: argparse.Namespace) -> int:
         _out(report)
     else:
         print(guard.to_text(report))
+    return int(report["exit_code"])
+
+
+def cmd_fonts(args: argparse.Namespace) -> int:
+    """Audit font licences: cache, ``fetched.json`` and the matrix must agree."""
+    from . import fontstore
+
+    action = getattr(args, "fonts_cmd", "")
+    if action != "audit":
+        print("uso: vx fonts audit [--root DIR] [--matrix FILE] [--json]")
+        return 2
+    report = fontstore.audit(root=getattr(args, "root", None), matrix_path=getattr(args, "matrix", None))
+    if args.json:
+        _out(report)
+    else:
+        print(
+            f"font in cache: {report['cache_families']} | "
+            f"righe matrice: {report['matrix_rows']} | "
+            f"righe fetched: {report['fetched_rows']}"
+        )
+        print(f"matrice: {report['matrix']}")
+        if report["ok"]:
+            print("coerente: nessuna incoerenza")
+        else:
+            for problem in report["problems"]:
+                print(f"  - {problem}")
+            print(f"{len(report['problems'])} incoerenze")
     return int(report["exit_code"])
 
 
@@ -2793,6 +2825,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="disattiva una feature dichiarata in vx.features (ripetibile)",
     )
+    p.add_argument(
+        "--no-guard",
+        action="store_true",
+        help="salta l'audit di consegna (`vx guard`) sulla workdir: il report lo "
+        "dichiara saltato e il lavoro si considera consegnato",
+    )
     p.add_argument("--crf", type=int, default=None)
     p.add_argument("--preset", default=None)
     p.add_argument("--json", action="store_true")
@@ -2871,6 +2909,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="server MCP su stdio (JSON-RPC per agenti)")
     p.set_defaults(func=cmd_mcp)
+
+    p = add("fonts", "licenze dei font: audit cache -> fetched.json -> matrice")
+    fonts_sub = p.add_subparsers(dest="fonts_cmd", required=True)
+    a = fonts_sub.add_parser(
+        "audit",
+        help="font in cache senza riga, righe senza file, licenze unknown (exit 2 se incoerente)",
+    )
+    a.add_argument("--root", default=None, help="radice del font store (default: assets/fonts)")
+    a.add_argument("--matrix", default=None, help="matrice da controllare (default: LICENSES_MATRIX.md)")
+    a.add_argument("--json", action="store_true", help="referto macchina")
+    a.set_defaults(func=cmd_fonts)
 
     return ap
 

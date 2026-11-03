@@ -38,7 +38,6 @@ import hashlib
 import json
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
@@ -64,10 +63,6 @@ __all__ = [
 #: Where the catalogue's ``<directory>/<file>`` pairs are read from.
 BASE_URL = "https://raw.githubusercontent.com/google/fonts/main"
 ENV_BASE_URL = "VX_FONT_BASE_URL"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def _base_url(base_url: Optional[str] = None) -> str:
@@ -110,6 +105,13 @@ def _download_family(
     names = _font_names(row)
     if not names:
         raise refuse("FONT_NO_FILES", f"{name}: il catalogo non elenca file .ttf/.otf")
+    licence = str(row.get("licence") or "").strip()
+    if not fontstore.licence_known(licence):
+        raise refuse(
+            "FONT_LICENCE_MISSING",
+            f"{name}: licenza {licence or 'assente'!r} non registrabile; nessun download",
+            str(row.get("directory") or ""),
+        )
     base = _base_url(base_url)
     directory = str(row.get("directory") or "").strip().strip("/")
     payloads: List[Dict[str, Any]] = []
@@ -126,12 +128,10 @@ def _download_family(
     cache = fontstore.cache_dir(root, name)
     for payload in payloads:
         fontstore.write_bytes(cache / payload["name"], payload["data"])
-    key = fontstore.norm(name)
-    rows = [item for item in fontstore.fetched_rows(root) if fontstore.norm(item.get("family")) != key]
-    rows.append(
+    fontstore.register(
         {
             "family": name,
-            "licence": str(row.get("licence") or "unknown"),
+            "licence": licence,
             "directory": directory,
             "files": [
                 {
@@ -141,12 +141,15 @@ def _download_family(
                 }
                 for payload in payloads
             ],
-            "fetched_utc": _now(),
             "source": base,
-        }
+            "licence_url": (
+                f"https://github.com/google/fonts/tree/main/{directory}"
+                if directory
+                else "https://github.com/google/fonts"
+            ),
+        },
+        root=root,
     )
-    rows.sort(key=lambda item: str(item.get("family") or "").lower())
-    fontstore.write_rows(root, rows)
 
 
 def fetch(
