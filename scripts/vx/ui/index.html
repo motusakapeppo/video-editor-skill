@@ -185,6 +185,8 @@
               <p class="estimate-total num" id="estimateTotal"></p>
             </div>
             <div class="estimate-rows" id="estimateRows"></div>
+            <p class="estimate-actual num" id="estimateActual" hidden></p>
+            <p class="estimate-mape num" id="estimateMape" hidden></p>
             <p class="estimate-note" id="estimateNote" hidden></p>
             <p class="estimate-notes" id="estimateNotes" hidden></p>
             <p class="estimate-flash" id="estimateFlash" role="status" hidden></p>
@@ -200,6 +202,21 @@
           </div>
           <div class="result-body" id="resultBody"></div>
         </section>
+
+        <div class="feedback" id="feedback" hidden>
+          <p class="feedback-ask" id="feedbackAsk">Com'è andato?</p>
+          <div class="feedback-actions" id="feedbackActions" role="group" aria-label="Voto da 1 a 5">
+            <button class="vote" type="button" data-rating="1" aria-label="Voto 1 su 5">1</button>
+            <button class="vote" type="button" data-rating="2" aria-label="Voto 2 su 5">2</button>
+            <button class="vote" type="button" data-rating="3" aria-label="Voto 3 su 5">3</button>
+            <button class="vote" type="button" data-rating="4" aria-label="Voto 4 su 5">4</button>
+            <button class="vote" type="button" data-rating="5" aria-label="Voto 5 su 5">5</button>
+            <input class="feedback-note" id="feedbackNote" type="text" maxlength="140"
+                   placeholder="una nota, se vuoi" aria-label="Nota facoltativa">
+          </div>
+          <p class="feedback-given num" id="feedbackGiven" hidden></p>
+          <p class="feedback-error" id="feedbackError" role="alert"></p>
+        </div>
 
         <section class="deck-wrap" aria-labelledby="framesTitle">
           <div class="deck-head">

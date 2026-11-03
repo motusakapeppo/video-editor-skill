@@ -48,7 +48,15 @@
     estimateRows: $('estimateRows'),
     estimateNote: $('estimateNote'),
     estimateNotes: $('estimateNotes'),
+    estimateActual: $('estimateActual'),
+    estimateMape: $('estimateMape'),
     estimateFlash: $('estimateFlash'),
+    feedback: $('feedback'),
+    feedbackAsk: $('feedbackAsk'),
+    feedbackActions: $('feedbackActions'),
+    feedbackNote: $('feedbackNote'),
+    feedbackGiven: $('feedbackGiven'),
+    feedbackError: $('feedbackError'),
     live: $('live'),
     liveMeta: $('liveMeta'),
     liveBody: $('liveBody'),
@@ -1267,7 +1275,7 @@
     deliver: 'consegna',
   };
 
-  function paintEstimate(state) {
+  function paintEstimate(state, verdict) {
     const est = state.estimate && typeof state.estimate === 'object' ? state.estimate : null;
     const parts = est && est.parts && typeof est.parts === 'object' ? est.parts : {};
     // Una stima a zero non è una stima: meglio non mostrare il blocco.
@@ -1325,6 +1333,40 @@
     const notes = (Array.isArray(est.notes) ? est.notes : []).filter((item) => String(item || '').trim());
     el.estimateNotes.hidden = !notes.length;
     el.estimateNotes.textContent = notes.join(' · ');
+
+    // Consuntivo: solo a lavoro finito, e solo se c'è davvero un tempo misurato.
+    const actual = Number(state.elapsed_sec) || 0;
+    const showActual = verdict === 'done' && seconds > 0 && actual > 0;
+    el.estimateActual.hidden = !showActual;
+    if (showActual) {
+      const delta = ((actual - seconds) / seconds) * 100;
+      const rounded = Math.round(delta);
+      el.estimateActual.textContent =
+        num(seconds, 0) + ' s stimati · ' + num(actual, 0) + ' s reali · ' +
+        (rounded >= 0 ? '+' : '−') + Math.abs(rounded) + '%';
+      el.estimateActual.className = 'estimate-actual num' + (Math.abs(delta) > 20 ? ' is-off' : '');
+    }
+
+    // Errore medio del modello, se il registro ne ha uno (numero o blocco).
+    const summary = state.feedback && state.feedback.summary ? state.feedback.summary : {};
+    let mapeValue = null;
+    let mapeN = 0;
+    if (typeof summary.mape === 'number') {
+      mapeValue = summary.mape;
+      mapeN = Number(summary.n || summary.count) || 0;
+    } else if (summary.mape && typeof summary.mape === 'object') {
+      mapeN = Number(summary.mape.n) || 0;
+      const percent = Number(summary.mape.mean_percent);
+      if (Number.isFinite(percent)) mapeValue = percent / 100;
+    }
+    const showMape = mapeN > 0 && mapeValue !== null && Number.isFinite(mapeValue);
+    el.estimateMape.hidden = !showMape;
+    if (showMape) {
+      el.estimateMape.textContent =
+        'errore medio sugli ultimi ' + mapeN +
+        (mapeN === 1 ? ' lavoro: ' : ' lavori: ') +
+        Math.round(mapeValue * 100) + '%';
+    }
   }
 
   const planPicked = new Set();
@@ -1510,6 +1552,81 @@
 
   el.planGate.addEventListener('cancel', (event) => {
     event.preventDefault();
+  });
+
+  /* -------------------------------------------------------------- voto finale */
+
+  let feedbackJob = null;
+  let feedbackSending = false;
+  let localRating = null;
+
+  function paintFeedback(state, verdict) {
+    if (feedbackJob !== jobIndex) {
+      feedbackJob = jobIndex;
+      localRating = null;
+      el.feedbackError.textContent = '';
+      el.feedbackNote.value = '';
+    }
+
+    const fb = state.feedback && typeof state.feedback === 'object' ? state.feedback : null;
+    const asked = !!(fb && fb.asked === true);
+    const given = !!(fb && fb.given === true);
+    const rating = given ? Number(fb.rating) || null : localRating;
+    // Il voto si chiede solo a lavoro consegnato: è un favore, non un cancello.
+    const show = verdict === 'done' && (asked || given || rating !== null);
+
+    el.feedback.hidden = !show;
+    if (!show) return;
+
+    const answered = Boolean(rating);
+    el.feedbackAsk.hidden = answered;
+    el.feedbackActions.hidden = answered;
+    el.feedbackGiven.hidden = !answered;
+    el.feedbackGiven.textContent = answered
+      ? 'Il tuo voto: ' + rating + '/5 — grazie, registrato.'
+      : '';
+  }
+
+  async function sendFeedback(rating, button) {
+    if (feedbackSending || !rating) return;
+    feedbackSending = true;
+    el.feedbackError.textContent = '';
+    el.feedbackActions.querySelectorAll('.vote').forEach((node) => {
+      node.disabled = true;
+    });
+    button.setAttribute('aria-busy', 'true');
+
+    try {
+      const base = scoped('/api/feedback');
+      const note = String(el.feedbackNote.value || '').trim();
+      let url = base + (base.indexOf('?') === -1 ? '?' : '&') + 'rating=' + rating;
+      if (note) url += '&note=' + encodeURIComponent(note);
+      const response = await fetch(url, { method: 'POST' });
+      const result = await response.json();
+
+      if (result && result.ok === true) {
+        localRating = rating;
+        el.feedbackNote.value = '';
+        feedbackSending = false;
+        paintFeedback(lastState || {}, lastVerdict);
+        await tick();
+        return;
+      }
+      el.feedbackError.textContent =
+        (result && result.reason) || 'Il voto non è stato registrato: riprova.';
+    } catch (error) {
+      el.feedbackError.textContent = 'Il voto non è stato registrato: il server non risponde.';
+    }
+
+    feedbackSending = false;
+    button.removeAttribute('aria-busy');
+    el.feedbackActions.querySelectorAll('.vote').forEach((node) => {
+      node.disabled = false;
+    });
+  }
+
+  el.feedbackActions.querySelectorAll('.vote').forEach((button) => {
+    button.addEventListener('click', () => sendFeedback(Number(button.dataset.rating), button));
   });
 
   /* ---------------------------------------------------------------------- live */
@@ -2133,9 +2250,11 @@
     body.classList.remove('is-offline');
 
     lastClosed = closed;
+    lastVerdict = verdict;
     paintRegia(state, closed);
-    paintEstimate(state);
+    paintEstimate(state, verdict);
     paintLive(state, closed);
+    paintFeedback(state, verdict);
 
     const prompt = String(state.prompt || '').trim();
     el.jobTitle.textContent = prompt || 'Lavoro senza titolo';
@@ -2220,6 +2339,7 @@
   let approving = false;
   let hasDrawn = false;
   let lastState = null;
+  let lastVerdict = null;
 
   // La testina è posizionata in pixel: se cambia la larghezza va ricalcolata.
   window.addEventListener('resize', () => {
