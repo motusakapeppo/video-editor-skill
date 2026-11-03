@@ -17,18 +17,33 @@ g. a one-shot document has no cut and no hook, and says both;
 h. a text card up from frame 0 is a hook at 0.0;
 i. an interview-driven profile reports an unbacked grammar and accepts a
    dialogue audio bus.
+
+The second half (``vx.structure/1``) proves the audio reading of "structure",
+on clips generated locally with ffmpeg:
+
+j. a track shaped A / silence / A / B has A recognised as the repeated family
+   and named chorus, with ``chorus_span`` starting at 0, and B as the outro;
+k. continuous white noise produces no chorus at all: ``chorus_span`` is None,
+   every confidence is low and a note says why;
+l. a 120 BPM click track measures ~120 BPM, while the sustained tones measure
+   no tempo rather than inventing one;
+m. the payload is valid JSON with the declared schema, the sections tile the
+   whole duration with no gap, and every ``repeat_of`` points backwards to a
+   section with the same label.
 """
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from vx import edl3, edl3_render, profiles, structure  # noqa: E402
+from vx import edl3, edl3_render, ffmpeg as ff, profiles, structure  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -118,7 +133,7 @@ REEL_SHAPED = [0.745] * 40
 DOCU = [600.0 / 61.0] * 61
 
 
-def main() -> int:
+def f26_checks() -> None:
     print("a. a document inside its band passes")
     inside = build(INSIDE, profile="reel")
     check("a1. reel: 25 s and 20 cuts is clean", shape(inside, "reel") == (), shape(inside, "reel"))
@@ -208,6 +223,165 @@ def main() -> int:
     check("i2. a dialogue audio bus backs it", codes(backed) == [], codes(backed))
     check("i3. beat alignment is never guessed", all("STRUCTURE_BEAT" not in code for code in codes(inside)), codes(inside))
 
+
+# ---------------------------------------------------------------------------
+# vx.structure/1 -- the song's shape from its audio
+# ---------------------------------------------------------------------------
+
+#: A / 1 s silence / A / B. The repeated A must be the chorus, from 0 s.
+TONES = (
+    "aevalsrc=if(lt(t\\,8)\\,0.35*sin(2*PI*440*t)\\,if(lt(t\\,9)\\,0\\,"
+    "if(lt(t\\,17)\\,0.35*sin(2*PI*440*t)\\,0.35*sin(2*PI*659.25*t)))):s=44100:d=25"
+)
+#: Continuous broadband noise: nothing repeats, nothing is tonal.
+NOISE = "anoisesrc=color=white:amplitude=0.25:duration=24:sample_rate=44100:seed=12345"
+#: 40 ms clicks every 0.5 s: 120 BPM, and nothing else.
+CLICKS = "aevalsrc=if(lt(mod(t\\,0.5)\\,0.04)\\,0.6*sin(2*PI*1000*t)\\,0):s=44100:d=16"
+
+
+def make_clip(target: Path, source: str) -> bool:
+    """Render one lavfi source to a mono wav; False when ffmpeg refused."""
+    proc = ff.run_ff(
+        ["-f", "lavfi", "-i", source, "-ac", "1", str(target)],
+        loglevel="error",
+        step="probe",
+    )
+    return proc.ok and target.exists() and target.stat().st_size > 0
+
+
+def contiguous(sections: Sequence[Dict[str, Any]], duration: float) -> bool:
+    """Sections tile [0, duration] with no hole and no overlap."""
+    if not sections:
+        return False
+    if abs(sections[0]["t_in"]) > 1e-6:
+        return False
+    if abs(sections[-1]["t_out"] - duration) > 1e-3:
+        return False
+    return all(
+        abs(left["t_out"] - right["t_in"]) <= 1e-3
+        for left, right in zip(sections, sections[1:])
+    )
+
+
+def song_checks(tmp: Path) -> None:
+    tones = tmp / "tones.wav"
+    noise = tmp / "noise.wav"
+    clicks = tmp / "clicks.wav"
+    built = [
+        make_clip(tones, TONES),
+        make_clip(noise, NOISE),
+        make_clip(clicks, CLICKS),
+    ]
+    check("j0. ffmpeg generated the three clips", all(built), built)
+    if not all(built):
+        return
+
+    print("\nj. A / silence / A / B: the repeated A is the chorus, from 0 s")
+    song = structure.analyze(str(tones))
+    sections = song["sections"]
+    span = song["chorus_span"]
+    labels = [section["label"] for section in sections]
+    check("j1. the schema is vx.structure/1", song["schema"] == "vx.structure/1", song["schema"])
+    check("j2. the duration is 25 s", abs(song["duration"] - 25.0) <= 0.05, song["duration"])
+    check("j3. a chorus was found", span is not None, span)
+    check("j4. the chorus starts at ~0 s", span is not None and abs(span[0]) <= 0.75, span)
+    check("j5. the chorus ends at ~8 s", span is not None and 7.2 <= span[1] <= 9.8, span)
+    check("j6. the first section is labelled chorus", labels[:1] == ["chorus"], labels)
+    check(
+        "j7. the chorus is named with high confidence",
+        bool(sections) and sections[0]["confidence"] == "high",
+        [section["confidence"] for section in sections],
+    )
+    second = next((s for s in sections[1:] if s["label"] == "chorus"), None)
+    check(
+        "j8. the second chorus repeats the first (repeat_of 0)",
+        second is not None and second["repeat_of"] == 0,
+        second,
+    )
+    check("j9. the last section is the outro", labels[-1:] == ["outro"], labels)
+    check("j10. sections tile the whole duration", contiguous(sections, song["duration"]), sections)
+    check(
+        "j11. no section is shorter than min_section",
+        all(section["t_out"] - section["t_in"] >= 8.0 - 0.1 for section in sections),
+        [round(section["t_out"] - section["t_in"], 3) for section in sections],
+    )
+    check(
+        "j12. every energy is a fraction in [0, 1]",
+        all(0.0 <= section["energy"] <= 1.0 for section in sections),
+        [section["energy"] for section in sections],
+    )
+    check(
+        "j13. the chorus is not quieter than half the loudest section",
+        span is not None and sections[0]["energy"] >= 0.5 * max(s["energy"] for s in sections),
+        sections[0]["energy"] if sections else None,
+    )
+    check(
+        "j14. every repeat_of points backwards to the same label",
+        all(
+            0 <= section["repeat_of"] < section_index
+            and sections[section["repeat_of"]]["label"] == section["label"]
+            for section_index, section in enumerate(sections)
+            if section["repeat_of"] is not None
+        ),
+        [(i, s["repeat_of"], s["label"]) for i, s in enumerate(sections)],
+    )
+    payload = json.loads(json.dumps(song))
+    check(
+        "j15. the payload is JSON with the declared schema",
+        payload["schema"] == "vx.structure/1" and payload["chorus_span"] == song["chorus_span"],
+        payload["schema"],
+    )
+    check(
+        "j16. sustained tones measure no tempo instead of inventing one",
+        song["tempo_bpm"] == 0.0,
+        song["tempo_bpm"],
+    )
+
+    print("\nk. continuous white noise produces no chorus")
+    hiss = structure.analyze(str(noise))
+    check("k1. chorus_span is None", hiss["chorus_span"] is None, hiss["chorus_span"])
+    check(
+        "k2. every section is low confidence",
+        all(section["confidence"] == "low" for section in hiss["sections"]),
+        [section["confidence"] for section in hiss["sections"]],
+    )
+    check(
+        "k3. no section is labelled chorus",
+        all(section["label"] != "chorus" for section in hiss["sections"]),
+        [section["label"] for section in hiss["sections"]],
+    )
+    check(
+        "k4. a note says why there is no chorus",
+        any("no chorus" in note or "no section repeats" in note for note in hiss["notes"]),
+        hiss["notes"],
+    )
+    check("k5. noise measures no tempo", hiss["tempo_bpm"] == 0.0, hiss["tempo_bpm"])
+    check("k6. the noise duration is 24 s", abs(hiss["duration"] - 24.0) <= 0.05, hiss["duration"])
+
+    print("\nl. a pulse is measured, not assumed")
+    beat = structure.analyze(str(clicks))
+    check(
+        "l1. the 120 BPM click track measures 110..130 BPM",
+        beat["tempo_bpm"] is not None and 110.0 <= beat["tempo_bpm"] <= 130.0,
+        beat["tempo_bpm"],
+    )
+    check("l2. the click duration is 16 s", abs(beat["duration"] - 16.0) <= 0.05, beat["duration"])
+
+    print("\nm. the contract refuses an impossible minimum")
+    try:
+        structure.analyze(str(clicks), min_section=0.0)
+        refused = False
+    except ValueError:
+        refused = True
+    except Exception:  # noqa: BLE001 - any other error is a failure
+        refused = False
+    check("m1. min_section=0 raises ValueError", refused, refused)
+
+
+def main() -> int:
+    f26_checks()
+    with tempfile.TemporaryDirectory(prefix="vxstruct_test_") as folder:
+        song_checks(Path(folder))
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 
