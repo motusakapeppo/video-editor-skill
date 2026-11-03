@@ -46,11 +46,14 @@ def run_auto(
     # Il worker ha stdout muto per contratto: la narrazione, se resta accesa da
     # una chiamata precedente nello stesso processo, scriverebbe li'.
     previous = getattr(auto, "_NARRATING", False)
+    reserved = getattr(auto, "_STDOUT_RESERVED", False)
     auto._NARRATING = False
+    auto._STDOUT_RESERVED = True
     try:
         return auto.run(namespace, progress=progress, progress_file=progress_file)
     finally:
         auto._NARRATING = previous
+        auto._STDOUT_RESERVED = reserved
 
 
 def triage(

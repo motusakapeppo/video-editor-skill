@@ -51,7 +51,12 @@ ricostruire nulla. Se stai leggendo dopo una compattazione, leggi questo, poi
    parallelo a un render. **Vale anche per la suite stessa**: lanciare `run_all.py`
    e contemporaneamente estrarre fotogrammi o costruire clip fa cadere i test che
    rendono golden (`test_motion_golden` è caduto due volte così, e passa sempre
-   quando la macchina è dedicata).
+   quando la macchina è dedicata). Da qui il default parallelo:
+   `run_all.py` con `--jobs 0` usa `max(2, min(6, cpu-2))` (6 qui; 14 file in
+   20 s contro 1418 s seriali), `--jobs 1` resta il seriale, e ogni FAIL del giro
+   parallelo è rieseguito **da solo**: se passa è `FLAKY` (elencato nel sommario,
+   fuori dall'exit code), se fallisce anche da solo resta FAIL.
+
 6. **`test_f17_crash.py` non è nella suite di default.** Misura la velocità della
    macchina e uccide il processo a offset fissi: dopo 175 test la macchina è calda,
    gli offset derivano e i kill si ammassano in una fase (misurato: loudness 45,

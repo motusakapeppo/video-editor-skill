@@ -77,6 +77,10 @@ def loudness_target(document: Any = None) -> tuple[float, float]:
 
 #: Quando c'e' un narratore, le righe tecniche tacciono: una voce sola.
 _NARRATING = False
+#: Chi ha gia' prenotato lo stdout (il worker) lo dichiara qui, per la durata
+#: della chiamata: non e' una variabile d'ambiente, che resterebbe attaccata a
+#: ogni processo che importa il modulo.
+_STDOUT_RESERVED = False
 
 
 def _log(msg: str) -> None:
@@ -663,8 +667,7 @@ def _say(msg: str) -> None:
     Chi ha gia' riservato lo stdout per i fatti suoi (il worker, che per
     contratto deve restare muto) lo dichiara con ``VX_STDOUT_RESERVED``.
     """
-    reserved = os.environ.get("VX_STDOUT_RESERVED") == "1"
-    stream = sys.stdout if (_NARRATING and not reserved) else sys.stderr
+    stream = sys.stdout if (_NARRATING and not _STDOUT_RESERVED) else sys.stderr
     try:
         print(msg, file=stream, flush=True)
     except Exception:  # noqa: BLE001 - uno stream chiuso non ferma il montaggio
