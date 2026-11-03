@@ -51,7 +51,7 @@
 
           <div class="bar" id="bar" role="progressbar" aria-label="Avanzamento del lavoro"
                aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-            <div class="bar-track">
+            <div class="bar-track" id="barTrack">
               <i class="bar-fill" id="fill"></i>
               <i class="bar-head" id="barHead"></i>
             </div>
@@ -144,6 +144,7 @@
               </p>
               <div class="look-frame" id="lookFrame">
                 <img class="look-img" id="lookImg" alt="" hidden>
+                <span class="look-scan" aria-hidden="true"></span>
                 <span class="look-empty" id="lookEmpty">Nessuno shot sotto la testina.</span>
               </div>
               <p class="look-note" id="lookNote" hidden></p>

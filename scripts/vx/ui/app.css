@@ -31,10 +31,23 @@
   --r-md: 10px;
   --r-lg: 16px;
 
-  /* durate: ingresso 520, innesto 380, barra 900, inclinazione 260 */
-  --ease-out: cubic-bezier(.16, .84, .3, 1);
+  /* durate: micro 120, ingresso 220, transizione 320, testina 900 */
+  --t-micro: 120ms;
+  --t-in: 220ms;
+  --t-move: 320ms;
+  --t-head: 900ms;
+
+  /* curve: ingressi e movimento continuo */
+  --e-in: cubic-bezier(.2, .8, .2, 1);
+  --e-cont: cubic-bezier(.22, .61, .36, 1);
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
   --ease-soft: cubic-bezier(.22, .61, .36, 1);
   --ease-depth: cubic-bezier(.2, .8, .2, 1);
+
+  /* profondità: una sola scala per tutti i pannelli */
+  --elev-1: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 2px 8px rgba(0, 0, 0, .35);
+  --elev-2: 0 1px 0 rgba(255, 255, 255, .055) inset, 0 18px 40px -26px rgba(0, 0, 0, .9), 0 2px 10px rgba(0, 0, 0, .35);
+  --elev-3: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 34px 70px -40px rgba(0, 0, 0, .95), 0 8px 24px rgba(0, 0, 0, .45);
 }
 
 * { box-sizing: border-box; }
@@ -281,10 +294,13 @@ body {
 
 .job-bar > i {
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: 2px;
   background: rgba(255, 255, 255, .3);
-  transition: width 900ms var(--ease-soft);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left center;
+  transition: transform 900ms var(--e-cont);
 }
 
 .job[aria-current="true"] .job-bar > i {
@@ -528,7 +544,7 @@ body.is-done .hero-unit { color: var(--ok); }
 
 .bar-fill {
   display: block;
-  width: 0;
+  width: 100%;
   height: 100%;
   border-radius: 3px;
   background: linear-gradient(180deg, #63b2ff 0%, #3d8fe8 46%, #2368b4 100%);
@@ -536,7 +552,9 @@ body.is-done .hero-unit { color: var(--ok); }
     inset 0 1px 0 rgba(255, 255, 255, .55),
     inset 0 -1px 0 rgba(0, 0, 0, .35),
     0 0 20px rgba(78, 161, 255, .45);
-  transition: width 900ms var(--ease-soft);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left center;
+  transition: transform var(--t-head) var(--e-cont);
 }
 
 .bar-track::after {
@@ -564,9 +582,9 @@ body.is-done .hero-unit { color: var(--ok); }
   box-shadow:
     0 0 14px rgba(190, 226, 255, 1),
     0 0 30px rgba(78, 161, 255, .7);
-  transform: translateX(-1px);
+  transform: translateX(var(--x, 0px));
   opacity: 0;
-  transition: left 900ms var(--ease-soft), opacity 300ms ease;
+  transition: transform var(--t-head) var(--e-cont), opacity 300ms ease;
 }
 
 .bar-head.is-on { opacity: 1; }
@@ -893,11 +911,13 @@ body.is-done .hero-unit { color: var(--ok); }
 
 .live-progress i {
   display: block;
-  width: 0;
+  width: 100%;
   height: 100%;
   border-radius: 3px;
   background: linear-gradient(90deg, #2f7fd0, #4ea1ff);
-  transition: width 600ms var(--ease-soft);
+  transform: scaleX(var(--p, 0));
+  transform-origin: left center;
+  transition: transform 600ms var(--e-cont);
 }
 
 .live-audio {
@@ -975,7 +995,7 @@ body.is-done .hero-unit { color: var(--ok); }
 
 .journal-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 14px 44px minmax(0, 1fr);
   align-items: baseline;
   gap: 12px;
   padding: 7px 2px;
@@ -997,7 +1017,7 @@ body.is-done .hero-unit { color: var(--ok); }
 .journal-row:first-child .journal-line { color: #e7eff9; }
 
 .journal-row.is-new {
-  animation: journal-in 240ms var(--ease-out) backwards;
+  animation: journal-in 220ms var(--e-in) backwards;
   animation-delay: calc(var(--i, 0) * 40ms);
 }
 
@@ -1731,6 +1751,116 @@ body.is-done .hero-unit { color: var(--ok); }
   font-size: 13px;
   line-height: 1.5;
   color: var(--ink-3);
+}
+
+/* ------------------------------------------------------ gesti legati al dato */
+
+/* Scansione: solo mentre la fase è di analisi. */
+.look-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 3;
+  height: 42%;
+  display: none;
+  background: linear-gradient(180deg,
+    rgba(160, 205, 255, 0) 0%,
+    rgba(78, 161, 255, .14) 62%,
+    rgba(208, 234, 255, .62) 100%);
+  border-bottom: 1px solid rgba(230, 246, 255, .9);
+  box-shadow: 0 0 22px rgba(142, 200, 255, .6);
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+
+.look-frame.is-scanning .look-scan {
+  display: block;
+  animation: scan 1.8s var(--e-cont) infinite;
+}
+
+@keyframes scan {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { transform: translateY(260%); opacity: 0; }
+}
+
+/* Velo di grado: un passaggio, poi si spegne. */
+.look-frame.is-grading::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: radial-gradient(120% 90% at 50% 30%,
+    var(--grade-color, rgba(255, 150, 80, .45)), transparent 72%);
+  opacity: 0;
+  animation: grade-veil 1.2s var(--e-in) 1 both;
+  pointer-events: none;
+}
+
+@keyframes grade-veil {
+  0%   { opacity: 0; }
+  35%  { opacity: .8; }
+  100% { opacity: 0; }
+}
+
+/* Tacche: caduta breve, solo per gli shot nuovi. */
+.shot-cell.is-fresh {
+  animation: tick-fall 180ms var(--e-in) backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+@keyframes tick-fall {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Journal: icona per tipo e ingresso proprio. */
+.journal-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--ink-3);
+}
+
+.journal-icon svg { display: block; width: 14px; height: 14px; }
+
+.journal-row[data-kind="taglio"] .journal-icon { color: var(--accent); }
+.journal-row[data-kind="audio"] .journal-icon { color: #9fe3a6; }
+.journal-row[data-kind="render"] .journal-icon { color: var(--accent-2); }
+.journal-row[data-kind="consegna"] .journal-icon { color: var(--ok); }
+
+.journal-row.is-new[data-kind="taglio"] { animation-name: journal-cut; }
+.journal-row.is-new[data-kind="audio"] { animation-name: journal-audio; }
+.journal-row.is-new[data-kind="testo"] { animation-name: journal-testo; }
+.journal-row.is-new[data-kind="render"] { animation-name: journal-render; }
+.journal-row.is-new[data-kind="consegna"] { animation-name: journal-consegna; }
+
+@keyframes journal-cut {
+  from { opacity: 0; transform: translateY(-5px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes journal-audio {
+  from { opacity: 0; transform: translateX(-5px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes journal-testo {
+  from { opacity: 0; transform: translateX(5px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes journal-render {
+  from { opacity: 0; transform: scale(.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes journal-consegna {
+  from { opacity: 0; transform: translateY(5px); }
+  to   { opacity: 1; transform: none; }
 }
 
 /* stima del lavoro e scelta sopra budget */
@@ -3055,4 +3185,7 @@ html.has-view body { overflow: hidden; }
   .shot { transform: none !important; }
   .spine { perspective: none; }
   .phase, .phase.is-now, .phase.is-done { transform: none !important; }
+
+  /* La testina è informazione, non decorazione: resta, solo più breve. */
+  .reel-head { transition-duration: 300ms !important; }
 }

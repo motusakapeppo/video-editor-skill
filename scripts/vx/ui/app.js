@@ -19,6 +19,7 @@
     heroLabel: $('heroLabel'),
     heroSub: $('heroSub'),
     bar: $('bar'),
+    barTrack: $('barTrack'),
     fill: $('fill'),
     barHead: $('barHead'),
     now: $('now'),
@@ -701,16 +702,61 @@
   // quelle già in pagina restano ferme (nessuna rianimazione a ogni poll).
   let journalJob = null;
 
+  const JOURNAL_ICONS = {
+    misura: '<path d="M2 4v4M5 2v8M8 4v4M11 2v8"/>',
+    taglio: '<path d="M2.5 3 9.5 9M9.5 3 2.5 9"/>',
+    audio: '<path d="M3 6v1M5 4v4M7 2v8M9 4v4M11 6v1"/>',
+    testo: '<path d="M3 3h6M6 3v7M4.5 10h3"/>',
+    render: '<rect x="2" y="3" width="8" height="6" rx="1"/><path d="M5.2 5.4 7.6 6l-2.4.6z"/>',
+    consegna: '<path d="M6 8V2M4 4l2-2 2 2M2.5 7.5V10h7V7.5"/>',
+    altro: '<circle cx="6" cy="6" r="1.4"/>',
+  };
+
+  // L'icona viene dal tipo di operazione, non da un'icona generica ripetuta.
+  function journalKind(entry) {
+    const phase = String(entry.phase || '').toLowerCase();
+    const line = String(entry.line || '').toLowerCase();
+    // Prima il tipo dichiarato dalla riga, poi la fase: "sottotitoli" resta testo
+    // anche se arriva durante il render.
+    if (phase === 'deliverables' || phase === 'done' || /consegn|deliver/.test(line)) {
+      return 'consegna';
+    }
+    if (phase === 'bridge' || /tagli|taglio|pezzi|montagg|transizion/.test(line)) {
+      return 'taglio';
+    }
+    if (/audio|voce|parlato|silenz|musica|loudness/.test(line)) return 'audio';
+    if (/testo|sottotitol|frase|titolo|didascal|font/.test(line)) return 'testo';
+    if (phase === 'render' || phase === 'render_done' || /encode|render|fotogrammi/.test(line)) {
+      return 'render';
+    }
+    if (phase === 'triage' || phase === 'ingest' || phase === 'qc' || /misur|clip|durata|controll/.test(line)) {
+      return 'misura';
+    }
+    return 'altro';
+  }
+
   function journalRow(entry) {
+    const kind = journalKind(entry);
     const row = document.createElement('li');
     row.className = 'journal-row';
+    row.dataset.kind = kind;
+
+    const icon = document.createElement('span');
+    icon.className = 'journal-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML =
+      '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" ' +
+      'stroke-linecap="round" stroke-linejoin="round">' +
+      (JOURNAL_ICONS[kind] || JOURNAL_ICONS.altro) +
+      '</svg>';
+
     const time = document.createElement('span');
     time.className = 'journal-time num';
     time.textContent = mmss(Number(entry.t) || 0);
     const line = document.createElement('span');
     line.className = 'journal-line';
     line.textContent = String(entry.line || '').trim();
-    row.append(time, line);
+    row.append(icon, time, line);
     return row;
   }
 
@@ -960,6 +1006,39 @@
   // La testina segue `render.percent`: a percent 0 non c'è posizione inventata.
   let lookAspect = '9 / 16';
   let lastClosed = false;
+  let shotJob = -1;
+  let shotCount = 0;
+  let gradeKey = null;
+
+  // Fasi che "guardano" davvero un'immagine: lì ha senso la scansione.
+  const SCAN_PHASES = ['analysis', 'analisi', 'triage', 'ingest', 'misura'];
+  // Fasi in cui il colore si tocca: lì ha senso il velo di grado.
+  const GRADE_PHASES = ['grade', 'grading', 'color', 'colore', 'lut'];
+
+  function lutColor(effects) {
+    const effect = (Array.isArray(effects) ? effects : []).find((item) =>
+      /^\s*lut\b/i.test(String(item || ''))
+    );
+    if (!effect) return '';
+    const name = String(effect).replace(/^\s*lut\s*/i, '').trim().toLowerCase();
+    if (/warm|caldo|gold|golden|orange|amber/.test(name)) return 'rgba(255, 154, 77, .5)';
+    if (/cool|freddo|teal|blue|cyan/.test(name)) return 'rgba(77, 168, 255, .45)';
+    return 'rgba(255, 255, 255, .28)';
+  }
+
+  function fireGrade(shot) {
+    const color = lutColor(shot && shot.effects);
+    if (!color) return; // nessun LUT dichiarato: nessun colore inventato
+    el.lookFrame.style.setProperty('--grade-color', color);
+    el.lookFrame.classList.remove('is-grading');
+    void el.lookFrame.offsetWidth;
+    el.lookFrame.classList.add('is-grading');
+    el.lookFrame.addEventListener(
+      'animationend',
+      () => el.lookFrame.classList.remove('is-grading'),
+      { once: true }
+    );
+  }
 
   function timecode(seconds) {
     const total = Math.max(0, Number(seconds) || 0);
@@ -988,12 +1067,19 @@
         .join(',');
     if (el.reelStrip.dataset.signature === signature) return;
 
+    // Tacche nuove: cadono solo se il piano è cresciuto mentre guardavamo.
+    const previous = shotJob === jobIndex ? shotCount : -1;
+
     el.reelStrip.dataset.signature = signature;
     el.reelStrip.textContent = '';
 
     shots.forEach((shot, position) => {
       const cell = document.createElement('span');
       cell.className = 'shot-cell';
+      if (previous >= 0 && position >= previous) {
+        cell.classList.add('is-fresh');
+        cell.style.setProperty('--i', String(position - previous));
+      }
       cell.style.flexGrow = String(Math.max(0.001, Number(shot.dur) || 0));
       cell.title =
         'Shot ' + pad2(position + 1) + ' · ' + timecode(shot.t_in) + '–' + timecode(shot.t_out);
@@ -1061,6 +1147,9 @@
       cell.append(thumb, tags);
       el.reelStrip.append(cell);
     });
+
+    shotJob = jobIndex;
+    shotCount = shots.length;
   }
 
   function setLookImage(shot) {
@@ -1142,6 +1231,7 @@
       el.reelStrip.textContent = '';
       el.reelStrip.dataset.signature = '';
       el.reelHead.hidden = true;
+      el.lookFrame.classList.remove('is-scanning');
       el.lookImg.hidden = true;
       el.lookImg.removeAttribute('src');
       el.mods.textContent = '';
@@ -1212,6 +1302,17 @@
       el.lookCaption.hidden = false;
       el.lookFrame.hidden = false;
       el.lookNote.hidden = true;
+
+      // Scansione solo dove il dato la giustifica: la fase di analisi.
+      const phaseKey = String(state.current || '').toLowerCase();
+      el.lookFrame.classList.toggle('is-scanning', SCAN_PHASES.indexOf(phaseKey) !== -1);
+
+      // Velo di grado: una volta per fase, e solo con un LUT dichiarato.
+      if (GRADE_PHASES.indexOf(phaseKey) !== -1 && gradeKey !== jobIndex + ':' + phaseKey) {
+        gradeKey = jobIndex + ':' + phaseKey;
+        fireGrade(shot);
+      }
+
       el.lookStatus.hidden = !notStarted;
       el.lookStatus.textContent = notStarted
         ? 'Primo shot del piano (encode non iniziato)'
@@ -1228,6 +1329,7 @@
     } else {
       el.lookCaption.hidden = true;
       el.lookFrame.hidden = true;
+      el.lookFrame.classList.remove('is-scanning');
       el.lookImg.hidden = true;
       el.lookImg.removeAttribute('src');
       el.lookImg.classList.remove('is-loaded');
@@ -1827,7 +1929,7 @@
     el.liveEmpty.hidden = chunks.length > 0;
     el.liveBody.hidden = chunks.length === 0;
     el.liveMeta.textContent = chunks.length ? ready + ' di ' + total + ' pronti' : '';
-    el.liveFill.style.width = total > 0 ? Math.min(100, (ready / total) * 100) + '%' : '0%';
+    el.liveFill.style.setProperty('--p', total > 0 ? String(Math.min(1, ready / total)) : '0');
 
     if (!chunks.length) {
       if (liveStarted) stopLive();
@@ -2157,7 +2259,7 @@
       node.name.textContent = prompt || 'Lavoro senza titolo';
       node.name.title = prompt;
       node.pct.textContent = percent + '%';
-      node.fill.style.width = percent + '%';
+      node.fill.style.setProperty('--p', String(percent / 100));
       node.link.title = (prompt || 'Lavoro senza titolo') + ' — ' + percent + '%';
       if (position === chosen) node.link.setAttribute('aria-current', 'true');
       else node.link.removeAttribute('aria-current');
@@ -2268,8 +2370,13 @@
 
     setPercent(percent);
     el.bar.setAttribute('aria-valuenow', String(Math.round(percent)));
-    el.fill.style.width = percent + '%';
-    el.barHead.style.left = percent + '%';
+    el.fill.style.setProperty('--p', String(clamp(percent, 0, 100) / 100));
+    const barWidth = el.barTrack ? el.barTrack.clientWidth : 0;
+    const barInner = Math.max(0, barWidth - 8);
+    el.barHead.style.setProperty(
+      '--x',
+      (3 + (clamp(percent, 0, 100) / 100) * barInner).toFixed(1) + 'px'
+    );
     el.barHead.classList.toggle('is-on', percent > 0);
 
     const activeIndex = phases.findIndex((p) => p.key === state.current);
@@ -2343,7 +2450,15 @@
 
   // La testina è posizionata in pixel: se cambia la larghezza va ricalcolata.
   window.addEventListener('resize', () => {
-    if (lastState) paintRegia(lastState, lastClosed);
+    if (!lastState) return;
+    const percent = clamp(Number(lastState.percent) || 0, 0, 100);
+    el.fill.style.setProperty('--p', String(percent / 100));
+    const barWidth = el.barTrack ? el.barTrack.clientWidth : 0;
+    el.barHead.style.setProperty(
+      '--x',
+      (3 + (percent / 100) * Math.max(0, barWidth - 8)).toFixed(1) + 'px'
+    );
+    paintRegia(lastState, lastClosed);
   });
 
   async function tick() {
