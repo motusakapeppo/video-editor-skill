@@ -49,6 +49,7 @@ from . import (
     profiles,
     qc,
     render,
+    resources,
     settings,
 )
 
@@ -156,6 +157,9 @@ class _Clock:
     def __init__(self) -> None:
         self.started = time.monotonic()
         self.stages: Dict[str, float] = {}
+        #: Dichiarazioni che non sono tempi (memoria vista, worker, priorita'):
+        #: viaggiano con il profilo perche' il report le deve alla stessa riga.
+        self.facts: Dict[str, Any] = {}
 
     @contextmanager
     def time(self, stage: str):
@@ -557,11 +561,9 @@ def _a_roll_sources(plan: Any) -> List[str]:
 
 MEASURE_KINDS = ("analysis", "faces", "audio")
 
-#: Quanti processi di misura al massimo: ``cpu - 2``, mai più job che misure.
-#: Le misure (audio, video, volti) sono funzioni pure dello stesso file: girano
-#: in processi separati, non in thread, perche' OpenCV e ffmpeg tengono il GIL e
-#: il decode e' CPU-bound. Il render resta un processo solo.
-PARALLEL_HEADROOM = 2
+#: Quanti thread ffmpeg per worker di misura. Il decode di una clip e' limitato
+#: dal file, non dai core: due thread bastano e lasciano i core al resto.
+WORKER_FFMPEG_THREADS = 2
 
 #: Sotto questa durata complessiva delle sorgenti il processo in più costa più di
 #: quanto misura: l'avvio di un interprete (cv2, numpy, ffmpeg) e' ~2 s cadauno, e
@@ -570,9 +572,9 @@ PARALLEL_HEADROOM = 2
 PARALLEL_MIN_SECONDS = 10.0
 
 
-def _measure_workers(jobs: int) -> int:
-    cpus = os.cpu_count() or 2
-    return max(1, min(int(jobs), max(1, cpus - PARALLEL_HEADROOM)))
+def _measure_workers(jobs: int, *, concurrent: int = 0) -> Dict[str, Any]:
+    """Il budget di worker per questa macchina, con i motivi del numero."""
+    return resources.worker_budget(jobs, concurrent=concurrent)
 
 
 def _measure_seconds(
@@ -598,10 +600,23 @@ def _measure_task(job: Any) -> Dict[str, Any]:
     da fuori: un processo figlio non eredita la cascata ``--settings``/
     ``--override`` della madre, e misure con soglie diverse non sarebbero le
     stesse misure.
+
+    Un figlio tiene un thread OpenCV e due ffmpeg: sei processi che si
+    moltiplicano i thread sono piu' rumorosi, non piu' veloci.
     """
     kind, path, settings_blob = job
     started = time.monotonic()
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("VX_FFMPEG_THREADS", str(WORKER_FFMPEG_THREADS))
     try:
+        try:  # OpenCV crea i suoi thread: uno per processo e' la regola.
+            import cv2  # type: ignore
+
+            cv2.setNumThreads(1)
+        except Exception:  # noqa: BLE001 - senza OpenCV si misura in modo degradato
+            pass
         from . import settings as settings_mod
 
         settings_mod.apply(dict(settings_blob))
@@ -644,6 +659,7 @@ def _measure_all(
     *,
     parallel: bool,
     clock: _Clock,
+    workdir: Any = "",
 ) -> List[Dict[str, Any]]:
     """Run every (source, kind) measurement and return one result per job, in order.
 
@@ -652,7 +668,19 @@ def _measure_all(
     Il tempo di ogni misura e' quello del processo che l'ha eseguita; in
     parallelo la quota attribuita a ogni stadio e' ripartita sul muro del
     blocco, cosi' la tabella somma ancora al totale.
+
+    Il budget si calcola prima di partire e si scrive nel profilo: core logici,
+    RAM libera, altri lavori pesanti in corso. Un numero di worker senza il suo
+    motivo non si puo' discutere.
     """
+    concurrent = resources.heavy_jobs()
+    budget = _measure_workers(len(jobs), concurrent=concurrent)
+    budget["mode"] = "parallelo" if (parallel and len(jobs) > 1) else "in fila"
+    if budget["mode"] == "in fila" and not parallel:
+        budget["reasons"] = list(budget.get("reasons") or []) + [
+            f"materiale sotto {PARALLEL_MIN_SECONDS:g} s: un processo in meno costa meno"
+        ]
+    clock.facts["resources"] = budget
     if not parallel or len(jobs) < 2:
         results = []
         for job in jobs:
@@ -663,7 +691,7 @@ def _measure_all(
             results.append(result)
         return results
 
-    workers = _measure_workers(len(jobs))
+    workers = int(budget["workers"])
     started = time.monotonic()
     results: Optional[List[Dict[str, Any]]] = None
     try:
@@ -671,8 +699,9 @@ def _measure_all(
         from concurrent.futures import ProcessPoolExecutor
 
         context = multiprocessing.get_context("spawn")
-        with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
-            results = list(pool.map(_measure_task, list(jobs), chunksize=1))
+        with resources.register_job("analysis", workdir):
+            with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
+                results = list(pool.map(_measure_task, list(jobs), chunksize=1))
     except Exception as exc:  # noqa: BLE001 - a broken pool is slow, not fatal
         _log(f"[auto] misure in parallelo non disponibili ({exc}); una alla volta")
         results = None
@@ -702,6 +731,7 @@ def _bridge_plan(
     media: Optional[Mapping[str, Any]] = None,
     target_lufs: float = TARGET_LUFS,
     clock: Optional[_Clock] = None,
+    workdir: Any = "",
 ) -> Any:
     """Run the bridge: analyses, transcripts, faces and motion per a_roll source.
 
@@ -754,6 +784,7 @@ def _bridge_plan(
         jobs,
         parallel=_measure_seconds(sources, media) >= PARALLEL_MIN_SECONDS,
         clock=prof,
+        workdir=workdir,
     )
     by_key: Dict[tuple, Dict[str, Any]] = {
         key: item for key, item in zip(keys, measured)
@@ -787,7 +818,19 @@ def _bridge_plan(
             continue
         try:
             with prof.time("speech"):
-                transcript = subs.transcribe(paths[source_id])
+                # Whisper e' lungo e in-process: la macchina deve restare
+                # usabile mentre lavora, e il report lo dichiara.
+                lowered = resources.set_current_priority(True)
+                try:
+                    transcript = subs.transcribe(paths[source_id])
+                finally:
+                    resources.set_current_priority(False)
+            if lowered:
+                prof.facts["priority"] = "below_normal"
+            prof.facts.setdefault("whisper", {})[source_id] = {
+                "device": str(getattr(transcript, "device", "") or ""),
+                "model": str(getattr(transcript, "model", "") or ""),
+            }
             reason = str(getattr(transcript, "skipped_reason", "") or "")
             if reason:
                 raise RuntimeError(reason)
@@ -1660,6 +1703,48 @@ def _caption_font(workdir: Path) -> Dict[str, str]:
     return {"family": family, "fonts_dir": fonts_dir, "fallback_reason": ""}
 
 
+def _resource_report(clock: _Clock) -> Dict[str, Any]:
+    """La sezione ``resources``: quanta macchina, con quale diritto, a che priorita'.
+
+    ``ram_free_mb`` e' il minimo visto durante il lavoro, non quello di partenza:
+    e' il numero che dice se la macchina stava per swappare. ``reasons`` ripete
+    perche' i worker sono quelli e non altri - un numero senza motivo non e'
+    verificabile.
+    """
+    budget = dict(clock.facts.get("resources") or {})
+    samples = [
+        float(value)
+        for value in (clock.facts.get("ram_free_mb"), resources.ram_free_mb())
+        if isinstance(value, (int, float))
+    ]
+    whisper = clock.facts.get("whisper")
+    return {
+        "cpu_logical": int(budget.get("cpu_logical") or resources.cpu_logical()),
+        "workers": int(budget.get("workers") or 1),
+        "mode": str(budget.get("mode") or "in fila"),
+        "ram_free_mb": round(min(samples), 1) if samples else None,
+        "gpu": clock.facts.get("gpu") or resources.gpu(),
+        "priority": str(clock.facts.get("priority") or "normal"),
+        "concurrent_jobs": int(
+            clock.facts.get("concurrent_jobs_render")
+            or budget.get("concurrent_jobs")
+            or 0
+        ),
+        "ffmpeg_threads": {
+            "analysis": WORKER_FFMPEG_THREADS,
+            "render": "default (pin thread cambierebbe il bitstream)",
+        },
+        "whisper": whisper
+        or {"used": False, "device": None, "reason": "nessuna trascrizione richiesta"},
+        "limits": {
+            "max_workers": resources.MAX_WORKERS,
+            "cpu_headroom": resources.CPU_HEADROOM,
+            "ram_per_worker_mb": resources.RAM_PER_WORKER_MB,
+        },
+        "reasons": list(budget.get("reasons") or []),
+    }
+
+
 def _run_locked(
     args: Any,
     workdir: Path,
@@ -1677,6 +1762,8 @@ def _run_locked(
     log = events_mod.EventLog(workdir / "events.jsonl")
     flags = features_mod.effective()
     clock = _Clock()
+    clock.facts["ram_free_mb"] = resources.ram_free_mb()
+    clock.facts["gpu"] = resources.gpu()
     _emit(log, "run", "start", Path(args.out).name)
 
     with clock.time("triage"):
@@ -1762,6 +1849,7 @@ def _run_locked(
             media=media_by_source,
             target_lufs=target_lufs,
             clock=clock,
+            workdir=workdir,
         )
         reframe_map, restore_map = _render_effects(bridge_report)
         bridge_gains_applied = any("gain_db" in item for item in bridge_report.audio)
@@ -1907,25 +1995,40 @@ def _run_locked(
         # Un file lasciato da un render precedente direbbe il falso: si riparte da zero.
         Path(progress_file).unlink(missing_ok=True)
     with clock.time("render"):
-        render.render_edl(
-            plan,
-            staged_paths,
-            out,
-            workdir=workdir / "render",
-            loudness=(target_lufs, target_tp),
-            crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
-            preset=str(
-                getattr(args, "preset", None) or settings.get("render.preset", "medium")
-            ),
-            progress_file=progress_file,
-            fill=fill_mode,
-            subtitles=captions_ass,
-            reframe=reframe_map,
-            restore=restore_map,
-            ceiling_dbtp=ceiling_dbtp,
-            fonts_dir=caption_font["fonts_dir"] or None,
-            cache_report=render_cache,
-        )
+        # Il render e' il processo lungo che tiene la macchina: i suoi ffmpeg
+        # figli nascono sotto la norma, cosi' mentre encoding uno si puo' ancora
+        # lavorare. La priorita' non entra nel bitstream: l'equivalenza resta.
+        previous_priority = os.environ.get("VX_CHILD_PRIORITY")
+        os.environ["VX_CHILD_PRIORITY"] = "below"
+        clock.facts["priority"] = "below_normal"
+        clock.facts["concurrent_jobs_render"] = resources.heavy_jobs()
+        try:
+            with resources.register_job("render", workdir):
+                render.render_edl(
+                    plan,
+                    staged_paths,
+                    out,
+                    workdir=workdir / "render",
+                    loudness=(target_lufs, target_tp),
+                    crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
+                    preset=str(
+                        getattr(args, "preset", None)
+                        or settings.get("render.preset", "medium")
+                    ),
+                    progress_file=progress_file,
+                    fill=fill_mode,
+                    subtitles=captions_ass,
+                    reframe=reframe_map,
+                    restore=restore_map,
+                    ceiling_dbtp=ceiling_dbtp,
+                    fonts_dir=caption_font["fonts_dir"] or None,
+                    cache_report=render_cache,
+                )
+        finally:
+            if previous_priority is None:
+                os.environ.pop("VX_CHILD_PRIORITY", None)
+            else:
+                os.environ["VX_CHILD_PRIORITY"] = previous_priority
     estimate.finish(render_estimate)
     _notify(progress, 92.0, "render_done", log=log, detail="master scritto")
 
@@ -2015,6 +2118,7 @@ def _run_locked(
         "features": flags,
         "source_sha": source_sha,
         "sources_unchanged": True,
+        "resources": _resource_report(clock),
         "timings": clock.as_dict(),
     }
     if shortfall:

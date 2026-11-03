@@ -85,7 +85,9 @@ def _timeout_seconds(step: str, timeout: Optional[int]) -> int:
 
 
 def _run_with_timeout(argv: List[str], timeout: int, step: str) -> Proc:
-    creationflags = CREATE_NO_WINDOW if os.name == "nt" else 0
+    from . import resources
+
+    creationflags = resources.child_creation_flags()
     proc = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
@@ -132,7 +134,14 @@ def run_ff(
 ) -> Proc:
     """Run ffmpeg with the house flags. loglevel defaults to info on purpose:
     silencedetect writes its findings at info level and -loglevel error hides them."""
+    from . import resources
+
     base = [ffmpeg(), "-hide_banner", "-nostdin", "-y", "-loglevel", loglevel]
+    # Thread espliciti solo quando il chiamante li dichiara (i worker di misura):
+    # un valore scelto dal figlio non e' un valore lasciato al caso.
+    threads = resources.ffmpeg_threads()
+    if threads:
+        base += ["-threads", str(threads)]
     return run(base + [str(a) for a in args], timeout=timeout, step=step)
 
 

@@ -24,6 +24,23 @@ player del master su `/result` (attivo solo se il file esiste: `master_ready`) e
   `-progress` di ffmpeg (`<workdir>/render/ffmpeg-progress.txt`). E' la
   posizione **reale** dell'encode, non una stima.
 * `timeline`: gli shot del piano (`index`, `t_in`, `t_out`, `dur`).
+* `shots`: gli stessi shot con `source`, `effects` (con i valori: `zoom 1.15`,
+  `lut warm`, `fade in 0.3s`) e `thumb` (`/shots/<i>`, `thumb_ready`). Con
+  `plan.json` gli effetti sono i trattamenti abilitati; con EDL 3 sono
+  `clips[].effects` del singolo shot.
+* `journal`: il racconto, una riga per fase (`t`, `phase`, `line`, `at`), in
+  italiano e con i numeri. E' dati, non console: nasce da `panel.say()` e lo
+  riempiono `narrate` e i comandi `ingest`/`run`.
+* `approval`: `required`, `approved`, `waiting`, `reason` per il cancello dei
+  fotogrammi (vedi `28-font-proposta-e-cancello.md` per la forma del cancello).
+* `outcome`: `running` | `done` | `stopped` | `failed` | `incomplete` | `idle`.
+  **Non** si deduce da `percent == 100`: un lavoro fermato puo' avere la barra
+  piena. `done` esiste solo con un master che sta su disco.
+
+`GET /shots/<i>?job=N` serve il JPEG di quello shot: prima la miniatura di
+`analysis/` piu' vicina a `t_in`, poi la cache in `<work>/shots/<i>.jpg`,
+altrimenti la estrae. Durante un render (file `-progress` fresco) risponde 404
+dichiarato: la vista non deve rubare CPU a ffmpeg.
 
 ## Quello che non esiste
 

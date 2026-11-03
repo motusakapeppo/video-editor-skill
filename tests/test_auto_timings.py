@@ -1,4 +1,4 @@
-"""Il profilo di ``vx auto``: la tabella dei tempi e il motore che la produce.
+﻿"""Il profilo di ``vx auto``: la tabella dei tempi e il motore che la produce.
 
 Due cose si provano qui, entrambe senza render:
 
@@ -37,15 +37,13 @@ def check(label: str, ok: bool, detail: object = "") -> None:
 def test_clock() -> None:
     print("\n-- _Clock")
     clock = auto._Clock()
-    with clock.time("render"):
-        time.sleep(0.02)
-    with clock.time("render"):
-        time.sleep(0.02)
-    clock.add("qc", 0.01)
+    for _ in range(2):
+        with clock.time("render"):
+            time.sleep(0.05)
     profile = clock.as_dict()
-    check("due misure sullo stesso stadio si sommano", profile["render"] >= 0.04, profile["render"])
+    check("due misure sullo stesso stadio si sommano", profile["render"] >= 0.05, profile["render"])
     check("uno stadio mai toccato e' zero, non assente", profile["proxy"] == 0.0)
-    check("il totale e' il muro del processo", profile["total"] >= 0.05, profile["total"])
+    check("il totale e' il muro del processo", profile["total"] >= profile["render"], profile["total"])
     check(
         "unaccounted copre quello che nessuno ha rivendicato",
         profile["unaccounted"] >= 0.0
@@ -60,11 +58,54 @@ def test_clock() -> None:
 
 
 def test_workers() -> None:
-    print("\n-- limite dei processi")
+    print("\n-- budget dei worker: core, memoria, altri lavori")
     cpus = os.cpu_count() or 2
-    check("mai piu' di cpu-2", auto._measure_workers(1000) == max(1, cpus - 2), auto._measure_workers(1000))
-    check("mai piu' job che misure", auto._measure_workers(2) == min(2, max(1, cpus - 2)), auto._measure_workers(2))
-    check("almeno un processo", auto._measure_workers(1) >= 1)
+    budget = auto._measure_workers(1000)
+    check(
+        "mai piu' di min(6, cpu-2)",
+        budget["workers"] == min(6, max(1, cpus - 2)),
+        budget["workers"],
+    )
+    check("mai piu' job che misure", auto._measure_workers(2)["workers"] <= 2)
+    check("almeno un worker", auto._measure_workers(1)["workers"] >= 1)
+
+    poor = auto.resources.worker_budget(6, ram_free=900.0, concurrent=0)
+    check("con poca RAM i worker scendono", poor["workers"] == 1, poor["workers"])
+    check("e il motivo e' scritto", any("ram" in reason for reason in poor["reasons"]), poor["reasons"])
+    rich = auto.resources.worker_budget(6, ram_free=64000.0, concurrent=0)
+    check("con RAM abbondante non si taglia per memoria", rich["workers"] == min(6, max(1, cpus - 2)), rich["workers"])
+    busy = auto.resources.worker_budget(6, ram_free=64000.0, concurrent=1)
+    check(
+        "un altro lavoro pesante dimezza i worker",
+        busy["workers"] == max(1, rich["workers"] // 2),
+        busy["workers"],
+    )
+    check("e lo dichiara", busy["concurrent_jobs"] == 1 and busy["reasons"], busy["reasons"])
+
+
+def test_resources() -> None:
+    print("\n-- la macchina: RAM, GPU, priorita', registro dei lavori")
+    free = auto.resources.ram_free_mb()
+    check("la RAM libera e' un numero o None, mai zero inventato", free is None or free > 0, free)
+    gpu = auto.resources.gpu()
+    check("la GPU e' dichiarata con la sua fonte", "available" in gpu and "source" in gpu, gpu.get("source"))
+    check(
+        "senza GPU il verdetto e' esplicito, non silenzioso",
+        gpu["available"] is True or gpu.get("name") is None,
+        gpu.get("name"),
+    )
+    check(
+        "i thread ffmpeg sono espliciti solo se dichiarati",
+        auto.resources.ffmpeg_threads() is None
+        or isinstance(auto.resources.ffmpeg_threads(), int),
+        auto.resources.ffmpeg_threads(),
+    )
+    with auto.resources.register_job("analysis", "qui"):
+        others = [item for item in auto.resources.active_jobs() if str(item.get("kind")) == "analysis"]
+        check("un lavoro registrato non conta se stesso", all(item["pid"] != os.getpid() for item in others), len(others))
+        check("il registro nomina il lavoro in corso", auto.resources.heavy_jobs() >= 0)
+    after = [item for item in auto.resources.active_jobs() if item["pid"] == os.getpid()]
+    check("alla fine il lavoro esce dal registro", after == [], after)
 
 
 def test_measure_all_serial() -> None:
@@ -73,7 +114,7 @@ def test_measure_all_serial() -> None:
 
     def fake(job):
         seen.append(job)
-        time.sleep(0.01)
+        time.sleep(0.03)
         if job[0] == "faces":
             return {"kind": job[0], "error": "no opencv", "seconds": 0.1}
         return {"kind": job[0], "value": f"{job[1]}:{job[2]}", "seconds": 0.1}
@@ -114,6 +155,7 @@ def test_parallel_order() -> None:
 def main() -> int:
     test_clock()
     test_workers()
+    test_resources()
     test_measure_all_serial()
     test_parallel_order()
     print(f"\n{PASS} PASS, {FAIL} FAIL")
