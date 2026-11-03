@@ -67,7 +67,7 @@
           </div>
 
           <div class="verdict" id="verdict" hidden aria-live="polite">
-            <span class="verdict-mark" aria-hidden="true">✓</span>
+            <span class="verdict-mark" id="verdictMark" aria-hidden="true">✓</span>
             <div class="verdict-body">
               <p class="verdict-title" id="verdictTitle">Lavoro concluso</p>
               <p class="verdict-text" id="verdictText"></p>
@@ -76,24 +76,66 @@
           </div>
         </section>
 
+        <section class="journal" aria-labelledby="journalTitle">
+          <div class="journal-head">
+            <h2 id="journalTitle">Racconto</h2>
+            <p class="journal-meta num" id="journalMeta"></p>
+          </div>
+          <ul class="journal-list" id="journalList" aria-label="Racconto del lavoro"></ul>
+          <p class="journal-empty" id="journalEmpty" hidden>Nessun racconto: il lavoro non ha ancora pubblicato fasi.</p>
+        </section>
+
         <section class="regia" aria-labelledby="regiaTitle">
           <div class="regia-head">
             <h2 id="regiaTitle">Regia</h2>
             <p class="regia-meta num" id="regiaMeta"></p>
           </div>
 
-          <div class="reel-scroll" id="reelScroll" role="img" aria-label="Sequenza degli shot">
-            <div class="reel" id="reel">
-              <div class="reel-strip" id="reelStrip"></div>
-              <div class="reel-head" id="reelHead" hidden>
-                <span class="reel-line"></span>
-                <span class="reel-speed num" id="reelSpeed"></span>
+          <div class="regia-now" id="regiaNow">
+            <div class="regia-look">
+              <p class="zone-label">Cosa guarda</p>
+              <p class="look-caption" id="lookCaption">
+                <span class="look-time num" id="lookTime">--:--.-</span>
+                <span class="look-source" id="lookSource"></span>
+              </p>
+              <div class="look-frame" id="lookFrame">
+                <img class="look-img" id="lookImg" alt="" hidden>
+                <span class="look-empty" id="lookEmpty">Nessuno shot sotto la testina.</span>
+              </div>
+              <p class="look-note" id="lookNote" hidden></p>
+            </div>
+
+            <div class="regia-side">
+              <div class="regia-block">
+                <p class="zone-label">Cosa modifica</p>
+                <ul class="mods" id="mods"></ul>
+                <p class="mods-empty" id="modsEmpty" hidden>Nessuna modifica a questo shot.</p>
+              </div>
+              <dl class="shot-specs" id="shotSpecs" hidden>
+                <div class="spec-row"><dt>durata</dt><dd class="num" id="specDur"></dd></div>
+                <div class="spec-row"><dt>dal</dt><dd class="num" id="specIn"></dd></div>
+                <div class="spec-row"><dt>al</dt><dd class="num" id="specOut"></dd></div>
+              </dl>
+            </div>
+          </div>
+
+          <div class="regia-strip-wrap" id="regiaStripWrap">
+            <div class="strip-head">
+              <p class="zone-label">Cosa fa</p>
+              <p class="strip-state num" id="regiaLine"></p>
+            </div>
+            <div class="reel-scroll" id="reelScroll" role="img" aria-label="Sequenza degli shot">
+              <div class="reel" id="reel">
+                <div class="reel-strip" id="reelStrip"></div>
+                <div class="reel-head" id="reelHead" hidden>
+                  <span class="reel-line"></span>
+                  <span class="reel-speed num" id="reelSpeed"></span>
+                </div>
               </div>
             </div>
           </div>
 
-          <p class="regia-line" id="regiaLine">Timeline pronta, encode non ancora iniziato.</p>
-          <p class="regia-empty" id="regiaEmpty" hidden>Il piano non c'è ancora: nessuno shot da disegnare.</p>
+          <p class="regia-empty" id="regiaEmpty" hidden>Nessuno shot da mostrare: il piano non è ancora arrivato.</p>
         </section>
 
         <section class="result" aria-labelledby="resultTitle">
@@ -128,13 +170,30 @@
             La sequenza delle fasi non è ancora arrivata.
           </p>
 
-          <div class="action">
+          <div class="action" id="action" hidden>
             <button id="approve" type="button" disabled>Approva questi fotogrammi</button>
-            <p class="action-note" id="approveNote">Aspetto i fotogrammi prima di aprire il cancello.</p>
+            <p class="approve-done" id="approveDone" hidden>
+              <span class="approve-check" aria-hidden="true">✓</span>Fotogrammi approvati
+            </p>
+            <p class="action-note" id="approveNote"></p>
+            <p class="approve-flash" id="approveFlash" role="status"></p>
           </div>
         </div>
       </aside>
     </main>
+  </div>
+
+  <div class="frame-view" id="frameView" role="dialog" aria-modal="false"
+       aria-labelledby="frameName" aria-describedby="frameJob" tabindex="-1" hidden>
+    <div class="frame-backdrop" id="frameBackdrop"></div>
+    <figure class="frame-stage">
+      <img class="frame-big" id="frameBig" alt="">
+      <figcaption class="frame-cap">
+        <span class="frame-name num" id="frameName"></span>
+        <span class="frame-job" id="frameJob"></span>
+      </figcaption>
+    </figure>
+    <button type="button" class="frame-close" id="frameClose">Chiudi</button>
   </div>
 
   <dialog class="font-gate" id="fontGate" role="dialog" aria-modal="true"

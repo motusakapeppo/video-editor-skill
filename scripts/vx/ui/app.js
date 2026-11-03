@@ -25,6 +25,7 @@
     nowText: $('nowText'),
     nowNote: $('nowNote'),
     verdict: $('verdict'),
+    verdictMark: $('verdictMark'),
     verdictTitle: $('verdictTitle'),
     verdictText: $('verdictText'),
     verdictMeta: $('verdictMeta'),
@@ -36,20 +37,47 @@
     fontPool: $('fontPool'),
     gateError: $('gateError'),
     regiaMeta: $('regiaMeta'),
+    regiaNow: $('regiaNow'),
+    regiaStripWrap: $('regiaStripWrap'),
+    lookFrame: $('lookFrame'),
+    lookCaption: $('lookCaption'),
+    lookNote: $('lookNote'),
+    lookImg: $('lookImg'),
+    lookEmpty: $('lookEmpty'),
+    lookTime: $('lookTime'),
+    lookSource: $('lookSource'),
+    mods: $('mods'),
+    modsEmpty: $('modsEmpty'),
+    shotSpecs: $('shotSpecs'),
+    specDur: $('specDur'),
+    specIn: $('specIn'),
+    specOut: $('specOut'),
     reelScroll: $('reelScroll'),
     reelStrip: $('reelStrip'),
     reelHead: $('reelHead'),
     reelSpeed: $('reelSpeed'),
     regiaLine: $('regiaLine'),
     regiaEmpty: $('regiaEmpty'),
+    journalList: $('journalList'),
+    journalMeta: $('journalMeta'),
+    journalEmpty: $('journalEmpty'),
+    frameView: $('frameView'),
+    frameBackdrop: $('frameBackdrop'),
+    frameBig: $('frameBig'),
+    frameName: $('frameName'),
+    frameJob: $('frameJob'),
+    frameClose: $('frameClose'),
     frames: $('frames'),
     framesEmpty: $('framesEmpty'),
     frameCount: $('frameCount'),
     phases: $('phases'),
     phasesEmpty: $('phasesEmpty'),
     railSub: $('railSub'),
+    action: $('action'),
     approve: $('approve'),
+    approveDone: $('approveDone'),
     approveNote: $('approveNote'),
+    approveFlash: $('approveFlash'),
   };
 
   const body = document.body;
@@ -90,6 +118,48 @@
   function upperFirst(text) {
     const t = String(text || '').trim();
     return t ? t.charAt(0).toUpperCase() + t.slice(1) : '';
+  }
+
+  // L'esito è del server; se il campo manca si torna al comportamento di prima.
+  const OUTCOME_VALUES = ['running', 'done', 'stopped', 'failed', 'incomplete', 'idle'];
+  const OUTCOME_WORD = {
+    running: 'In corso',
+    done: 'Fatto',
+    stopped: 'Fermato',
+    failed: 'Non riuscito',
+    incomplete: 'Senza master',
+    idle: 'In attesa',
+  };
+  const OUTCOME_MARK = { done: '✓', stopped: '■', failed: '!', incomplete: '–' };
+  const OUTCOME_TITLE = {
+    done: 'Lavoro concluso',
+    stopped: 'Fermato prima della fine',
+    failed: 'Non riuscito',
+    incomplete: 'Concluso senza master',
+  };
+
+  function outcomeOf(state, finished) {
+    const raw = String(state.outcome || '').trim().toLowerCase();
+    if (OUTCOME_VALUES.indexOf(raw) !== -1) return raw;
+    return finished ? 'done' : state.current ? 'running' : 'idle';
+  }
+
+  // Il motivo arriva da `note`: si riporta com'è, senza inventarne uno.
+  function verdictSentence(kind, note) {
+    const reason = String(note || '').trim();
+    const quoted = reason ? 'Motivo dichiarato: ' + reason + (/[.!?]$/.test(reason) ? '' : '.') : '';
+
+    if (kind === 'done') {
+      const text = upperFirst(reason);
+      return text ? text + (/[.!?]$/.test(text) ? '' : '.') : "Il lavoro è arrivato in fondo senza una nota di esito.";
+    }
+    if (kind === 'stopped') {
+      return quoted || 'Il lavoro si è fermato prima della fine, senza un motivo dichiarato.';
+    }
+    if (kind === 'failed') {
+      return quoted || 'Il lavoro non è riuscito, senza un motivo dichiarato.';
+    }
+    return 'Il master non è stato prodotto.' + (quoted ? ' ' + quoted : '');
   }
 
   function sizeLabel(bytes) {
@@ -180,11 +250,13 @@
   /* -------------------------------------------------------------- fotogrammi */
 
   function cardFor(frame, index, total) {
-    const figure = document.createElement('figure');
-    figure.className = 'shot';
-    figure.style.setProperty('--i', String(index));
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'shot';
+    card.setAttribute('aria-haspopup', 'dialog');
+    card.style.setProperty('--i', String(index));
 
-    const box = document.createElement('div');
+    const box = document.createElement('span');
     box.className = 'shot-img';
 
     const img = document.createElement('img');
@@ -192,12 +264,12 @@
     img.decoding = 'async';
 
     img.addEventListener('load', () => {
-      figure.classList.add('is-loaded');
-      attachTilt(figure);
+      card.classList.add('is-loaded');
+      attachTilt(card);
     });
 
     img.addEventListener('error', () => {
-      figure.classList.add('is-missing');
+      card.classList.add('is-missing');
       box.textContent = '';
       const fallback = document.createElement('span');
       fallback.className = 'shot-fallback';
@@ -208,7 +280,7 @@
     img.src = scoped('/frames/' + encodeURIComponent(frame.name));
     box.append(img);
 
-    const cap = document.createElement('figcaption');
+    const cap = document.createElement('span');
     cap.className = 'shot-cap';
 
     const idx = document.createElement('span');
@@ -225,8 +297,9 @@
     size.textContent = sizeLabel(frame.bytes);
 
     cap.append(idx, name, size);
-    figure.append(box, cap);
-    return figure;
+    card.append(box, cap);
+    card.addEventListener('click', () => openFrame(frame, card));
+    return card;
   }
 
   // Inclinazione reale: il contenitore ha prospettiva, la card si muove su X e Y.
@@ -266,18 +339,132 @@
       : 'Nessun fotogramma: il lavoro non ne ha ancora scritti.';
   }
 
+  /* --------------------------------------------------- fotogramma ingrandito */
+
+  let frameCard = null;
+  let frameClosing = false;
+
+  // FLIP: dalla card al grande e ritorno, senza stacchi. Il livello non è un
+  // cancello: si chiude con Esc, col fondo o col pulsante, e la pagina resta.
+  function openFrame(frame, card) {
+    if (el.fontGate.open || !el.frameView.hidden || frameClosing) return;
+
+    const thumb = card.querySelector('.shot-img') || card;
+    const from = thumb.getBoundingClientRect();
+
+    frameCard = card;
+    el.frameName.textContent = frame.name;
+    const prompt = lastState ? String(lastState.prompt || '').trim() : '';
+    const jobName = lastState ? String(lastState.job || '').trim() : '';
+    el.frameJob.textContent = prompt || jobName || 'Lavoro senza titolo';
+    el.frameBig.alt = 'Fotogramma chiave: ' + frame.name;
+
+    el.frameBig.style.transition = 'none';
+    el.frameBig.style.transform = 'none';
+    el.frameBig.style.visibility = 'hidden';
+
+    el.frameView.hidden = false;
+    document.documentElement.classList.add('has-view');
+    el.frameBig.src = scoped('/frames/' + encodeURIComponent(frame.name));
+
+    window.requestAnimationFrame(() => el.frameView.classList.add('is-open'));
+
+    const reveal = () => {
+      if (el.frameView.hidden) return;
+      const to = el.frameBig.getBoundingClientRect();
+      el.frameBig.style.visibility = 'visible';
+
+      if (reduce.matches || !to.width || !to.height) {
+        el.frameBig.style.transform = 'none';
+      } else {
+        const scale = from.width / to.width;
+        const dx = from.left - to.left;
+        const dy = from.top - to.top;
+        el.frameBig.style.transform =
+          'translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px) scale(' + scale.toFixed(4) + ')';
+        void el.frameBig.offsetWidth;
+        el.frameBig.style.transition = 'transform 320ms cubic-bezier(.2,.8,.2,1)';
+        el.frameBig.style.transform = 'none';
+      }
+
+      el.frameView.focus({ preventScroll: true });
+    };
+
+    if (typeof el.frameBig.decode === 'function') {
+      el.frameBig.decode().then(reveal).catch(reveal);
+    } else if (el.frameBig.complete) {
+      reveal();
+    } else {
+      el.frameBig.addEventListener('load', reveal, { once: true });
+    }
+  }
+
+  function closeFrame(options) {
+    if (el.frameView.hidden || frameClosing) return;
+
+    const instant = Boolean(options && options.immediate) || reduce.matches;
+    const card = frameCard;
+    const finish = () => {
+      frameClosing = false;
+      el.frameView.hidden = true;
+      el.frameView.classList.remove('is-open');
+      document.documentElement.classList.remove('has-view');
+      el.frameBig.style.transition = 'none';
+      el.frameBig.style.transform = 'none';
+      el.frameBig.style.visibility = 'hidden';
+      el.frameBig.removeAttribute('src');
+      frameCard = null;
+      if (card && card.isConnected) card.focus({ preventScroll: true });
+    };
+
+    if (instant || !card || !card.isConnected) {
+      finish();
+      return;
+    }
+
+    const thumb = card.querySelector('.shot-img') || card;
+    const to = thumb.getBoundingClientRect();
+    const from = el.frameBig.getBoundingClientRect();
+    el.frameView.classList.remove('is-open');
+
+    if (!from.width || !to.width) {
+      finish();
+      return;
+    }
+
+    const scale = to.width / from.width;
+    const dx = to.left - from.left;
+    const dy = to.top - from.top;
+    frameClosing = true;
+    el.frameBig.style.transition = 'transform 300ms cubic-bezier(.2,.8,.2,1)';
+    el.frameBig.style.transform =
+      'translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px) scale(' + scale.toFixed(4) + ')';
+    window.setTimeout(finish, 310);
+  }
+
+  el.frameBackdrop.addEventListener('click', () => closeFrame());
+  el.frameClose.addEventListener('click', () => closeFrame());
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || el.frameView.hidden) return;
+    event.preventDefault();
+    closeFrame();
+  });
+
   /* ---------------------------------------------------------------- risultato */
 
   // Il risultato dipende dal file, non da una parola: `master_ready` lo dice il
   // server leggendo il disco. Se il file c'è, il player è in pagina e il pulsante
   // apre lo stesso flusso a schermo intero; se non c'è, resta una riga sola.
-  function paintResult(state) {
+  function paintResult(state, closed) {
     const ready = state.master_ready === true;
     const name = String(state.master || '').trim();
     const bytes = Number(state.master_bytes) || 0;
-    const signature = (ready ? 'ready|' + name + '|' + bytes : 'empty') + '|job:' + jobIndex;
+    const signature =
+      (ready ? 'ready|' + name + '|' + bytes : 'empty|' + (closed ? 'closed' : 'open')) +
+      '|job:' + jobIndex;
 
-    el.resultMeta.textContent = ready ? 'pronto' : 'non ancora';
+    el.resultMeta.textContent = ready ? 'pronto' : closed ? 'assente' : 'non ancora';
     el.resultMeta.classList.toggle('is-ready', ready);
 
     if (el.resultBody.dataset.signature === signature) return;
@@ -287,7 +474,9 @@
     if (!ready) {
       const line = document.createElement('p');
       line.className = 'result-empty';
-      line.textContent = "Il risultato non c'è ancora: il master non è stato scritto.";
+      line.textContent = closed
+        ? 'Il master non è stato prodotto: non c’è nessun file da guardare.'
+        : "Il risultato non c'è ancora: il master non è stato scritto.";
       el.resultBody.append(line);
       return;
     }
@@ -418,10 +607,10 @@
   }
 
   // Riscontro breve, sempre nello stesso posto: si spegne da solo dopo 4 s.
-  function flash(note, message, kind) {
+  function flash(note, message, kind, base) {
     window.clearTimeout(note._timer);
     note.textContent = message;
-    note.className = 'reveal-note' + (kind ? ' is-' + kind : '');
+    note.className = (base || 'reveal-note') + (kind ? ' is-' + kind : '');
     note.style.opacity = '1';
     note._timer = window.setTimeout(() => {
       note.style.opacity = '0';
@@ -431,95 +620,429 @@
     }, 4000);
   }
 
+  /* ------------------------------------------------------------ approvazione */
+
+  // Il pulsante esiste solo se c'è un piano e un'attesa: `required` accende il
+  // blocco, `waiting` lo rende cliccabile, `approved` lo chiude. Mai per ipotesi.
+  function paintApproval(state) {
+    const approval = state.approval && typeof state.approval === 'object' ? state.approval : null;
+    const required = !!(approval && approval.required === true);
+
+    el.action.hidden = !required;
+    if (!required) {
+      window.clearTimeout(el.approveFlash._timer);
+      el.approveFlash.textContent = '';
+      el.approve.classList.remove('is-waiting');
+      return;
+    }
+
+    const approved = approval.approved === true;
+    const waiting = approval.waiting === true;
+
+    el.approve.hidden = approved;
+    el.approveDone.hidden = !approved;
+
+    if (approved) {
+      el.approve.classList.remove('is-waiting');
+      el.approve.disabled = true;
+      el.approveNote.className = 'action-note';
+      el.approveNote.textContent = 'La scelta è registrata per questo lavoro.';
+      return;
+    }
+
+    el.approve.classList.toggle('is-waiting', waiting);
+    el.approve.disabled = !waiting;
+    el.approve.textContent = 'Approva questi fotogrammi';
+    el.approveNote.className = 'action-note';
+    el.approveNote.textContent = waiting
+      ? 'Il render è fermo qui finché non approvi.'
+      : String(approval.reason || '').trim() || 'Il render non è ancora arrivato ai fotogrammi.';
+  }
+
+  /* ------------------------------------------------------------------ racconto */
+
+  // Il journal è la narrazione, non un log: le righe nuove entrano dal basso,
+  // quelle già in pagina restano ferme (nessuna rianimazione a ogni poll).
+  let journalJob = null;
+
+  function journalRow(entry) {
+    const row = document.createElement('li');
+    row.className = 'journal-row';
+    const time = document.createElement('span');
+    time.className = 'journal-time num';
+    time.textContent = mmss(Number(entry.t) || 0);
+    const line = document.createElement('span');
+    line.className = 'journal-line';
+    line.textContent = String(entry.line || '').trim();
+    row.append(time, line);
+    return row;
+  }
+
+  function paintJournal(state) {
+    const raw = Array.isArray(state.journal) ? state.journal : [];
+    const entries = raw
+      .map((entry, index) => ({ entry, index }))
+      .filter((item) => item.entry && String(item.entry.line || '').trim())
+      .sort(
+        (a, b) =>
+          (Number(b.entry.t) || 0) - (Number(a.entry.t) || 0) || b.index - a.index
+      );
+
+    const total = entries.length;
+    el.journalMeta.textContent = total > 6 ? 'ultime 6 di ' + total : '';
+    el.journalEmpty.hidden = total > 0;
+    el.journalList.hidden = total === 0;
+
+    if (!total) {
+      if (el.journalList.childElementCount) el.journalList.textContent = '';
+      journalJob = jobIndex;
+      return;
+    }
+
+    if (journalJob !== jobIndex) {
+      el.journalList.textContent = '';
+      journalJob = jobIndex;
+    }
+
+    const existing = new Map();
+    el.journalList.querySelectorAll('.journal-row').forEach((node) => {
+      existing.set(node.dataset.key, node);
+    });
+
+    const visible = entries.slice(0, 6);
+    const order = [];
+    let fresh = 0;
+
+    visible.forEach((item) => {
+      const line = String(item.entry.line || '');
+      const key = Number(item.entry.t) + '|' + String(item.entry.phase || '') + '|' + line;
+      let node = existing.get(key);
+      if (node) {
+        existing.delete(key);
+      } else {
+        node = journalRow(item.entry);
+        node.dataset.key = key;
+        node.classList.add('is-new');
+        node.style.setProperty('--i', String(Math.min(fresh, 5)));
+        fresh += 1;
+        node.addEventListener(
+          'animationend',
+          () => node.classList.remove('is-new'),
+          { once: true }
+        );
+      }
+      order.push(node);
+    });
+
+    existing.forEach((node) => node.remove());
+
+    const current = Array.from(el.journalList.children);
+    const same =
+      current.length === order.length && current.every((node, i) => node === order[i]);
+    if (!same) order.forEach((node) => el.journalList.append(node));
+  }
+
   /* -------------------------------------------------------------------- regia */
 
-  // La striscia è il piano, non il video: la testina segue `render.percent`, che
-  // arriva dal file -progress di ffmpeg. A percent 0 non c'è testina.
-  function paintReel(state) {
-    const shots = Array.isArray(state.timeline) ? state.timeline : [];
+  // Tre zone: cosa guarda la testina (un fotogramma vero), cosa fa (la striscia
+  // con gli effetti di ogni shot), cosa modifica (i valori dello shot attivo).
+  // La testina segue `render.percent`: a percent 0 non c'è posizione inventata.
+  let lookAspect = '9 / 16';
+  let lastClosed = false;
+
+  function timecode(seconds) {
+    const total = Math.max(0, Number(seconds) || 0);
+    const m = Math.floor(total / 60);
+    const s = Math.floor(total % 60);
+    const tenths = Math.floor((total * 10) % 10);
+    return pad2(m) + ':' + pad2(s) + '.' + tenths;
+  }
+
+  // "zoom 1.15" -> "zoom 1,15×", "lut warm" -> "LUT warm", "fade in 0.3s" -> "fade in 0,3 s"
+  function prettyEffect(text) {
+    let out = String(text || '').trim();
+    if (!out) return '';
+    out = out.replace(/^lut\b/i, 'LUT');
+    out = out.replace(/(\d+)\.(\d+)/g, '$1,$2');
+    out = out.replace(/(\d),(\d+)s\b/g, '$1,$2 s');
+    if (/^zoom\s+[\d,]+/.test(out)) out += '×';
+    return out;
+  }
+
+  function buildShotCells(shots) {
+    const signature =
+      jobIndex + '|' +
+      shots
+        .map((s) => s.index + ':' + s.dur + ':' + (s.thumb_ready ? 1 : 0) + ':' + (s.effects || []).join(';'))
+        .join(',');
+    if (el.reelStrip.dataset.signature === signature) return;
+
+    el.reelStrip.dataset.signature = signature;
+    el.reelStrip.textContent = '';
+
+    shots.forEach((shot, position) => {
+      const cell = document.createElement('span');
+      cell.className = 'shot-cell';
+      cell.style.flexGrow = String(Math.max(0.001, Number(shot.dur) || 0));
+      cell.title =
+        'Shot ' + pad2(position + 1) + ' · ' + timecode(shot.t_in) + '–' + timecode(shot.t_out);
+
+      const thumb = document.createElement('span');
+      thumb.className = 'cell-thumb';
+
+      if (shot.thumb_ready && shot.thumb) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.decoding = 'async';
+        img.addEventListener('load', () => thumb.classList.add('is-loaded'));
+        img.addEventListener('error', () => img.remove());
+        img.src = scoped(String(shot.thumb));
+        thumb.append(img);
+      } else {
+        // Senza immagine la card dice lo stesso cosa contiene: niente rettangolo grigio.
+        thumb.classList.add('is-fallback');
+        const fb = document.createElement('span');
+        fb.className = 'cell-fallback';
+
+        const src = document.createElement('span');
+        src.className = 'cell-src';
+        src.textContent = shot.source || 'clip ' + (position + 1);
+
+        const dur = document.createElement('span');
+        dur.className = 'cell-dur num';
+        dur.textContent = num(Number(shot.dur) || 0, 1) + ' s';
+
+        const note = document.createElement('span');
+        note.className = 'cell-note';
+        note.textContent = 'anteprima non disponibile';
+
+        fb.append(src, dur, note);
+        thumb.append(fb);
+      }
+
+      const idx = document.createElement('span');
+      idx.className = 'cell-idx num';
+      idx.textContent = pad2(position + 1);
+      thumb.append(idx);
+
+      const tags = document.createElement('span');
+      tags.className = 'cell-tags';
+      const effects = Array.isArray(shot.effects) ? shot.effects : [];
+      const shown = effects.slice(0, 2);
+      shown.forEach((effect, i) => {
+        const tag = document.createElement('span');
+        tag.className = 'cell-tag';
+        let text = prettyEffect(effect);
+        if (i === shown.length - 1 && effects.length > 2) {
+          text += ' +' + (effects.length - 2);
+        }
+        tag.textContent = text;
+        tag.title = effects.map(prettyEffect).join(' · ');
+        tags.append(tag);
+      });
+      if (!effects.length) {
+        const none = document.createElement('span');
+        none.className = 'cell-tag';
+        none.textContent = '—';
+        tags.append(none);
+      }
+
+      cell.append(thumb, tags);
+      el.reelStrip.append(cell);
+    });
+  }
+
+  function setLookImage(shot) {
+    const url = shot.thumb_ready && shot.thumb ? scoped(String(shot.thumb)) : '';
+    el.lookEmpty.textContent = '';
+    el.lookEmpty.classList.toggle('is-fallback', !url);
+
+    if (!url) {
+      el.lookImg.hidden = true;
+      el.lookImg.removeAttribute('src');
+      el.lookImg.classList.remove('is-loaded');
+      el.lookFrame.hidden = false;
+      el.lookEmpty.hidden = false;
+
+      const block = document.createElement('span');
+      block.className = 'look-fallback';
+
+      const src = document.createElement('span');
+      src.className = 'look-fallback-src';
+      src.textContent = shot.source || 'clip ' + (Number(shot.index) + 1);
+
+      const dur = document.createElement('span');
+      dur.className = 'look-fallback-dur num';
+      dur.textContent = num(Number(shot.dur) || 0, 1) + ' s';
+
+      const note = document.createElement('span');
+      note.className = 'look-fallback-note';
+      note.textContent = 'anteprima non disponibile';
+
+      block.append(src, dur, note);
+      el.lookEmpty.append(block);
+      return;
+    }
+
+    if (el.lookImg.getAttribute('src') === url && el.lookImg.classList.contains('is-loaded')) {
+      el.lookEmpty.hidden = true;
+      return;
+    }
+    el.lookEmpty.hidden = true;
+    el.lookImg.classList.remove('is-loaded');
+    el.lookImg.hidden = false;
+    el.lookImg.src = url;
+  }
+
+  function paintMods(shot) {
+    const effects = (Array.isArray(shot.effects) ? shot.effects : [])
+      .map(prettyEffect)
+      .filter(Boolean);
+
+    el.mods.textContent = '';
+
+    if (!effects.length) {
+      el.modsEmpty.hidden = false;
+      el.modsEmpty.textContent = 'Nessuna modifica a questo shot.';
+      return;
+    }
+
+    el.modsEmpty.hidden = true;
+    effects.forEach((effect) => {
+      const item = document.createElement('li');
+      item.className = 'mod';
+      item.textContent = effect;
+      el.mods.append(item);
+    });
+  }
+
+  function paintRegia(state, closed) {
+    const shots = Array.isArray(state.shots) ? state.shots : [];
     const render = state.render && typeof state.render === 'object' ? state.render : {};
     const percent = clamp(Number(render.percent) || 0, 0, 100);
     const total = shots.reduce((sum, shot) => sum + (Number(shot.dur) || 0), 0);
 
     el.regiaEmpty.hidden = shots.length > 0;
-    el.reelScroll.hidden = shots.length === 0;
-    el.regiaLine.hidden = shots.length === 0;
+    el.regiaNow.hidden = shots.length === 0;
+    el.regiaStripWrap.hidden = shots.length === 0;
 
     if (!shots.length) {
       el.regiaMeta.textContent = '';
+      el.reelStrip.textContent = '';
+      el.reelStrip.dataset.signature = '';
+      el.reelHead.hidden = true;
+      el.lookImg.hidden = true;
+      el.lookImg.removeAttribute('src');
+      el.mods.textContent = '';
+      el.shotSpecs.hidden = true;
       return;
     }
 
-    el.regiaMeta.textContent = num(total, 1) + ' s';
-
-    const signature = jobIndex + '|' + shots.map((s) => s.index + ':' + s.dur).join(',');
-    if (el.reelStrip.dataset.signature !== signature) {
-      el.reelStrip.dataset.signature = signature;
-      el.reelStrip.textContent = '';
-      shots.forEach((shot) => {
-        const block = document.createElement('span');
-        block.className = 'shot-block';
-        block.style.flexGrow = String(Math.max(0.001, Number(shot.dur) || 0));
-        block.title =
-          'Shot ' + pad2((Number(shot.index) || 0) + 1) +
-          ' · ' + num(shot.t_in, 2) + '–' + num(shot.t_out, 2) + ' s';
-        const label = document.createElement('span');
-        label.className = 'n';
-        label.textContent = pad2((Number(shot.index) || 0) + 1);
-        block.append(label);
-        el.reelStrip.append(block);
-      });
+    let active = -1;
+    const t = total > 0 ? (percent / 100) * total : 0;
+    if (percent > 0 && total > 0) {
+      for (let i = 0; i < shots.length; i += 1) {
+        active = i;
+        if (t >= Number(shots[i].t_in) && t < Number(shots[i].t_out)) break;
+      }
+    } else if (closed) {
+      // Nessuna testina in movimento: si mostra l'ultimo shot, dichiarandolo.
+      active = shots.length - 1;
     }
 
+    el.regiaMeta.textContent =
+      active >= 0
+        ? 'shot ' + (active + 1) + ' di ' + shots.length + (percent > 0 ? '' : ' · ultimo')
+        : shots.length + (shots.length === 1 ? ' shot' : ' shot');
+
+    buildShotCells(shots);
     el.reelStrip.querySelectorAll('.is-now').forEach((node) => node.classList.remove('is-now'));
 
     const speed = String(render.speed || '').trim();
     const speedText = speed ? speed.replace('.', ',') : '';
 
-    if (percent <= 0 || total <= 0) {
+    if (percent > 0 && active >= 0 && total > 0) {
+      const shot = shots[active];
+      const cell = el.reelStrip.children[active];
+      const span = Number(shot.dur) || 0;
+      const local = span > 0 ? clamp((t - Number(shot.t_in)) / span, 0, 1) : 0;
+      const x = cell ? cell.offsetLeft + cell.offsetWidth * local : 0;
+
+      el.reelHead.hidden = false;
+      el.reelHead.style.transform = 'translateX(' + x.toFixed(1) + 'px)';
+      if (cell) cell.classList.add('is-now');
+
+      el.reelSpeed.textContent = speedText;
+      el.reelSpeed.hidden = !speedText;
+      el.reelSpeed.classList.toggle('is-left', x > el.reelStrip.offsetWidth - 60);
+
+      el.regiaLine.textContent =
+        'Encode al ' + Math.round(percent) + '% — ' +
+        num(Number(render.out_time_sec) || t, 1) + ' s di ' + num(total, 1) + ' s' +
+        (speedText ? ' · ' + speedText : '');
+    } else {
       el.reelHead.hidden = true;
-      el.regiaLine.textContent = 'Timeline pronta, encode non ancora iniziato.';
-      el.reelScroll.setAttribute(
-        'aria-label',
-        'Sequenza di ' + shots.length + ' shot, ' + num(total, 1) + ' secondi; encode non ancora iniziato'
-      );
-      return;
+      el.reelSpeed.hidden = true;
+      if (active >= 0) {
+        const cell = el.reelStrip.children[active];
+        if (cell) cell.classList.add('is-now');
+      }
+      el.regiaLine.textContent = closed
+        ? 'Encode concluso: la testina non è più in movimento.'
+        : 'Piano pronto, encode non iniziato.';
     }
 
-    const t = (percent / 100) * total;
-    let index = 0;
-    for (let i = 0; i < shots.length; i += 1) {
-      index = i;
-      if (t >= Number(shots[i].t_in) && t < Number(shots[i].t_out)) break;
+    if (active >= 0) {
+      const shot = shots[active];
+      el.lookCaption.hidden = false;
+      el.lookFrame.hidden = false;
+      el.lookNote.hidden = true;
+      el.lookTime.textContent = timecode(shot.t_in);
+      el.lookSource.textContent = shot.source || 'sorgente non dichiarata';
+      el.lookFrame.style.aspectRatio = lookAspect;
+      setLookImage(shot);
+      paintMods(shot);
+      el.shotSpecs.hidden = false;
+      el.specDur.textContent = num(Number(shot.dur) || 0, 1) + ' s';
+      el.specIn.textContent = timecode(shot.t_in);
+      el.specOut.textContent = timecode(shot.t_out);
+    } else {
+      el.lookCaption.hidden = true;
+      el.lookFrame.hidden = true;
+      el.lookImg.hidden = true;
+      el.lookImg.removeAttribute('src');
+      el.lookImg.classList.remove('is-loaded');
+      el.lookNote.hidden = false;
+      el.lookNote.textContent = closed
+        ? 'Nessuno shot sotto la testina: il lavoro è chiuso.'
+        : "Nessuno shot sotto la testina: l'encode non è ancora iniziato.";
+      el.mods.textContent = '';
+      el.modsEmpty.hidden = false;
+      el.modsEmpty.textContent = 'Nessuno shot selezionato.';
+      el.shotSpecs.hidden = true;
     }
-
-    const shot = shots[index];
-    const block = el.reelStrip.children[index];
-    if (!block) return;
-
-    const span = Number(shot.dur) || 0;
-    const local = span > 0 ? clamp((t - Number(shot.t_in)) / span, 0, 1) : 0;
-    const x = block.offsetLeft + block.offsetWidth * local;
-
-    el.reelHead.hidden = false;
-    el.reelHead.style.transform = 'translateX(' + x.toFixed(1) + 'px)';
-    block.classList.add('is-now');
-
-    el.reelSpeed.textContent = speedText;
-    el.reelSpeed.hidden = !speedText;
-    el.reelSpeed.classList.toggle('is-left', x > el.reelStrip.offsetWidth - 60);
-
-    el.regiaLine.textContent =
-      'Encode al ' + Math.round(percent) + '% — ' +
-      num(Number(render.out_time_sec) || t, 1) + ' s di ' + num(total, 1) + ' s' +
-      (speedText ? ' · ' + speedText : '');
 
     el.reelScroll.setAttribute(
       'aria-label',
-      'Sequenza di ' + shots.length + ' shot, ' + num(total, 1) +
-      ' secondi; encode al ' + Math.round(percent) + '%'
+      'Sequenza di ' + shots.length + ' shot, ' + num(total, 1) + ' secondi' +
+      (percent > 0 ? '; encode al ' + Math.round(percent) + '%' : '; encode fermo')
     );
   }
+
+  el.lookImg.addEventListener('load', () => {
+    el.lookImg.classList.add('is-loaded');
+    if (el.lookImg.naturalWidth > 0 && el.lookImg.naturalHeight > 0) {
+      lookAspect = el.lookImg.naturalWidth + ' / ' + el.lookImg.naturalHeight;
+      el.lookFrame.style.aspectRatio = lookAspect;
+    }
+  });
+
+  el.lookImg.addEventListener('error', () => {
+    el.lookImg.hidden = true;
+    el.lookImg.classList.remove('is-loaded');
+    el.lookEmpty.hidden = false;
+    el.lookEmpty.textContent = 'Fotogramma non disponibile per questo shot.';
+  });
 
   /* ------------------------------------------------------------ scelta font */
 
@@ -602,6 +1125,7 @@
   }
 
   function openGate(font) {
+    if (!el.frameView.hidden) closeFrame({ immediate: true });
     gateJob = jobIndex;
     buildGate(font);
     if (!el.fontGate.open) {
@@ -747,6 +1271,7 @@
 
   function resetForJob() {
     // Cambiare lavoro non deve lasciare in pagina i fotogrammi o il video di prima.
+    closeFrame({ immediate: true });
     hasDrawn = false;
     el.frames.dataset.signature = '';
     el.resultBody.dataset.signature = '';
@@ -802,31 +1327,36 @@
     if (Number.isFinite(Number(state.selected))) jobIndex = Number(state.selected);
     paintJobs(state);
     lastState = state;
-    paintReel(state);
+    paintJournal(state);
 
     const finished = !state.current && percent >= 99.9;
     const ready = state.master_ready === true;
-    // Il file può esistere anche mentre il lavoro sta ancora girando: "fatto" lo
-    // dice il lavoro che ha finito, il player lo dice il file che c'è.
-    const done = finished;
-    const waiting = !state.current && !done;
+    // "Concluso" non si deduce dalla percentuale: un lavoro fermato può restare
+    // a 100. L'esito lo dice il server, e senza campo si torna al comportamento
+    // di prima (finestra chiusa = concluso).
+    const verdict = outcomeOf(state, finished);
+    const closed =
+      verdict === 'done' ||
+      verdict === 'stopped' ||
+      verdict === 'failed' ||
+      verdict === 'incomplete';
     const approved = state.approved === true;
 
-    body.classList.toggle('is-done', done);
-    body.classList.toggle('is-idle', waiting);
+    body.classList.toggle('is-done', verdict === 'done');
+    body.classList.toggle('is-stopped', verdict === 'stopped');
+    body.classList.toggle('is-failed', verdict === 'failed');
+    body.classList.toggle('is-incomplete', verdict === 'incomplete');
+    body.classList.toggle('is-idle', verdict === 'idle');
     body.classList.remove('is-offline');
+
+    lastClosed = closed;
+    paintRegia(state, closed);
 
     const prompt = String(state.prompt || '').trim();
     el.jobTitle.textContent = prompt || 'Lavoro senza titolo';
     document.title = 'vx — ' + (prompt ? prompt.slice(0, 70) : 'lavoro in corso');
 
-    el.stateWord.textContent = ready && done
-      ? 'Fatto'
-      : done
-        ? 'Concluso'
-        : waiting
-          ? 'In attesa'
-          : 'In corso';
+    el.stateWord.textContent = OUTCOME_WORD[verdict] || 'In corso';
     el.jobClock.textContent = mmss(state.elapsed_sec);
 
     const clips = Number(state.clips) || 0;
@@ -840,7 +1370,7 @@
 
     const activeIndex = phases.findIndex((p) => p.key === state.current);
     el.heroLabel.textContent = 'avanzamento';
-    if (done) {
+    if (finished) {
       el.heroSub.textContent = pad2(phases.length) + ' fasi su ' + pad2(phases.length);
     } else if (activeIndex >= 0) {
       el.heroSub.textContent = 'fase ' + pad2(activeIndex + 1) + ' di ' + pad2(phases.length);
@@ -854,20 +1384,19 @@
       el.phases.dataset.signature = phaseSignature;
       buildPhases(phases);
     }
-    paintPhases(phases, activeIndex, done);
+    paintPhases(phases, activeIndex, finished);
     el.phasesEmpty.hidden = phases.length > 0;
     el.railSub.textContent =
       phases.length === 0 ? 'nessuna fase' : pad2(phases.length) + ' fasi';
 
     // ora / esito
-    if (done) {
+    if (closed) {
       el.now.hidden = true;
       el.verdict.hidden = false;
-      el.verdictTitle.textContent = 'Lavoro concluso';
-      const note = upperFirst(state.note);
-      el.verdictText.textContent = note
-        ? note + (/[.!?]$/.test(note) ? '' : '.')
-        : "Il lavoro è arrivato in fondo senza una nota di esito.";
+      el.verdict.className = 'verdict is-' + verdict;
+      el.verdictMark.textContent = OUTCOME_MARK[verdict] || '–';
+      el.verdictTitle.textContent = OUTCOME_TITLE[verdict] || 'Lavoro concluso';
+      el.verdictText.textContent = verdictSentence(verdict, state.note);
       el.verdictMeta.textContent =
         frames.length +
         (frames.length === 1 ? ' fotogramma' : ' fotogrammi') +
@@ -893,24 +1422,10 @@
     }
 
     // fotogrammi e approvazione
-    paintFrames(frames, done);
-    paintResult(state);
+    paintFrames(frames, finished);
+    paintResult(state, closed);
     paintFontGate(state);
-
-    el.approve.classList.toggle('is-approved', approved);
-    el.approve.disabled = approved || frames.length === 0;
-    el.approve.textContent = approved ? 'Fotogrammi approvati' : 'Approva questi fotogrammi';
-
-    el.approveNote.className = 'action-note' + (approved ? ' is-ok' : '');
-    if (approved) {
-      el.approveNote.textContent = 'Il cancello è aperto: il lavoro può procedere.';
-    } else if (frames.length === 0) {
-      el.approveNote.textContent = done
-        ? "Non c'è niente da approvare: il lavoro non ha scritto fotogrammi."
-        : 'Nessun fotogramma da approvare: il lavoro non ne ha ancora scritti.';
-    } else {
-      el.approveNote.textContent = "L'approvazione apre il cancello per questo lavoro.";
-    }
+    paintApproval(state);
   }
 
   /* ------------------------------------------------------------------ rete */
@@ -922,7 +1437,7 @@
 
   // La testina è posizionata in pixel: se cambia la larghezza va ricalcolata.
   window.addEventListener('resize', () => {
-    if (lastState) paintReel(lastState);
+    if (lastState) paintRegia(lastState, lastClosed);
   });
 
   async function tick() {
@@ -950,23 +1465,24 @@
     approving = true;
     el.approve.setAttribute('aria-busy', 'true');
     el.approve.disabled = true;
-    el.approveNote.className = 'action-note';
-    el.approveNote.textContent = "Registro l'approvazione…";
+    el.approveFlash.className = 'approve-flash';
+    el.approveFlash.textContent = "Registro l'approvazione…";
 
     try {
       const response = await fetch(scoped('/api/approve'), { method: 'POST' });
       const result = await response.json();
-      if (!result || result.ok !== true) {
-        el.approveNote.className = 'action-note is-warn';
-        el.approveNote.textContent =
-          'Non ho potuto approvare: ' +
-          ((result && result.reason) || 'il server non ha risposto come previsto.') +
-          '.';
+      if (result && result.ok === true) {
+        flash(el.approveFlash, 'Approvazione registrata.', 'ok', 'approve-flash');
+      } else {
+        flash(
+          el.approveFlash,
+          (result && result.reason) || "Il server non ha registrato l'approvazione.",
+          'warn',
+          'approve-flash'
+        );
       }
     } catch (error) {
-      el.approveNote.className = 'action-note is-warn';
-      el.approveNote.textContent =
-        'Non ho potuto approvare: il server locale non risponde.';
+      flash(el.approveFlash, 'Non ho potuto approvare: il server non risponde.', 'warn', 'approve-flash');
     } finally {
       approving = false;
       el.approve.removeAttribute('aria-busy');
