@@ -8,14 +8,31 @@ restituisce:
 
     {"ok": bool, "violations": [...], "metrics": {...}}
 
-Cinque controlli, ognuno con la sua prova:
+Nove controlli, ognuno con la sua prova. I primi cinque guardano il basso (un
+montaggio che non varia, ripete, apre male); gli ultimi quattro guardano l'alto,
+perche' la coerenza e' un **intervallo**, non un massimo: massimizzare la
+varieta' premia l'irrequietezza.
 
 * ``low_variety``      — shot distinti / shot totali sotto :data:`MIN_VARIETY`;
 * ``repeated_shots``   — >= :data:`REPEAT_RUN` shot quasi identici di fila;
 * ``unusable_frame``   — frame nero (luma < :data:`BLACK_LUMA`) o mosso/uniforme
   oltre la soglia di nitidezza gia' usata dal triage;
 * ``weak_open``        — il primo shot non ha ne' un hook ne' il primo verso;
-* ``unjustified_cut``  — tagli senza provenienza beat/scene/speech/chorus.
+* ``unjustified_cut``  — tagli senza provenienza beat/scene/speech/chorus;
+* ``frantic_cuts``     — tagli al secondo sopra :data:`MAX_CUT_RATE`;
+* ``too_short_shots``  — piu' di :data:`SHORT_SHOT_ALLOWANCE` shot sotto
+  :data:`MIN_SHOT_SEC`;
+* ``effect_pileup``    — frazione di shot con piu' di :data:`EFFECTS_PER_SHOT`
+  effetti (transizioni comprese) sopra :data:`MAX_EFFECT_DENSITY`;
+* ``restless_camera``  — movimento medio sopra :data:`MAX_MOTION_MEAN`, quando
+  il piano o il referto portano la misura.
+
+``metrics["balance"]`` riassume l'asse varieta'/frenesia: ``"low"`` quando il
+montaggio pecca per difetto (varieta' bassa o ripetizione), ``"high"`` quando
+pecca per eccesso (tagli, shot corti, effetti, movimento), ``"ok"`` quando sta
+dentro l'intervallo. Se sbaglia da entrambi i lati vince ``"high"``, ma i codici
+restano tutti elencati: il referto non nasconde una violazione per farne vedere
+un'altra.
 
 La regola dell'onesta': un dato che manca non e' una violazione. Se i fotogrammi
 non si possono leggere, se la nitidezza non e' misurabile o se il piano non porta
@@ -39,8 +56,14 @@ from .contract import THRESHOLDS
 __all__ = [
     "BLACK_LUMA",
     "CUT_SOURCES",
+    "EFFECTS_PER_SHOT",
+    "MAX_CUT_RATE",
+    "MAX_EFFECT_DENSITY",
+    "MAX_MOTION_MEAN",
+    "MIN_SHOT_SEC",
     "MIN_VARIETY",
     "REPEAT_RUN",
+    "SHORT_SHOT_ALLOWANCE",
     "SHOT_SAME_DISTANCE",
     "disabled",
     "evaluate",
@@ -61,6 +84,40 @@ REPEAT_RUN = 3
 
 #: Un frame con luma media sotto questo valore e' nero: non mostra niente.
 BLACK_LUMA = 0.02
+
+# --------------------------------------------------------------------------- #
+# il limite superiore: dove la varieta' diventa frenesia
+# --------------------------------------------------------------------------- #
+
+#: Tagli al secondo oltre i quali il montaggio e' frenetico. Il limite guarda
+#: l'alto: sotto non c'e' niente da correggere, sopra si taglia per il gusto di
+#: tagliare. Un reel che cambia inquadratura ogni 0.83s e' gia' al limite.
+MAX_CUT_RATE = 1.2
+
+#: Durata minima di uno shot perche' l'occhio lo veda (secondi).
+MIN_SHOT_SEC = 0.35
+
+#: Quanti shot possono stare sotto :data:`MIN_SHOT_SEC` senza essere un difetto:
+#: un'accelerazione di due inquadrature e' un accento, quaranta sono una fuga.
+SHORT_SHOT_ALLOWANCE = 2
+
+#: Un shot con piu' di questo numero di effetti (transizioni comprese) e'
+#: sovraccarico: l'effetto non serve piu' all'immagine, la copre.
+EFFECTS_PER_SHOT = 2
+
+#: Frazione di shot sovraccarichi oltre la quale il montaggio e' un accumulo.
+MAX_EFFECT_DENSITY = 0.4
+
+#: Movimento medio (differenza media per frame, scala 0..255, la stessa di
+#: :func:`vx.analyze.measure_motion`) sopra cui la camera non sta mai ferma.
+#: Il dato esiste solo se il piano o il referto lo portano; senza, ``unknown``.
+MAX_MOTION_MEAN = 10.0
+
+#: I codici che dicono "troppo poco" e quelli che dicono "troppo".
+_LOW_CODES = frozenset({"low_variety", "repeated_shots"})
+_HIGH_CODES = frozenset(
+    {"frantic_cuts", "too_short_shots", "effect_pileup", "restless_camera"}
+)
 
 #: Le provenienze che giustificano un taglio. Un taglio senza una di queste,
 #: quando il piano dichiara provenienze, e' ``unjustified_cut``.
@@ -141,6 +198,84 @@ def _provenance_records(raw: Any) -> Tuple[Dict[str, Any], ...]:
     return ()
 
 
+def _transition_present(raw: Any) -> bool:
+    """Una transizione vera, non il ``None``/``"cut"`` che non fa niente."""
+    if raw is None:
+        return False
+    if isinstance(raw, str):
+        return raw.strip().lower() not in ("", "none", "cut")
+    if isinstance(raw, Mapping):
+        kind = raw.get("type") or raw.get("style") or raw.get("kind")
+        if kind is None:
+            return bool(raw)
+        return str(kind).strip().lower() not in ("", "none", "cut")
+    return True
+
+
+def _effect_count(clip: Any) -> int:
+    """Gli effetti applicati a un clip, transizioni comprese.
+
+    Un effetto dichiarato in ``effects`` e una mossa di camera in ``stack``
+    contano uno ciascuno; una transizione in ingresso o in uscita e' un effetto
+    sul taglio, quindi conta anche lei. Cosi' "due effetti e una dissolvenza"
+    sono tre cose che l'occhio vede sommate, non due.
+    """
+    count = 0
+    effects = _field(clip, "effects")
+    if isinstance(effects, (list, tuple)):
+        count += len(effects)
+    stack = _field(clip, "stack")
+    if isinstance(stack, (list, tuple)):
+        count += len(stack)
+    for name in ("transition_in", "transition_out"):
+        if _transition_present(_field(clip, name)):
+            count += 1
+    return count
+
+
+def _motion_value(raw: Any) -> Optional[float]:
+    """Il movimento medio da un numero, un blocco ``motion`` o un'analisi."""
+    if isinstance(raw, Mapping):
+        for key in ("motion_intensity", "motion_mean", "mean", "intensity"):
+            value = _number(raw.get(key))
+            if value is not None:
+                return value
+        for key in ("motion", "analysis", "pixel", "measurements"):
+            if key in raw:
+                value = _motion_value(raw[key])
+                if value is not None:
+                    return value
+        return None
+    value = _number(raw)
+    if value is not None:
+        return value
+    data = _as_dict(raw)
+    return _motion_value(data) if data else None
+
+
+def _motion_means(
+    plan: Any, report: Mapping[str, Any], bridge: Mapping[str, Any]
+) -> Dict[str, float]:
+    """Movimento medio per ``source_id``, se il piano o il referto lo portano.
+
+    Le forme ammesse sono quelle che la pipeline produce gia': un blocco
+    ``motion``/``analysis`` per sorgente nel piano, nel referto o nel ponte.
+    Nessuna di queste e' obbligatoria: senza, la misura resta ``unknown``.
+    """
+    means: Dict[str, float] = {}
+    for holder in (plan, report, bridge):
+        data = _as_dict(holder)
+        for key in ("motion", "analysis", "analyses"):
+            block = data.get(key)
+            if not isinstance(block, Mapping):
+                continue
+            for source_id, raw in block.items():
+                value = _motion_value(raw)
+                if value is not None:
+                    means[str(source_id)] = value
+    return means
+
+
 def _shots(plan: Any) -> List[Dict[str, Any]]:
     """I clip della traccia base in ordine di timeline.
 
@@ -182,6 +317,7 @@ def _shots(plan: Any) -> List[Dict[str, Any]]:
                     "src_out": src_out,
                     "dst_in": dst_in,
                     "dst_out": dst_out,
+                    "effects": _effect_count(clip),
                     "provenance": records,
                 }
             )
@@ -213,6 +349,9 @@ def _visual_shots(clips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 last["src_out"] = clip["src_out"]
                 last["dst_out"] = clip["dst_out"]
                 last["duration"] = last["dst_out"] - last["dst_in"]
+                last["effects"] = int(last.get("effects") or 0) + int(
+                    clip.get("effects") or 0
+                )
                 last["provenance"] = tuple(last["provenance"]) + tuple(
                     clip["provenance"]
                 )
@@ -575,6 +714,20 @@ def _violation(
     }
 
 
+def _balance(violations: Sequence[Mapping[str, Any]]) -> str:
+    """Su quale lato dell'intervallo sta sbagliando il montaggio.
+
+    ``high`` (frenesia) vince su ``low`` quando ci sono entrambi: i codici
+    restano tutti nel referto, quindi non si perde informazione.
+    """
+    codes = {str(item.get("code") or "") for item in violations}
+    if codes & _HIGH_CODES:
+        return "high"
+    if codes & _LOW_CODES:
+        return "low"
+    return "ok"
+
+
 def _runs(hashes: Mapping[int, str], order: Sequence[int]) -> List[List[int]]:
     """Le sequenze consecutive di shot quasi identici, lunghe almeno due.
 
@@ -614,7 +767,7 @@ def disabled(reason: str = "--free") -> Dict[str, Any]:
         "disabled": True,
         "reason": f"{reason}: controlli di coerenza disattivati per scelta esplicita",
         "violations": [],
-        "metrics": {"checked": False},
+        "metrics": {"checked": False, "balance": None},
     }
 
 
@@ -646,6 +799,12 @@ def evaluate(
         "sharpness_low": float(THRESHOLDS["triage_sharpness_low"]),
         "hook_window": float(THRESHOLDS["hook_window"]),
         "cut_tolerance_sec": CUT_TOLERANCE,
+        "max_cut_rate": MAX_CUT_RATE,
+        "min_shot_sec": MIN_SHOT_SEC,
+        "short_shot_allowance": SHORT_SHOT_ALLOWANCE,
+        "effects_per_shot": EFFECTS_PER_SHOT,
+        "max_effect_density": MAX_EFFECT_DENSITY,
+        "max_motion_mean": MAX_MOTION_MEAN,
     }
 
     metrics: Dict[str, Any] = {
@@ -662,6 +821,13 @@ def evaluate(
         "unjustified_cuts": None,
         "cut_provenance": "unknown",
         "opening": "unknown",
+        "cut_rate": None,
+        "shot_len_min": None,
+        "short_shots": [],
+        "effect_density": None,
+        "effect_pileup_shots": [],
+        "motion_intensity": None,
+        "balance": "ok",
         "thresholds": thresholds,
         "unknown": [],
     }
@@ -771,6 +937,123 @@ def evaluate(
             )
         )
 
+    # -- frenesia: tagli, durata, effetti, movimento ----------------------- #
+    # Il limite superiore. Il montaggio deve stare in un intervallo: se ogni
+    # metrica qui sotto e' al massimo, il referto non e' pulito, e' nervoso.
+    span = max(shot["dst_out"] for shot in shots) - min(
+        shot["dst_in"] for shot in shots
+    )
+    visual_cuts = max(0, len(shots) - 1)
+    if span > 0:
+        cut_rate = visual_cuts / span
+        metrics["cut_rate"] = round(cut_rate, 3)
+        if cut_rate > MAX_CUT_RATE:
+            violations.append(
+                _violation(
+                    "frantic_cuts",
+                    f"{cut_rate:.2f} tagli/s su {span:.2f}s sopra "
+                    f"{MAX_CUT_RATE:.2f}/s: {visual_cuts} tagli, uno ogni "
+                    f"{span / visual_cuts:.2f}s",
+                    cut_rate=round(cut_rate, 3),
+                    cuts=visual_cuts,
+                    seconds=round(span, 3),
+                    threshold=MAX_CUT_RATE,
+                )
+            )
+    else:
+        unknown.append(
+            {
+                "check": "cut_rate",
+                "reason": "durata della timeline non positiva: tagli/s non misurabile",
+            }
+        )
+
+    durations = [shot["duration"] for shot in shots]
+    shortest = min(durations)
+    short = [
+        shot["index"] for shot in shots if shot["duration"] < MIN_SHOT_SEC
+    ]
+    metrics["shot_len_min"] = round(shortest, 3)
+    metrics["short_shots"] = short
+    if len(short) > SHORT_SHOT_ALLOWANCE:
+        violations.append(
+            _violation(
+                "too_short_shots",
+                f"{len(short)} shot su {len(shots)} sotto {MIN_SHOT_SEC:.2f}s "
+                f"(il piu' breve {shortest:.2f}s, ammessi "
+                f"{SHORT_SHOT_ALLOWANCE}): indici {short}",
+                count=len(short),
+                total=len(shots),
+                minimum=round(shortest, 3),
+                threshold=MIN_SHOT_SEC,
+                indices=short,
+            )
+        )
+
+    pileup = [
+        shot["index"] for shot in shots if shot["effects"] > EFFECTS_PER_SHOT
+    ]
+    density = len(pileup) / float(len(shots))
+    metrics["effect_density"] = round(density, 3)
+    metrics["effect_pileup_shots"] = pileup
+    if density > MAX_EFFECT_DENSITY:
+        violations.append(
+            _violation(
+                "effect_pileup",
+                f"{len(pileup)} shot su {len(shots)} con piu' di "
+                f"{EFFECTS_PER_SHOT} effetti (densita' {density:.2f} sopra "
+                f"{MAX_EFFECT_DENSITY:.2f}): indici {pileup}",
+                count=len(pileup),
+                total=len(shots),
+                density=round(density, 3),
+                threshold=MAX_EFFECT_DENSITY,
+                indices=pileup,
+            )
+        )
+
+    motion_means = _motion_means(plan, report, bridge_map)
+    measured = sum(
+        shot["duration"]
+        for shot in shots
+        if shot["source_id"] in motion_means
+    )
+    if not motion_means or measured <= 0:
+        unknown.append(
+            {
+                "check": "motion",
+                "reason": "nessuna misura di movimento nel piano o nel referto",
+            }
+        )
+    elif measured + 1e-6 < span:
+        unknown.append(
+            {
+                "check": "motion",
+                "reason": "movimento misurato solo su "
+                f"{measured:.2f}s di {span:.2f}s: media non calcolata",
+            }
+        )
+    else:
+        motion = (
+            sum(
+                shot["duration"] * motion_means[shot["source_id"]]
+                for shot in shots
+                if shot["source_id"] in motion_means
+            )
+            / measured
+        )
+        metrics["motion_intensity"] = round(motion, 3)
+        if motion > MAX_MOTION_MEAN:
+            violations.append(
+                _violation(
+                    "restless_camera",
+                    f"movimento medio {motion:.2f} sopra "
+                    f"{MAX_MOTION_MEAN:.2f} (scala 0..255): la camera "
+                    "non sta mai ferma",
+                    motion=round(motion, 3),
+                    threshold=MAX_MOTION_MEAN,
+                )
+            )
+
     # -- frame inutilizzabili --------------------------------------------- #
     for index in sorted(lumas):
         luma = lumas[index]
@@ -869,4 +1152,5 @@ def evaluate(
                 )
             )
 
+    metrics["balance"] = _balance(violations)
     return {"ok": not violations, "violations": violations, "metrics": metrics}

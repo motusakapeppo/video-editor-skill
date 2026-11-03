@@ -1,7 +1,11 @@
-"""Il referto di coerenza: cinque codici, ognuno con la sua prova.
+"""Il referto di coerenza: nove codici, ognuno con la sua prova.
 
 Niente rete, niente render, niente ffmpeg: i piani sono dizionari sintetici e i
 fotogrammi sono PNG scritti qui, cosi' ogni verdetto e' riproducibile.
+
+I cinque controlli del limite inferiore dicono quando il montaggio non varia
+abbastanza; i quattro del limite superiore dicono quando ha smesso di essere un
+montaggio e ha cominciato a tremare. ``balance`` dice da che lato si sbaglia.
 
     python tests/test_coherence.py
 """
@@ -81,11 +85,21 @@ def _patterns(directory: Path) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def _plan(shots, *, treatments=None) -> dict:
+def _plan(
+    shots,
+    *,
+    treatments=None,
+    effects=None,
+    transitions=None,
+    analysis=None,
+) -> dict:
     """Un EDL minimo: solo la traccia video di layer 0 conta.
 
     ``shots`` e' una lista di ``(source_id, duration, provenance)``; la
-    provenienza e' una lista di record o ``None``.
+    provenienza e' una lista di record o ``None``. ``effects`` e' una lista
+    parallela di conteggi (o liste di effetti), ``transitions`` una lista di
+    booleani per la dissolvenza in ingresso, ``analysis`` il blocco movimento
+    per sorgente (``{"a": {"motion": {"mean": 3.0}}}``).
     """
     clips = []
     sources: dict = {}
@@ -103,6 +117,18 @@ def _plan(shots, *, treatments=None) -> dict:
         }
         if provenance is not None:
             clip["provenance"] = provenance
+        if effects is not None and index < len(effects) and effects[index] is not None:
+            spec = effects[index]
+            if isinstance(spec, int):
+                clip["effects"] = [{"kind": f"fx_{k}"} for k in range(spec)]
+            else:
+                clip["effects"] = list(spec)
+        if (
+            transitions is not None
+            and index < len(transitions)
+            and transitions[index]
+        ):
+            clip["transition_in"] = {"type": "fade", "duration_sec": 0.2}
         clips.append(clip)
         sources[source_id] = {
             "path": "",
@@ -122,12 +148,30 @@ def _plan(shots, *, treatments=None) -> dict:
     }
     if treatments is not None:
         plan["treatments"] = treatments
+    if analysis is not None:
+        plan["analysis"] = analysis
     return plan
 
 
-def _run(shots, frames, *, bridge=None, text_required=False, treatments=None) -> dict:
+def _run(
+    shots,
+    frames,
+    *,
+    bridge=None,
+    text_required=False,
+    treatments=None,
+    effects=None,
+    transitions=None,
+    analysis=None,
+) -> dict:
     return coherence.evaluate(
-        _plan(shots, treatments=treatments),
+        _plan(
+            shots,
+            treatments=treatments,
+            effects=effects,
+            transitions=transitions,
+            analysis=analysis,
+        ),
         {},
         bridge=bridge,
         frames=frames,
@@ -162,9 +206,16 @@ def test_healthy(pics: dict) -> None:
         ("c", 2.0, provenance),
         ("d", 2.0, provenance),
     ]
-    report = _run(shots, frames)
+    report = _run(shots, frames, analysis={
+        key: {"motion": {"mean": 2.0}} for key in ("a", "b", "c", "d")
+    })
     check("nessuna violazione", not report["violations"], report["violations"])
     check("ok vero", report["ok"] is True, report["ok"])
+    check(
+        "balance ok: dentro l'intervallo",
+        report["metrics"]["balance"] == "ok",
+        report["metrics"]["balance"],
+    )
     check(
         "varieta' 1.0: quattro shot distinti",
         report["metrics"]["variety"] == 1.0,
@@ -244,6 +295,171 @@ def test_repeat_without_low_variety(pics: dict) -> None:
         "tre identici di fila sono una ripetizione",
         "repeated_shots" in _codes(report),
         _codes(report),
+    )
+
+
+def test_balance_low(pics: dict) -> None:
+    print("\n-- tre shot ripetuti: il difetto e' per difetto")
+    frames = [pics["vertical"], pics["vertical"], pics["vertical"]]
+    beat = [{"kind": "beat"}]
+    shots = [
+        ("a", 2.0, [{"kind": "hook"}, {"kind": "beat"}]),
+        ("a", 2.0, beat),
+        ("a", 2.0, beat),
+    ]
+    report = _run(shots, frames)
+    metrics = report["metrics"]
+    check("balance low", metrics["balance"] == "low", metrics["balance"])
+    check("low_variety c'e'", "low_variety" in _codes(report), _codes(report))
+    check(
+        "nessuna violazione per eccesso",
+        "frantic_cuts" not in _codes(report)
+        and "too_short_shots" not in _codes(report),
+        _codes(report),
+    )
+    check("cut_rate 0.333/s", metrics["cut_rate"] == 0.333, metrics["cut_rate"])
+    check("shot_len_min 2.0s", metrics["shot_len_min"] == 2.0, metrics["shot_len_min"])
+
+
+def test_balance_high(pics: dict) -> None:
+    print("\n-- quaranta shot da 0.2s: il difetto e' per eccesso")
+    beat = [{"kind": "beat"}]
+    shots = [("a", 0.2, [{"kind": "hook"}, {"kind": "beat"}])]
+    shots += [("a", 0.2, beat) for _ in range(39)]
+    report = _run(shots, None)
+    metrics = report["metrics"]
+    frantic = _violation(report, "frantic_cuts")
+    short = _violation(report, "too_short_shots")
+    check("balance high", metrics["balance"] == "high", metrics["balance"])
+    check("frantic_cuts c'e'", frantic is not None, _codes(report))
+    check(
+        "cut_rate 4.875/s nel referto e nell'evidenza",
+        metrics["cut_rate"] == 4.875
+        and frantic is not None
+        and frantic["metrics"]["cut_rate"] == 4.875
+        and "4.88" in frantic["evidence"],
+        (metrics["cut_rate"], frantic and frantic["evidence"]),
+    )
+    check(
+        "too_short_shots: 40 shot su 40 sotto 0.35s",
+        short is not None
+        and short["metrics"]["count"] == 40
+        and short["metrics"]["minimum"] == 0.2,
+        short and short["metrics"],
+    )
+    check("shot_len_min 0.2s", metrics["shot_len_min"] == 0.2, metrics["shot_len_min"])
+    check(
+        "nessuna varieta' inventata senza fotogrammi",
+        "low_variety" not in _codes(report),
+        _codes(report),
+    )
+
+
+def test_effect_pileup(pics: dict) -> None:
+    print("\n-- due effetti (piu' dissolvenza) su ogni shot")
+    frames = [pics["vertical"], pics["horizontal"], pics["checker"], pics["circle"]]
+    beat = [{"kind": "beat"}]
+    shots = [("a", 2.0, [{"kind": "hook"}, {"kind": "beat"}])]
+    shots += [("b", 2.0, beat), ("c", 2.0, beat), ("d", 2.0, beat)]
+    effects = [2, 2, 2, 2]
+    report = _run(
+        shots,
+        frames,
+        effects=effects,
+        transitions=[True, True, True, True],
+    )
+    pileup = _violation(report, "effect_pileup")
+    check("effect_pileup c'e'", pileup is not None, _codes(report))
+    check(
+        "densita' 1.0: ogni shot ha tre slot (2 effetti + dissolvenza)",
+        report["metrics"]["effect_density"] == 1.0
+        and pileup
+        and pileup["metrics"]["count"] == 4,
+        (report["metrics"]["effect_density"], pileup and pileup["metrics"]),
+    )
+    check(
+        "balance high",
+        report["metrics"]["balance"] == "high",
+        report["metrics"]["balance"],
+    )
+    clean = _run(shots, frames, effects=effects)
+    check(
+        "due effetti senza transizione non sono un accumulo (soglia > 2)",
+        "effect_pileup" not in _codes(clean)
+        and clean["metrics"]["effect_density"] == 0.0,
+        (clean["metrics"]["effect_density"], _codes(clean)),
+    )
+
+
+def test_healthy_interval(pics: dict) -> None:
+    print("\n-- piano sano: dentro l'intervallo, da entrambi i lati")
+    frames = [pics["vertical"], pics["horizontal"], pics["checker"], pics["circle"]]
+    beat = [{"kind": "beat"}]
+    shots = [
+        ("a", 5.0, [{"kind": "hook"}, {"kind": "beat"}]),
+        ("b", 2.0, beat),
+        ("c", 3.0, beat),
+        ("d", 4.0, beat),
+    ]
+    analysis = {
+        key: {"motion": {"mean": 2.0, "static_run_max": 1.0}}
+        for key in ("a", "b", "c", "d")
+    }
+    report = _run(
+        shots,
+        frames,
+        effects=[1, 0, 0, 1],
+        analysis=analysis,
+    )
+    metrics = report["metrics"]
+    check("nessuna violazione", not report["violations"], report["violations"])
+    check("ok vero", report["ok"] is True, report["ok"])
+    check("balance ok", metrics["balance"] == "ok", metrics["balance"])
+    check("cut_rate 0.214/s", metrics["cut_rate"] == 0.214, metrics["cut_rate"])
+    check("shot_len_min 2.0s", metrics["shot_len_min"] == 2.0, metrics["shot_len_min"])
+    check("effect_density 0.0", metrics["effect_density"] == 0.0, metrics["effect_density"])
+    check("motion_intensity 2.0", metrics["motion_intensity"] == 2.0, metrics["motion_intensity"])
+    check(
+        "nessun unknown sul movimento",
+        all(item.get("check") != "motion" for item in metrics["unknown"]),
+        metrics["unknown"],
+    )
+
+
+def test_restless_camera(pics: dict) -> None:
+    print("\n-- camera che non sta mai ferma")
+    frames = [pics["vertical"], pics["horizontal"], pics["checker"], pics["circle"]]
+    beat = [{"kind": "beat"}]
+    shots = [("a", 2.0, [{"kind": "hook"}, {"kind": "beat"}])]
+    shots += [("b", 2.0, beat), ("c", 2.0, beat), ("d", 2.0, beat)]
+    analysis = {
+        key: {"motion": {"mean": 13.5}} for key in ("a", "b", "c", "d")
+    }
+    report = _run(shots, frames, analysis=analysis)
+    restless = _violation(report, "restless_camera")
+    check("restless_camera c'e'", restless is not None, _codes(report))
+    check(
+        "movimento medio 13.5 sopra 10.0",
+        report["metrics"]["motion_intensity"] == 13.5
+        and restless
+        and restless["metrics"]["motion"] == 13.5,
+        (report["metrics"]["motion_intensity"], restless and restless["metrics"]),
+    )
+    check(
+        "balance high",
+        report["metrics"]["balance"] == "high",
+        report["metrics"]["balance"],
+    )
+    quiet = _run(
+        shots,
+        frames,
+        analysis={key: {"motion": {"mean": 1.0}} for key in ("a", "b", "c", "d")},
+    )
+    check(
+        "camera ferma: nessuna violazione per eccesso",
+        "restless_camera" not in _codes(quiet)
+        and quiet["metrics"]["motion_intensity"] == 1.0,
+        quiet["metrics"]["motion_intensity"],
     )
 
 
@@ -484,6 +700,11 @@ def test_disabled() -> None:
     check(
         "metrics.checked falso",
         report["metrics"]["checked"] is False,
+        report["metrics"]["checked"],
+    )
+    check(
+        "balance non dichiarato quando i controlli sono spenti",
+        report["metrics"]["balance"] is None,
         report["metrics"],
     )
     check("il motivo nomina il flag", "--free" in report["reason"], report["reason"])
@@ -521,6 +742,11 @@ def main() -> int:
         test_healthy(pics)
         test_low_variety(pics)
         test_repeat_without_low_variety(pics)
+        test_balance_low(pics)
+        test_balance_high(pics)
+        test_effect_pileup(pics)
+        test_healthy_interval(pics)
+        test_restless_camera(pics)
         test_black_frame(pics)
         test_sharpness_frame(pics)
         test_unjustified_cut(pics)
