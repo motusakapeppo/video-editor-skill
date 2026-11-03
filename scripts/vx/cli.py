@@ -2289,6 +2289,19 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return mcp_server.main([])
 
 
+def cmd_guard(args: argparse.Namespace) -> int:
+    """Audit a work folder: was the job really done through vx? Exit 2 if not."""
+    from . import guard
+
+    report = guard.audit(args.dir)
+    if args.json:
+        _out(report)
+    else:
+        print(guard.to_text(report))
+    return int(report["exit_code"])
+
+
+
 def _apply_settings(args: argparse.Namespace) -> None:
     """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
     from . import features, settings
@@ -2651,6 +2664,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("dir", help="cartella del lavoro (dove sta progress.json)")
     p.add_argument("--port", type=int, default=0, help="0 = porta libera scelta dal sistema")
     p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser(
+        "guard",
+        help="audit di una cartella: il lavoro e' passato davvero da vx? (exit 2 se no)",
+        description=(
+            "Audit read-only di una cartella di lavoro. Sei voci: firma vx, master "
+            "fuori dalla pipeline, UI artigianale, pipeline artigianale, progresso "
+            "pubblicato, sorgente non modificato. Exit 0 conforme, 2 con violazioni."
+        ),
+    )
+    p.add_argument("dir", help="cartella del lavoro da controllare")
+    p.add_argument("--json", action="store_true", help="referto macchina")
+    p.set_defaults(func=cmd_guard)
 
     p = add("edl", "EDL v2.0 multi-sorgente: validate o render")
     edl_sub = p.add_subparsers(dest="edl_cmd", required=True)
