@@ -1346,10 +1346,115 @@ def cmd_qc(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+#: Le fasi che ``vx ingest`` attraversa davvero, nell'ordine del codice:
+#: chiave (la stessa che finisce in ``progress.json``), quota dell'arco e la
+#: riga in italiano che la vista mostra. L'arco lo decide il chiamante — da
+#: solo 0-100, dentro ``vx run`` 0-30 — cosi' la percentuale e' aggiornata ai
+#: confini di stadio senza inventare un secondo formato.
+_INGEST_STAGES: tuple = (
+    ("ingest", 0.07, "Importo il materiale: probe, normalizzazione, staging."),
+    ("proxy", 0.22, "Faccio il proxy a bassa risoluzione."),
+    ("analysis", 0.44, "Misuro il video: esposizione, colore, movimento, tagli."),
+    ("speech", 0.62, "Ascolto il parlato e misuro i silenzi."),
+    ("audio", 0.74, "Misuro l'audio: rumore, loudness, clipping."),
+    ("faces", 0.86, "Cerco volti e speaker."),
+    ("thumbs", 0.93, "Estraggo le anteprime e il contact sheet."),
+    ("triage", 1.0, "Guardo cosa manca e preparo le domande."),
+)
+
+_INGEST_PHASES = tuple((key, label) for key, _, label in _INGEST_STAGES)
+
+#: ``vx run`` attraversa l'ingest e poi tutto il resto: il pannello elenca le
+#: fasi in anticipo, cosi' la vista sa dove siamo e quanto manca.
+_RUN_PHASES = _INGEST_PHASES + (
+    ("plan", "Scelgo i tagli e le scelte del piano."),
+    ("subs", "Scrivo sottotitoli, hook e inquadratura."),
+    ("render", "Costruisco la timeline e renderizzo. E' la parte lunga."),
+    ("render_done", "Il master e' scritto."),
+    ("qc", "Controllo il risultato: durata, loudness, picco, audio."),
+    ("deliverables", "Preparo le consegne."),
+)
+
+
+class _Progress:
+    """Il pannello dei comandi che non passano da ``auto``.
+
+    ``auto`` racconta con ``narrate.Narrator``; ``ingest`` e ``run`` pubblicano
+    lo **stesso** ``progress.json``/``progress.html`` con lo stesso
+    ``panel.Panel``, quindi ``vx serve`` legge una fonte sola
+    (``progress_source: "json"``) invece di dedurre le fasi dalle cartelle.
+    Un pannello che non si scrive non ferma mai il lavoro: si perde la vista,
+    non l'ingest.
+    """
+
+    def __init__(
+        self, work: Path, phases: Sequence[tuple], *, prompt: str = "", clips: int = 1
+    ) -> None:
+        from . import panel as panel_mod
+
+        self.labels = {str(key): str(label) for key, label in phases}
+        self.started = time.monotonic()
+        self.panel = panel_mod.Panel(
+            Path(work) / "progress.html",
+            prompt=str(prompt),
+            clips=int(clips),
+            phases=list(phases),
+        )
+        self.panel.write()
+
+    def __call__(self, percent: float, stage: str, *, note: str = "") -> None:
+        key = str(stage)
+        try:
+            self.panel.note = note or self.labels.get(key, key)
+            self.panel.record(
+                float(percent), key, elapsed=time.monotonic() - self.started
+            )
+        except Exception:  # noqa: BLE001 - the panel is a viewer, not a gate
+            pass
+
+    def finish(self, note: str, *, master: str = "") -> None:
+        try:
+            self.panel.finish(
+                note, elapsed=time.monotonic() - self.started, master=master
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def stop(self, note: str) -> None:
+        """Il lavoro aspetta l'umano: la percentuale resta, la nota lo dice."""
+        try:
+            self.panel.note = note
+            self.panel.write()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _publish_progress(
+    work: Path, phases: Sequence[tuple], *, prompt: str = "", clips: int = 1
+) -> Optional[_Progress]:
+    try:
+        return _Progress(work, phases, prompt=prompt, clips=clips)
+    except Exception:  # noqa: BLE001 - no panel is better than no ingest
+        return None
+
+
+def _stage(
+    progress: Optional[_Progress], percent: float, key: str, *, note: str = ""
+) -> None:
+    if progress is None:
+        return
+    progress(float(percent), key, note=note)
+
+
 def _ingest(
     src: Path,
     args: argparse.Namespace,
     brief_override: Optional[Dict[str, Any]] = None,
+    *,
+    progress: Optional[_Progress] = None,
+    arc: Sequence[float] = (0.0, 100.0),
+    phases: Optional[Sequence[tuple]] = None,
+    prompt: str = "",
 ) -> Dict[str, Any]:
     """Fase 1 + Fase 4: proxy, pre-analysis, findings. Never mutates the source."""
     from . import analyze, audio, faces
@@ -1362,7 +1467,6 @@ def _ingest(
     from . import triage
 
     fingerprint = winpath.source_fingerprint(str(src))
-    probe_data = probe_mod.probe(str(src)).to_dict()
     if args.workdir:
         work = Path(args.workdir)
         work.mkdir(parents=True, exist_ok=True)
@@ -1374,6 +1478,25 @@ def _ingest(
         winpath.clear_lock(stale)
         work = winpath.make_workdir(str(src))
 
+    # Il pannello nasce prima del probe: la vista c'e' da subito e `vx serve`
+    # legge `progress.json` invece di dedurre le fasi dalle cartelle. Dentro
+    # `run` il pannello e' gia' quello del lavoro e lo chiude `cmd_run`.
+    owns_panel = progress is None and phases is None
+    if progress is None:
+        progress = _publish_progress(
+            work,
+            phases or _INGEST_PHASES,
+            prompt=prompt or f"Ingest — {src.name}",
+        )
+    lo, hi = float(arc[0]), float(arc[1])
+
+    def stage(key: str) -> None:
+        for name, share, label in _INGEST_STAGES:
+            if name == key:
+                _stage(progress, lo + (hi - lo) * share, key, note=label)
+                return
+
+    probe_data = probe_mod.probe(str(src)).to_dict()
     raw_stream = probe_mod.raw_video_stream(str(src))
     normalization = ingest_mod.normalize_source(str(src), raw_stream, work / "stage_00")
     analysis_src = Path(normalization.staged_path)
@@ -1384,17 +1507,20 @@ def _ingest(
     )
     if normalization.is_staged:
         _log(f"[0/6] ingest: {', '.join(normalization.filters_applied)}")
+    stage("ingest")
 
     _log("[1/6] proxy a bassa risoluzione")
     proxy_info = proxy_mod.make_proxy(
         str(analysis_src), work / "proxy" / "proxy.mp4", width=args.width
     )
     proxy_path = proxy_info["path"]
+    stage("proxy")
 
     _log("[2/7] pre-analisi video (proxy)")
     video = analyze.analyze_video(
         str(analysis_src), sample_fps=args.sample_fps, proxy_path=proxy_path
     )
+    stage("analysis")
     analysis_sha = (
         winpath.source_fingerprint(str(analysis_src))["sha256"]
         if normalization.is_staged
@@ -1412,8 +1538,10 @@ def _ingest(
         transcribe=not getattr(args, "no_speech", False),
         chunk_sec=_analysis_chunk_sec(args),
     )
+    stage("speech")
     _log("[4/7] pre-analisi audio")
     aud = audio.analyze_audio(str(analysis_src), vad_result=(chunked or {}).get("vad"))
+    stage("audio")
     _log("[5/7] volti e speaker")
     fac = faces.detect_faces_tracked(proxy_path, sample_fps=SAMPLE_FPS_FACE)
     # Detection ran on the proxy; every consumer below reads `analysis_probe`
@@ -1425,9 +1553,11 @@ def _ingest(
         int(analysis_probe.get("width") or 0),
         int(analysis_probe.get("height") or 0),
     )
+    stage("faces")
     _log("[6/7] anteprime")
     thumbs = proxy_mod.thumbs(str(src), work / "analysis", count=args.thumbs)
     sheet = proxy_mod.contact_sheet(thumbs, work / "analysis" / "contact.jpg")
+    stage("thumbs")
 
     rep = report_io.new_report(probe_data, tool=_tool_block())
     report_path = work / "report.json"
@@ -1479,6 +1609,16 @@ def _ingest(
         (work / "triage.md").write_text(triage.to_markdown(request), encoding="utf-8")
     winpath.clear_lock(work)
 
+    stage("triage")
+    if owns_panel and progress is not None:
+        if request is not None:
+            note = "Ingest concluso: report pronto, servono alcune risposte."
+        elif autonomous:
+            note = "Ingest concluso: report pronto, default registrati."
+        else:
+            note = "Ingest concluso: report pronto, si passa al piano."
+        progress.finish(note, master="")
+
     return {
         "workdir": work,
         "report": rep,
@@ -1494,6 +1634,7 @@ def _ingest(
         "contact_sheet": sheet,
         "transcript": transcript,
         "chunked": chunked,
+        "progress": progress,
     }
 
 
@@ -1572,7 +1713,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         args.no_speech = True
         answers = {}
 
-    state = _ingest(src, args, brief_override=brief_override)
+    state = _ingest(
+        src,
+        args,
+        brief_override=brief_override,
+        arc=(0.0, 30.0),
+        phases=_RUN_PHASES,
+        prompt=f"Montaggio — {src.name}",
+    )
+    progress: Optional[_Progress] = state.get("progress")
 
     rep = state["report"]
     work: Path = state["workdir"]
@@ -1583,6 +1732,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if answers is None:
         request = state["triage"] or plan_mod.needs_triage(brief, rep)
         if request is not None:
+            if progress is not None:
+                progress.stop("Mi serve una risposta: guarda le domande del triage.")
             if args.json:
                 _out(request)
             else:
@@ -1644,6 +1795,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         for err in errors:
             _log(f"[plan] {err}")
         return EXIT_USAGE
+    _stage(progress, 35.0, "plan")
     # ---- subtitles
     subs_path: Optional[str] = None
     hook_path: Optional[str] = None
@@ -1782,7 +1934,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     # ---- preview on the proxy, then full-res delivery
     gates.pre_render(built, media, findings=rep.get("findings"))
     report_io.write(built.to_dict(), work / "plan.json")
+    _stage(progress, 40.0, "subs")
     winpath.heartbeat(work, "render_preview")
+    _stage(progress, 45.0, "render")
     _log("[run] render anteprima (proxy)")
     preview = render.render(
         built,
@@ -1795,6 +1949,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         hook_path=hook_path,
     )
     _log(f"[run] anteprima: {preview['path']} ({preview['frames']} frame)")
+    _stage(
+        progress,
+        55.0,
+        "render",
+        note="Anteprima pronta: renderizzo il master a piena risoluzione.",
+    )
 
     winpath.heartbeat(work, "render_full")
     _log("[run] render finale (full-res)")
@@ -1809,6 +1969,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         visual=visual,
         hook_path=hook_path,
     )
+    _stage(progress, 85.0, "render_done")
 
     winpath.heartbeat(work, "qc")
     _log("[run] controllo qualita")
@@ -1835,6 +1996,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     gates.post_render(
         final_plan, media, final["path"], workdir=work, planned_total=planned_total
     )
+    _stage(progress, 92.0, "qc")
 
     rep["plan"] = final_plan.to_dict()
     rep["qc"] = result.to_dict()
@@ -1855,11 +2017,25 @@ def cmd_run(args: argparse.Namespace) -> int:
     report_io.write({"deliverables": produced}, out_dir / "deliverables.json")
     rep["deliverables"] = produced
     report_io.write(rep, work / "report.json")
+    _stage(progress, 96.0, "deliverables")
 
     if not args.keep_proxy:
         Path(state["proxy"]["path"]).unlink(missing_ok=True)
         rep["artifacts"]["proxy"] = None
         report_io.write(rep, work / "report.json")
+
+    master_item = next(
+        (item for item in produced if str(item.get("kind")) == "master"), None
+    )
+    master_path = str((master_item or {}).get("path") or final["path"])
+    if progress is not None:
+        progress.finish(
+            "Fatto: il master e' scritto, il controllo qualita passa."
+            if result.pass_
+            else "Fatto: il master e' scritto, il controllo qualita non passa: "
+            "vedi qc.json.",
+            master=master_path,
+        )
 
     summary = {
         "output": final["path"],
