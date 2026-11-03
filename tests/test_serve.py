@@ -279,6 +279,167 @@ def check_ass_bridge() -> None:
         )
 
 
+def check_derived_jobs() -> None:
+    """Un lavoro senza ``progress.json`` compare, ma lo dice: stato dedotto.
+
+    Il riconoscimento e' stretto: i segni veri della skill bastano, un video
+    sciolto no. Lo stato dedotto non finge percentuali ne' master.
+    """
+    with tempfile.TemporaryDirectory(prefix="vx-derived-") as raw:
+        base = Path(raw)
+
+        derived = base / "mixed_reel"
+        (derived / "stage_00").mkdir(parents=True)
+        (derived / "stage_00" / "stage_00_ingest_IMG_9929.mp4").write_bytes(
+            b"\x00\x00\x00\x18ftypmp42" + b"i" * 64
+        )
+        (derived / "proxy").mkdir()
+        (derived / "audio").mkdir()
+        (derived / "out").mkdir()
+        # La workdir di un lavoro non e' un secondo lavoro.
+        (derived / "work").mkdir()
+        (derived / "work" / "plan.json").write_text(
+            json.dumps({"timeline": {"duration_sec": 4.0}}), encoding="utf-8"
+        )
+        master = derived / "out" / "master.mp4"
+        master.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"d" * 512)
+
+        bare = base / "video_sciolto"
+        bare.mkdir()
+        (bare / "clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"v" * 32)
+
+        empty_out = base / "senza_uscita"
+        (empty_out / "stage_00").mkdir(parents=True)
+
+        published = base / "pubblicato"
+        published.mkdir()
+        (published / "progress.json").write_text(
+            json.dumps(
+                {
+                    "prompt": "reel pubblicato",
+                    "percent": 42.0,
+                    "current": "render",
+                    "phases": [{"key": "render", "label": "Renderizzo"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        names = [item["job"] for item in serve.state(base)["jobs"]]
+        check(
+            "S11 i segni veri bastano: mixed_reel compare anche senza progress.json",
+            "mixed_reel" in names and "pubblicato" in names,
+            names,
+        )
+        check(
+            "S11 una cartella con solo un video non e' un lavoro",
+            "video_sciolto" not in names,
+            names,
+        )
+        check(
+            "S11 la workdir interna (plan.json) non e' un secondo lavoro",
+            names.count("work") == 0,
+            names,
+        )
+
+        index = names.index("mixed_reel")
+        job = serve.state(base, index)
+        check(
+            "S11 lo stato dedotto dichiara la sua fonte",
+            job["progress_source"] == "derived",
+            job["progress_source"],
+        )
+        check(
+            "S11 lo stato dedotto e' parziale, non finto",
+            job["percent"] == 0.0
+            and job["current"] is None
+            and "senza progresso" in job["note"]
+            and job["timeline"] == []
+            and job["render"] == {
+                "out_time_sec": 0.0, "duration_sec": 0.0, "percent": 0.0, "speed": ""
+            }
+            and job["font"]["pending"] is False
+            and job["font"]["candidates"] == [],
+            {k: job[k] for k in ("percent", "current", "note")},
+        )
+        check(
+            "S11 le fasi sono quelle che i file presenti raccontano",
+            [phase["key"] for phase in job["phases"]] == ["stage_00", "proxy", "audio"],
+            job["phases"],
+        )
+        check(
+            "S11 il master vale solo perche' il file esiste",
+            job["master_ready"] is True
+            and job["master"] == "master.mp4"
+            and job["master_bytes"] == master.stat().st_size,
+            {k: job[k] for k in ("master", "master_ready", "master_bytes")},
+        )
+
+        server = serve.Server(base).start()
+        try:
+            with urllib.request.urlopen(
+                server.url + f"result?job={index}", timeout=10
+            ) as response:
+                body = response.read()
+                check(
+                    "S11 /result serve il master dedotto",
+                    response.headers.get("Content-Type") == "video/mp4"
+                    and body == master.read_bytes(),
+                    f"{response.status} {len(body)}",
+                )
+
+            opened = []
+            original = serve.REVEAL
+            serve.REVEAL = lambda where: opened.append(Path(where))
+            try:
+                answer = post(server.url + f"api/reveal?job={index}")
+            finally:
+                serve.REVEAL = original
+            check(
+                "S11 /api/reveal apre il master dedotto che esiste",
+                answer.get("ok") is True and opened == [master],
+                answer,
+            )
+
+            missing = names.index("senza_uscita")
+            missing_state = serve.state(base, missing)
+            check(
+                "S11 senza file d'uscita il master resta vuoto",
+                missing_state["progress_source"] == "derived"
+                and missing_state["master_ready"] is False
+                and missing_state["master"] == "",
+                {k: missing_state[k] for k in ("master", "master_ready")},
+            )
+            try:
+                get(server.url + f"result?job={missing}")
+                no_master = False
+            except Exception:  # noqa: BLE001
+                no_master = True
+            check("S11 senza master /result resta 404", no_master, "404")
+
+            master.unlink()
+            try:
+                get(server.url + f"result?job={index}")
+                gone = False
+            except Exception:  # noqa: BLE001
+                gone = True
+            check("S11 tolto il file, /result torna 404", gone, "404")
+
+            # L'ordine puo' cambiare (l'unlink ha toccato ``out/``): si rilegge.
+            fresh = [item["job"] for item in serve.state(base)["jobs"]]
+            normal = serve.state(base, fresh.index("pubblicato"))
+            check(
+                "S11 il lavoro con progress.json resta pubblicato",
+                normal["progress_source"] == "json"
+                and normal["percent"] == 42.0
+                and normal["current"] == "render"
+                and normal["phases"] == [{"key": "render", "label": "Renderizzo"}],
+                {k: normal[k] for k in ("progress_source", "percent", "current")},
+            )
+        finally:
+            server.stop()
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx-serve-") as raw:
         job = Path(raw) / "lavoro"
@@ -606,6 +767,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx-fontgate-") as raw3:
         check_font_gate(raw3)
     check_ass_bridge()
+    check_derived_jobs()
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

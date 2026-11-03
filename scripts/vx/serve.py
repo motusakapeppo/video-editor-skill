@@ -43,6 +43,21 @@ UI_FILES = {
 #: Quanti livelli di cartelle guardare sotto la radice.
 MAX_DEPTH = 2
 
+#: I segni che una cartella e' un lavoro ``vx`` anche senza ``progress.json``.
+#: Sono file e cartelle che la skill scrive davvero: una cartella con solo un
+#: video dentro non basta, e non deve bastare.
+JOB_MARKER_DIRS = ("stage_00", "proxy", "out")
+JOB_MARKER_FILES = ("source.json", "report.json", "plan.json")
+
+#: Le fasi che si possono dedurre dai file presenti in un lavoro senza panel.
+#: ``audio`` non e' un segno di riconoscimento: da sola non fa un lavoro, ma
+#: dentro un lavoro gia' riconosciuto dice che l'audio e' stato estratto.
+DERIVED_PHASE_LABELS = (
+    ("stage_00", "Materiale importato"),
+    ("proxy", "Proxy pronti"),
+    ("audio", "Audio estratto"),
+)
+
 #: La proposta di font e la scelta dell'operatore, scritte nella workdir.
 FONT_PROPOSAL_NAME = "font_proposal.json"
 FONT_CHOICE_NAME = "font_choice.json"
@@ -89,6 +104,60 @@ def _parse_kv(path: Path) -> Dict[str, str]:
 
 def _empty_render() -> Dict[str, Any]:
     return {"out_time_sec": 0.0, "duration_sec": 0.0, "percent": 0.0, "speed": ""}
+
+
+def _looks_like_job(directory: Path) -> bool:
+    """Una cartella e' un lavoro se ha il panel o i segni veri della skill.
+
+    Il riconoscimento e' stretto di proposito: uno solo tra ``stage_00/``,
+    ``proxy/``, ``out/``, ``source.json``, ``report.json``, ``plan.json``. Un
+    video sciolto in una cartella resta fuori.
+    """
+    if (directory / "progress.json").is_file():
+        return True
+    if any((directory / name).is_dir() for name in JOB_MARKER_DIRS):
+        return True
+    return any((directory / name).is_file() for name in JOB_MARKER_FILES)
+
+
+def _derived_phases(directory: Path) -> List[Dict[str, str]]:
+    """Le fasi che i file presenti raccontano, senza inventare le assenti."""
+    return [
+        {"key": key, "label": label}
+        for key, label in DERIVED_PHASE_LABELS
+        if (directory / key).is_dir()
+    ]
+
+
+def _master_path(directory: Path, progress: Mapping[str, Any]) -> Optional[Path]:
+    """Il file d'uscita: quello pubblicato, o quello che si vede in ``out/``.
+
+    Con ``progress.json`` vale solo il master registrato. Per un lavoro dedotto
+    (senza panel) si guarda ``out/master.mp4`` e poi l'ultimo ``*.mp4`` della
+    stessa cartella: e' un file che esiste davvero, non un nome promesso.
+    """
+    text = str(progress.get("master") or "")
+    if text:
+        return Path(text)
+    if (directory / "progress.json").is_file():
+        return None
+    out = directory / "out"
+    if not out.is_dir():
+        return None
+    named = out / "master.mp4"
+    if named.is_file():
+        return named
+    candidates = [item for item in out.glob("*.mp4") if item.is_file()]
+    if not candidates:
+        return None
+
+    def stamp(item: Path) -> float:
+        try:
+            return item.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return max(candidates, key=lambda item: (stamp(item), item.name))
 
 
 def _data_dir(directory: Path) -> Path:
@@ -241,30 +310,62 @@ def _ui(name: str) -> Optional[bytes]:
 def discover(root: Path) -> List[Path]:
     """Le cartelle di lavoro sotto ``root``: quella stessa, poi i figli.
 
-    Un lavoro e' una cartella che contiene ``progress.json``. L'ordine e' per
-    data di modifica, il piu' recente prima, cosi' quando ne parte uno nuovo
-    finisce davanti senza che nessuno debba dirlo.
+    Un lavoro e' una cartella con ``progress.json`` **oppure** con i segni veri
+    della skill (``stage_00/``, ``proxy/``, ``out/``, ``source.json``,
+    ``report.json``, ``plan.json``): cosi' anche un lavoro condotto a mano con
+    ``ingest`` compare, pur senza panel. L'ordine e' per data di modifica, il
+    piu' recente prima; per un lavoro dedotto vale il segno piu' recente.
     """
     root = Path(root)
     found: List[Path] = []
-    if (root / "progress.json").is_file():
+    if _looks_like_job(root):
         found.append(root)
+    known = [path.resolve() for path in found]
     for level in range(1, MAX_DEPTH + 1):
-        pattern = "/".join(["*"] * level) + "/progress.json"
-        found.extend(path.parent for path in root.glob(pattern))
+        for candidate in root.glob("/".join(["*"] * level)):
+            if not candidate.is_dir() or not _looks_like_job(candidate):
+                continue
+            resolved = candidate.resolve()
+            # I file interni di un lavoro (es. ``work/plan.json``) non sono un
+            # altro lavoro: si scende solo fuori dai lavori gia' riconosciuti.
+            # Un ``progress.json`` esplicito invece vale sempre.
+            if not (candidate / "progress.json").is_file() and any(
+                parent in known for parent in resolved.parents
+            ):
+                continue
+            found.append(candidate)
+            known.append(resolved)
     unique = {path.resolve(): path for path in found}
 
     def stamp(path: Path) -> float:
-        try:
-            return (path / "progress.json").stat().st_mtime
-        except OSError:
-            return 0.0
+        panel = path / "progress.json"
+        if panel.is_file():
+            try:
+                return panel.stat().st_mtime
+            except OSError:
+                return 0.0
+        stamps: List[float] = []
+        for name in JOB_MARKER_DIRS + JOB_MARKER_FILES:
+            try:
+                stamps.append((path / name).stat().st_mtime)
+            except OSError:
+                continue
+        return max(stamps) if stamps else 0.0
 
     return sorted(unique.values(), key=stamp, reverse=True)
 
 
 def _job_state(directory: Path) -> Dict[str, Any]:
-    progress = _read_json(directory / "progress.json")
+    """Lo stato del lavoro: pubblicato se c'e' il panel, altrimenti dedotto.
+
+    Un lavoro senza ``progress.json`` non finge una percentuale: ``percent`` e'
+    zero, ``current`` e' nullo, la ``note`` dice che manca il progresso, le fasi
+    sono quelle che i file presenti raccontano e il master vale solo se il file
+    d'uscita esiste davvero. ``progress_source`` dichiara quale dei due casi e'.
+    """
+    published = (directory / "progress.json").is_file()
+    derived = not published
+    progress = _read_json(directory / "progress.json") if published else {}
     data_dir = _data_dir(directory)
     plan = _read_json(data_dir / "plan.json")
     frames_dir = directory / "keyframes"
@@ -273,9 +374,8 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         for item in sorted(frames_dir.glob("*.png"))
     ] if frames_dir.is_dir() else []
     record = keygate.read(directory / keygate.RECORD_NAME)
-    master_text = str(progress.get("master") or "")
-    master = Path(master_text) if master_text else None
-    ready = bool(master and master.is_file() and master.stat().st_size > 0)
+    master = _master_path(directory, progress)
+    ready = bool(master is not None and master.is_file() and master.stat().st_size > 0)
     return {
         "job": directory.name,
         "path": str(directory),
@@ -284,16 +384,18 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "percent": progress.get("percent") or 0.0,
         "elapsed_sec": progress.get("elapsed_sec") or 0,
         "current": progress.get("current"),
-        "note": progress.get("note") or "",
-        "phases": progress.get("phases") or [],
+        "note": progress.get("note")
+        or ("lavoro vx senza progresso pubblicato" if derived else ""),
+        "phases": _derived_phases(directory) if derived else (progress.get("phases") or []),
         "frames": frames,
         "approved": bool(record and record.get("approved") is True),
         "master": master.name if ready and master is not None else "",
         "master_ready": ready,
         "master_bytes": master.stat().st_size if ready and master is not None else 0,
-        "render": render_state(data_dir, plan),
-        "timeline": timeline(plan),
-        "font": _font_state(directory),
+        "render": _empty_render() if derived else render_state(data_dir, plan),
+        "timeline": [] if derived else timeline(plan),
+        "font": _empty_font() if derived else _font_state(directory),
+        "progress_source": "derived" if derived else "json",
     }
 
 
@@ -319,21 +421,26 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "render": _empty_render(),
             "timeline": [],
             "font": _empty_font(),
+            "progress_source": "",
             "jobs": [],
             "selected": 0,
         }
     chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
     payload = _job_state(jobs[chosen])
-    payload["jobs"] = [
-        {
-            "index": position,
-            "job": _job_state(path)["job"],
-            "prompt": _read_json(path / "progress.json").get("prompt") or "",
-            "percent": _read_json(path / "progress.json").get("percent") or 0.0,
-            "current": _read_json(path / "progress.json").get("current"),
-        }
-        for position, path in enumerate(jobs)
-    ]
+    entries = []
+    for position, path in enumerate(jobs):
+        item = _job_state(path)
+        entries.append(
+            {
+                "index": position,
+                "job": item["job"],
+                "prompt": item["prompt"],
+                "percent": item["percent"],
+                "current": item["current"],
+                "progress_source": item["progress_source"],
+            }
+        )
+    payload["jobs"] = entries
     payload["selected"] = chosen
     return payload
 
@@ -357,16 +464,16 @@ REVEAL = reveal_native
 def reveal(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     """Apre la cartella del master. Il percorso non arriva mai dal client.
 
-    Si apre **solo** il file registrato in ``progress.json`` di un lavoro
-    scoperto: la richiesta sceglie il lavoro, non il percorso.
+    Si apre **solo** il file d'uscita di un lavoro scoperto — quello registrato
+    in ``progress.json`` o, per un lavoro dedotto, quello presente in ``out/``:
+    la richiesta sceglie il lavoro, non il percorso.
     """
     jobs = discover(root)
     if not jobs:
         return {"ok": False, "reason": "nessun lavoro"}
     chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
     directory = jobs[chosen]
-    text = str(_read_json(directory / "progress.json").get("master") or "")
-    master = Path(text) if text else None
+    master = _master_path(directory, _read_json(directory / "progress.json"))
     if master is None or not master.is_file():
         return {"ok": False, "reason": "il master non esiste ancora"}
     REVEAL(master)
@@ -547,8 +654,7 @@ def make_handler(root: Path):
                 return
             chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
             progress = _read_json(jobs[chosen] / "progress.json")
-            text = str(progress.get("master") or "")
-            path = Path(text) if text else None
+            path = _master_path(jobs[chosen], progress)
             if path is None or not path.is_file() or path.stat().st_size == 0:
                 self._send(b"il master non esiste ancora", "text/plain", status=404)
                 return
