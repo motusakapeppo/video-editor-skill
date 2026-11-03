@@ -28,9 +28,15 @@ Per chunk, and nothing else:
 
 from __future__ import annotations
 
+import json
+import math
+import os
+import shutil
+import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from . import ffmpeg, stagecache
 from .edl3 import Timeline3
@@ -45,6 +51,137 @@ CHUNK_VERSION = "1"
 CHUNK_DIR = "chunks"
 CHUNK_PREFIX = "chunk_"
 CONCAT_LIST = "concat.txt"
+
+#: Where ``--live`` publishes the pieces a player can already watch.
+LIVE_DIR = "live"
+LIVE_MANIFEST = "manifest.json"
+LIVE_SCHEMA = "vx.live/1"
+LIVE_CHUNK_SECONDS = 4.0
+LIVE_MIN_CHUNKS = 2
+LIVE_MAX_CHUNKS = 40
+
+
+def live_chunks(duration: float, *, clips: Optional[int] = None) -> int:
+    """A piece every ~4 s of output, clamped to 2..40 and to the clip count.
+
+    A chunk boundary is a clip boundary, so asking for more chunks than there are
+    layer-0 clips can only be refused by :func:`edl3_slice.plan_windows`; with
+    ``clips`` given the count is lowered to what the document can actually tile.
+    """
+    seconds = max(0.0, float(duration or 0.0))
+    count = (
+        int(math.ceil(seconds / LIVE_CHUNK_SECONDS))
+        if seconds > 0.0
+        else LIVE_MIN_CHUNKS
+    )
+    count = max(LIVE_MIN_CHUNKS, min(LIVE_MAX_CHUNKS, count))
+    if clips is not None and int(clips) >= LIVE_MIN_CHUNKS:
+        count = min(count, int(clips))
+    return count
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+class LivePublisher:
+    """Publish finished chunks as they land, with one atomically replaced manifest.
+
+    The manifest is written before the first chunk (every planned piece is listed
+    with ``ready: false``) and re-written after each piece is copied into the live
+    directory. Both the copy and the manifest use a temp file plus ``os.replace``,
+    so a reader sees either the old file or the new one, never a half-written one.
+    """
+
+    def __init__(
+        self,
+        directory: Any,
+        windows: List[Mapping[str, Any]],
+        *,
+        t0: Optional[str] = None,
+    ) -> None:
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.path = self.directory / LIVE_MANIFEST
+        self.t0 = t0 or _utc_now()
+        self._lock = threading.Lock()
+        self._entries: List[Dict[str, Any]] = [
+            {
+                "index": int(window["index"]),
+                "file": f"{CHUNK_PREFIX}{int(window['index']):03d}.mp4",
+                "t_in": float(window["t0"]),
+                "t_out": float(window["t1"]),
+                "bytes": 0,
+                "sha256": "",
+                "ready": False,
+            }
+            for window in windows
+        ]
+        self._write()
+
+    def _payload(self) -> Dict[str, Any]:
+        return {
+            "schema": LIVE_SCHEMA,
+            "chunks": [dict(entry) for entry in self._entries],
+            "total": len(self._entries),
+            "ready": sum(1 for entry in self._entries if entry["ready"]),
+            "t0": self.t0,
+            "updated": _utc_now(),
+        }
+
+    def _write(self) -> None:
+        payload = self._payload()
+        temp = self.path.with_name(
+            f"{self.path.name}.tmp{os.getpid()}.{threading.get_ident()}"
+        )
+        temp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(temp, self.path)
+
+    def publish(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+        """Copy one finished chunk in and flip its manifest entry to ready."""
+        index = int(record["chunk"])
+        source = Path(str(record["artifact"]))
+        target = self.directory / f"{CHUNK_PREFIX}{index:03d}.mp4"
+        temp = target.with_name(
+            f"{target.name}.part{os.getpid()}.{threading.get_ident()}"
+        )
+        shutil.copyfile(source, temp)
+        os.replace(temp, target)
+        digest = stagecache.file_sha256(target)
+        size = target.stat().st_size
+        with self._lock:
+            for entry in self._entries:
+                if int(entry["index"]) != index:
+                    continue
+                entry.update(
+                    {
+                        "file": target.name,
+                        "t_in": float(record["t0"]),
+                        "t_out": float(record["t1"]),
+                        "bytes": int(size),
+                        "sha256": digest,
+                        "ready": True,
+                    }
+                )
+                break
+            self._write()
+            return dict(self._payload())
+
+    def summary(self) -> Dict[str, Any]:
+        with self._lock:
+            payload = self._payload()
+        return {
+            "schema": LIVE_SCHEMA,
+            "directory": str(self.directory.resolve()),
+            "manifest": str(self.path.resolve()),
+            "total": payload["total"],
+            "ready": payload["ready"],
+            "t0": payload["t0"],
+        }
 
 
 @dataclass(frozen=True)
@@ -69,7 +206,11 @@ def _concat_path(path: Path) -> str:
     return path.resolve().as_posix().replace("'", "'\\''")
 
 
-def _render_one(run: Run, window: Mapping[str, Any]) -> Dict[str, Any]:
+def _render_one(
+    run: Run,
+    window: Mapping[str, Any],
+    on_ready: Optional[Callable[[Mapping[str, Any]], None]] = None,
+) -> Dict[str, Any]:
     """Encode ``window`` unless its inputs still match, and return its record."""
     from . import edl3_render  # noqa: PLC0415 - render-only, avoids the cycle
 
@@ -121,6 +262,8 @@ def _render_one(run: Run, window: Mapping[str, Any]) -> Dict[str, Any]:
                 "plan": plan,
             }
         )
+        if on_ready is not None:
+            on_ready(record)
         return record
     artifact.parent.mkdir(parents=True, exist_ok=True)
     proc, _script = edl3_render._encode(
@@ -156,6 +299,8 @@ def _render_one(run: Run, window: Mapping[str, Any]) -> Dict[str, Any]:
             "command": proc.args,
         }
     )
+    if on_ready is not None:
+        on_ready(record)
     return record
 
 
@@ -202,8 +347,15 @@ def render_chunked(
     chunks: int = 2,
     benchmark: bool = False,
     jobs: int = 1,
+    live: bool = False,
 ) -> Dict[str, Any]:
-    """Render ``timeline`` as ``chunks`` resumable pieces, then join them."""
+    """Render ``timeline`` as ``chunks`` resumable pieces, then join them.
+
+    ``live`` publishes every piece into ``<workdir>/live/`` the moment it is
+    ready, plus an atomically replaced ``manifest.json`` (``vx.live/1``), so a
+    player can watch what has actually been encoded while the render continues.
+    Without it the module writes exactly the files it wrote before.
+    """
     from . import edl3_render  # noqa: PLC0415 - render-only, avoids the cycle
 
     destination = Path(output)
@@ -232,6 +384,10 @@ def render_chunked(
         total=len(windows),
         memo={},
     )
+    publisher = LivePublisher(root / LIVE_DIR, windows) if live else None
+    on_ready: Optional[Callable[[Mapping[str, Any]], None]] = (
+        publisher.publish if publisher is not None else None
+    )
 
     # A chunk is an independent ffmpeg process writing into its own folder, and
     # the stage cache records each chunk atomically (temp file, then os.replace),
@@ -239,12 +395,14 @@ def render_chunked(
     # order of `windows`, which is what the join and the report depend on.
     workers = max(1, min(int(jobs), len(windows)))
     if workers == 1:
-        records = [_render_one(run, window) for window in windows]
+        records = [_render_one(run, window, on_ready) for window in windows]
     else:
         from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415 - only here
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            records = list(pool.map(lambda window: _render_one(run, window), windows))
+            records = list(
+                pool.map(lambda window: _render_one(run, window, on_ready), windows)
+            )
     proc = _join(run, [Path(record["artifact"]) for record in records])
 
     clips: List[Dict[str, Any]] = []
@@ -278,7 +436,7 @@ def render_chunked(
         if "command" in record:
             commands.append(record["command"])
 
-    return {
+    report = {
         "version": timeline.version,
         "backend": edl3_render.choose_backend(timeline),
         "audio_policy": audio,
@@ -317,3 +475,6 @@ def render_chunked(
         },
         "stderr_tail": proc.tail(5),
     }
+    if publisher is not None:
+        report["live"] = publisher.summary()
+    return report

@@ -2212,6 +2212,37 @@ def cmd_edl(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_edl3(args: argparse.Namespace) -> int:
+    """Renderizza un documento ``vx.edl3/1``; con ``--live`` pubblica i pezzi."""
+    from . import edl3, edl3_render
+
+    try:
+        timeline = edl3.Timeline3.from_dict(_load_json(args.plan))
+    except edl3.EDLError as exc:
+        _out({"ok": False, "error": str(exc)})
+        return EXIT_USAGE
+
+    output = Path(args.out)
+    work = Path(args.workdir) if args.workdir else output.parent / "work"
+    report = edl3_render.render(
+        timeline,
+        output,
+        workdir=work,
+        audio=args.audio,
+        chunks=args.chunks,
+        jobs=args.jobs,
+        live=bool(args.live),
+    )
+    if args.json:
+        _out(report)
+    else:
+        print(f"Output: {report['output']}")
+        if report.get("live"):
+            live = report["live"]
+            print(f"Live: {live['ready']}/{live['total']} in {live['directory']}")
+    return EXIT_OK
+
+
 def cmd_auto(args: argparse.Namespace) -> int:
     """Prompt + folder -> triage -> EDL -> render -> QC -> deliverables -> report."""
     from . import auto
@@ -2766,6 +2797,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--preset", default=None)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_auto)
+
+    p = add(
+        "edl3",
+        "EDL 3: renderizza un documento vx.edl3/1 (--live pubblica i pezzi)",
+    )
+    edl3_sub = p.add_subparsers(dest="edl3_cmd", required=True)
+    e3 = edl3_sub.add_parser("render", help="renderizza il documento in --out")
+    e3.add_argument("--plan", required=True, help="documento vx.edl3/1 (JSON)")
+    e3.add_argument("--out", required=True, help="file master da scrivere")
+    e3.add_argument("--workdir", default=None, help="cartella di lavoro (chunk, live)")
+    e3.add_argument(
+        "--audio",
+        default="refuse",
+        choices=["refuse", "drop", "mix"],
+        help="politica audio del compilatore (default: refuse)",
+    )
+    e3.add_argument(
+        "--chunks",
+        type=int,
+        default=None,
+        help="blocchi resumable; con --live il default e' un pezzo ogni ~4 s",
+    )
+    e3.add_argument("--jobs", type=int, default=1, help="blocchi in parallelo")
+    e3.add_argument(
+        "--live",
+        action="store_true",
+        help="pubblica ogni blocco appena e' pronto in <workdir>/live/ "
+        "(chunk_NNN.mp4 + manifest.json), cosi' il player mostra il video vero",
+    )
+    e3.add_argument("--json", action="store_true")
+    e3.set_defaults(func=cmd_edl3)
 
     p = add("serve", "UI locale: guarda il lavoro e approva i fotogrammi")
     p.add_argument("dir", help="cartella del lavoro (dove sta progress.json)")
