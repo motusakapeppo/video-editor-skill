@@ -30,6 +30,12 @@ Regole, tutte verificate da :func:`validate`:
 * ``by`` dice chi ha scelto: ``auto``, ``user`` o ``timeout``. La forma non
   cambia col grado di autonomia, cambia solo questo campo.
 
+Una voce puo' anche dichiarare ``check``: l'id di una verifica deterministica
+(``contrast``, ``duration``, ...). Il registro non esegue il check — non ha
+ffmpeg e non deve averlo — ma tiene il campo e il verdetto che ``vx.verify``
+scrive dopo aver misurato il master. Senza un check automatico la voce resta
+``verified: false`` con il motivo, mai un ``true`` per cortesia.
+
 Il modulo e' puro: nessuna rete, nessun file, nessun import del resto della
 skill. Cosi' il registro si puo' provare senza un render.
 """
@@ -190,7 +196,7 @@ def validate(entry: Mapping[str, Any]) -> Dict[str, Any]:
         raise DecisionError(
             "alternatives_note: senza alternative va detto perche' non ce n'erano"
         )
-    return {
+    result = {
         "id": decision_id,
         "question": question,
         "chosen": chosen,
@@ -201,6 +207,24 @@ def validate(entry: Mapping[str, Any]) -> Dict[str, Any]:
         "falsified_if": falsified_if,
         "by": by,
     }
+    # Il check e il suo verdetto sono opzionali: una voce vecchia non cambia
+    # forma, ma se un chiamante li ha gia' scritti non vanno persi (e'
+    # ``decisions.validate(item) == item`` a pretendere questa simmetria).
+    check = str(entry.get("check") or "").strip()
+    if check:
+        result["check"] = check
+    if "verified" in entry:
+        # Nessuna auto-certificazione: un ``verified: true`` senza un check
+        # dichiarato viene riportato a false, anche se un chiamante lo ha
+        # scritto a mano.
+        if entry.get("verified") and not check:
+            result["verified"] = False
+            result["verification"] = {"why": "falsifier non automatizzabile"}
+        else:
+            result["verified"] = entry["verified"]
+    if "verification" in entry and "verification" not in result:
+        result["verification"] = entry["verification"]
+    return result
 
 
 def record(
@@ -214,6 +238,7 @@ def record(
     alternatives: Any = None,
     alternatives_note: str = "",
     by: str = "auto",
+    check: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Costruisce una voce valida; ``confidence`` assente la deduce dall'evidenza."""
     return validate(
@@ -227,6 +252,7 @@ def record(
             "alternatives_note": alternatives_note,
             "falsified_if": falsified_if,
             "by": by,
+            "check": check,
         }
     )
 
@@ -251,6 +277,18 @@ class Registry:
             if fields:
                 raise DecisionError("add: o una voce o i campi, non entrambi")
             item = validate(entry)
+        # Ogni voce dice se la sua falsificazione e' stata davvero verificata.
+        # Senza un check automatico il verdetto e' ``false`` col motivo: il
+        # registro non promuove a prova una frase di prosa.
+        if "verified" not in item:
+            item["verified"] = False
+        if "verification" not in item:
+            check = str(item.get("check") or "").strip()
+            item["verification"] = (
+                {"check": check, "why": "check non eseguito"}
+                if check
+                else {"why": "falsifier non automatizzabile"}
+            )
         if any(existing["id"] == item["id"] for existing in self._entries):
             raise DecisionError(f"id: {item['id']!r} e' gia' nel registro")
         self._entries.append(item)
