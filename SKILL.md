@@ -183,18 +183,17 @@ e il QC riverifica `source_sha_unchanged`. Il master è `work/stage/final_full.m
 i deliverable in `work/out/`. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`; un lock
 per liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
 
-## Superficie opzionale, non normativa
+## Regola zero: si passa da `vx`
 
-`board.py`, `pipeline.py`, `decide.py`, `creative.py`, `motion_browser.py` sono
-motore sperimentale di giuria. La Motion Studio (54 template) si usa dall'API:
-un EDL 3 dichiara una clip `generator` e il render la compone con l'alfa.
+Ogni fase passa da un comando `vx` (`doctor`, `ingest`, `run`, `auto`, `edl`,
+`serve`). Niente ffmpeg a mano, niente script di pipeline, niente UI nuove: se
+una capacita' manca si dichiara e ci si ferma. `vx guard <dir>` dice se un
+lavoro e' passato davvero da qui; `board.py`/`pipeline.py`/`decide.py` restano
+sperimentali e non si raggiungono dalla CLI.
 
 ## Riferimenti
 
 
-- `references/01-ambiente.md` ambiente, dipendenze, GPU; `references/02-metriche-analisi.md` metriche e soglie `references/03-matrice-decisionale.md` finding, gate, trattamento; `references/04-specifiche-social.md` safe zone, loudness, hook
-- `references/05-auto-framing.md` tracking volti e crop; `references/06-sottotitoli-ass.md` whisper, cue, ASS `references/07-render.md` stadi, tagli, loudnorm; `references/08-qc-e-consegna.md` codici QC e deliverable
-- `references/09-accelerazione-e-vad.md` hardware e VAD; `references/10-grammatica-del-montaggio.md` grammatica e ritmo
-- `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
-- `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap; `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo
-- `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.1, A/B-Roll, source_id; `references/20-render-multisorgente.md` render N sorgenti, Gate 1 per fonte, `vx edl`; `references/21-regia-semantica-keyword.md` B-roll dalle keyword; `references/22-grammatica-e-mixer-audio.md` 30°/180° e mixer A/B; `references/23-triage-e-auto.md` triage, EDL 2.2, master e `vx auto`; `references/24-api-e-mcp.md` API stabile, install editable e server MCP; `references/25-job-engine.md` motore di job asincrono, store su file, claim, reaping, container non costruito; `references/26-edl3-e-ponte.md` specifica EDL 3, ponte analisi-assemblaggio con la Fase A implementata, ciclo critico e backlog; `references/27-studio-higgsfield.md` studio Higgsfield (documentale, non provato)
+- `references/01-ambiente.md` ambiente, dipendenze, GPU; `references/02-metriche-analisi.md` metriche e soglie `references/03-matrice-decisionale.md` finding, gate, trattamento; `references/04-specifiche-social.md` safe zone, loudness, hook `references/05-auto-framing.md` tracking volti e crop; `references/06-sottotitoli-ass.md` whisper, cue, ASS `references/07-render.md` stadi, tagli, loudnorm; `references/08-qc-e-consegna.md` codici QC e deliverable
+- `references/09-accelerazione-e-vad.md` hardware e VAD; `references/10-grammatica-del-montaggio.md` grammatica e ritmo `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
+- `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap; `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.1, A/B-Roll, source_id; `references/20-render-multisorgente.md` render N sorgenti, Gate 1 per fonte, `vx edl`; `references/21-regia-semantica-keyword.md` B-roll dalle keyword; `references/22-grammatica-e-mixer-audio.md` 30°/180° e mixer A/B; `references/23-triage-e-auto.md` triage, EDL 2.2, master e `vx auto`; `references/24-api-e-mcp.md` API stabile, install editable e server MCP; `references/25-job-engine.md` motore di job asincrono, store su file, claim, reaping, container non costruito; `references/26-edl3-e-ponte.md` specifica EDL 3, ponte analisi-assemblaggio con la Fase A implementata, ciclo critico e backlog; `references/27-studio-higgsfield.md` studio Higgsfield (documentale, non provato)
