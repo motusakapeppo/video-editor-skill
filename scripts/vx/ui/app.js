@@ -86,6 +86,9 @@
     journalList: $('journalList'),
     journalMeta: $('journalMeta'),
     journalEmpty: $('journalEmpty'),
+    decisionsList: $('decisionsList'),
+    decisionsMeta: $('decisionsMeta'),
+    decisionsEmpty: $('decisionsEmpty'),
     frameView: $('frameView'),
     frameBackdrop: $('frameBackdrop'),
     frameBig: $('frameBig'),
@@ -765,6 +768,181 @@
     const same =
       current.length === order.length && current.every((node, i) => node === order[i]);
     if (!same) order.forEach((node) => el.journalList.append(node));
+  }
+
+  /* ---------------------------------------------------------------- decisioni */
+
+  let decisionsJob = null;
+  const decisionOpen = new Map();
+
+  function decisionLabel(text) {
+    const label = document.createElement('p');
+    label.className = 'decision-label';
+    label.textContent = text;
+    return label;
+  }
+
+  function paintDecisions(state) {
+    const items = (Array.isArray(state.decisions) ? state.decisions : []).filter(
+      (item) => item && (item.question || item.chosen)
+    );
+
+    if (decisionsJob !== jobIndex) {
+      decisionsJob = jobIndex;
+      decisionOpen.clear();
+      el.decisionsList.textContent = '';
+      el.decisionsList.dataset.signature = '';
+    }
+
+    el.decisionsEmpty.hidden = items.length > 0;
+    el.decisionsList.hidden = items.length === 0;
+    el.decisionsMeta.textContent = items.length
+      ? items.length + (items.length === 1 ? ' voce' : ' voci')
+      : '';
+
+    if (!items.length) {
+      el.decisionsList.textContent = '';
+      el.decisionsList.dataset.signature = '';
+      return;
+    }
+
+    // La firma evita di ricostruire (e richiudere) tutto a ogni poll.
+    const signature = JSON.stringify(items);
+    if (el.decisionsList.dataset.signature === signature) return;
+    el.decisionsList.dataset.signature = signature;
+    el.decisionsList.textContent = '';
+
+    items.forEach((item, position) => {
+      const id = String(item.id || 'd' + position);
+      const bodyId = 'dec-' + jobIndex + '-' + position;
+      const confidence = String(item.confidence || '').toLowerCase();
+      const by = String(item.by || 'auto').toLowerCase();
+      const open = decisionOpen.has(id) ? decisionOpen.get(id) : position === 0;
+
+      const row = document.createElement('li');
+      row.className = 'decision' + (confidence === 'low' ? ' is-low' : '');
+
+      const head = document.createElement('button');
+      head.type = 'button';
+      head.className = 'decision-head';
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      head.setAttribute('aria-controls', bodyId);
+
+      const caret = document.createElement('span');
+      caret.className = 'decision-caret';
+      caret.setAttribute('aria-hidden', 'true');
+      caret.textContent = '▸';
+
+      const question = document.createElement('span');
+      question.className = 'decision-q';
+      question.textContent = String(item.question || 'Domanda non dichiarata');
+
+      const answer = document.createElement('span');
+      answer.className = 'decision-a';
+      answer.textContent = String(item.chosen || 'nessuna scelta');
+
+      const tags = document.createElement('span');
+      tags.className = 'decision-tags';
+
+      const byTag = document.createElement('span');
+      byTag.className =
+        'dtag is-by' +
+        (by === 'user' ? ' is-user' : by === 'timeout' ? ' is-timeout' : '');
+      byTag.textContent = by === 'user' ? 'tu' : by === 'timeout' ? 'timeout' : 'auto';
+      tags.append(byTag);
+
+      if (confidence === 'high' || confidence === 'medium' || confidence === 'low') {
+        const confTag = document.createElement('span');
+        confTag.className =
+          'dtag is-conf' +
+          (confidence === 'low' ? ' is-low' : confidence === 'medium' ? ' is-medium' : '');
+        confTag.textContent =
+          'fiducia ' + (confidence === 'high' ? 'alta' : confidence === 'medium' ? 'media' : 'bassa');
+        tags.append(confTag);
+      }
+
+      head.append(caret, question, answer, tags);
+      row.append(head);
+
+      const body = document.createElement('div');
+      body.className = 'decision-body';
+      body.id = bodyId;
+      body.hidden = !open;
+
+      const evidence = (Array.isArray(item.evidence) ? item.evidence : []).filter((value) =>
+        String(value || '').trim()
+      );
+      if (evidence.length) {
+        const block = document.createElement('div');
+        const list = document.createElement('ul');
+        list.className = 'decision-evidence';
+        evidence.forEach((value) => {
+          const li = document.createElement('li');
+          li.textContent = String(value);
+          list.append(li);
+        });
+        block.append(decisionLabel('Prove'), list);
+        body.append(block);
+      }
+
+      const alts = (Array.isArray(item.alternatives) ? item.alternatives : []).filter(
+        (alt) => alt && String(alt.option || '').trim()
+      );
+      const note = String(item.alternatives_note || '').trim();
+      if (alts.length || note) {
+        const block = document.createElement('div');
+        block.append(decisionLabel('Alternative scartate'));
+        if (alts.length) {
+          const list = document.createElement('ul');
+          list.className = 'decision-alts';
+          alts.forEach((alt) => {
+            const li = document.createElement('li');
+            const option = document.createElement('span');
+            option.className = 'decision-alt-option';
+            option.textContent = String(alt.option);
+            const why = document.createElement('span');
+            why.className = 'decision-alt-why';
+            why.textContent = ' — ' + (String(alt.why_not || '').trim() || 'motivo non dichiarato');
+            li.append(option, why);
+            list.append(li);
+          });
+          block.append(list);
+        } else {
+          const line = document.createElement('p');
+          line.className = 'decision-note';
+          line.textContent = note;
+          block.append(line);
+        }
+        body.append(block);
+      }
+
+      const falsified = String(item.falsified_if || '').trim();
+      if (falsified) {
+        const block = document.createElement('div');
+        const line = document.createElement('p');
+        line.className = 'decision-falsified';
+        line.textContent = falsified;
+        block.append(decisionLabel('Mi smentisci se'), line);
+        body.append(block);
+      }
+
+      if (!body.childElementCount) {
+        const line = document.createElement('p');
+        line.className = 'decision-note';
+        line.textContent = 'Nessun dettaglio pubblicato per questa voce.';
+        body.append(line);
+      }
+
+      row.append(body);
+      el.decisionsList.append(row);
+
+      head.addEventListener('click', () => {
+        const next = head.getAttribute('aria-expanded') !== 'true';
+        head.setAttribute('aria-expanded', next ? 'true' : 'false');
+        body.hidden = !next;
+        decisionOpen.set(id, next);
+      });
+    });
   }
 
   /* -------------------------------------------------------------------- regia */
@@ -1932,6 +2110,7 @@
     paintJobs(state);
     lastState = state;
     paintJournal(state);
+    paintDecisions(state);
 
     const finished = !state.current && percent >= 99.9;
     const ready = state.master_ready === true;
