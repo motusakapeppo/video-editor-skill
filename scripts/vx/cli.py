@@ -2264,6 +2264,19 @@ def cmd_auto(args: argparse.Namespace) -> int:
     if getattr(args, "font_wait", None) is None:
         args.font_wait = float(settings.get("font.wait_sec", auto.FONT_WAIT_DEFAULT))
 
+    # Il tetto dichiarato e l'attesa della scelta full/fast: stesse regole dei
+    # cancelli dei font e dei fotogrammi (settings, poi il flag vince).
+    if getattr(args, "budget", None) is None:
+        args.budget = float(
+            settings.get("budget.max_seconds", auto.estimate.BUDGET_DEFAULT)
+            or auto.estimate.BUDGET_DEFAULT
+        )
+    if getattr(args, "plan_wait", None) is None:
+        args.plan_wait = float(
+            settings.get("budget.plan_wait_sec", auto.estimate.PLAN_WAIT_DEFAULT)
+            or auto.estimate.PLAN_WAIT_DEFAULT
+        )
+
     try:
         report = auto.run(
             args,
@@ -2711,6 +2724,23 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="quanto si aspetta l'approvazione dei fotogrammi chiave (default: 180); "
         "allo scadere il render prosegue e il report lo dichiara",
+    )
+    p.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="tetto dichiarato per il lavoro (default: settings budget.max_seconds, "
+        "600); la stima si fa prima di partire e, se supera il tetto, si chiede "
+        "full o fast",
+    )
+    p.add_argument(
+        "--plan-wait",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="quanto si aspetta la scelta full/fast (default: 180); allo scadere "
+        "si parte con la versione rapida e il report lo dichiara",
     )
     p.add_argument(
         "--subs",

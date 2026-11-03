@@ -2028,6 +2028,15 @@ def _run_locked(
     with clock.time("plan_choice"):
         plan_choice = _run_plan_gate(args, workdir, plan)
     plan = plan_choice["plan"]
+    if plan_choice["plan_choice"].get("chosen") == "fast":
+        # Il piano su disco deve essere quello che si rende, non quello di prima.
+        try:
+            (workdir / "plan.json").write_text(
+                json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:  # noqa: BLE001 - il referto resta la fonte della scelta
+            pass
     _emit(
         log,
         "plan_choice",
@@ -2271,6 +2280,12 @@ def _run_locked(
                 else str(coherence_section.get("error"))
             )
         )
+    # I tempi misurati di questo giro sono la calibrazione del prossimo: la
+    # riga si scrive qui, dopo il report, e un errore non ferma la consegna.
+    try:
+        estimate.record_timings(workdir, report)
+    except Exception as exc:  # noqa: BLE001 - la contabilita' non e' il lavoro
+        report["timing_history_error"] = f"{type(exc).__name__}: {exc}"
     timings = report["timings"]
     _log(
         "[auto] tempi: "

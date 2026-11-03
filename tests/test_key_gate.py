@@ -436,6 +436,59 @@ def test_flags() -> None:
         )
 
 
+def test_plan_budget_flags() -> None:
+    print("\n-- il tetto del lavoro: --budget, --plan-wait e la stima prima di partire")
+    parser = cli.build_parser()
+    base = ["auto", "--prompt", "p", "--assets", ".", "--out", "o.mp4"]
+    plain = parser.parse_args(base)
+    check("default: tetto deciso dalle settings (None)", plain.budget is None, plain.budget)
+    check("default: attesa decisa dalle settings (None)", plain.plan_wait is None, plain.plan_wait)
+    budgeted = parser.parse_args(base + ["--budget", "120"])
+    check("--budget 120 vale 120.0 s", budgeted.budget == 120.0, budgeted.budget)
+    waited = parser.parse_args(base + ["--plan-wait", "7"])
+    check("--plan-wait 7 vale 7.0 s", waited.plan_wait == 7.0, waited.plan_wait)
+
+    print("\n-- _run_plan_gate: il flag decide, non il caso")
+    with tempfile.TemporaryDirectory() as tmp:
+        workdir = Path(tmp)
+        args = argparse.Namespace(budget=100000.0, plan_wait=30.0)
+        result = auto._run_plan_gate(args, workdir, Plan())
+        check(
+            "tetto alto: nessuna domanda e nessun file",
+            result["plan_choice"]["asked"] is False
+            and not (workdir / auto.estimate.PLAN_CHOICE_NAME).exists(),
+            result["plan_choice"]["selected_by"],
+        )
+        check(
+            "la stima accompagna sempre la scelta",
+            result["estimate"]["high"] > 0 and "parts" in result["estimate"],
+            result["estimate"]["seconds"],
+        )
+        args = argparse.Namespace(budget=1.0, plan_wait=0.0)
+        result = auto._run_plan_gate(args, workdir, Plan())
+        section = result["plan_choice"]
+        check(
+            "tetto basso e attesa zero: fast dichiarato dal timeout",
+            section["chosen"] == "fast" and section["selected_by"] == "timeout",
+            section["selected_by"],
+        )
+        check(
+            "il piano eseguito e' quello rapido",
+            list(result["plan"].resolution) == section["fast_resolution"],
+            result["plan"].resolution,
+        )
+        check(
+            "il preset rapido arriva al render, non solo al report",
+            args.preset == auto.estimate.FAST_PRESET,
+            args.preset,
+        )
+        check(
+            "la rinuncia e' scritta nel report",
+            bool(section["traded"]) and section["saved_seconds_estimate"] > 0,
+            section["traded"],
+        )
+
+
 def main() -> int:
     test_no_plan()
     test_closed_gate()
@@ -444,6 +497,7 @@ def main() -> int:
     test_already_approved()
     test_default_proposal_without_media()
     test_flags()
+    test_plan_budget_flags()
     print(f"\n{PASS} PASS, {FAIL} FAIL, {SKIP} SKIP")
     return 0 if FAIL == 0 else 1
 
