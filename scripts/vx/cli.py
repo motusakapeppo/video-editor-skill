@@ -11,6 +11,7 @@ JSON/markdown briefing on stdout; the agent driving this toolkit shows it and wa
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
@@ -58,6 +59,181 @@ def _log(msg: str) -> None:
 
 def _out(obj: Any) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
+
+
+# --------------------------------------------------------------------------- #
+# session registry helpers
+# --------------------------------------------------------------------------- #
+
+
+def _session_argv() -> List[str]:
+    """L'argv che la sessione ricorda: corto, e gia' tutto stringa."""
+    return [str(item) for item in sys.argv[1:]][:40]
+
+
+def _session_of(args: Any):
+    """La sessione aperta dal decoratore, senza farne un obbligo."""
+    return getattr(args, "_vx_session", None)
+
+
+def _session_command(kind: str):
+    """Apre la sessione prima del comando e la chiude su ogni uscita.
+
+    La chiusura sta qui e non nei singoli ``return``: un comando che esce 3 per
+    il triage, un'eccezione o un Ctrl+C lasciano comunque ``end`` nel registro.
+    """
+
+    def decorate(func):
+        @functools.wraps(func)
+        def wrapped(args):
+            from . import session as session_mod
+
+            session = session_mod.begin(
+                kind, _session_argv(), os.getcwd()
+            )
+            setattr(args, "_vx_session", session)
+            try:
+                result = func(args)
+            except BaseException as exc:  # noqa: BLE001 - re-raised unchanged
+                session.error(f"{type(exc).__name__}: {exc}")
+                session.end("failed")
+                raise
+            if result in (EXIT_OK, None):
+                session.end("done")
+            elif int(result) == EXIT_NEEDS_INPUT:
+                session.end("incomplete")
+            else:
+                session.end("failed")
+            return result
+
+        return wrapped
+
+    return decorate
+
+
+def _session_artifact(session: Any, kind: str, path: Any) -> None:
+    if session is None or path is None:
+        return
+    session.artifact(kind, str(path))
+
+
+def _session_auto(session: Any, report: Any, panel: Any = None) -> None:
+    """Racconta un giro di ``auto``: journal, decisioni, cancelli, consegne."""
+    if session is None or not isinstance(report, dict):
+        return
+    workdir = str(report.get("workdir") or "")
+    if workdir:
+        session.set_job(workdir)
+    for item in report.get("decisions") or []:
+        if isinstance(item, dict):
+            session.decision(
+                str(item.get("id") or ""),
+                item.get("chosen") or "",
+                by=str(item.get("by") or ""),
+                confidence=str(item.get("confidence") or ""),
+            )
+    font = report.get("font") if isinstance(report.get("font"), dict) else {}
+    if font.get("candidates"):
+        session.gate("font", open=True, detail="proposta pronta, scelta in attesa")
+    session.gate(
+        "font",
+        open=False,
+        chosen=str(font.get("chosen") or ""),
+        by=str(font.get("selected_by") or ""),
+    )
+    keys = (
+        report.get("keyframes_gate")
+        if isinstance(report.get("keyframes_gate"), dict)
+        else {}
+    )
+    if keys.get("required"):
+        session.gate("keyframes", open=True, detail="fotogrammi da approvare")
+    session.gate(
+        "keyframes",
+        open=False,
+        approved=bool(keys.get("approved")),
+        by=str(keys.get("selected_by") or ""),
+    )
+    plan = (
+        report.get("plan_choice")
+        if isinstance(report.get("plan_choice"), dict)
+        else {}
+    )
+    if plan.get("asked"):
+        session.gate("plan", open=True, detail="scelta full/fast in attesa")
+    session.gate(
+        "plan",
+        open=False,
+        chosen=str(plan.get("chosen") or ""),
+        by=str(plan.get("selected_by") or ""),
+    )
+    _session_artifact(session, "master", report.get("master"))
+    if workdir:
+        _session_artifact(session, "report", Path(workdir) / "auto_report.json")
+    seen = {
+        str(row.get("stage") or "")
+        for row in session.events
+        if str(row.get("type") or "") == "stage"
+    }
+    timings = report.get("timings") if isinstance(report.get("timings"), dict) else {}
+    for name, seconds in timings.items():
+        if name == "total" or name in seen:
+            continue
+        try:
+            detail = f"{float(seconds):.1f}s"
+        except (TypeError, ValueError):
+            detail = ""
+        session.stage(str(name), None, detail)
+    for item in report.get("deliverables") or []:
+        if isinstance(item, dict):
+            _session_artifact(
+                session, str(item.get("kind") or "deliverable"), item.get("path")
+            )
+    for row in getattr(panel, "journal", []) or []:
+        if isinstance(row, dict):
+            session.journal(row.get("line"), phase=str(row.get("phase") or ""))
+    if workdir:
+        _session_live(session, workdir)
+
+
+def _session_live(session: Any, workdir: Any) -> None:
+    """Pubblica nel registro i pezzi del manifest live, dovunque stia ``live/``.
+
+    La vista non deve leggere una cartella fissa: gli eventi portano il percorso
+    vero del manifest e dei singoli chunk, e lo snapshot tiene ``ready/total``.
+    """
+    if session is None:
+        return
+    try:
+        folder = Path(workdir) / "live"
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8-sig"))
+    except Exception:  # noqa: BLE001 - nessun manifest live non e' un errore
+        return
+    if not isinstance(manifest, dict):
+        return
+    raw = manifest.get("chunks")
+    chunks = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+    for item in chunks:
+        try:
+            number = int(item.get("index"))
+        except (TypeError, ValueError):
+            continue
+        path = folder / f"chunk_{number:03d}.mp4"
+        session.artifact(
+            "chunk",
+            str(path),
+            bytes=(path.stat().st_size if path.is_file() else None),
+            index=number,
+            t_in=item.get("t_in"),
+            t_out=item.get("t_out"),
+            ready=bool(item.get("ready")),
+        )
+    ready = sum(1 for item in chunks if item.get("ready"))
+    try:
+        total = int(manifest.get("total") or len(chunks))
+    except (TypeError, ValueError):
+        total = len(chunks)
+    session.live(ready, total, str(folder), chunks=chunks)
 
 
 def _load_json(path: str | Path) -> Dict[str, Any]:
@@ -724,10 +900,20 @@ def _tool_block() -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+@_session_command("doctor")
 def cmd_doctor(args: argparse.Namespace) -> int:
     from . import doctor
 
+    session = _session_of(args)
+    if session is not None:
+        session.stage("scan", 0.0, "Scansione dell'ambiente")
     rep = doctor.scan()
+    if session is not None:
+        session.stage(
+            "scan",
+            100.0,
+            f"Verdetto: {rep.get('verdict') or 'n/d'}",
+        )
     if args.json:
         _out(rep)
     else:
@@ -1498,6 +1684,7 @@ def _ingest(
     arc: Sequence[float] = (0.0, 100.0),
     phases: Optional[Sequence[tuple]] = None,
     prompt: str = "",
+    session: Any = None,
 ) -> Dict[str, Any]:
     """Fase 1 + Fase 4: proxy, pre-analysis, findings. Never mutates the source."""
     from . import analyze, audio, faces
@@ -1532,11 +1719,16 @@ def _ingest(
             prompt=prompt or f"Ingest — {src.name}",
         )
     lo, hi = float(arc[0]), float(arc[1])
+    if session is not None:
+        session.set_job(work)
 
     def stage(key: str) -> None:
         for name, share, label in _INGEST_STAGES:
             if name == key:
-                _stage(progress, lo + (hi - lo) * share, key, note=label)
+                percent = lo + (hi - lo) * share
+                _stage(progress, percent, key, note=label)
+                if session is not None:
+                    session.stage(key, round(percent, 1), label)
                 return
 
     probe_data = probe_mod.probe(str(src)).to_dict()
@@ -1650,6 +1842,13 @@ def _ingest(
     if request is not None:
         report_io.write(request, work / "triage.json")
         (work / "triage.md").write_text(triage.to_markdown(request), encoding="utf-8")
+    if session is not None:
+        session.artifact("report", str(report_path))
+        if sheet is not None:
+            session.artifact("contact_sheet", str(sheet))
+        if proxy_path:
+            session.artifact("proxy", str(proxy_path))
+        session.gate("triage", open=request is not None, detail="" if request is None else "servono risposte")
     winpath.clear_lock(work)
 
     stage("triage")
@@ -1681,11 +1880,12 @@ def _ingest(
     }
 
 
+@_session_command("ingest")
 def cmd_ingest(args: argparse.Namespace) -> int:
     from . import triage
 
     src = Path(args.input)
-    state = _ingest(src, args)
+    state = _ingest(src, args, session=_session_of(args))
 
     request = state["triage"]
     recorded = (state["report"] or {}).get("triage")
@@ -1719,6 +1919,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return EXIT_NEEDS_INPUT if request is not None else EXIT_OK
 
 
+@_session_command("run")
 def cmd_run(args: argparse.Namespace) -> int:
     """Fase 7 end-to-end: ingest -> plan -> subs -> proxy -> full -> qc -> deliverables."""
     from . import autoframe, render, subs
@@ -1728,6 +1929,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from .contract import FaceTracks
     from . import report as report_io
 
+    session = _session_of(args)
     src = Path(args.input)
     answers = _load_json(args.answers) if args.answers else None
 
@@ -1763,6 +1965,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         arc=(0.0, 30.0),
         phases=_RUN_PHASES,
         prompt=f"Montaggio — {src.name}",
+        session=session,
     )
     progress: Optional[_Progress] = state.get("progress")
 
@@ -1977,6 +2180,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     # ---- preview on the proxy, then full-res delivery
     gates.pre_render(built, media, findings=rep.get("findings"))
     report_io.write(built.to_dict(), work / "plan.json")
+    if session is not None:
+        session.stage("plan", 40.0, "Piano scritto")
+        _session_artifact(session, "plan", work / "plan.json")
     _stage(progress, 40.0, "subs")
     winpath.heartbeat(work, "render_preview")
     _stage(progress, 45.0, "render")
@@ -1998,6 +2204,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "render",
         note="Anteprima pronta: renderizzo il master a piena risoluzione.",
     )
+    if session is not None:
+        session.stage("render", 55.0, "Anteprima pronta, master a piena risoluzione")
+        _session_artifact(session, "preview", preview.get("path"))
 
     winpath.heartbeat(work, "render_full")
     _log("[run] render finale (full-res)")
@@ -2013,6 +2222,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         hook_path=hook_path,
     )
     _stage(progress, 85.0, "render_done")
+    if session is not None:
+        session.stage("render_done", 85.0, "Master scritto")
+        _session_artifact(session, "render", final.get("path"))
 
     winpath.heartbeat(work, "qc")
     _log("[run] controllo qualita")
@@ -2040,6 +2252,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         final_plan, media, final["path"], workdir=work, planned_total=planned_total
     )
     _stage(progress, 92.0, "qc")
+    if session is not None:
+        session.stage("qc", 92.0, "Controllo qualita' eseguito")
+        _session_artifact(session, "qc", work / "qc.json")
 
     rep["plan"] = final_plan.to_dict()
     rep["qc"] = result.to_dict()
@@ -2061,6 +2276,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     rep["deliverables"] = produced
     report_io.write(rep, work / "report.json")
     _stage(progress, 96.0, "deliverables")
+    if session is not None:
+        session.stage("deliverables", 96.0, "Consegne pronte")
+        _session_artifact(session, "deliverables", out_dir / "deliverables.json")
+        _session_artifact(session, "report", work / "report.json")
 
     if not args.keep_proxy:
         Path(state["proxy"]["path"]).unlink(missing_ok=True)
@@ -2071,6 +2290,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         (item for item in produced if str(item.get("kind")) == "master"), None
     )
     master_path = str((master_item or {}).get("path") or final["path"])
+    if session is not None:
+        session.set_job(work)
+        _session_artifact(session, "master", master_path)
     if progress is not None:
         progress.finish(
             "Fatto: il master e' scritto, il controllo qualita passa."
@@ -2212,18 +2434,32 @@ def cmd_edl(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@_session_command("edl3")
 def cmd_edl3(args: argparse.Namespace) -> int:
     """Renderizza un documento ``vx.edl3/1``; con ``--live`` pubblica i pezzi."""
     from . import edl3, edl3_render
 
+    session = _session_of(args)
     try:
         timeline = edl3.Timeline3.from_dict(_load_json(args.plan))
     except edl3.EDLError as exc:
+        if session is not None:
+            session.error(str(exc))
         _out({"ok": False, "error": str(exc)})
         return EXIT_USAGE
 
     output = Path(args.out)
     work = Path(args.workdir) if args.workdir else output.parent / "work"
+    from . import settings as settings_module  # noqa: PLC0415 - only this command
+
+    budget = getattr(args, "effect_budget", None)
+    if budget is None:
+        budget = settings_module.get(
+            "render.effect_budget", edl3.EFFECT_DENSITY_LIMIT
+        )
+    if session is not None:
+        session.set_job(work)
+        session.stage("render", 0.0, f"Compilo {Path(args.plan).name}")
     report = edl3_render.render(
         timeline,
         output,
@@ -2232,7 +2468,13 @@ def cmd_edl3(args: argparse.Namespace) -> int:
         chunks=args.chunks,
         jobs=args.jobs,
         live=bool(args.live),
+        effect_budget=int(budget),
     )
+    if session is not None:
+        session.stage("render", 100.0, "Render completato")
+        _session_artifact(session, "master", report.get("output") or output)
+        if report.get("live"):
+            _session_live(session, work)
     if args.json:
         _out(report)
     else:
@@ -2243,11 +2485,20 @@ def cmd_edl3(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@_session_command("auto")
 def cmd_auto(args: argparse.Namespace) -> int:
     """Prompt + folder -> triage -> EDL -> render -> QC -> deliverables -> report."""
     from . import auto
     from . import settings
     from .grammar import GrammarError
+
+    session = _session_of(args)
+    if session is not None:
+        try:
+            session.set_job(auto._resolve_workdir(args))
+        except Exception:  # noqa: BLE001 - il registro non deve fermare il giro
+            pass
+        session.stage("triage", 0.0, "Avvio del lavoro")
 
     # La narrazione e' per chi guarda, il JSON per chi legge: non convivono.
     narrator = None
@@ -2308,10 +2559,17 @@ def cmd_auto(args: argparse.Namespace) -> int:
             or auto.estimate.PLAN_WAIT_DEFAULT
         )
 
+    progress_target = narrator
+    if session is not None and narrator is not None:
+
+        def progress_target(percent, stage, _narrator=narrator, _session=session):
+            _session.stage(str(stage), float(percent))
+            _narrator(percent, stage)
+
     try:
         report = auto.run(
             args,
-            progress=narrator,
+            progress=progress_target,
             progress_file=str(auto.progress_path(args)),
             view_url=str(getattr(panel, "watch_url", "") or "") if panel else "",
             view_active=panel is not None,
@@ -2326,6 +2584,8 @@ def cmd_auto(args: argparse.Namespace) -> int:
             }
         )
         return EXIT_USAGE
+
+    _session_auto(session, report, panel)
 
     if getattr(args, "json", False):
         _out(report)
@@ -2364,7 +2624,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     """Local UI: the live panel plus the keyframe approval, on 127.0.0.1."""
     from . import serve
 
-    server = serve.Server(Path(args.dir), port=int(args.port)).start()
+    sessions = bool(getattr(args, "session", False)) or not getattr(args, "dir", None)
+    root = Path(args.dir) if getattr(args, "dir", None) else None
+    server = serve.Server(root, port=int(args.port), session=sessions).start()
     _log(f"vx serve: {server.url}  (Ctrl+C per fermare)")
     try:
         while True:
@@ -2967,6 +3229,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--crf", type=int, default=None)
     p.add_argument("--preset", default=None)
+    p.add_argument(
+        "--live",
+        action="store_true",
+        help="registra nella sessione i pezzi live pubblicati dal motore di "
+        "render, se il lavoro ne produce (manifest vx.live/1)",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_auto)
 
@@ -2993,6 +3261,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     e3.add_argument("--jobs", type=int, default=1, help="blocchi in parallelo")
     e3.add_argument(
+        "--effect-budget",
+        type=int,
+        default=None,
+        help="quanti look della libreria possono iniziare in una finestra di 10 s "
+        "(default: render.effect_budget nei settings, 3; 0 toglie il tetto). "
+        "Alzalo per un montaggio con molte transizioni",
+    )
+    e3.add_argument(
         "--live",
         action="store_true",
         help="pubblica ogni blocco appena e' pronto in <workdir>/live/ "
@@ -3002,7 +3278,19 @@ def build_parser() -> argparse.ArgumentParser:
     e3.set_defaults(func=cmd_edl3)
 
     p = add("serve", "UI locale: guarda il lavoro e approva i fotogrammi")
-    p.add_argument("dir", help="cartella del lavoro (dove sta progress.json)")
+    p.add_argument(
+        "dir",
+        nargs="?",
+        default=None,
+        help="cartella del lavoro (dove sta progress.json); senza cartella "
+        "si serve l'ultima sessione",
+    )
+    p.add_argument(
+        "--session",
+        action="store_true",
+        help="serve il registro di sessione invece di una cartella di lavoro "
+        "(l'ultima, oppure ?session=ID)",
+    )
     p.add_argument("--port", type=int, default=0, help="0 = porta libera scelta dal sistema")
     p.set_defaults(func=cmd_serve)
 

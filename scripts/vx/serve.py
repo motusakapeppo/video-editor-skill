@@ -8,6 +8,8 @@ Un server stdlib su `127.0.0.1`. Con **un** lavoro si comporta come sempre; con
 * ``/api/state?job=N``     lo stato: fase, percentuale, fotogrammi, approvazione,
                            il master, gli ``shots`` con sorgente ed effetti, il
                            registro ``decisions`` e la lista ``jobs``;
+* ``/api/state?session=ID`` in modalita' sessione: ``session``, ``events``,
+                           ``artifacts``, ``gates``, ``live`` e ``journal``;
 * ``/api/approve?job=N``   POST che scrive il record **nella forma di keygate**;
 * ``/frames/<nome>?job=N`` il PNG di un fotogramma;
 * ``/shots/<i>?job=N``     il JPEG dello shot ``i``: miniatura pronta, cache o un
@@ -1106,7 +1108,7 @@ def add_feedback(
     except ValueError as exc:
         return {"ok": False, "reason": str(exc)}
     data_dir = _data_dir(directory)
-    payload = _job_state(directory)
+    payload = _safe_job_state(directory)
     context = feedback.context_from_report(_report_of(directory, data_dir))
     if context.get("estimate_seconds") is None:
         estimate_block = payload.get("estimate")
@@ -1132,6 +1134,16 @@ def add_feedback(
             context=context,
         )
     )
+    if record.get("stored") is False:
+        # Il voto e' valido ma il registro non si scrive: la vista lo dice,
+        # non finge un salvataggio che non c'e' stato.
+        return {
+            "ok": False,
+            "degraded": True,
+            "job": directory.name,
+            "rating": record.get("rating"),
+            "reason": str(record.get("error") or "registro non scrivibile"),
+        }
     return {
         "ok": True,
         "job": directory.name,
@@ -1217,15 +1229,20 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     if not plan_choice and isinstance(progress.get("plan_choice"), Mapping):
         plan_choice = progress.get("plan_choice")
     frames_dir = data_dir / "keyframes"
-    frames = [
-        {"name": item.name, "bytes": item.stat().st_size}
-        for item in sorted(frames_dir.glob("*.png"))
-    ] if frames_dir.is_dir() else []
+    frames: List[Dict[str, Any]] = []
+    if frames_dir.is_dir():
+        try:
+            frames = [
+                {"name": item.name, "bytes": _size_of(item)}
+                for item in sorted(frames_dir.glob("*.png"))
+            ]
+        except OSError as exc:
+            degrade.note("serve", exc)
     pending = _read_json(frames_dir / "pending.json")
     approval = _approval_state(data_dir, pending)
     font = _empty_font() if derived else _font_state(directory)
     master = _master_path(directory, progress)
-    ready = bool(master is not None and master.is_file() and master.stat().st_size > 0)
+    ready = _ready_file(master)
     note = progress.get("note") or (
         "lavoro vx senza progresso pubblicato" if derived else ""
     )
@@ -1268,7 +1285,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "approval": approval,
         "master": master.name if ready and master is not None else "",
         "master_ready": ready,
-        "master_bytes": master.stat().st_size if ready and master is not None else 0,
+        "master_bytes": _size_of(master) if ready else 0,
         "render": _empty_render() if derived else render_state(data_dir, plan),
         "timeline": [] if derived else timeline(plan),
         "shots": shots(directory, plan, data_dir=data_dir),
@@ -1287,7 +1304,9 @@ def _session_value(session_id: Optional[str] = None) -> Optional[session_store.S
         return None
 
 
-def _empty_session_state(reason: str = "nessuna sessione") -> Dict[str, Any]:
+def _empty_session_state(
+    reason: str = "nessuna sessione: nessun comando vx e' stato eseguito",
+) -> Dict[str, Any]:
     return {
         "session": {
             "schema": session_store.SCHEMA,
@@ -1341,12 +1360,23 @@ def session_state(session_id: Optional[str] = None) -> Dict[str, Any]:
         )
     }
     summary["decisions"] = list(snapshot.get("decisions") or [])
+    live = snapshot.get("live") or {"ready": 0, "total": 0, "chunks": []}
+    live_chunks = []
+    for item in live.get("chunks") or []:
+        entry = dict(item)
+        try:
+            entry["url"] = f"{LIVE_PREFIX}chunk_{int(entry.get('index')):03d}.mp4"
+        except (TypeError, ValueError):
+            entry["url"] = ""
+        live_chunks.append(entry)
+    live = {**{key: value for key, value in live.items() if key != "chunks"},
+            "chunks": live_chunks}
     return {
         "session": summary,
         "events": [dict(row) for row in session.events],
         "artifacts": list(snapshot.get("artifacts") or []),
         "gates": list(snapshot.get("gates") or []),
-        "live": snapshot.get("live") or {"ready": 0, "total": 0, "chunks": []},
+        "live": live,
         "journal": list(snapshot.get("journal") or []),
     }
 
@@ -1414,11 +1444,19 @@ def _write_plan_choice(directory: Path, choice: Any) -> Dict[str, Any]:
         "chosen_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "from": "ui",
     }
-    (directory / "plan_choice.json").write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    try:
+        (directory / "plan_choice.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return {
+            "ok": False,
+            "degraded": True,
+            "reason": f"scelta non scritta: {type(exc).__name__}: {exc}",
+        }
     return {"ok": True, "choice": value, "job": directory.name}
 
 
@@ -1494,6 +1532,59 @@ def session_chunk(session_id: Optional[str], name: str) -> Optional[Path]:
     return None
 
 
+def _empty_job_payload(directory: Any, why: str = "") -> Dict[str, Any]:
+    """Lo stato di un lavoro che non si legge: zeri e il motivo, non un 500."""
+    return {
+        "job": Path(str(directory)).name if directory else "",
+        "path": str(directory or ""),
+        "active": False,
+        "locked": False,
+        "updated_sec": None,
+        "updated_at": "",
+        "state": "",
+        "showing": "none",
+        "prompt": "",
+        "clips": 0,
+        "percent": 0.0,
+        "elapsed_sec": 0,
+        "current": None,
+        "note": why or "",
+        "estimate": {},
+        "plan_choice": {},
+        "decisions": [],
+        "outcome": "idle",
+        "guard": _empty_guard(why or "stato non leggibile"),
+        "phases": [],
+        "journal": [],
+        "frames": [],
+        "approved": False,
+        "approval": _empty_approval(),
+        "master": "",
+        "master_ready": False,
+        "master_bytes": 0,
+        "render": _empty_render(),
+        "timeline": [],
+        "shots": [],
+        "live": {"ready": 0, "total": 0, "chunks": []},
+        "font": _empty_font(),
+        "feedback": _empty_feedback(),
+        "progress_source": "",
+        "jobs": [],
+        "selected": 0,
+    }
+
+
+def _safe_job_state(directory: Path) -> Dict[str, Any]:
+    """``_job_state`` senza eccezioni: un lavoro rotto non ferma gli altri."""
+    try:
+        return _job_state(directory)
+    except Exception as exc:  # noqa: BLE001 - la vista non e' il lavoro
+        degrade.note("serve", exc)
+        payload = _empty_job_payload(directory, f"stato non leggibile: {type(exc).__name__}: {exc}")
+        payload["degraded"] = True
+        return payload
+
+
 def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     """Lo stato del lavoro scelto, piu' l'elenco di tutti quelli scoperti.
 
@@ -1543,7 +1634,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "jobs": [],
             "selected": 0,
         }
-    items = [_job_state(path) for path in jobs]
+    items = [_safe_job_state(path) for path in jobs]
     chosen = (
         _default_index(jobs, items)
         if index is None
@@ -1629,13 +1720,21 @@ def approve(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
         "count": int(pending.get("count") or 0),
         "frames": list(pending.get("frames") or []),
     }
-    (data_dir / keygate.RECORD_NAME).write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    # L'attesa e' finita: il segnale che il render e' fermo non deve restare.
-    (data_dir / "keyframes" / KEYFRAMES_WAITING_NAME).unlink(missing_ok=True)
+    try:
+        (data_dir / keygate.RECORD_NAME).write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        # L'attesa e' finita: il segnale che il render e' fermo non deve restare.
+        (data_dir / "keyframes" / KEYFRAMES_WAITING_NAME).unlink(missing_ok=True)
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return {
+            "ok": False,
+            "degraded": True,
+            "reason": f"approvazione non scritta: {type(exc).__name__}: {exc}",
+        }
     return {"ok": True, "count": payload["count"], "job": directory.name}
 
 
@@ -1667,11 +1766,19 @@ def font_pick(root: Path, index: Optional[int] = None, family: str = "") -> Dict
         "chosen_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "from": "ui",
     }
-    (directory / FONT_CHOICE_NAME).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    try:
+        (directory / FONT_CHOICE_NAME).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return {
+            "ok": False,
+            "degraded": True,
+            "reason": f"scelta non scritta: {type(exc).__name__}: {exc}",
+        }
     return {"ok": True, "chosen": wanted}
 
 
@@ -1729,6 +1836,27 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             self.wfile.write(body)
 
         def do_GET(self):  # noqa: D102
+            """Ogni lettura risponde 200 o 404: un errore non diventa un 500 muto."""
+            try:
+                self._do_get()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except Exception as exc:  # noqa: BLE001 - la UI legge zeri, non un crash
+                degrade.note("serve", exc)
+                try:
+                    body = json.dumps(
+                        {
+                            "ok": False,
+                            "degraded": True,
+                            "reason": f"{type(exc).__name__}: {exc}",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    self._send(body, "application/json; charset=utf-8")
+                except Exception:  # noqa: BLE001 - la connessione e' gia' caduta
+                    pass
+
+        def _do_get(self):  # noqa: D102
             path, index = query(self.path)
             if path in ("/", "/index.html"):
                 body = _ui("index.html") or PAGE.encode("utf-8")
@@ -1743,10 +1871,19 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
                 self._send(body, UI_FILES[name])
                 return
             if path == "/api/state":
-                if session_mode:
-                    payload = session_state(self._session_id())
-                else:
-                    payload = state(self._root(), index)
+                try:
+                    if session_mode:
+                        payload = session_state(self._session_id())
+                    else:
+                        payload = state(self._root(), index)
+                except Exception as exc:  # noqa: BLE001 - la vista legge zeri
+                    degrade.note("serve", exc)
+                    payload = (
+                        _empty_session_state("stato non leggibile")
+                        if session_mode
+                        else _empty_job_payload(self._root(), f"stato non leggibile: {type(exc).__name__}: {exc}")
+                    )
+                    payload["degraded"] = True
                 self._send(json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
@@ -1966,6 +2103,27 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             self._serve_video(path)
 
         def do_POST(self):  # noqa: D102
+            """Un giudizio o un'approvazione che fallisce risponde, non chiude."""
+            try:
+                self._do_post()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except Exception as exc:  # noqa: BLE001 - la UI legge il motivo
+                degrade.note("serve", exc)
+                try:
+                    body = json.dumps(
+                        {
+                            "ok": False,
+                            "degraded": True,
+                            "reason": f"{type(exc).__name__}: {exc}",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    self._send(body, "application/json; charset=utf-8")
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def _do_post(self):  # noqa: D102
             path, index = query(self.path)
             session_id = self._session_id()
             if path == "/api/approve":
@@ -2061,4 +2219,7 @@ __all__ = ["ACTIVE_SEC", "FONT_CHOICE_NAME", "FONT_CHOICE_SCHEMA", "FONT_PROPOSA
            "MAX_DEPTH", "PAGE", "RECENT_SEC", "REVEAL", "RENDER_FRESH_SEC",
            "SHOT_DIR", "SHOT_LIMIT", "Server", "UI_DIR", "UI_FILES", "add_feedback",
            "approve", "discover", "font_pick", "live_state", "make_handler",
-           "render_state", "reveal", "reveal_native", "shots", "state", "timeline"]
+           "render_state", "reveal", "reveal_native", "session_approve",
+           "session_chunk", "session_feedback", "session_font_pick",
+           "session_master", "session_plan_choice", "session_reveal",
+           "session_state", "shots", "state", "timeline"]
