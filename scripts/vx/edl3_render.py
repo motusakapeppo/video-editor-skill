@@ -96,6 +96,8 @@ from .edl3_compose import (
 from .edl3_extremes import freeze_plan, reverse_plan
 from .edl3_nested import resolve as resolve_nesting
 from .edl3_time import AudioPolicy, RemapCurve, audio_fragment, ramp_fragment
+from .effects import compose as effect_compose
+from .effects import ffmpeg as effect_ffmpeg
 
 BACKEND_EXPR = "expr"
 BACKEND_SENDCMD = "sendcmd"
@@ -299,6 +301,12 @@ REFUSAL_CODES = frozenset(
         "GENERATOR_EFFECT",
         "GENERATOR_CAPTURE",
         "CHUNK_UNSUPPORTED",
+        "SPEC_INVALID",
+        "BUDGET_EXCEEDED",
+        "PRIMITIVE_NOT_RENDERED",
+        "CURVE_NOT_REPRESENTABLE",
+        "BLUR_STYLE_NOT_RENDERED",
+        "PARAM_NOT_RENDERED",
     }
 )
 
@@ -374,6 +382,7 @@ __all__ = [
     "sendcmd_commands",
     "compile_timeline",
     "render",
+    "render_effect_spec",
 ]
 
 
@@ -1055,6 +1064,7 @@ def _clip_plan(
     width: int,
     height: int,
     fps: int,
+    spec_plan: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     duration = clip.timeline_duration
     generator = clip.generator_declaration
@@ -1103,6 +1113,20 @@ def _clip_plan(
         f"scale={scaled_width}:{scaled_height}:"
         "force_original_aspect_ratio=decrease:flags=bicubic"
     )
+    # The composed spec runs as one ordered chain. It comes before the
+    # historical per-kind effects so its transform is a real first stage, while
+    # a document that never declares a spec keeps the exact graph it had.
+    if spec_plan is not None:
+        if spec_plan.get("chain") is None:
+            raise CompileError(
+                "UNSUPPORTED_EFFECT",
+                "la specifica usa 'blend', che richiede una seconda sorgente; il "
+                "percorso clip di edl3_render non la collega. Usa "
+                "render_effect_spec con extra_inputs.",
+                f"clips[{index}].effect_spec",
+            )
+        if spec_plan["chain"]:
+            geometry.append(str(spec_plan["chain"]))
     for ordinal, color in enumerate(effects.get("color") or []):
         geometry.append(_color_fragment(index, ordinal, color, fps, duration))
     for blur in effects.get("blur") or []:
@@ -1192,6 +1216,17 @@ def _clip_plan(
         "compose": compose_ops,
         "compose_op": compose_op,
         "compose_fragment": compose_fragment,
+        "effect_spec": (
+            None
+            if spec_plan is None
+            else {
+                "id": spec_plan.get("id"),
+                "cost": spec_plan.get("cost"),
+                "budget": spec_plan.get("budget"),
+                "primitives": list(spec_plan.get("primitives") or []),
+                "filters": str(spec_plan.get("chain") or ""),
+            }
+        ),
         "generator": (
             None
             if not isinstance(generator, Mapping)
@@ -1867,6 +1902,36 @@ def _generator_table(
     return table
 
 
+def _compile_effect_spec(
+    effect: Any,
+    *,
+    width: int,
+    height: int,
+    fps: float,
+    duration: float,
+    where: str,
+) -> Dict[str, Any]:
+    """Resolve a compose spec (or a historical name) into a validated plan.
+
+    ``expand`` is the one owner of history: ``"zoom"`` and a hand-written
+    ``transform`` spec reach the bridge through the same normalisation, so a
+    legacy name cannot drift from its canonical formula.
+    """
+    try:
+        normalized = effect_compose.expand(effect)
+        return effect_ffmpeg.plan_spec(
+            normalized,
+            width=width,
+            height=height,
+            fps=fps,
+            duration=duration,
+        )
+    except effect_compose.SpecError as exc:
+        raise CompileError("SPEC_INVALID", str(exc), where) from exc
+    except effect_ffmpeg.RenderSpecError as exc:
+        raise CompileError(exc.code, exc.message, exc.where or where) from exc
+
+
 def compile_timeline(
     timeline: Timeline3,
     *,
@@ -1874,6 +1939,7 @@ def compile_timeline(
     settings: Optional[Mapping[str, Any]] = None,
     nested_paths: Optional[Mapping[str, str]] = None,
     generator_paths: Optional[Mapping[str, str]] = None,
+    effect_specs: Optional[Mapping[Any, Any]] = None,
 ) -> Dict[str, Any]:
     """Validate, route every effect, and return a compile plan.
 
@@ -1884,6 +1950,12 @@ def compile_timeline(
     each directory's ``capture.json`` is checked against the declaration. A
     document with either cannot be compiled without that evidence, because a
     compile never runs ffmpeg and never launches a browser.
+
+    ``effect_specs`` maps a clip id to a composed spec (or a historical name):
+    each entry goes through :func:`vx.effects.compose.expand` and the
+    :mod:`vx.effects.ffmpeg` bridge, and its chain joins that clip's geometry.
+    A spec that the bridge refuses (unsupported primitive, budget, curve) fails
+    the compile with the bridge's own code instead of being skipped.
     """
     if timeline.version not in EDL3_VERSIONS:
         raise CompileError(
@@ -1958,6 +2030,19 @@ def compile_timeline(
             routed,
             presets_applied.get(clip_index),
         )
+        raw_spec = (effect_specs or {}).get(clip.id)
+        spec_plan = (
+            None
+            if raw_spec is None
+            else _compile_effect_spec(
+                raw_spec,
+                width=timeline.width,
+                height=timeline.height,
+                fps=float(timeline.fps),
+                duration=clip.timeline_duration,
+                where=f"{clip_where}.effect_spec",
+            )
+        )
         for slot, transition in (
             ("transition_in", clip.transition_in),
             ("transition_out", clip.transition_out),
@@ -1979,6 +2064,7 @@ def compile_timeline(
             timeline.width,
             timeline.height,
             timeline.fps,
+            spec_plan,
         )
         if clip_index in presets_applied:
             plans[clip_index]["preset"] = clip.preset_provenance()
@@ -2503,6 +2589,8 @@ def render(
     chunks: Optional[int] = None,
     benchmark: bool = False,
     jobs: int = 1,
+    effect_specs: Optional[Mapping[Any, Any]] = None,
+    live: bool = False,
 ) -> Dict[str, Any]:
     """Render ``timeline`` to ``output`` and return the compile/run report.
 
@@ -2514,6 +2602,15 @@ def render(
     ffmpeg process this engine has always run, and its graph is untouched.
     ``benchmark`` asks ffmpeg for its own ``-benchmark`` line, reported under
     ``benchmark``.
+
+    ``live`` forces the chunk path and publishes each finished piece into
+    ``<workdir>/live/`` with a ``vx.live/1`` manifest, so a player can watch the
+    picture that has really been encoded. The chunk count is chosen for a piece
+    every :data:`vx.edl3_chunks.LIVE_CHUNK_SECONDS` seconds (2..40 pieces, never
+    more pieces than layer-0 clips) unless the caller passed ``chunks``.
+
+    ``effect_specs`` is forwarded to :func:`compile_timeline`; the chunk path
+    refuses it instead of dropping the per-clip specs.
     """
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -2528,12 +2625,28 @@ def render(
     else:
         settings_source = "declared"
     auto_chunked = False
-    if chunks is None:
+    if live:
+        from . import edl3_chunks  # noqa: PLC0415 - the resumable path only
+
+        base_clips = sum(1 for clip in timeline.clips if int(clip.layer) == 0)
+        if chunks is None or int(chunks) < 2:
+            chunks = edl3_chunks.live_chunks(
+                float(getattr(timeline, "duration", 0.0) or 0.0),
+                clips=base_clips,
+            )
+    elif chunks is None:
         decided = auto_chunks(float(getattr(timeline, "duration", 0.0) or 0.0))
         if decided is not None:
             chunks = decided
             auto_chunked = True
     if chunks is not None and int(chunks) > 1:
+        if effect_specs:
+            raise CompileError(
+                "CHUNK_UNSUPPORTED",
+                "effect_specs non è collegato al percorso a blocchi: il render "
+                "rifiuta invece di scartare le specifiche per clip.",
+                "effect_specs",
+            )
         from . import edl3_chunks  # noqa: PLC0415 - the resumable path only
 
         report = edl3_chunks.render_chunked(
@@ -2546,6 +2659,7 @@ def render(
             chunks=int(chunks),
             benchmark=benchmark,
             jobs=int(jobs),
+            live=bool(live),
         )
         report["settings_source"] = settings_source
         report["chunks_auto"] = auto_chunked
@@ -2559,6 +2673,7 @@ def render(
         settings=settings,
         nested_paths=nested,
         generator_paths=generators,
+        effect_specs=effect_specs,
     )
     proc, script_path = _encode(
         plan, destination, script_dir, timeout, benchmark=benchmark
@@ -2593,3 +2708,126 @@ def render(
         "benchmark": {"encode_kib": _bench_maxrss(proc.stderr)},
     }
     return report
+
+
+def render_effect_spec(
+    effect: Any,
+    source: Any,
+    output: Any,
+    *,
+    width: int,
+    height: int,
+    fps: float = 30.0,
+    duration: Optional[float] = None,
+    workdir: Optional[Any] = None,
+    timeout: Optional[int] = None,
+    budget: float = effect_ffmpeg.DEFAULT_BUDGET,
+    extra_inputs: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Render one clip through the composed-effect bridge.
+
+    ``effect`` is a spec mapping or a historical name (``"zoom"``): both are
+    normalised by :func:`vx.effects.compose.expand`, so the legacy name and the
+    hand-written formula produce the same graph. ``extra_inputs`` maps a blend
+    source name to a path; the bridge assigns it the next ffmpeg input label.
+
+    The report carries ``cost``, ``estimate`` and ``plan_choice`` so
+    ``/api/state`` can show the estimate and the full/fast buttons without
+    re-deriving them. A refused spec raises, and no output file is written.
+    """
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    script_dir = Path(workdir) if workdir is not None else destination.parent
+    script_dir.mkdir(parents=True, exist_ok=True)
+
+    extras = dict(extra_inputs or {})
+    labels = {name: f"[{index + 1}:v]" for index, name in enumerate(extras)}
+    normalized = effect_compose.expand(effect)
+    try:
+        plan = effect_ffmpeg.plan_spec(
+            normalized,
+            width=width,
+            height=height,
+            fps=fps,
+            duration=duration,
+            budget=budget,
+            extra_sources=labels,
+        )
+    except effect_ffmpeg.RenderSpecError as exc:
+        raise CompileError(exc.code, exc.message, exc.where) from exc
+
+    script_path = script_dir / "filter_complex.txt"
+    script_path.write_text(plan["filter_complex"], encoding="utf-8", newline="\n")
+    args: List[Any] = ["-i", str(source)]
+    for path in extras.values():
+        args.extend(["-i", str(path)])
+    args.extend(["-filter_complex_script", str(script_path), "-map", "[vout]"])
+    args.extend(["-t", filter_number(float(plan["duration"]))])
+    args.extend(["-r", filter_number(float(plan["fps"]))])
+    args.extend(
+        [
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "18",
+            "-pix_fmt",
+            "yuv420p",
+            str(destination),
+        ]
+    )
+    proc = ffmpeg.run_ff(args, timeout=timeout, loglevel="error", step="render")
+    if not proc.ok:
+        raise CompileError("RENDER_FAILED", proc.tail(), str(destination))
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise CompileError(
+            "RENDER_FAILED",
+            "ffmpeg ha dichiarato successo ma non ha scritto il file",
+            str(destination),
+        )
+
+    from . import probe as probe_module  # noqa: PLC0415 - render only
+
+    try:
+        probed = probe_module.probe(str(destination))
+        measured = {
+            "duration": float(probed.duration),
+            "fps": float(probed.fps),
+            "size": [int(probed.width), int(probed.height)],
+        }
+    except Exception:  # noqa: BLE001 - an unreadable probe is not a lie
+        measured = {
+            "duration": float(plan["duration"]),
+            "fps": float(plan["fps"]),
+            "size": [int(width), int(height)],
+        }
+
+    choice = ""
+    try:
+        from . import estimate as estimate_module  # noqa: PLC0415 - optional
+
+        if workdir is not None:
+            choice = estimate_module.read_plan_choice(workdir)
+        choices = list(estimate_module.PLAN_CHOICE_VALUES)
+    except Exception:  # noqa: BLE001 - the estimate module is a convenience
+        choices = ["full", "fast"]
+
+    return {
+        "version": "vx.effect-spec/1",
+        "output": str(destination.resolve()),
+        "output_size": destination.stat().st_size,
+        "duration": measured["duration"],
+        "fps": measured["fps"],
+        "size": measured["size"],
+        "cost": plan["cost"],
+        "budget": plan["budget"],
+        "primitives": list(plan["primitives"]),
+        "estimate": dict(plan["estimate"]),
+        "plan_choice": {"choice": choice, "values": choices},
+        "filter_script": plan["filter_complex"],
+        "filter_script_path": str(script_path.resolve()),
+        "command": proc.args,
+        "stderr_tail": proc.tail(5),
+    }

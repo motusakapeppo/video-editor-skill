@@ -78,6 +78,12 @@ SHOT_LIMIT = 60
 #: La cache dei fotogrammi estratti, dentro la workdir del lavoro.
 SHOT_DIR = "shots"
 
+#: I pezzi pubblicati da ``--live``: ``<workdir>/live/chunk_000.mp4`` + manifest.
+LIVE_DIR = "live"
+LIVE_MANIFEST = "manifest.json"
+LIVE_NAME = re.compile(r"^chunk_(\d{3,})\.mp4$")
+LIVE_PREFIX = "/live/"
+
 #: I file ``-progress`` di ffmpeg: uno per ``auto``, uno per il worker.
 RENDER_PROGRESS_FILES = (
     ("render", "ffmpeg-progress.txt"),
@@ -666,6 +672,51 @@ def shots(
     return entries
 
 
+def live_state(
+    directory: Path, data_dir: Optional[Path] = None
+) -> Dict[str, Any]:
+    """Lo stato live pubblicato dal render: pezzi pronti, totali e URL.
+
+    La fonte e' il manifest ``vx.live/1`` nella cartella ``live/`` della workdir.
+    Un manifest assente e' uno stato vuoto, mai un errore: il player non deve
+    distinguere "nessun render live" da "render live appena partito".
+    """
+    data_dir = _data_dir(directory) if data_dir is None else data_dir
+    folders = [data_dir / LIVE_DIR, directory / LIVE_DIR, directory / "work" / LIVE_DIR]
+    manifest: Dict[str, Any] = {}
+    for folder in folders:
+        manifest = _read_json(folder / LIVE_MANIFEST)
+        if manifest:
+            break
+    raw = manifest.get("chunks")
+    entries: List[Dict[str, Any]] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        index = _number(item.get("index"))
+        if index is None or index < 0:
+            continue
+        number = int(index)
+        name = f"chunk_{number:03d}.mp4"
+        entries.append(
+            {
+                "index": number,
+                "t_in": round(float(_number(item.get("t_in")) or 0.0), 6),
+                "t_out": round(float(_number(item.get("t_out")) or 0.0), 6),
+                "ready": bool(item.get("ready")),
+                "url": LIVE_PREFIX + name,
+            }
+        )
+    if not entries:
+        return {"ready": 0, "total": 0, "chunks": []}
+    total = _number(manifest.get("total"))
+    return {
+        "ready": sum(1 for entry in entries if entry["ready"]),
+        "total": int(total) if total is not None else len(entries),
+        "chunks": entries,
+    }
+
+
 def render_state(directory: Path, plan: Mapping[str, Any]) -> Dict[str, Any]:
     """Dove e' arrivato ffmpeg, letto dal suo file di progresso.
 
@@ -834,6 +885,15 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     progress = _read_json(directory / "progress.json") if published else {}
     data_dir = _data_dir(directory)
     plan = _read_json(data_dir / "plan.json")
+    report = _read_json(directory / "report.json")
+    if not report and data_dir != directory:
+        report = _read_json(data_dir / "report.json")
+    estimate = report.get("estimate") if isinstance(report.get("estimate"), Mapping) else {}
+    plan_choice = report.get("plan_choice") if isinstance(report.get("plan_choice"), Mapping) else {}
+    if not estimate and isinstance(progress.get("estimate"), Mapping):
+        estimate = progress.get("estimate")
+    if not plan_choice and isinstance(progress.get("plan_choice"), Mapping):
+        plan_choice = progress.get("plan_choice")
     frames_dir = data_dir / "keyframes"
     frames = [
         {"name": item.name, "bytes": item.stat().st_size}
@@ -864,6 +924,8 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "elapsed_sec": progress.get("elapsed_sec") or 0,
         "current": progress.get("current"),
         "note": note,
+        "estimate": estimate,
+        "plan_choice": plan_choice,
         "outcome": outcome,
         "phases": _derived_phases(directory) if derived else (progress.get("phases") or []),
         "journal": [] if derived else list(progress.get("journal") or []),
@@ -876,6 +938,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "render": _empty_render() if derived else render_state(data_dir, plan),
         "timeline": [] if derived else timeline(plan),
         "shots": shots(directory, plan, data_dir=data_dir),
+        "live": live_state(directory, data_dir),
         "font": font,
         "progress_source": "derived" if derived else "json",
     }
@@ -894,6 +957,8 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "elapsed_sec": 0,
             "current": None,
             "note": "",
+            "estimate": {},
+            "plan_choice": {},
             "outcome": "idle",
             "phases": [],
             "journal": [],
@@ -906,6 +971,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "render": _empty_render(),
             "timeline": [],
             "shots": [],
+            "live": {"ready": 0, "total": 0, "chunks": []},
             "font": _empty_font(),
             "progress_source": "",
             "jobs": [],
@@ -1100,6 +1166,9 @@ def make_handler(root: Path):
             if path.startswith("/shots/"):
                 self._shot(path[len("/shots/"):], index)
                 return
+            if path.startswith(LIVE_PREFIX):
+                self._live_chunk(path[len(LIVE_PREFIX):], index)
+                return
             if path.startswith(FONT_SAMPLE_PREFIX):
                 self._font_sample(path[len(FONT_SAMPLE_PREFIX):], index)
                 return
@@ -1201,19 +1270,49 @@ def make_handler(root: Path):
                 return
             self._send(cache.read_bytes(), "image/jpeg")
 
-        def _result(self, index: Optional[int]) -> None:
-            """Il master, con Range: il browser deve poter scorrere."""
+        def _live_chunk(self, raw: str, index: Optional[int]) -> None:
+            """Un pezzo pubblicato da ``--live``, con Range.
+
+            Solo nomi ``chunk_NNN.mp4`` e solo dentro ``<workdir>/live``: il nome
+            non passa da ``Path.name`` (che accetterebbe ``a/../b``), quindi un
+            percorso con separatori o ``..`` non corrisponde e resta 404.
+            """
+            name = urllib.parse.unquote(raw)
+            if not LIVE_NAME.fullmatch(name):
+                self._send(b"not found", "text/plain", status=404)
+                return
             jobs = discover(root)
             if not jobs:
-                self._send(b"nessun lavoro", "text/plain", status=404)
+                self._send(b"not found", "text/plain", status=404)
                 return
             chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
-            progress = _read_json(jobs[chosen] / "progress.json")
-            path = _master_path(jobs[chosen], progress)
-            if path is None or not path.is_file() or path.stat().st_size == 0:
-                self._send(b"il master non esiste ancora", "text/plain", status=404)
+            directory = jobs[chosen]
+            data_dir = _data_dir(directory)
+            folder = data_dir / LIVE_DIR
+            if not (folder / LIVE_MANIFEST).is_file():
+                folder = directory / LIVE_DIR
+            try:
+                base = folder.resolve()
+                candidate = (folder / name).resolve()
+                inside = candidate == base or base in candidate.parents
+                exists = inside and candidate.is_file()
+            except OSError:
+                inside, exists = False, False
+            if not inside or not exists:
+                self._send(b"not found", "text/plain", status=404)
                 return
-            size = path.stat().st_size
+            self._serve_video(candidate)
+
+        def _serve_video(self, path: Path) -> None:
+            """Il file video, con Range: il browser deve poter scorrere."""
+            try:
+                size = path.stat().st_size
+            except OSError:
+                self._send(b"not found", "text/plain", status=404)
+                return
+            if size <= 0:
+                self._send(b"not found", "text/plain", status=404)
+                return
             start, end, status = 0, size - 1, 200
             header = self.headers.get("Range")
             if header and header.startswith("bytes="):
@@ -1244,6 +1343,20 @@ def make_handler(root: Path):
                         break
                     self.wfile.write(block)
                     remaining -= len(block)
+
+        def _result(self, index: Optional[int]) -> None:
+            """Il master, con Range: il browser deve poter scorrere."""
+            jobs = discover(root)
+            if not jobs:
+                self._send(b"nessun lavoro", "text/plain", status=404)
+                return
+            chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+            progress = _read_json(jobs[chosen] / "progress.json")
+            path = _master_path(jobs[chosen], progress)
+            if path is None or not path.is_file() or path.stat().st_size == 0:
+                self._send(b"il master non esiste ancora", "text/plain", status=404)
+                return
+            self._serve_video(path)
 
         def do_POST(self):  # noqa: D102
             path, index = query(self.path)
@@ -1291,7 +1404,8 @@ class Server:
 
 
 __all__ = ["FONT_CHOICE_NAME", "FONT_CHOICE_SCHEMA", "FONT_PROPOSAL_NAME",
-           "FONT_SAMPLE_PREFIX", "MAX_DEPTH", "PAGE", "REVEAL", "RENDER_FRESH_SEC",
+           "FONT_SAMPLE_PREFIX", "LIVE_DIR", "LIVE_MANIFEST", "LIVE_PREFIX",
+           "MAX_DEPTH", "PAGE", "REVEAL", "RENDER_FRESH_SEC",
            "SHOT_DIR", "SHOT_LIMIT", "Server", "UI_DIR", "UI_FILES", "approve",
-           "discover", "font_pick", "make_handler", "render_state", "reveal",
-           "reveal_native", "shots", "state", "timeline"]
+           "discover", "font_pick", "live_state", "make_handler", "render_state",
+           "reveal", "reveal_native", "shots", "state", "timeline"]
