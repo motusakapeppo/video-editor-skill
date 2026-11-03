@@ -36,7 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from . import guard, keygate
+from . import feedback, guard, keygate
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 UI_FILES = {
@@ -891,6 +891,116 @@ def _guard_state(
     }
 
 
+def _report_of(directory: Path, data_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Il referto del lavoro, con la stessa precedenza che usa lo stato.
+
+    ``report.json`` prima, poi ``auto_report.json`` (e poi le stesse due nella
+    data dir): la UI e il giudizio devono leggere lo stesso file, o il contesto
+    del voto racconterebbe un altro lavoro.
+    """
+    folders = [directory]
+    resolved = _data_dir(directory) if data_dir is None else data_dir
+    if resolved != directory:
+        folders.append(resolved)
+    for folder in folders:
+        for name in ("report.json", "auto_report.json"):
+            found = _read_json(folder / name)
+            if found:
+                return found
+    return {}
+
+
+def _empty_feedback() -> Dict[str, Any]:
+    """Nessun lavoro e nessun giudizio: la UI legge zeri, non un errore."""
+    return {"asked": False, "given": False, "rating": None, "summary": feedback.report()}
+
+
+def _feedback_state(directory: Path) -> Dict[str, Any]:
+    """Se il voto e' stato chiesto, se e' arrivato, e gli aggregati del registro.
+
+    ``asked`` viene dal segnale che ``auto`` scrive a fine lavoro; ``given`` dal
+    registro, cercato per ``job_id``; ``rating`` e' l'ultimo voto di **questo**
+    lavoro. Qui non si scrive niente: la vista legge e basta.
+    """
+    request = feedback.pending(directory)
+    job_id = str(request.get("job_id") or directory.name)
+    record = feedback.latest(job_id=job_id)
+    rating = _number(record.get("rating")) if record else None
+    return {
+        "asked": bool(request.get("asked")),
+        "given": record is not None,
+        "rating": int(rating) if rating is not None else None,
+        "summary": feedback.report(),
+    }
+
+
+#: Gli esiti che un giudizio puo' dichiarare sono quelli del registro; il
+#: ``running`` dello stato qui diventa ``incomplete`` (un lavoro in corso non e'
+#: un lavoro finito da votare).
+
+
+def _feedback_outcome(state_outcome: str, fallback: Any = None) -> str:
+    """L'esito per il record: quello dello stato se e' un esito vero."""
+    if state_outcome in feedback.OUTCOMES:
+        return state_outcome
+    if isinstance(fallback, str) and fallback in feedback.OUTCOMES:
+        return fallback
+    return "incomplete"
+
+
+def add_feedback(
+    root: Path, index: Optional[int] = None, rating: Any = None, note: str = ""
+) -> Dict[str, Any]:
+    """Registra il voto sul lavoro scelto, col contesto che il lavoro ha misurato.
+
+    Il contesto arriva dal report; quello che il report non dice (esito dello
+    stato, shot, font scelto) lo aggiunge lo stato gia' calcolato. Un voto
+    fuori 1..5 non scrive niente: la risposta dice perche'.
+    """
+    jobs = discover(root)
+    if not jobs:
+        return {"ok": False, "reason": "nessun lavoro"}
+    chosen = 0 if index is None else max(0, min(int(index), len(jobs) - 1))
+    directory = jobs[chosen]
+    try:
+        value = feedback.validate_rating(rating)
+    except ValueError as exc:
+        return {"ok": False, "reason": str(exc)}
+    data_dir = _data_dir(directory)
+    payload = _job_state(directory)
+    context = feedback.context_from_report(_report_of(directory, data_dir))
+    if context.get("estimate_seconds") is None:
+        estimate_block = payload.get("estimate")
+        if isinstance(estimate_block, Mapping):
+            context["estimate_seconds"] = _number(estimate_block.get("seconds"))
+    if not context.get("shots"):
+        context["shots"] = len(payload.get("shots") or [])
+    if not context.get("font"):
+        font_block = payload.get("font")
+        if isinstance(font_block, Mapping):
+            context["font"] = str(font_block.get("chosen") or "")
+    if context.get("duration_sec") is None and payload.get("timeline"):
+        context["duration_sec"] = float(payload["timeline"][-1]["t_out"])
+    context["outcome"] = _feedback_outcome(
+        str(payload.get("outcome") or ""), context.get("outcome")
+    )
+    record = feedback.append(
+        feedback.make_record(
+            job_id=directory.name,
+            prompt=str(payload.get("prompt") or ""),
+            rating=value,
+            note=str(note or ""),
+            context=context,
+        )
+    )
+    return {
+        "ok": True,
+        "job": directory.name,
+        "job_id": record["job_id"],
+        "rating": record["rating"],
+    }
+
+
 def _outcome(
     *,
     percent: float,
@@ -934,15 +1044,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     progress = _read_json(directory / "progress.json") if published else {}
     data_dir = _data_dir(directory)
     plan = _read_json(data_dir / "plan.json")
-    report = _read_json(directory / "report.json")
-    if not report:
-        # ``auto`` scrive il proprio referto in ``auto_report.json``: senza
-        # leggerlo la UI non vedrebbe ne' le decisioni ne' la guardia.
-        report = _read_json(directory / "auto_report.json")
-    if not report and data_dir != directory:
-        report = _read_json(data_dir / "report.json")
-        if not report:
-            report = _read_json(data_dir / "auto_report.json")
+    report = _report_of(directory, data_dir)
     estimate = report.get("estimate") if isinstance(report.get("estimate"), Mapping) else {}
     plan_choice = report.get("plan_choice") if isinstance(report.get("plan_choice"), Mapping) else {}
     raw_decisions = report.get("decisions")
@@ -1008,6 +1110,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "shots": shots(directory, plan, data_dir=data_dir),
         "live": live_state(directory, data_dir),
         "font": font,
+        "feedback": _feedback_state(directory),
         "progress_source": "derived" if derived else "json",
     }
 
@@ -1043,6 +1146,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "shots": [],
             "live": {"ready": 0, "total": 0, "chunks": []},
             "font": _empty_font(),
+            "feedback": _empty_feedback(),
             "progress_source": "",
             "jobs": [],
             "selected": 0,
@@ -1445,6 +1549,14 @@ def make_handler(root: Path):
                 self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return
+            if path == "/api/feedback":
+                params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                rating = (params.get("rating") or [""])[0]
+                note = (params.get("note") or [""])[0]
+                answer = add_feedback(root, index, rating, note)
+                self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
             self._send(b"not found", "text/plain", status=404)
 
     return Handler
@@ -1476,6 +1588,6 @@ class Server:
 __all__ = ["FONT_CHOICE_NAME", "FONT_CHOICE_SCHEMA", "FONT_PROPOSAL_NAME",
            "FONT_SAMPLE_PREFIX", "LIVE_DIR", "LIVE_MANIFEST", "LIVE_PREFIX",
            "MAX_DEPTH", "PAGE", "REVEAL", "RENDER_FRESH_SEC",
-           "SHOT_DIR", "SHOT_LIMIT", "Server", "UI_DIR", "UI_FILES", "approve",
-           "discover", "font_pick", "live_state", "make_handler", "render_state",
-           "reveal", "reveal_native", "shots", "state", "timeline"]
+           "SHOT_DIR", "SHOT_LIMIT", "Server", "UI_DIR", "UI_FILES", "add_feedback",
+           "approve", "discover", "font_pick", "live_state", "make_handler",
+           "render_state", "reveal", "reveal_native", "shots", "state", "timeline"]

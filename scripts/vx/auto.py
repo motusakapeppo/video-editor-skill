@@ -39,6 +39,7 @@ from . import (
     deliverables,
     edl_plan,
     estimate,
+    feedback,
     ffmpeg as ff,
     gates,
     grammar,
@@ -425,6 +426,27 @@ def guard_line(section: Any) -> str:
     if count > 1:
         return f"Guardia: {count} violazioni, il lavoro non e' consegnabile"
     return "Guardia: il lavoro non e' consegnabile"
+
+
+def write_feedback_request(
+    report_data: Any, workdir: Any, prompt: Any = ""
+) -> Dict[str, Any]:
+    """Lascia nella workdir il contesto per chiedere un voto, senza fermare niente.
+
+    ``feedback_request.json`` porta quello che il lavoro ha gia' misurato
+    (esito, equilibrio, violazioni, stima e consuntivo, font, effetti, shot,
+    durata): la vista puo' chiedere ``1..5`` senza ricostruire il report e senza
+    che questo giro tocchi il codice. Non blocca, non apre console, e un
+    registro irraggiungibile resta un ``error`` nel ritorno.
+    """
+    context = feedback.context_from_report(report_data)
+    return feedback.pending(
+        workdir,
+        context,
+        job_id=Path(workdir).name,
+        prompt=str(prompt or ""),
+        refresh=True,
+    )
 
 
 def _discover(args: Any) -> List[asset_triage.AssetInfo]:
@@ -3036,6 +3058,20 @@ def _run_locked(
     if not report.get("delivered", True):
         _log("[auto] guardia non superata: il video c'e', la consegna no")
     _write_json_atomic(auto_report, report)
+    # Il giudizio umano: a fine lavoro il contesto e' gia' scritto nella
+    # workdir, cosi' la vista puo' chiedere un voto senza fermare niente e
+    # senza che ogni lavoro tocchi il codice. Un registro irraggiungibile non
+    # e' un lavoro fallito: si annota nei log e si va avanti.
+    try:
+        request = write_feedback_request(
+            report, workdir, str(getattr(args, "prompt", "") or "")
+        )
+        if request.get("asked"):
+            _log("[auto] giudizio: chiesto nella workdir, il voto e' facoltativo")
+        else:
+            _log(f"[auto] giudizio: segnale non scritto ({request.get('error') or 'niente da chiedere'})")
+    except Exception as exc:  # noqa: BLE001 - il giudizio non e' la consegna
+        _log(f"[auto] giudizio non registrato: {type(exc).__name__}: {exc}")
     log.close()
     return report
 

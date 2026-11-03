@@ -2421,6 +2421,140 @@ def cmd_fonts(args: argparse.Namespace) -> int:
 
 
 
+def cmd_feedback(args: argparse.Namespace) -> int:
+    """Il registro dei giudizi: ``add`` scrive una riga, ``report`` la legge.
+
+    ``add`` prende il contesto dal report del lavoro (o da
+    ``feedback_request.json`` se ``auto`` l'ha gia' scritto): chi vota non deve
+    ricompilare esito, equilibrio, stima e consuntivo a mano. ``report`` mette
+    gli aggregati in italiano e, sotto la soglia dichiarata, dice che la
+    correlazione non e' conclusiva invece di lasciarla sembrare una prova.
+    """
+    from . import feedback
+
+    action = getattr(args, "feedback_cmd", "")
+    if action == "add":
+        workdir = Path(str(getattr(args, "workdir", "") or ""))
+        try:
+            rating = feedback.validate_rating(getattr(args, "rating", None))
+        except ValueError as exc:
+            _log(f"[feedback] {exc}")
+            return EXIT_USAGE
+        request = feedback.request_context(workdir)
+        if not request["context"]:
+            _log(f"[feedback] nessun contesto in {workdir}: il voto si registra lo stesso")
+        record = feedback.append(
+            feedback.make_record(
+                job_id=request["job_id"],
+                prompt=request["prompt"],
+                rating=rating,
+                note=str(getattr(args, "note", "") or ""),
+                context=request["context"],
+            ),
+            root=getattr(args, "root", None),
+        )
+        if getattr(args, "json", False):
+            _out(record)
+        else:
+            print(
+                f"Giudizio registrato: {record['rating']}/5 per "
+                f"{record['job_id'] or 'il lavoro'} "
+                f"(registro {feedback.register_path(getattr(args, 'root', None))})"
+            )
+        return EXIT_OK
+    if action == "report":
+        data = feedback.report(root=getattr(args, "root", None))
+        if getattr(args, "json", False):
+            _out(data)
+        else:
+            print(feedback.report_text(data))
+        return EXIT_OK
+    _log("uso: vx feedback add --rating N [--note ...] --workdir DIR | vx feedback report [--json]")
+    return EXIT_USAGE
+
+
+def cmd_learn(args: argparse.Namespace) -> int:
+    """L'archivio leggero: quanto pesa, cosa si pota, che soglie sono in vigore.
+
+    ``status`` legge il disco e non tocca niente; ``prune`` comprime i mesi
+    vecchi e toglie i corpus piu' vecchi, mai quelli che una policy cita;
+    ``policy --show`` stampa le soglie versionate con il motivo dell'ultimo
+    cambio. Sempre in italiano, sempre con i MB veri.
+    """
+    from . import learning
+
+    action = getattr(args, "learn_cmd", "")
+    root = getattr(args, "root", None)
+    budget = getattr(args, "budget_mb", None) or learning.DEFAULT_BUDGET_MB
+    if action == "status":
+        data = learning.status(root=root, budget_mb=budget)
+        if getattr(args, "json", False):
+            _out(data)
+            return EXIT_OK
+        megabytes = 1024 * 1024
+        by_area = data["by_area"]
+        print(f"Apprendimento: {data['root']}")
+        for area in ("events", "archive", "corpus", "policy"):
+            print(f"  {area:<8} {by_area.get(area, 0) / megabytes:7.2f} MB")
+        if by_area.get("other"):
+            print(f"  {'altro':<8} {by_area['other'] / megabytes:7.2f} MB")
+        print(
+            f"  {'totale':<8} {data['bytes'] / megabytes:7.2f} MB"
+            f" / {data['budget_mb']:.1f} MB"
+        )
+        oldest = (data["oldest"] or "nessuno")[:10]
+        print(
+            f"eventi {data['events_count']} | corpus {data['corpus_count']} | "
+            f"archivi {data['archive_count']} | piu' vecchio {oldest}"
+        )
+        if data["will_prune_next"]:
+            print(
+                f"prossima potatura: {len(data['will_prune_next'])} elementi, "
+                f"{data['next_prune_bytes'] / megabytes:.2f} MB"
+                f" (a partire da {data['will_prune_next'][0]})"
+            )
+        elif data["over_budget"]:
+            print("sopra budget ma nulla da potare: restano il lavoro piu' recente e i corpus citati")
+        else:
+            print("sotto budget: niente da potare")
+        return EXIT_OK
+    if action == "prune":
+        result = learning.prune(root=root, budget_mb=budget)
+        if getattr(args, "json", False):
+            _out(result)
+            return EXIT_OK
+        megabytes = 1024 * 1024
+        print(
+            f"potatura: {result['bytes_before'] / megabytes:.2f} MB -> "
+            f"{result['bytes_after'] / megabytes:.2f} MB "
+            f"(liberati {result['freed_bytes'] / megabytes:.2f} MB)"
+        )
+        print(
+            f"  mesi compressi: {len(result['archived'])} | "
+            f"elementi rimossi: {len(result['removed'])} | "
+            f"corpus citati tenuti: {len(result['kept_cited'])}"
+        )
+        if result["over_budget"]:
+            print("  ancora sopra budget: resta solo il recente e cio' che e' citato")
+        return EXIT_OK
+    if action == "policy":
+        data = learning.policy_load(root=root)
+        if getattr(args, "json", False):
+            _out(data)
+            return EXIT_OK
+        print(f"policy v{int(data.get('version') or 0)} ({data.get('updated_utc') or 'mai salvata'})")
+        thresholds = data.get("thresholds") or {}
+        for key in sorted(thresholds):
+            print(f"  {key:<22} {thresholds[key]}")
+        if data.get("reason"):
+            print(f"motivo: {data['reason']}")
+        if data.get("feedback_ids"):
+            print(f"feedback citati: {len(data['feedback_ids'])}")
+        return EXIT_OK
+    _log("uso: vx learn status | prune | policy --show [--root DIR] [--budget-mb N] [--json]")
+    return EXIT_USAGE
+
+
 def _apply_settings(args: argparse.Namespace) -> None:
     """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
     from . import features, settings
@@ -2920,6 +3054,62 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--matrix", default=None, help="matrice da controllare (default: LICENSES_MATRIX.md)")
     a.add_argument("--json", action="store_true", help="referto macchina")
     a.set_defaults(func=cmd_fonts)
+
+    p = add(
+        "feedback",
+        "il giudizio umano sul lavoro: registralo e leggilo (il codice non cambia)",
+    )
+    feedback_sub = p.add_subparsers(dest="feedback_cmd", required=True)
+    a = feedback_sub.add_parser(
+        "add",
+        help="registra un voto 1..5 sul lavoro, col contesto del suo report",
+    )
+    a.add_argument("--rating", type=int, required=True, help="voto da 1 (da buttare) a 5 (pronto)")
+    a.add_argument("--note", default="", help="cosa ha funzionato o no, in una riga")
+    a.add_argument(
+        "--workdir",
+        required=True,
+        help="cartella del lavoro: il contesto arriva da auto_report.json o feedback_request.json",
+    )
+    a.add_argument(
+        "--root",
+        default=None,
+        help="registro dei giudizi (default: ~/.vx, o VX_FEEDBACK_ROOT)",
+    )
+    a.add_argument("--json", action="store_true", help="record scritto, forma macchina")
+    a.set_defaults(func=cmd_feedback)
+    r = feedback_sub.add_parser(
+        "report",
+        help="aggregati del registro e correlazione equilibrio/voto, con la cautela",
+    )
+    r.add_argument(
+        "--root",
+        default=None,
+        help="registro dei giudizi (default: ~/.vx, o VX_FEEDBACK_ROOT)",
+    )
+    r.add_argument("--json", action="store_true", help="referto macchina")
+    r.set_defaults(func=cmd_feedback)
+
+    p = add(
+        "learn",
+        "l'archivio leggero dei feedback: stato, potatura, policy versionata",
+    )
+    learn_sub = p.add_subparsers(dest="learn_cmd", required=True)
+    s = learn_sub.add_parser("status", help="peso reale per area, conteggi e prossima potatura")
+    s.add_argument("--root", default=None, help="archivio (default: ~/.vx/learning, o VX_LEARNING_DIR)")
+    s.add_argument("--budget-mb", type=float, default=None, help="budget in MB (default: 20)")
+    s.add_argument("--json", action="store_true", help="referto macchina")
+    s.set_defaults(func=cmd_learn)
+    d = learn_sub.add_parser("prune", help="comprime i mesi vecchi e pota i corpus piu' vecchi")
+    d.add_argument("--root", default=None, help="archivio (default: ~/.vx/learning, o VX_LEARNING_DIR)")
+    d.add_argument("--budget-mb", type=float, default=None, help="budget in MB (default: 20)")
+    d.add_argument("--json", action="store_true", help="referto macchina")
+    d.set_defaults(func=cmd_learn)
+    y = learn_sub.add_parser("policy", help="mostra la policy corrente e la sua storia")
+    y.add_argument("--show", action="store_true", help="stampa la policy (e' il default)")
+    y.add_argument("--root", default=None, help="archivio (default: ~/.vx/learning, o VX_LEARNING_DIR)")
+    y.add_argument("--json", action="store_true", help="referto macchina")
+    y.set_defaults(func=cmd_learn)
 
     return ap
 
