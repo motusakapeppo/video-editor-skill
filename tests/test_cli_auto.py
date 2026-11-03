@@ -329,6 +329,17 @@ def main() -> int:
         check("auto_report ok", on_disk.get("ok") is True, on_disk.get("ok"))
         check("report su disco == stdout", on_disk == report, "identici")
 
+        # Il profilo e' parte del referto: senza i tempi per stadio non si sa
+        # dove va il muro, e un'ottimizzazione diventa un'opinione.
+        timings = on_disk.get("timings") or {}
+        check(
+            "report.timings: ogni stadio e il totale",
+            isinstance(timings.get("total"), (int, float))
+            and timings["total"] > 0
+            and {"triage", "render", "qc", "deliverables"} <= set(timings),
+            sorted(timings),
+        )
+
         bridge_path = work / "bridge_report.json"
         bridge_block = report.get("bridge") or {}
         check("bridge_report.json esiste", bridge_path.is_file(), bridge_path)

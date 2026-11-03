@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -118,6 +119,71 @@ def _emit(log: Optional[Any], stage: str, status: str, detail: str = "") -> None
 
 #: Sotto questa differenza la durata consegnata e' quella chiesta.
 DURATION_SHORTFALL_TOLERANCE = 0.5
+
+#: Gli stadi che il profilo dichiara sempre, anche a zero: una voce assente e una
+#: voce a zero non sono la stessa cosa quando si legge dove e' andato il tempo.
+TIMING_STAGES = (
+    "triage",
+    "probe",
+    "hash",
+    "ingest",
+    "proxy",
+    "audio",
+    "analysis",
+    "faces",
+    "speech",
+    "measure_wall",
+    "plan",
+    "bridge",
+    "font",
+    "keyframes",
+    "render",
+    "qc",
+    "deliverables",
+)
+
+
+class _Clock:
+    """Wall time per stage, accumulated. Measurement only: no call is reordered.
+
+    Il totale e' quello del processo (``_run_locked``): ``unaccounted`` e' quello
+    che nessuno stadio ha rivendicato, cosi' un buco si vede invece di sparire
+    dentro la somma. Gli stadi annidati (audio/faces/analysis/speech dentro il
+    bridge) si contano a parte e il bridge tiene il proprio totale: le due letture
+    servono a dire sia "quanto costa il ponte" sia "quanto costa ogni misura".
+    """
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.stages: Dict[str, float] = {}
+
+    @contextmanager
+    def time(self, stage: str):
+        begin = time.monotonic()
+        try:
+            yield
+        finally:
+            self.add(stage, time.monotonic() - begin)
+
+    def add(self, stage: str, seconds: float) -> None:
+        self.stages[stage] = self.stages.get(stage, 0.0) + float(seconds)
+
+    def as_dict(self) -> Dict[str, float]:
+        total = time.monotonic() - self.started
+        out: Dict[str, float] = {}
+        for stage in TIMING_STAGES:
+            out[stage] = round(self.stages.get(stage, 0.0), 3)
+        for stage, seconds in self.stages.items():
+            if stage not in out:
+                out[stage] = round(seconds, 3)
+        out["total"] = round(total, 3)
+        claimed = sum(
+            seconds
+            for stage, seconds in self.stages.items()
+            if stage != "measure_wall"
+        )
+        out["unaccounted"] = round(max(0.0, total - claimed), 3)
+        return out
 
 
 def duration_shortfall(requested: Any, delivered: Any) -> Optional[Dict[str, Any]]:
@@ -489,12 +555,153 @@ def _a_roll_sources(plan: Any) -> List[str]:
     return seen
 
 
+MEASURE_KINDS = ("analysis", "faces", "audio")
+
+#: Quanti processi di misura al massimo: ``cpu - 2``, mai più job che misure.
+#: Le misure (audio, video, volti) sono funzioni pure dello stesso file: girano
+#: in processi separati, non in thread, perche' OpenCV e ffmpeg tengono il GIL e
+#: il decode e' CPU-bound. Il render resta un processo solo.
+PARALLEL_HEADROOM = 2
+
+#: Sotto questa durata complessiva delle sorgenti il processo in più costa più di
+#: quanto misura: l'avvio di un interprete (cv2, numpy, ffmpeg) e' ~2 s cadauno, e
+#: su clip da due secondi la versione sequenziale e' piu' veloce. Misurato, non
+#: stimato: 2 s di materiale, 5.3 s in fila contro 20.3 s in parallelo.
+PARALLEL_MIN_SECONDS = 10.0
+
+
+def _measure_workers(jobs: int) -> int:
+    cpus = os.cpu_count() or 2
+    return max(1, min(int(jobs), max(1, cpus - PARALLEL_HEADROOM)))
+
+
+def _measure_seconds(
+    sources: Sequence[str], media: Optional[Mapping[str, Any]]
+) -> float:
+    """How much material is about to be measured, in seconds of timeline source."""
+    total = 0.0
+    for source_id in sources:
+        info = (media or {}).get(source_id) or {}
+        try:
+            total += max(0.0, float(info.get("duration") or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _measure_task(job: Any) -> Dict[str, Any]:
+    """One measurement, in this process. Never raises: the failure is a value.
+
+    ``bridge.build`` treats a source that could not be measured as a declared
+    skip, so the task returns ``{"error": str}`` instead of a traceback that
+    would have to be rebuilt in the parent. Le impostazioni effettive arrivano
+    da fuori: un processo figlio non eredita la cascata ``--settings``/
+    ``--override`` della madre, e misure con soglie diverse non sarebbero le
+    stesse misure.
+    """
+    kind, path, settings_blob = job
+    started = time.monotonic()
+    try:
+        from . import settings as settings_mod
+
+        settings_mod.apply(dict(settings_blob))
+        if kind == "audio":
+            from . import audio
+
+            value: Any = audio.analyze_audio(path)
+        elif kind == "analysis":
+            from . import analyze
+
+            value = analyze.analyze_video(path)
+        elif kind == "faces":
+            from . import faces
+
+            value = faces.detect_faces_tracked(
+                path, sample_fps=contract.SAMPLE_FPS_FACE
+            )
+        else:  # pragma: no cover - guarded by MEASURE_KINDS
+            raise ValueError(f"misura sconosciuta: {kind!r}")
+    except Exception as exc:  # noqa: BLE001 - the bridge turns it into a declaration
+        return {
+            "kind": kind,
+            "error": str(exc) or type(exc).__name__,
+            "seconds": time.monotonic() - started,
+        }
+    return {"kind": kind, "value": value, "seconds": time.monotonic() - started}
+
+
+def _settings_blob() -> Dict[str, Any]:
+    """The live cascade, bookkeeping excluded: ``apply`` recomputes those itself."""
+    return {
+        key: value
+        for key, value in dict(settings.current() or {}).items()
+        if key not in ("_fingerprint", "schema")
+    }
+
+
+def _measure_all(
+    jobs: Sequence[Any],
+    *,
+    parallel: bool,
+    clock: _Clock,
+) -> List[Dict[str, Any]]:
+    """Run every (source, kind) measurement and return one result per job, in order.
+
+    Parallel over processes bounded by :func:`_measure_workers`; a pool that
+    cannot start falls back to the serial path instead of failing the run.
+    Il tempo di ogni misura e' quello del processo che l'ha eseguita; in
+    parallelo la quota attribuita a ogni stadio e' ripartita sul muro del
+    blocco, cosi' la tabella somma ancora al totale.
+    """
+    if not parallel or len(jobs) < 2:
+        results = []
+        for job in jobs:
+            kind = job[0]
+            started = time.monotonic()
+            result = _measure_task(job)
+            clock.add(kind, time.monotonic() - started)
+            results.append(result)
+        return results
+
+    workers = _measure_workers(len(jobs))
+    started = time.monotonic()
+    results: Optional[List[Dict[str, Any]]] = None
+    try:
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=workers, mp_context=context) as pool:
+            results = list(pool.map(_measure_task, list(jobs), chunksize=1))
+    except Exception as exc:  # noqa: BLE001 - a broken pool is slow, not fatal
+        _log(f"[auto] misure in parallelo non disponibili ({exc}); una alla volta")
+        results = None
+    if results is None:
+        results = []
+        for job in jobs:
+            kind = job[0]
+            one = time.monotonic()
+            results.append(_measure_task(job))
+            clock.add(kind, time.monotonic() - one)
+        return results
+
+    wall = time.monotonic() - started
+    spent = sum(float(item.get("seconds") or 0.0) for item in results)
+    for item in results:
+        owned = float(item.get("seconds") or 0.0)
+        share = wall * (owned / spent) if spent > 0 else 0.0
+        clock.add(str(item["kind"]), share)
+    clock.add("measure_wall", wall)
+    return results
+
+
 def _bridge_plan(
     plan: Any,
     *,
     captions: bool = True,
     media: Optional[Mapping[str, Any]] = None,
     target_lufs: float = TARGET_LUFS,
+    clock: Optional[_Clock] = None,
 ) -> Any:
     """Run the bridge: analyses, transcripts, faces and motion per a_roll source.
 
@@ -509,58 +716,94 @@ def _bridge_plan(
     and never a filter applied without a finding. ``media`` supplies the frame
     size of each staged source, because face boxes are pixels and the crop the
     renderer animates is normalised.
-    """
-    from . import analyze, audio, bridge, faces, subs
 
+    Le tre misure per sorgente sono indipendenti e pure: sotto
+    ``PARALLEL_MIN_SECONDS`` di materiale girano in fila, sopra girano in
+    processi paralleli (max ``cpu - 2``) e i risultati si ricompongono
+    nell'ordine delle sorgenti. Stesso file, stesse funzioni, stesse soglie:
+    il piano non cambia, cambia quanto ci mette.
+    """
+    from . import audio, bridge, subs
+
+    prof = clock or _Clock()
     analyses: Dict[str, Any] = {}
     transcripts: Dict[str, Any] = {}
     face_tracks: Dict[str, Any] = {}
     motion: Dict[str, Any] = {}
     sources = _a_roll_sources(plan)
+    paths = {
+        source_id: str(getattr(plan.sources.get(source_id), "path", "") or "")
+        for source_id in sources
+    }
+    blob = _settings_blob()
+    keys: List[tuple] = [
+        (kind, source_id)
+        for source_id in sources
+        for kind in MEASURE_KINDS
+        if paths[source_id]
+    ]
+    jobs = [(kind, paths[source_id], blob) for kind, source_id in keys]
     for source_id in sources:
-        ref = plan.sources.get(source_id)
-        path = str(getattr(ref, "path", "") or "")
-        try:
-            analyses[source_id] = audio.analyze_audio(path)
-        except Exception as exc:  # noqa: BLE001 - the bridge turns it into a declaration
-            analyses[source_id] = exc
-        try:
-            motion[source_id] = analyze.analyze_video(path)
-        except Exception as exc:  # noqa: BLE001 - declared per clip
-            motion[source_id] = exc
-        try:
+        if not paths[source_id]:
+            # Senza un file non c'e' misura: la sorgente resta una dichiarazione.
+            reason = RuntimeError(f"source {source_id!r}: nessun percorso")
+            analyses[source_id] = reason
+            motion[source_id] = reason
+            face_tracks[source_id] = reason
+    measured = _measure_all(
+        jobs,
+        parallel=_measure_seconds(sources, media) >= PARALLEL_MIN_SECONDS,
+        clock=prof,
+    )
+    by_key: Dict[tuple, Dict[str, Any]] = {
+        key: item for key, item in zip(keys, measured)
+    }
+    for source_id in sources:
+        if not paths[source_id]:
+            continue
+        for kind, bucket in (
+            ("audio", analyses),
+            ("analysis", motion),
+            ("faces", face_tracks),
+        ):
+            item = by_key.get((kind, source_id))
+            if item is None:
+                bucket[source_id] = RuntimeError(f"nessuna misura {kind}")
+            elif "error" in item:
+                bucket[source_id] = RuntimeError(str(item["error"]))
+            else:
+                bucket[source_id] = item["value"]
+        tracked = face_tracks.get(source_id)
+        if not isinstance(tracked, BaseException):
             info = (media or {}).get(source_id) or {}
-            tracked = faces.detect_faces_tracked(
-                path, sample_fps=contract.SAMPLE_FPS_FACE
-            )
             payload: Dict[str, Any] = dict(tracked.to_dict())
             payload["width"] = info.get("width")
             payload["height"] = info.get("height")
-            cuts = getattr(motion[source_id], "scene_cuts", None)
+            cuts = getattr(motion.get(source_id), "scene_cuts", None)
             if cuts:
                 payload["scene_cuts"] = list(cuts)
             face_tracks[source_id] = payload
-        except Exception as exc:  # noqa: BLE001 - declared per clip
-            face_tracks[source_id] = exc
         if not captions:
             continue
         try:
-            transcript = subs.transcribe(path)
+            with prof.time("speech"):
+                transcript = subs.transcribe(paths[source_id])
             reason = str(getattr(transcript, "skipped_reason", "") or "")
             if reason:
                 raise RuntimeError(reason)
             transcripts[source_id] = transcript
         except Exception as exc:  # noqa: BLE001 - the bridge declares it
             transcripts[source_id] = exc
-    new_plan, report = bridge.build(
-        plan,
-        analyses,
-        target_lufs=float(target_lufs),
-        loudness_spans=audio.loudness_spans,
-        transcripts=transcripts if captions else None,
-        faces=face_tracks,
-        motion=motion,
-    )
+    with prof.time("bridge"):
+        new_plan, report = bridge.build(
+            plan,
+            analyses,
+            target_lufs=float(target_lufs),
+            loudness_spans=audio.loudness_spans,
+            transcripts=transcripts if captions else None,
+            faces=face_tracks,
+            motion=motion,
+        )
     return new_plan, report, analyses
 
 
@@ -1433,23 +1676,26 @@ def _run_locked(
 
     log = events_mod.EventLog(workdir / "events.jsonl")
     flags = features_mod.effective()
+    clock = _Clock()
     _emit(log, "run", "start", Path(args.out).name)
 
-    assets = _discover(args)
-    assets_by_id = {asset.asset_id: asset for asset in assets}
-    source_sha = _source_hashes(assets)
-    fill_mode = _fill_mode(fill)
-    montage_mode = bool(montage)
+    with clock.time("triage"):
+        assets = _discover(args)
+        assets_by_id = {asset.asset_id: asset for asset in assets}
+        with clock.time("hash"):
+            source_sha = _source_hashes(assets)
+        fill_mode = _fill_mode(fill)
+        montage_mode = bool(montage)
 
-    try:
-        payload = decide.parse_and_decide(
-            args.prompt,
-            asset_pool=assets,
-            force_mode="autonomous" if getattr(args, "autonomous", False) else None,
-            montage=montage_mode,
-        )
-    except decide.AmbiguousContractError as exc:
-        raise contract.VxError(f"prompt ambiguo in STRICT: {exc}") from exc
+        try:
+            payload = decide.parse_and_decide(
+                args.prompt,
+                asset_pool=assets,
+                force_mode="autonomous" if getattr(args, "autonomous", False) else None,
+                montage=montage_mode,
+            )
+        except decide.AmbiguousContractError as exc:
+            raise contract.VxError(f"prompt ambiguo in STRICT: {exc}") from exc
 
     block = payload.get("asset_triage")
     if not isinstance(block, Mapping) or not block:
@@ -1459,8 +1705,9 @@ def _run_locked(
     target_lufs, target_tp = loudness_target(payload)
     _notify(progress, 5.0, "triage", log=log)
 
-    fps = _fps(args, selected, assets_by_id)
-    timeline_est = _timeline_est(selected, assets_by_id, rejected)
+    with clock.time("probe"):
+        fps = _fps(args, selected, assets_by_id)
+        timeline_est = _timeline_est(selected, assets_by_id, rejected)
 
     sources_map: Dict[str, str] = {}
     for entry in selected:
@@ -1472,15 +1719,20 @@ def _run_locked(
 
     specs = _specs(selected, assets_by_id, fps, timeline_est)
     _log(f"[auto] staging {len(sources_map)} sorgenti a {fps:g} fps")
-    staged = _stage(sources_map, specs, workdir / "stage_00")
-    source_refs, media_info_map = _source_refs(staged)
+    with clock.time("ingest"):
+        staged = _stage(sources_map, specs, workdir / "stage_00")
+        with clock.time("probe"):
+            source_refs, media_info_map = _source_refs(staged)
     _notify(progress, 20.0, "ingest", log=log)
 
-    plan = contract.payload_to_edl_plan(payload, source_refs, media_info_map, fps=fps)
-    errors = plan.validate()
-    if errors:
-        raise contract.VxError("EDL non valido: " + "; ".join(errors))
-    media_by_source = _media_by_source_key(plan, staged, media_info_map)
+    with clock.time("plan"):
+        plan = contract.payload_to_edl_plan(
+            payload, source_refs, media_info_map, fps=fps
+        )
+        errors = plan.validate()
+        if errors:
+            raise contract.VxError("EDL non valido: " + "; ".join(errors))
+        media_by_source = _media_by_source_key(plan, staged, media_info_map)
 
     bridge_summary: Dict[str, Any] = {
         "enabled": False,
@@ -1509,6 +1761,7 @@ def _run_locked(
             captions=subs_enabled,
             media=media_by_source,
             target_lufs=target_lufs,
+            clock=clock,
         )
         reframe_map, restore_map = _render_effects(bridge_report)
         bridge_gains_applied = any("gain_db" in item for item in bridge_report.audio)
@@ -1561,17 +1814,19 @@ def _run_locked(
         "eseguito" if bridge_summary["enabled"] else "--no-bridge",
     )
 
-    (workdir / "plan.json").write_text(
-        json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    with clock.time("plan"):
+        (workdir / "plan.json").write_text(
+            json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     # Il piano esiste: ora si propongono i font e si aspetta la scelta, prima del
     # render. Il cancello e' aperto solo se c'e' una vista e non l'hanno spento:
     # in autonomia senza pannello si prende il ``chosen`` e lo si dichiara.
-    font_section = _run_font_gate(
-        args, workdir, plan, payload, view_url=view_url, view_active=view_active
-    )
+    with clock.time("font"):
+        font_section = _run_font_gate(
+            args, workdir, plan, payload, view_url=view_url, view_active=view_active
+        )
     _emit(
         log,
         "font",
@@ -1620,9 +1875,10 @@ def _run_locked(
     # partire. Con una vista si aspetta l'approvazione, al massimo `--key-wait`;
     # senza vista non si aspetta nessuno. Allo scadere si prosegue e lo si
     # dichiara nel report: un'attesa finita non e' un blocco.
-    key_section = _run_key_gate(
-        args, workdir, plan, view_url=view_url, view_active=view_active
-    )
+    with clock.time("keyframes"):
+        key_section = _run_key_gate(
+            args, workdir, plan, view_url=view_url, view_active=view_active
+        )
     _emit(
         log,
         "keyframes",
@@ -1650,41 +1906,45 @@ def _run_locked(
     if progress_file:
         # Un file lasciato da un render precedente direbbe il falso: si riparte da zero.
         Path(progress_file).unlink(missing_ok=True)
-    render.render_edl(
-        plan,
-        staged_paths,
-        out,
-        workdir=workdir / "render",
-        loudness=(target_lufs, target_tp),
-        crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
-        preset=str(
-            getattr(args, "preset", None) or settings.get("render.preset", "medium")
-        ),
-        progress_file=progress_file,
-        fill=fill_mode,
-        subtitles=captions_ass,
-        reframe=reframe_map,
-        restore=restore_map,
-        ceiling_dbtp=ceiling_dbtp,
-        fonts_dir=caption_font["fonts_dir"] or None,
-        cache_report=render_cache,
-    )
+    with clock.time("render"):
+        render.render_edl(
+            plan,
+            staged_paths,
+            out,
+            workdir=workdir / "render",
+            loudness=(target_lufs, target_tp),
+            crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
+            preset=str(
+                getattr(args, "preset", None) or settings.get("render.preset", "medium")
+            ),
+            progress_file=progress_file,
+            fill=fill_mode,
+            subtitles=captions_ass,
+            reframe=reframe_map,
+            restore=restore_map,
+            ceiling_dbtp=ceiling_dbtp,
+            fonts_dir=caption_font["fonts_dir"] or None,
+            cache_report=render_cache,
+        )
     estimate.finish(render_estimate)
     _notify(progress, 92.0, "render_done", log=log, detail="master scritto")
 
-    qc_result = qc.audit_master(out, target_lufs=target_lufs, target_tp=target_tp)
+    with clock.time("qc"):
+        qc_result = qc.audit_master(out, target_lufs=target_lufs, target_tp=target_tp)
     _notify(progress, 96.0, "qc", log=log)
 
-    produced = deliverables.produce(
-        plan,
-        out,
-        workdir / "out",
-        srt_source=Path(captions_srt) if captions_srt else None,
-        workdir=workdir,
-    )
+    with clock.time("deliverables"):
+        produced = deliverables.produce(
+            plan,
+            out,
+            workdir / "out",
+            srt_source=Path(captions_srt) if captions_srt else None,
+            workdir=workdir,
+        )
     _notify(progress, 100.0, "deliverables", log=log)
 
-    _assert_sources_unchanged(assets, source_sha)
+    with clock.time("hash"):
+        _assert_sources_unchanged(assets, source_sha)
 
     a_roll_indices: Dict[str, int] = {}
     for entry in selected:
@@ -1755,6 +2015,7 @@ def _run_locked(
         "features": flags,
         "source_sha": source_sha,
         "sources_unchanged": True,
+        "timings": clock.as_dict(),
     }
     if shortfall:
         report["duration_shortfall"] = shortfall
@@ -1764,6 +2025,12 @@ def _run_locked(
         )
     if render_cache:
         report["stage_cache"] = render_cache
+    timings = report["timings"]
+    _log(
+        "[auto] tempi: "
+        + " ".join(f"{stage}={seconds:.1f}s" for stage, seconds in timings.items())
+    )
+    _emit(log, "timings", "done", json.dumps(timings, ensure_ascii=False))
     _emit(log, "run", "done", f"{len(produced)} consegne")
     (workdir / "auto_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
