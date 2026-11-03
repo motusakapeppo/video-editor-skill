@@ -1,4 +1,4 @@
-﻿"""F4-T08 â€” the anti-arlecchino density cap, enforced by the compiler.
+"""F4-T08 â€” the anti-arlecchino density cap, enforced by the compiler.
 
 The rule: no more than 3 visible effect instances may start inside any sliding
 10 s window of one timeline. Windows are anchored on each clip's start on the

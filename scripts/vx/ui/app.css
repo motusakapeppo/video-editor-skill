@@ -909,6 +909,13 @@ body.is-done .hero-unit { color: var(--ok); }
   color: var(--ink-3);
 }
 
+.look-status {
+  margin: 0 0 6px;
+  font: 500 11px/1.4 var(--mono);
+  letter-spacing: .02em;
+  color: var(--accent-2);
+}
+
 .look-caption {
   display: flex;
   align-items: baseline;
@@ -1034,7 +1041,7 @@ body.is-done .hero-unit { color: var(--ok); }
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
-  min-width: 92px;
+  min-width: 108px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
@@ -1055,8 +1062,8 @@ body.is-done .hero-unit { color: var(--ok); }
 
 .cell-thumb {
   position: relative;
-  flex: 0 0 56px;
-  height: 56px;
+  flex: 0 0 64px;
+  height: 64px;
   overflow: hidden;
   background:
     repeating-linear-gradient(135deg, rgba(255, 255, 255, .03) 0 6px, transparent 6px 12px),
@@ -1071,27 +1078,36 @@ body.is-done .hero-unit { color: var(--ok); }
 .cell-fallback {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 1px;
+  justify-content: flex-start;
+  gap: 2px;
   height: 100%;
-  padding: 14px 6px 4px;
+  padding: 17px 6px 5px;
+  overflow: hidden;
 }
 
 .cell-src {
+  flex: 0 0 auto;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font: 500 9px/1.25 var(--mono);
+  font: 500 9px/1.35 var(--mono);
   color: var(--ink-2);
 }
 
 .cell-dur {
-  font: 500 8.5px/1.25 var(--mono);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font: 500 8.5px/1.35 var(--mono);
   color: var(--ink-3);
 }
 
 .cell-note {
-  font: 500 8px/1.25 var(--sans);
+  flex: 0 0 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 500 7.5px/1.35 var(--sans);
   color: var(--ink-3);
 }
 

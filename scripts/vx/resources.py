@@ -1,4 +1,4 @@
-﻿"""vx.resources - quanta macchina c'e', chi la sta gia' usando, a che priorita'.
+"""vx.resources - quanta macchina c'e', chi la sta gia' usando, a che priorita'.
 
 Il profilo dice dove va il tempo; questo modulo dice con quale diritto lo si
 prende. Tre regole, tutte dichiarate nel report:

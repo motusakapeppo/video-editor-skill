@@ -1,4 +1,4 @@
-﻿"""Il profilo di ``vx auto``: la tabella dei tempi e il motore che la produce.
+"""Il profilo di ``vx auto``: la tabella dei tempi e il motore che la produce.
 
 Due cose si provano qui, entrambe senza render:
 

@@ -1,4 +1,4 @@
-﻿"""F4-T01 gate â€” the declarative effect schema holds together.
+"""F4-T01 gate â€” the declarative effect schema holds together.
 
 The registry is no longer five hand-written kinds: :mod:`vx.effects` declares
 families as data, each entry publishing its parameters, its ffmpeg template and

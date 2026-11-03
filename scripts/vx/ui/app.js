@@ -42,6 +42,7 @@
     lookFrame: $('lookFrame'),
     lookCaption: $('lookCaption'),
     lookNote: $('lookNote'),
+    lookStatus: $('lookStatus'),
     lookImg: $('lookImg'),
     lookEmpty: $('lookEmpty'),
     lookTime: $('lookTime'),
@@ -939,21 +940,25 @@
     }
 
     let active = -1;
+    let notStarted = false;
     const t = total > 0 ? (percent / 100) * total : 0;
     if (percent > 0 && total > 0) {
       for (let i = 0; i < shots.length; i += 1) {
         active = i;
         if (t >= Number(shots[i].t_in) && t < Number(shots[i].t_out)) break;
       }
-    } else if (closed) {
-      // Nessuna testina in movimento: si mostra l'ultimo shot, dichiarandolo.
-      active = shots.length - 1;
+    } else if (shots.length) {
+      // Encode fermo: si mostra il primo shot del piano (o l'ultimo, se chiuso),
+      // dichiarandolo: è un shot reale, non una posizione inventata.
+      active = closed ? shots.length - 1 : 0;
+      notStarted = !closed;
     }
 
     el.regiaMeta.textContent =
       active >= 0
-        ? 'shot ' + (active + 1) + ' di ' + shots.length + (percent > 0 ? '' : ' · ultimo')
-        : shots.length + (shots.length === 1 ? ' shot' : ' shot');
+        ? 'shot ' + (active + 1) + ' di ' + shots.length +
+          (percent > 0 ? '' : closed ? ' · ultimo' : '')
+        : shots.length + ' shot';
 
     buildShotCells(shots);
     el.reelStrip.querySelectorAll('.is-now').forEach((node) => node.classList.remove('is-now'));
@@ -997,6 +1002,10 @@
       el.lookCaption.hidden = false;
       el.lookFrame.hidden = false;
       el.lookNote.hidden = true;
+      el.lookStatus.hidden = !notStarted;
+      el.lookStatus.textContent = notStarted
+        ? 'Primo shot del piano (encode non iniziato)'
+        : '';
       el.lookTime.textContent = timecode(shot.t_in);
       el.lookSource.textContent = shot.source || 'sorgente non dichiarata';
       el.lookFrame.style.aspectRatio = lookAspect;
@@ -1013,6 +1022,7 @@
       el.lookImg.removeAttribute('src');
       el.lookImg.classList.remove('is-loaded');
       el.lookNote.hidden = false;
+      el.lookStatus.hidden = true;
       el.lookNote.textContent = closed
         ? 'Nessuno shot sotto la testina: il lavoro è chiuso.'
         : "Nessuno shot sotto la testina: l'encode non è ancora iniziato.";
