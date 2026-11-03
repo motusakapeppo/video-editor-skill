@@ -58,4 +58,59 @@ def family_entries() -> Dict[str, EffectSpec]:
     return merged
 
 
-__all__ = ["FAMILY_MODULES", "families", "family_entries"]
+# The composable layer lives next to the families: a spec is built from
+# primitives, validated, costed and expanded from a historical name, while the
+# family modules above stay the static registry. Re-exported here so callers can
+# write ``from vx.effects import validate`` whether they compose or look up.
+from .compose import (  # noqa: E402  (deliberately after the family loaders)
+    CURVES,
+    DEFAULT_DURATION,
+    HISTORICAL_NAMES,
+    MAX_COST,
+    MAX_DURATION,
+    MAX_PRIMITIVES,
+    PRIMITIVES,
+    TRANSITIONS,
+    Issue,
+    Param,
+    Primitive,
+    SpecError,
+    canonical_easing,
+    cost,
+    describe,
+    describe_primitive,
+    expand,
+    normalize,
+    sample_curve,
+    sample_param,
+    transition,
+    validate,
+)
+
+__all__ = [
+    "FAMILY_MODULES",
+    "families",
+    "family_entries",
+    "CURVES",
+    "DEFAULT_DURATION",
+    "HISTORICAL_NAMES",
+    "MAX_COST",
+    "MAX_DURATION",
+    "MAX_PRIMITIVES",
+    "PRIMITIVES",
+    "TRANSITIONS",
+    "Issue",
+    "Param",
+    "Primitive",
+    "SpecError",
+    "canonical_easing",
+    "cost",
+    "describe",
+    "describe_primitive",
+    "expand",
+    "normalize",
+    "sample_curve",
+    "sample_param",
+    "transition",
+    "validate",
+]
