@@ -43,6 +43,30 @@
     lookCaption: $('lookCaption'),
     lookNote: $('lookNote'),
     lookStatus: $('lookStatus'),
+    estimate: $('estimate'),
+    estimateTotal: $('estimateTotal'),
+    estimateRows: $('estimateRows'),
+    estimateNote: $('estimateNote'),
+    estimateNotes: $('estimateNotes'),
+    estimateFlash: $('estimateFlash'),
+    live: $('live'),
+    liveMeta: $('liveMeta'),
+    liveBody: $('liveBody'),
+    liveCover: $('liveCover'),
+    liveStart: $('liveStart'),
+    liveCoverNote: $('liveCoverNote'),
+    liveNow: $('liveNow'),
+    liveStatus: $('liveStatus'),
+    liveWait: $('liveWait'),
+    liveFill: $('liveFill'),
+    liveAudio: $('liveAudio'),
+    liveVideoA: $('liveVideoA'),
+    liveVideoB: $('liveVideoB'),
+    liveEmpty: $('liveEmpty'),
+    planGate: $('planGate'),
+    planCards: $('planCards'),
+    planSub: $('planSub'),
+    planError: $('planError'),
     lookImg: $('lookImg'),
     lookEmpty: $('lookEmpty'),
     lookTime: $('lookTime'),
@@ -1054,7 +1078,572 @@
     el.lookEmpty.textContent = 'Fotogramma non disponibile per questo shot.';
   });
 
-  /* ------------------------------------------------------------ scelta font */
+  /* --------------------------------------------------------- stima e piano */
+
+  const STAGE_NAMES = {
+    analysis: 'analisi',
+    render: 'render',
+    ingest: 'acquisizione',
+    qc: 'controllo',
+    encode: 'encode',
+    deliver: 'consegna',
+  };
+
+  function paintEstimate(state) {
+    const est = state.estimate && typeof state.estimate === 'object' ? state.estimate : null;
+    const parts = est && est.parts && typeof est.parts === 'object' ? est.parts : {};
+    // Una stima a zero non è una stima: meglio non mostrare il blocco.
+    const usable = !!(est && (Number(est.seconds) > 0 || Object.keys(parts).length > 0));
+    el.estimate.hidden = !usable;
+
+    if (!usable) {
+      el.estimateRows.textContent = '';
+      return;
+    }
+
+    const seconds = Number(est.seconds) || 0;
+    const low = Number(est.low) || seconds;
+    const high = Number(est.high) || seconds;
+    const plan = state.plan_choice && typeof state.plan_choice === 'object' ? state.plan_choice : {};
+    const budget = Number(plan.budget) || 0;
+
+    el.estimateTotal.textContent =
+      num(seconds, 0) + ' s (' + num(low, 0) + '–' + num(high, 0) + ')' +
+      (budget > 0 ? ' · budget ' + num(budget, 0) + ' s' : '');
+
+    const rows = Object.keys(parts)
+      .map((key) => [key, Number(parts[key]) || 0])
+      .filter(([, value]) => value > 0);
+    const sum = rows.reduce((total, [, value]) => total + value, 0) || 1;
+
+    el.estimateRows.textContent = '';
+    rows.forEach(([key, value]) => {
+      const row = document.createElement('div');
+      row.className = 'estimate-row';
+
+      const name = document.createElement('span');
+      name.className = 'estimate-name';
+      name.textContent = STAGE_NAMES[key] || key;
+
+      const track = document.createElement('span');
+      track.className = 'estimate-track';
+      const fill = document.createElement('i');
+      fill.className = 'estimate-fill';
+      fill.style.width = Math.max(2, (value / sum) * 100).toFixed(1) + '%';
+      track.append(fill);
+
+      const val = document.createElement('span');
+      val.className = 'estimate-value num';
+      val.textContent = num(value, 0) + ' s';
+
+      row.append(name, track, val);
+      el.estimateRows.append(row);
+    });
+
+    const calibrated = est.calibrated !== false;
+    el.estimateNote.hidden = calibrated;
+    el.estimateNote.textContent = calibrated ? '' : 'stima non calibrata: nessuna misura precedente';
+
+    const notes = (Array.isArray(est.notes) ? est.notes : []).filter((item) => String(item || '').trim());
+    el.estimateNotes.hidden = !notes.length;
+    el.estimateNotes.textContent = notes.join(' · ');
+  }
+
+  const planPicked = new Set();
+  let planPicking = false;
+  let planJob = null;
+
+  function planNumbers(pc, est) {
+    const seconds = Number(est && est.seconds) || 0;
+    const high = Number(est && est.high) || seconds;
+    const saved = Math.max(0, Number(pc && pc.saved_seconds_estimate) || 0);
+    const fast = saved > 0 ? Math.max(1, seconds - saved) : 0;
+    const ratio = seconds > 0 ? saved / seconds : 0;
+    const traded = (Array.isArray(pc && pc.traded) ? pc.traded : []).filter(
+      (item) => String(item || '').trim()
+    );
+    return { seconds, high, saved, fast, ratio, traded, recommend: ratio >= 0.35 ? 'fast' : 'full' };
+  }
+
+  function planCard(spec) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'plan-card' + (spec.recommend ? ' is-suggested' : '');
+    card.dataset.choice = spec.choice;
+
+    if (spec.recommend) {
+      const badge = document.createElement('span');
+      badge.className = 'plan-badge';
+      badge.textContent = 'Consigliata';
+      card.append(badge);
+    }
+
+    const name = document.createElement('span');
+    name.className = 'plan-name';
+    name.textContent = spec.name;
+
+    const time = document.createElement('span');
+    time.className = 'plan-time num';
+    time.textContent = spec.time;
+
+    const label = document.createElement('span');
+    label.className = 'plan-keeps';
+    label.textContent = spec.label;
+
+    const list = document.createElement('ul');
+    list.className = 'plan-list';
+    spec.items.forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      list.append(li);
+    });
+
+    const line = document.createElement('span');
+    line.className = 'plan-line';
+    line.textContent = spec.line;
+
+    card.append(name, time, label, list, line);
+    card.addEventListener('click', () => pickPlan(spec.choice, card));
+    return card;
+  }
+
+  function buildPlanCards(pc, est) {
+    const n = planNumbers(pc, est);
+    const low = Number(est && est.low) || n.seconds;
+
+    el.planSub.textContent =
+      'Stima ' + num(n.seconds, 0) + ' s (' + num(low, 0) + '–' + num(n.high, 0) + ')' +
+      (Number(pc && pc.budget) > 0 ? ' · budget ' + num(Number(pc.budget), 0) + ' s' : '') +
+      (est && est.calibrated === false ? ' · stima non calibrata' : '');
+
+    el.planCards.textContent = '';
+    el.planCards.append(
+      planCard({
+        choice: 'full',
+        name: 'Completa',
+        time: '~' + num(n.high, 0) + ' s',
+        label: 'Cosa mantiene',
+        items: n.traded.length ? n.traded : ['tutto il piano'],
+        line: 'Nessuna rinuncia: il piano resta intero.',
+        recommend: n.recommend === 'full',
+      }),
+      planCard({
+        choice: 'fast',
+        name: 'Rapida',
+        time: n.fast ? '~' + num(n.fast, 0) + ' s' : 'risparmio non dichiarato',
+        label: 'Cosa cede',
+        items: n.traded.length ? n.traded : ['niente di dichiarato'],
+        line: "Tutto il resto resta com'è: cambia solo ciò che è elencato.",
+        recommend: n.recommend === 'fast',
+      })
+    );
+  }
+
+  function openPlanGate(pc, est) {
+    if (!el.frameView.hidden) closeFrame({ immediate: true });
+    planJob = jobIndex;
+    buildPlanCards(pc, est);
+    el.planError.textContent = '';
+
+    if (!el.planGate.open) {
+      document.documentElement.classList.add('has-gate');
+      el.planGate.showModal();
+    }
+
+    const suggested =
+      el.planCards.querySelector('.plan-card.is-suggested') ||
+      el.planCards.querySelector('.plan-card');
+    if (suggested) suggested.focus();
+  }
+
+  function closePlanGate() {
+    planJob = null;
+    planPicking = false;
+    if (el.planGate.open) el.planGate.close();
+    document.documentElement.classList.remove('has-gate');
+  }
+
+  function paintPlanChoice(state) {
+    const pc = state.plan_choice && typeof state.plan_choice === 'object' ? state.plan_choice : null;
+    const pending = !!(pc && pc.pending === true && !pc.chosen);
+
+    if (!pending) {
+      if (el.planGate.open) closePlanGate();
+      return;
+    }
+    if (planPicking || planPicked.has(jobIndex)) return;
+    if (el.fontGate.open) return; // un cancello alla volta: prima i font
+    if (el.planGate.open && planJob === jobIndex) return;
+
+    openPlanGate(pc, state.estimate);
+  }
+
+  async function pickPlan(choice, card) {
+    if (planPicking) return;
+    planPicking = true;
+    el.planError.textContent = '';
+    card.setAttribute('aria-busy', 'true');
+    el.planCards.querySelectorAll('.plan-card').forEach((node) => {
+      node.disabled = true;
+    });
+
+    try {
+      const base = scoped('/api/plan-choice');
+      const url =
+        base + (base.indexOf('?') === -1 ? '?' : '&') + 'choice=' + encodeURIComponent(choice);
+      const response = await fetch(url, { method: 'POST' });
+      const result = await response.json();
+
+      if (result && result.ok === true) {
+        planPicked.add(jobIndex);
+        planPicking = false;
+        closePlanGate();
+        showPlanFlash(choice, lastState);
+        await tick();
+        return;
+      }
+      el.planError.textContent =
+        (result && result.reason) || 'La scelta non è stata registrata: riprova.';
+    } catch (error) {
+      el.planError.textContent = 'La scelta non è stata registrata: il server non risponde.';
+    }
+
+    planPicking = false;
+    card.removeAttribute('aria-busy');
+    el.planCards.querySelectorAll('.plan-card').forEach((node) => {
+      node.disabled = false;
+    });
+    card.focus();
+  }
+
+  function showPlanFlash(choice, state) {
+    if (!state) return;
+    const pc = state.plan_choice || {};
+    const est = state.estimate || {};
+    const n = planNumbers(pc, est);
+
+    el.estimateFlash.textContent =
+      choice === 'fast'
+        ? 'Versione rapida: −' + num(n.saved, 0) + ' s stimati' +
+          (n.traded.length ? ', ' + n.traded.join(', ') : '') + '.'
+        : 'Versione completa: ' + num(n.seconds, 0) + ' s stimati, nessuna rinuncia.';
+    el.estimateFlash.hidden = false;
+  }
+
+  el.planGate.addEventListener('cancel', (event) => {
+    event.preventDefault();
+  });
+
+  /* ---------------------------------------------------------------------- live */
+
+  // Il live non è un video che cresce: sono chunk veri, messi in fila. Due
+  // elementi si alternano, il prossimo è precaricato, e il cambio avviene solo
+  // sulla fine del pezzo in corso — mai a metà.
+  const liveVideos = [el.liveVideoA, el.liveVideoB];
+  let liveJob = null;
+  let liveStarted = false;
+  let liveSlot = 0;
+  let liveChunk = -1;
+  let liveMaster = false;
+  let liveWaiting = false;
+  let liveChunks = [];
+  let liveTotal = 0;
+  let liveMuted = true;
+  let liveBlocked = false;
+
+  const liveUrl = (chunk) => scoped(String(chunk && chunk.url ? chunk.url : ''));
+
+  function applyMute() {
+    liveVideos.forEach((video) => {
+      video.muted = liveMuted;
+    });
+  }
+
+  function onLiveBlocked() {
+    // Il browser ha rifiutato la partenza: si dice, e si offre un pulsante.
+    liveBlocked = true;
+    liveStarted = false;
+    el.liveCover.hidden = false;
+    el.liveStart.hidden = false;
+    el.liveStart.disabled = false;
+    el.liveStart.textContent = 'Premi per guardare';
+    el.liveCoverNote.textContent = 'Il browser ha bloccato la partenza: premi per guardare.';
+    el.liveStatus.textContent = '';
+  }
+
+  function liveShow(slot) {
+    liveSlot = slot;
+    liveVideos.forEach((video, index) => video.classList.toggle('is-on', index === slot));
+  }
+
+  function livePlay(video) {
+    video.muted = liveMuted;
+    const started = video.play();
+    if (started && typeof started.catch === 'function') {
+      started.catch(() => {
+        if (liveStarted && video === liveVideos[liveSlot] && !video.ended) onLiveBlocked();
+      });
+    }
+  }
+
+  function playChunk(index) {
+    const chunk = liveChunks[index];
+    if (!chunk) return;
+    const video = liveVideos[liveSlot];
+    const url = liveUrl(chunk);
+    if (video.getAttribute('src') !== url) video.src = url;
+    try {
+      video.currentTime = 0;
+    } catch (error) {
+      /* il metadata non c'è ancora: si parte da capo comunque */
+    }
+    liveChunk = index;
+    liveMaster = false;
+    liveWaiting = false;
+    el.liveWait.hidden = true;
+    el.liveNow.textContent = 'chunk ' + (index + 1) + ' di ' + liveTotal;
+    el.liveStatus.textContent = 'In riproduzione.';
+    livePlay(video);
+  }
+
+  function nextChunk(index) {
+    const chunk = liveChunks[index];
+    if (!chunk) return;
+    const old = liveVideos[liveSlot];
+    const other = liveVideos[1 - liveSlot];
+    const url = liveUrl(chunk);
+    if (other.getAttribute('src') !== url) other.src = url;
+    try {
+      other.currentTime = 0;
+    } catch (error) {
+      /* riparte dall'inizio: nessun salto */
+    }
+    liveShow(1 - liveSlot);
+    liveChunk = index;
+    liveMaster = false;
+    liveWaiting = false;
+    el.liveWait.hidden = true;
+    el.liveNow.textContent = 'chunk ' + (index + 1) + ' di ' + liveTotal;
+    el.liveStatus.textContent = 'In riproduzione.';
+    livePlay(other);
+    old.pause();
+  }
+
+  function preloadChunk(index) {
+    const chunk = liveChunks[index];
+    if (!chunk || !chunk.ready) return;
+    const other = liveVideos[1 - liveSlot];
+    const url = liveUrl(chunk);
+    if (other.getAttribute('src') !== url) {
+      other.preload = 'auto';
+      other.src = url;
+    }
+  }
+
+  function playMaster() {
+    const last = liveChunks[liveChunks.length - 1];
+    const old = liveVideos[liveSlot];
+    const other = liveVideos[1 - liveSlot];
+    const seek = Number(last && last.t_out) || 0;
+
+    other.src = scoped('/result');
+    const start = () => {
+      try {
+        other.currentTime = seek;
+      } catch (error) {
+        /* parte dall'inizio del master: meglio che fermo */
+      }
+      livePlay(other);
+    };
+    if (other.readyState >= 1) start();
+    else other.addEventListener('loadedmetadata', start, { once: true });
+
+    liveShow(1 - liveSlot);
+    old.pause();
+    liveMaster = true;
+    liveWaiting = false;
+    el.liveWait.hidden = true;
+    el.liveNow.textContent = 'master';
+    el.liveStatus.textContent = 'Master in riproduzione.';
+  }
+
+  function onLiveEnded(event) {
+    if (!liveStarted) return;
+    if (event.target !== liveVideos[liveSlot]) return;
+
+    const next = liveChunks[liveChunk + 1];
+    if (next && next.ready) {
+      nextChunk(liveChunk + 1);
+      return;
+    }
+    if (liveChunk >= liveChunks.length - 1 && lastState && lastState.master_ready === true) {
+      playMaster();
+      return;
+    }
+
+    liveWaiting = true;
+    el.liveWait.hidden = false;
+    el.liveStatus.textContent = next
+      ? 'Il prossimo pezzo non è ancora pronto.'
+      : 'Il master non è ancora pronto.';
+  }
+
+  function stopLive() {
+    liveStarted = false;
+    liveVideos.forEach((video) => {
+      video.pause();
+      video.removeAttribute('src');
+      video.classList.remove('is-on');
+      try {
+        video.load();
+      } catch (error) {
+        /* niente da caricare */
+      }
+    });
+    liveSlot = 0;
+    liveChunk = -1;
+    liveMaster = false;
+    liveWaiting = false;
+    el.liveWait.hidden = true;
+    el.liveCover.hidden = false;
+    el.liveNow.textContent = '';
+    el.liveStatus.textContent = '';
+  }
+
+  function paintLive(state, closed) {
+    const live = state.live && typeof state.live === 'object' ? state.live : null;
+
+    if (!live) {
+      el.live.hidden = true;
+      return;
+    }
+    if (liveJob !== jobIndex) {
+      stopLive();
+      liveJob = jobIndex;
+    }
+
+    const chunks = (Array.isArray(live.chunks) ? live.chunks : []).filter(
+      (chunk) => chunk && chunk.url
+    );
+    const total = Number(live.total) || chunks.length;
+    const ready = Number(live.ready) || chunks.filter((chunk) => chunk.ready).length;
+
+    el.live.hidden = closed && !liveStarted;
+    el.liveEmpty.hidden = chunks.length > 0;
+    el.liveBody.hidden = chunks.length === 0;
+    el.liveMeta.textContent = chunks.length ? ready + ' di ' + total + ' pronti' : '';
+    el.liveFill.style.width = total > 0 ? Math.min(100, (ready / total) * 100) + '%' : '0%';
+
+    if (!chunks.length) {
+      if (liveStarted) stopLive();
+      el.liveCover.hidden = false;
+      return;
+    }
+
+    liveChunks = chunks;
+    liveTotal = total;
+
+    // Lavoro chiuso e nessuno sta guardando: niente autoplay nascosto.
+    if (closed && !liveStarted) {
+      el.liveCover.hidden = false;
+      el.liveStart.hidden = true;
+      el.liveAudio.hidden = true;
+      return;
+    }
+
+    if (!liveStarted) {
+      if (liveBlocked) {
+        el.liveCover.hidden = false;
+        el.liveStart.hidden = false;
+        el.liveStart.disabled = false;
+        el.liveStart.textContent = 'Premi per guardare';
+        el.liveCoverNote.textContent = 'Il browser ha bloccato la partenza: premi per guardare.';
+        el.liveAudio.hidden = true;
+        return;
+      }
+      if (ready > 0) {
+        startLive();
+        return;
+      }
+      el.liveCover.hidden = false;
+      el.liveStart.hidden = true;
+      el.liveCoverNote.textContent = 'Aspetto che il render scriva il primo pezzo.';
+      el.liveStatus.textContent = '';
+      el.liveAudio.hidden = true;
+      return;
+    }
+
+    el.liveCover.hidden = true;
+    el.liveAudio.hidden = false;
+    el.liveAudio.disabled = !liveMuted;
+    el.liveAudio.textContent = liveMuted ? 'Attiva audio' : 'Audio attivo';
+
+    if (liveWaiting) {
+      const next = liveChunks[liveChunk + 1];
+      if (next && next.ready) {
+        nextChunk(liveChunk + 1);
+        return;
+      }
+      if (liveChunk >= liveChunks.length - 1 && state.master_ready === true) {
+        playMaster();
+        return;
+      }
+      el.liveWait.hidden = false;
+      el.liveStatus.textContent = next
+        ? 'Il prossimo pezzo non è ancora pronto.'
+        : 'Il master non è ancora pronto.';
+      return;
+    }
+
+    if (!liveMaster) {
+      preloadChunk(liveChunk + 1);
+      el.liveNow.textContent = 'chunk ' + (liveChunk + 1) + ' di ' + liveTotal;
+    }
+  }
+
+  function startLive() {
+    const first = liveChunks.findIndex((chunk) => chunk.ready);
+    if (first < 0) return;
+    liveStarted = true;
+    liveBlocked = false;
+    liveJob = jobIndex;
+    liveShow(0);
+    applyMute();
+    el.liveCover.hidden = true;
+    el.liveAudio.hidden = false;
+    el.liveAudio.disabled = !liveMuted;
+    el.liveAudio.textContent = liveMuted ? 'Attiva audio' : 'Audio attivo';
+    playChunk(first);
+    preloadChunk(first + 1);
+  }
+
+  // Il pulsante serve solo quando il browser blocca la partenza.
+  el.liveStart.addEventListener('click', () => {
+    liveBlocked = false;
+    if (!liveChunks.length) return;
+    startLive();
+  });
+
+  el.liveAudio.addEventListener('click', () => {
+    if (!liveMuted) return;
+    liveMuted = false;
+    applyMute();
+    el.liveAudio.disabled = true;
+    el.liveAudio.textContent = 'Audio attivo';
+  });
+
+  liveVideos.forEach((video) => {
+    video.addEventListener('ended', onLiveEnded);
+    video.addEventListener('pause', () => {
+      if (!liveStarted || video !== liveVideos[liveSlot] || video.ended) return;
+      el.liveStatus.textContent = 'In pausa.';
+    });
+    video.addEventListener('play', () => {
+      if (!liveStarted || video !== liveVideos[liveSlot]) return;
+      el.liveStatus.textContent = liveMaster ? 'Master in riproduzione.' : 'In riproduzione.';
+    });
+  });
+
 
   // Il cancello dei font: si apre solo se il lavoro dichiara una scelta da fare,
   // non si chiude con Esc né col clic fuori, e sparisce quando la scelta è presa.
@@ -1136,6 +1725,7 @@
 
   function openGate(font) {
     if (!el.frameView.hidden) closeFrame({ immediate: true });
+    if (el.planGate.open) return; // un cancello alla volta
     gateJob = jobIndex;
     buildGate(font);
     if (!el.fontGate.open) {
@@ -1282,6 +1872,10 @@
   function resetForJob() {
     // Cambiare lavoro non deve lasciare in pagina i fotogrammi o il video di prima.
     closeFrame({ immediate: true });
+    if (el.planGate.open) closePlanGate();
+    stopLive();
+    el.estimateFlash.hidden = true;
+    el.estimateFlash.textContent = '';
     hasDrawn = false;
     el.frames.dataset.signature = '';
     el.resultBody.dataset.signature = '';
@@ -1361,6 +1955,8 @@
 
     lastClosed = closed;
     paintRegia(state, closed);
+    paintEstimate(state);
+    paintLive(state, closed);
 
     const prompt = String(state.prompt || '').trim();
     el.jobTitle.textContent = prompt || 'Lavoro senza titolo';
@@ -1435,6 +2031,7 @@
     paintFrames(frames, finished);
     paintResult(state, closed);
     paintFontGate(state);
+    paintPlanChoice(state);
     paintApproval(state);
   }
 

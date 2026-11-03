@@ -76,6 +76,38 @@
           </div>
         </section>
 
+        <section class="live" id="live" aria-labelledby="liveTitle" hidden>
+          <div class="live-head">
+            <h2 id="liveTitle">Live</h2>
+            <p class="live-meta num" id="liveMeta"></p>
+          </div>
+
+          <div class="live-body" id="liveBody">
+            <div class="live-player">
+              <video class="live-video" id="liveVideoA" playsinline muted controls preload="none"></video>
+              <video class="live-video" id="liveVideoB" playsinline muted controls preload="none"></video>
+              <div class="live-cover" id="liveCover">
+                <button class="live-start" id="liveStart" type="button" hidden>Premi per guardare</button>
+                <p class="live-cover-note" id="liveCoverNote"></p>
+              </div>
+            </div>
+
+            <div class="live-side">
+              <p class="live-now num" id="liveNow"></p>
+              <p class="live-status" id="liveStatus"></p>
+              <p class="live-wait" id="liveWait" hidden>
+                <span class="live-dot" aria-hidden="true"></span>Sto scrivendo il prossimo pezzo…
+              </p>
+              <div class="live-progress" aria-hidden="true"><i id="liveFill"></i></div>
+              <button class="live-audio" id="liveAudio" type="button" hidden>Attiva audio</button>
+            </div>
+          </div>
+
+          <p class="live-empty" id="liveEmpty" hidden>
+            Nessun pezzo pubblicato: il live parte quando il render scrive il primo chunk.
+          </p>
+        </section>
+
         <section class="journal" aria-labelledby="journalTitle">
           <div class="journal-head">
             <h2 id="journalTitle">Racconto</h2>
@@ -134,6 +166,17 @@
                 </div>
               </div>
             </div>
+          </div>
+
+          <div class="estimate" id="estimate" hidden>
+            <div class="estimate-head">
+              <p class="zone-label">Stima</p>
+              <p class="estimate-total num" id="estimateTotal"></p>
+            </div>
+            <div class="estimate-rows" id="estimateRows"></div>
+            <p class="estimate-note" id="estimateNote" hidden></p>
+            <p class="estimate-notes" id="estimateNotes" hidden></p>
+            <p class="estimate-flash" id="estimateFlash" role="status" hidden></p>
           </div>
 
           <p class="regia-empty" id="regiaEmpty" hidden>Nessuno shot da mostrare: il piano non è ancora arrivato.</p>
@@ -212,6 +255,18 @@
       <div class="font-cards" id="fontCards"></div>
       <p class="gate-error" id="gateError" role="alert"></p>
       <p class="font-foot">Il render resta fermo finché non scegli.</p>
+    </div>
+  </dialog>
+
+  <dialog class="font-gate" id="planGate" role="dialog" aria-modal="true"
+          aria-labelledby="planTitle" aria-describedby="planSub">
+    <div class="font-panel plan-panel">
+      <p class="gate-label"><span class="gate-dot" aria-hidden="true"></span>Scelta obbligatoria</p>
+      <h2 class="font-title" id="planTitle">Il lavoro è più lungo del budget</h2>
+      <p class="plan-sub num" id="planSub"></p>
+      <div class="plan-cards" id="planCards"></div>
+      <p class="gate-error" id="planError" role="alert"></p>
+      <p class="font-foot">Il lavoro resta fermo finché non scegli.</p>
     </div>
   </dialog>
 
