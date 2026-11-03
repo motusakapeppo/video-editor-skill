@@ -47,6 +47,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
+from . import degrade
+
 SCHEMA = "vx.feedback/1"
 
 #: Il registro e il suo lock. Il lock e' un file a parte: il registro resta
@@ -274,6 +276,11 @@ def append(record: Mapping[str, Any], root: Optional[Any] = None) -> Dict[str, A
     Non riscrive il file: apre in append, scrive la riga, ``flush`` e ``fsync``
     sotto lock. Un voto fuori 1..5 solleva ``ValueError`` prima di toccare il
     disco. Un registro illeggibile non si corregge qui: si appende in coda.
+
+    Un registro che non si scrive (permessi, disco pieno, cartella che non si
+    crea) **non** solleva: la riga non entra, il motivo finisce in
+    ``stored: false`` e in :data:`vx.degrade`, e chi ha chiesto il voto resta
+    vivo. Il giudizio e' accessorio; il lavoro no.
     """
     if not isinstance(record, Mapping):
         raise ValueError("il record del giudizio deve essere un oggetto JSON")
@@ -291,11 +298,19 @@ def append(record: Mapping[str, Any], root: Optional[Any] = None) -> Dict[str, A
     )
     target = register_path(root)
     line = json.dumps(normalized, ensure_ascii=False, default=str) + "\n"
-    with _locked(target.parent / LOCK_NAME):
-        with open(target, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
+    try:
+        with _locked(target.parent / LOCK_NAME):
+            with open(target, "a", encoding="utf-8", newline="\n") as handle:
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+    except OSError as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        degrade.note("feedback", exc)
+        stored = dict(normalized)
+        stored["stored"] = False
+        stored["error"] = reason
+        return stored
     return normalized
 
 
@@ -489,11 +504,30 @@ def _build_report(path: Path) -> Dict[str, Any]:
     }
 
 
+def _empty_report(path: Path) -> Dict[str, Any]:
+    """Gli aggregati di un registro che non si legge: zeri, non un'eccezione."""
+    return {
+        "root": str(path),
+        "count": 0,
+        "mean": None,
+        "distribution": {str(value): 0 for value in RATINGS},
+        "by_outcome": _group_mean([], "outcome", OUTCOMES),
+        "by_balance": _group_mean([], "balance", BALANCES),
+        "mape": _mape([]),
+        "correlation": _correlation([]),
+        "window": {"first_utc": "", "last_utc": ""},
+        "broken_lines": 0,
+    }
+
+
 def report(root: Optional[Any] = None) -> Dict[str, Any]:
     """Gli aggregati del registro, in una forma che sopravvive a ``json.dumps``.
 
     Con zero valutazioni non si inventa niente: medie ``None``, distribuzione a
     zero, e la frase "la correlazione non e' conclusiva" gia' dentro ``note``.
+    Un registro che non si legge (permessi, file troncato in modo irrecuperabile)
+    da' lo stesso report vuoto con ``error``, non un'eccezione: chi guarda la
+    vista vede zeri, non una pagina rotta.
     """
     path = register_path(root)
     try:
@@ -504,7 +538,12 @@ def report(root: Optional[Any] = None) -> Dict[str, Any]:
     cached = _REPORT_CACHE.get(key)
     if cached is not None:
         return cached
-    data = _build_report(path)
+    try:
+        data = _build_report(path)
+    except Exception as exc:  # noqa: BLE001 - un registro rotto risponde zeri
+        degrade.note("feedback", exc)
+        data = _empty_report(path)
+        data["error"] = f"{type(exc).__name__}: {exc}"
     _REPORT_CACHE.clear()
     _REPORT_CACHE[key] = data
     return data
@@ -747,7 +786,8 @@ def pending(
     }
     try:
         _write_json_atomic(path, payload)
-    except OSError as exc:
+    except Exception as exc:  # noqa: BLE001 - il segnale non e' il lavoro
+        degrade.note("feedback", exc)
         return {
             "asked": False,
             "created_utc": None,

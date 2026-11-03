@@ -43,6 +43,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
+from . import degrade
+
 SCHEMA_EVENT = "vx.learning.event/1"
 SCHEMA_PLAN = "vx.learning.plan/1"
 SCHEMA_METRICS = "vx.learning.metrics/1"
@@ -181,9 +183,23 @@ def _sha256(value: Any) -> str:
 def _read_json(path: _Path) -> Dict[str, Any]:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        # Un indice troncato o illeggibile vale come assente: chi legge decide
+        # con i valori di partenza invece di fermarsi. Un file che non c'e'
+        # non e' un guasto (la prima esecuzione non ha ancora una policy).
+        if isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError):
+            degrade.note("learning", exc)
         return {}
     return dict(data) if isinstance(data, Mapping) else {}
+
+
+def _glob(directory: Path, pattern: str) -> List[Path]:
+    """Le corrispondenze, o niente: una cartella illeggibile non e' un errore."""
+    try:
+        return sorted(directory.glob(pattern))
+    except OSError as exc:
+        degrade.note("learning", exc)
+        return []
 
 
 def _write_json_atomic(path: _Path, payload: Mapping[str, Any]) -> Path:
@@ -278,12 +294,20 @@ def _month(moment: datetime) -> str:
 
 
 def _torn(path: Path) -> bool:
-    """L'ultima riga e' senza newline: un crash l'ha lasciata a meta'."""
-    if not path.is_file() or not path.stat().st_size:
+    """L'ultima riga e' senza newline: un crash l'ha lasciata a meta'.
+
+    Un file che non si legge non e' un file troncato: si risponde ``False`` e
+    l'append prosegue (con la riga nuova su una riga sua).
+    """
+    try:
+        if not path.is_file() or not path.stat().st_size:
+            return False
+        with path.open("rb") as raw:
+            raw.seek(-1, 2)
+            return raw.read(1) != b"\n"
+    except OSError as exc:
+        degrade.note("learning", exc)
         return False
-    with path.open("rb") as raw:
-        raw.seek(-1, 2)
-        return raw.read(1) != b"\n"
 
 
 def append_event(
@@ -322,16 +346,25 @@ def append_event(
     }
     line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str) + "\n"
     target = events_dir(base) / f"{month}.jsonl"
-    with _locked(base / EVENTS_LOCK):
-        target.parent.mkdir(parents=True, exist_ok=True)
-        torn = _torn(target)
-        with open(target, "a", encoding="utf-8", newline="\n") as handle:
-            if torn:
-                # Chiude la riga mutilata: il nuovo evento non si incolla a lei.
-                handle.write("\n")
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
+    try:
+        with _locked(base / EVENTS_LOCK):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            torn = _torn(target)
+            with open(target, "a", encoding="utf-8", newline="\n") as handle:
+                if torn:
+                    # Chiude la riga mutilata: il nuovo evento non si incolla a lei.
+                    handle.write("\n")
+                handle.write(line)
+                handle.flush()
+                os.fsync(handle.fileno())
+    except OSError as exc:
+        # L'evento e' accessorio: se non entra, il chiamante lo sa dal ritorno
+        # e il lavoro continua. Nessuna riga e' stata riscritta.
+        degrade.note("learning", exc)
+        lost = dict(record)
+        lost["stored"] = False
+        lost["error"] = f"{type(exc).__name__}: {exc}"
+        return lost
     return record
 
 
@@ -365,14 +398,15 @@ def read_events(
     if wanted and not re.fullmatch(r"\d{4}-\d{2}", wanted):
         raise ValueError(f"read_events: mese non valido {month!r} (atteso YYYY-MM)")
     records: List[Dict[str, Any]] = []
-    for path in sorted(events_dir(base).glob("*.jsonl")):
+    for path in _glob(events_dir(base), "*.jsonl"):
         if wanted and path.stem != wanted:
             continue
         try:
             records.extend(_lines(path.read_text(encoding="utf-8", errors="replace")))
-        except OSError:
+        except OSError as exc:
+            degrade.note("learning", exc)
             continue
-    for path in sorted(archive_dir(base).glob("*.jsonl.*")):
+    for path in _glob(archive_dir(base), "*.jsonl.*"):
         stem = path.name.split(".")[0]
         if wanted and stem != wanted:
             continue
@@ -430,12 +464,13 @@ def archive_events(
     base = root_dir(root)
     keep = str(keep_month or "").strip() or _month(_now())
     done: List[Dict[str, Any]] = []
-    for path in sorted(events_dir(base).glob("*.jsonl")):
+    for path in _glob(events_dir(base), "*.jsonl"):
         if path.stem >= keep:
             continue
         try:
             data = path.read_bytes()
-        except OSError:
+        except OSError as exc:
+            degrade.note("learning", exc)
             continue
         blob, suffix = compress_bytes(data)
         target = archive_dir(base) / f"{path.stem}.jsonl.{suffix}"
@@ -617,23 +652,44 @@ def store_failure(
             "il piano va ridotto, non il video archiviato"
         )
 
-    with _locked(base / CORPUS_LOCK):
-        parent = corpus_dir(base)
-        parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(dir=str(parent), prefix=f".{job}.staging-"))
-        try:
-            _write_json_atomic(staging / "plan.json", plan_record)
-            _write_json_atomic(staging / "metrics.json", metrics_record)
-            for index, (origin, data, _dimensions) in enumerate(checked):
-                (staging / f"thumb_{index}{origin.suffix.lower()}").write_bytes(data)
-            if target.exists():
-                shutil.rmtree(target)
-            os.replace(staging, target)
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
+    try:
+        with _locked(base / CORPUS_LOCK):
+            parent = corpus_dir(base)
+            parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(dir=str(parent), prefix=f".{job}.staging-"))
+            try:
+                _write_json_atomic(staging / "plan.json", plan_record)
+                _write_json_atomic(staging / "metrics.json", metrics_record)
+                for index, (origin, data, _dimensions) in enumerate(checked):
+                    (staging / f"thumb_{index}{origin.suffix.lower()}").write_bytes(data)
+                if target.exists():
+                    shutil.rmtree(target)
+                os.replace(staging, target)
+            except BaseException:
+                shutil.rmtree(staging, ignore_errors=True)
+                raise
+    except OSError as exc:
+        # L'archivio impara, il montaggio no: se il disco non accetta il corpus
+        # (permessi, pieno, cartella read-only) il lavoro resta com'era. La
+        # cartella vecchia non e' stata toccata e la staging e' gia' sparita.
+        degrade.note("learning", exc)
+        return {
+            "schema": "vx.learning.corpus/1",
+            "job_id": job,
+            "path": str(target),
+            "files": [],
+            "thumbs": 0,
+            "bytes": 0,
+            "captured_utc": stamp,
+            "stored": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
-    files = sorted(path.name for path in target.iterdir() if path.is_file())
+    try:
+        files = sorted(path.name for path in target.iterdir() if path.is_file())
+    except OSError as exc:
+        degrade.note("learning", exc)
+        files = []
     written = {
         "schema": "vx.learning.corpus/1",
         "job_id": job,
@@ -642,19 +698,23 @@ def store_failure(
         "thumbs": len(checked),
         "bytes": _dir_bytes(target),
         "captured_utc": stamp,
+        "stored": True,
     }
-    append_event(
-        "failure",
-        {
-            "files": files,
-            "thumbs": len(checked),
-            "bytes": written["bytes"],
-            "outcome": measures.get("outcome", ""),
-            "rating": measures.get("rating", measures.get("vote", "")),
-        },
-        job_id=job,
-        root=base,
-    )
+    try:
+        append_event(
+            "failure",
+            {
+                "files": files,
+                "thumbs": len(checked),
+                "bytes": written["bytes"],
+                "outcome": measures.get("outcome", ""),
+                "rating": measures.get("rating", measures.get("vote", "")),
+            },
+            job_id=job,
+            root=base,
+        )
+    except Exception as exc:  # noqa: BLE001 - l'indice non e' il corpus
+        degrade.note("learning", exc)
     return written
 
 
@@ -837,7 +897,12 @@ def policy_save(
 
 def _dir_bytes(path: Path) -> int:
     total = 0
-    for item in path.rglob("*"):
+    try:
+        items = list(path.rglob("*"))
+    except OSError as exc:
+        degrade.note("learning", exc)
+        return 0
+    for item in items:
         try:
             if item.is_file():
                 total += item.stat().st_size
@@ -847,8 +912,16 @@ def _dir_bytes(path: Path) -> int:
 
 
 def _data_files(base: Path) -> Iterator[Path]:
-    for path in base.rglob("*"):
-        if not path.is_file():
+    try:
+        items = list(base.rglob("*"))
+    except OSError as exc:
+        degrade.note("learning", exc)
+        return
+    for path in items:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
             continue
         name = path.name
         if name.endswith(".lock") or name.endswith(".tmp") or ".staging-" in path.parts[-2:]:
@@ -884,7 +957,12 @@ def _corpus_entries(base: Path) -> List[Tuple[datetime, Path]]:
     if not parent.is_dir():
         return []
     out: List[Tuple[datetime, Path]] = []
-    for path in parent.iterdir():
+    try:
+        children = list(parent.iterdir())
+    except OSError as exc:
+        degrade.note("learning", exc)
+        return []
+    for path in children:
         if not path.is_dir() or path.name.startswith("."):
             continue
         out.append((_corpus_stamp(path), path))
@@ -903,7 +981,7 @@ def _cited_job_ids(base: Path, jobs: Sequence[str]) -> set:
     if policy_path(base).is_file():
         documents.append(_read_json(policy_path(base)))
     if history_dir(base).is_dir():
-        for path in sorted(history_dir(base).glob("*.json")):
+        for path in _glob(history_dir(base), "*.json"):
             documents.append(_read_json(path))
     explicit = ("corpus_refs", "job_ids", "cited_jobs", "jobs", "job_id", "corpus")
     for data in documents:
@@ -942,7 +1020,7 @@ def _prune_plan(
     keep |= cited
     plan: List[Tuple[Path, int]] = []
 
-    archives = sorted(archive_dir(base).glob("*.jsonl.*"), key=lambda path: path.name)
+    archives = _glob(archive_dir(base), "*.jsonl.*")
     for path in archives:
         if total <= budget_bytes:
             break
@@ -1006,7 +1084,7 @@ def status(*, root: Optional[Any] = None, budget_mb: float = DEFAULT_BUDGET_MB) 
         "by_area": by_area,
         "events_count": len(read_events(root=base)),
         "corpus_count": len(_corpus_entries(base)),
-        "archive_count": len(sorted(archive_dir(base).glob("*.jsonl.*"))),
+        "archive_count": len(_glob(archive_dir(base), "*.jsonl.*")),
         "oldest": _oldest(base),
         "will_prune_next": [
             str(path.relative_to(base)).replace("\\", "/") for path, _size in plan

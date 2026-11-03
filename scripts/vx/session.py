@@ -11,7 +11,7 @@ gli errori (``error``) e la fine (``end``), con ``t`` in secondi dall'inizio e
 Forma di un evento::
 
     {"t": 1.234, "type": "stage", "stage": "proxy", "percent": 12.0,
-     "detail": "Proxy pronti", "job": "lavoro", "job_path": "C:/..."}
+     "detail": "Proxy pronti", "job": "lavoro", "job_path": "work/lavoro"}
 
 Il registro non deve costare: con ``VX_SESSION=0`` (o ``false``/``off``/``no``)
 non si apre nessun file, e qualunque errore di scrittura spegne la sessione in

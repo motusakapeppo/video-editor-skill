@@ -40,6 +40,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -47,11 +48,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from . import (
+    ask,
     asset_triage,
     contract,
     creative,
     decide,
     decisions,
+    degrade,
     deliverables,
     edl_plan,
     estimate,
@@ -93,6 +96,44 @@ KEYFRAMES_PLAN_SCHEMA = "vx.keyframes-plan/1"
 KEY_GATE_WAIT_DEFAULT = FONT_WAIT_DEFAULT
 #: Tre fotogrammi: la regola di ``keygate`` (sotto tre non si vede un montaggio).
 KEYFRAME_PICKS = (0.25, 0.5, 0.75)
+
+#: Le domande del triage che prima finivano in chat. Ora passano da ``vx.ask``:
+#: la vista le mostra con le opzioni, e senza vista si prende il default
+#: dichiarandolo (``answered_by="default"``), come per gli altri cancelli.
+TRIAGE_WAIT_DEFAULT = 180.0
+TRIAGE_QUESTIONS: List[Dict[str, Any]] = [
+    {
+        "id": "target_format",
+        "question": "In che formato esce il video?",
+        "options": [
+            {"value": "9:16", "label": "9:16 verticale", "detail": "Reel, TikTok, Shorts"},
+            {"value": "16:9", "label": "16:9 orizzontale", "detail": "YouTube, vlog"},
+            {"value": "1:1", "label": "1:1 quadrato", "detail": "feed"},
+            {"value": "4:5", "label": "4:5 verticale stretto", "detail": "carosello"},
+        ],
+        "default": "9:16",
+    },
+    {
+        "id": "hook",
+        "question": "Cosa metto nei primi 3 secondi?",
+        "options": [
+            {"value": "testo", "label": "testo", "detail": "una card in apertura"},
+            {"value": "auto", "label": "auto", "detail": "decide il montaggio"},
+            {"value": "nessuno", "label": "nessuno", "detail": "si parte col girato"},
+        ],
+        "default": "auto",
+    },
+    {
+        "id": "subtitles",
+        "question": "Che sottotitoli vuoi?",
+        "options": [
+            {"value": "karaoke", "label": "karaoke", "detail": "parola per parola"},
+            {"value": "clean", "label": "clean", "detail": "righe pulite"},
+            {"value": "nessuno", "label": "nessuno", "detail": "nessun testo"},
+        ],
+        "default": "karaoke",
+    },
+]
 
 
 def loudness_target(document: Any = None) -> tuple[float, float]:
@@ -179,6 +220,7 @@ DURATION_SHORTFALL_TOLERANCE = 0.5
 #: voce a zero non sono la stessa cosa quando si legge dove e' andato il tempo.
 TIMING_STAGES = (
     "triage",
+    "questions",
     "probe",
     "hash",
     "ingest",
@@ -411,9 +453,11 @@ def run_guard(args: Any, workdir: Any) -> Dict[str, Any]:
     try:
         audit = guard.audit(Path(workdir))
     except Exception as exc:  # noqa: BLE001 - l'audit non e' la consegna
+        degrade.note("guard", exc)
         return {
             "ok": True,
             "skipped": True,
+            "degraded": True,
             "why": f"guardia non eseguibile: {type(exc).__name__}: {exc}",
             "violations": [],
             "warnings": [],
@@ -2739,6 +2783,117 @@ def _resource_report(clock: _Clock) -> Dict[str, Any]:
     }
 
 
+def collect_triage_questions(
+    workdir: Any,
+    *,
+    view_active: bool,
+    view_url: str = "",
+    wait: float = TRIAGE_WAIT_DEFAULT,
+    notify: Optional[Callable[[str], None]] = None,
+) -> List[Dict[str, Any]]:
+    """Le tre domande del triage, nella vista; senza vista il default dichiarato.
+
+    ``ask`` scrive una domanda e aspetta la risposta. Le tre domande sono
+    indipendenti, quindi si aprono tutte insieme: chi guarda le vede nello
+    stesso momento e l'attesa totale e' ``wait``, non ``3 x wait``. Ognuna ha
+    la sua scadenza dentro :func:`vx.ask.ask`; allo scadere il valore e' il
+    default e ``answered_by`` lo dice.
+
+    Senza una vista attiva non si scrive niente e non si aspetta: si usano i
+    tre default e ogni voce dichiara ``answered_by="default"``. Un guasto di
+    ``ask`` non ferma il lavoro: quella voce torna al default con l'errore.
+    """
+    root = Path(workdir)
+    say = notify if notify is not None else _say
+    try:
+        limit = max(0.0, float(TRIAGE_WAIT_DEFAULT if wait is None else wait))
+    except (TypeError, ValueError):
+        limit = TRIAGE_WAIT_DEFAULT
+
+    def fallback(spec: Mapping[str, Any], error: str = "") -> Dict[str, Any]:
+        entry: Dict[str, Any] = {
+            "id": str(spec.get("id") or ""),
+            "question": str(spec.get("question") or ""),
+            "default": spec.get("default"),
+            "value": spec.get("default"),
+            "answered_by": "default",
+            "timed_out": False,
+        }
+        if error:
+            entry["error"] = error
+            entry["degraded"] = True
+        return entry
+
+    if not view_active or limit <= 0:
+        return [fallback(spec) for spec in TRIAGE_QUESTIONS]
+
+    if str(view_url or "").strip():
+        say(f"Rispondi alle domande del triage nella vista: {view_url}")
+    else:
+        say(
+            "Rispondi alle domande del triage: "
+            f"{root} (cartella {ask.QUESTION_DIR})"
+        )
+
+    results: Dict[str, Dict[str, Any]] = {}
+
+    def run(spec: Mapping[str, Any]) -> None:
+        key = str(spec.get("id") or "")
+        try:
+            results[key] = ask.ask(
+                root,
+                key,
+                spec.get("question"),
+                spec.get("options"),
+                default=spec.get("default"),
+                context={"stage": "triage", "from": "auto"},
+                timeout=limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - una domanda rotta non ferma il lavoro
+            results[key] = {
+                "answered_by": "default",
+                "value": spec.get("default"),
+                "timed_out": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    threads = [
+        threading.Thread(target=run, args=(spec,), daemon=True)
+        for spec in TRIAGE_QUESTIONS
+    ]
+    for thread in threads:
+        thread.start()
+    # ``ask`` ha gia' la sua scadenza; il margine copre solo la scrittura.
+    for thread in threads:
+        thread.join(limit + 5.0)
+
+    entries: List[Dict[str, Any]] = []
+    for spec in TRIAGE_QUESTIONS:
+        key = str(spec.get("id") or "")
+        result = results.get(key)
+        if not isinstance(result, Mapping):
+            entries.append(fallback(spec, "nessuna risposta entro la scadenza"))
+            continue
+        entry = {
+            "id": key,
+            "question": str(spec.get("question") or ""),
+            "default": spec.get("default"),
+            "value": result.get("value"),
+            "answered_by": str(result.get("answered_by") or "default"),
+            "timed_out": bool(result.get("timed_out")),
+        }
+        if result.get("error"):
+            entry["error"] = str(result.get("error"))
+            entry["degraded"] = True
+        entries.append(entry)
+    for entry in entries:
+        if entry["answered_by"] == "user":
+            say(f"Triage: {entry['id']} = {entry['value']} (scelto nella vista).")
+        elif entry["answered_by"] == "default":
+            say(f"Triage: {entry['id']} = {entry['value']} (default dichiarato).")
+    return entries
+
+
 def _run_locked(
     args: Any,
     workdir: Path,
@@ -2759,6 +2914,39 @@ def _run_locked(
     clock.facts["ram_free_mb"] = resources.ram_free_mb()
     clock.facts["gpu"] = resources.gpu()
     _emit(log, "run", "start", Path(args.out).name)
+
+    # Le domande del triage: prima andavano in chat, ora vanno nella vista.
+    # Con una vista si aspettano le tre risposte (in parallelo, una sola
+    # scadenza); senza vista si usano i default e il report lo dichiara.
+    with clock.time("questions"):
+        try:
+            question_wait = float(
+                settings.get("triage.wait_sec", TRIAGE_WAIT_DEFAULT)
+            )
+        except (TypeError, ValueError):
+            question_wait = TRIAGE_WAIT_DEFAULT
+        questions = collect_triage_questions(
+            workdir,
+            view_active=bool(view_active),
+            view_url=str(view_url or ""),
+            wait=question_wait,
+            notify=_say,
+        )
+    _emit(
+        log,
+        "questions",
+        "done" if view_active else "skip",
+        ", ".join(
+            f"{item['id']}={item['value']} ({item['answered_by']})"
+            for item in questions
+        ),
+    )
+    answers = {str(item.get("id")): item for item in questions}
+    subtitles_answer = answers.get("subtitles") or {}
+    if subtitles_answer.get("answered_by") == "user":
+        # L'unica risposta che ha gia' un interruttore nella pipeline: la vista
+        # ha scelto, non si finge che il default sia una scelta.
+        args.subs = str(subtitles_answer.get("value") or "") != "nessuno"
 
     with clock.time("triage"):
         assets = _discover(args)
@@ -3130,20 +3318,26 @@ def _run_locked(
     shortfall = duration_shortfall(requested_sec, plan.duration_sec)
 
     # Le cinque scelte del giro, con la prova che le sostiene. Il registro si
-    # costruisce qui, quando tutte le sezioni hanno gia' i loro numeri.
-    decision_log = build_decisions(
-        font_section=font_section,
-        key_section=key_section,
-        plan_choice=plan_choice["plan_choice"],
-        estimate_section=plan_choice["estimate"],
-        coherence_section=coherence_section,
-        bridge_summary=bridge_summary,
-        plan=plan,
-        payload=payload,
-        requirement=font_requirement(getattr(args, "prompt", ""), payload, plan),
-        energy=font_energy(payload, plan),
-        creative_section=creative_section,
-    )
+    # costruisce qui, quando tutte le sezioni hanno gia' i loro numeri. Un
+    # registro che non si costruisce e' un accessorio che cede: il report lo
+    # dichiara in ``degraded`` e la consegna prosegue senza il suo elenco.
+    try:
+        decision_log = build_decisions(
+            font_section=font_section,
+            key_section=key_section,
+            plan_choice=plan_choice["plan_choice"],
+            estimate_section=plan_choice["estimate"],
+            coherence_section=coherence_section,
+            bridge_summary=bridge_summary,
+            plan=plan,
+            payload=payload,
+            requirement=font_requirement(getattr(args, "prompt", ""), payload, plan),
+            energy=font_energy(payload, plan),
+            creative_section=creative_section,
+        )
+    except Exception as exc:  # noqa: BLE001 - il registro non e' la consegna
+        degrade.note("decisions", exc)
+        decision_log = []
 
     report: Dict[str, Any] = {
         "ok": True,
@@ -3164,6 +3358,7 @@ def _run_locked(
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "font": font_section,
         "keyframes_gate": key_section,
+        "questions": questions,
         "decisions": decision_log,
         "bridge": bridge_summary,
         "coherence": coherence_section,
@@ -3245,12 +3440,16 @@ def _run_locked(
         with clock.time("verify"):
             verification = verify_mod.verify_all(report, out)
     except Exception as exc:  # noqa: BLE001 - un verdetto rotto non e' la consegna
+        degrade.note("verify", exc)
         verification = {
             "ok": False,
             "checks": [],
+            "degraded": ["verify_all"],
             "error": f"{type(exc).__name__}: {exc}",
         }
         report["verification"] = verification
+    if verification.get("degraded"):
+        degrade.note("verify", why=f"check non eseguiti: {', '.join(verification['degraded'])}")
     if not verification.get("ok"):
         failed = ", ".join(
             str(item.get("id"))
@@ -3297,11 +3496,23 @@ def _run_locked(
     # a chi legge solo i log, e la riscrittura porta la guardia nel report.
     if not report.get("delivered", True):
         _log("[auto] guardia non superata: il video c'e', la consegna no")
+    # Il registro delle sessioni: se il comando ne ha aperta una (il decoratore
+    # di ``cli``) e non e' riuscita a scrivere, il report lo dichiara qui. Non
+    # si riapre e non si duplica: la sessione e' del comando, non del render.
+    opened = getattr(args, "_vx_session", None)
+    raw_reason = getattr(opened, "last_error", "") if opened is not None else ""
+    reason = raw_reason.strip() if isinstance(raw_reason, str) else ""
+    if reason:
+        degrade.note("session", why=reason)
+    # Un accessorio che ha ceduto non cambia l'esito: si dichiara una volta nel
+    # report, con il motivo, prima che il report vada su disco.
+    degrade.merge_into(report)
+    if report.get("degraded"):
+        _say("Accessori degradati: " + degrade.text(report) + " - il lavoro e' proseguito.")
     _write_json_atomic(auto_report, report)
-    # Il giudizio umano: a fine lavoro il contesto e' gia' scritto nella
-    # workdir, cosi' la vista puo' chiedere un voto senza fermare niente e
-    # senza che ogni lavoro tocchi il codice. Un registro irraggiungibile non
-    # e' un lavoro fallito: si annota nei log e si va avanti.
+    # Il giudizio umano viene **dopo** il report scritto: il segnale deve
+    # leggere l'ultimo report, non uno provvisorio. Se il segnale non si scrive
+    # il lavoro e' gia' salvo; il cedimento resta nel referto restituito.
     try:
         request = write_feedback_request(
             report, workdir, str(getattr(args, "prompt", "") or "")
@@ -3311,6 +3522,8 @@ def _run_locked(
         else:
             _log(f"[auto] giudizio: segnale non scritto ({request.get('error') or 'niente da chiedere'})")
     except Exception as exc:  # noqa: BLE001 - il giudizio non e' la consegna
+        degrade.note("feedback", exc)
+        degrade.merge_into(report)
         _log(f"[auto] giudizio non registrato: {type(exc).__name__}: {exc}")
     log.close()
     return report

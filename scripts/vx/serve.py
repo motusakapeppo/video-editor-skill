@@ -11,6 +11,8 @@ Un server stdlib su `127.0.0.1`. Con **un** lavoro si comporta come sempre; con
 * ``/api/state?session=ID`` in modalita' sessione: ``session``, ``events``,
                            ``artifacts``, ``gates``, ``live`` e ``journal``;
 * ``/api/approve?job=N``   POST che scrive il record **nella forma di keygate**;
+* ``/api/answer?job=N&id=<id>&value=<value>`` POST che risponde a una domanda
+                           aperta da ``vx.ask`` (triage: formato, hook, sottotitoli);
 * ``/frames/<nome>?job=N`` il PNG di un fotogramma;
 * ``/shots/<i>?job=N``     il JPEG dello shot ``i``: miniatura pronta, cache o un
                            fotogramma estratto dal sorgente;
@@ -38,7 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from . import degrade, feedback, guard, keygate, lock
+from . import ask, degrade, feedback, guard, keygate, lock
 from . import session as session_store
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
@@ -1201,6 +1203,26 @@ def _size_of(path: Optional[Path]) -> int:
         return 0
 
 
+def _questions_state(directory: Path, data_dir: Path) -> List[Dict[str, Any]]:
+    """Le domande aperte da ``vx.ask`` in questo lavoro, una voce per id.
+
+    ``ask`` scrive ``<workdir>/questions/``; la workdir e' quella che contiene
+    il piano, ma per un lavoro dedotto puo' essere la cartella stessa. Si
+    guardano tutte e due, senza far sparire l'una per l'altra, e la prima voce
+    di un id vince: la vista non disegna due volte la stessa domanda.
+    """
+    entries: List[Dict[str, Any]] = []
+    seen: set = set()
+    for folder in (data_dir, directory):
+        for item in ask.pending(folder):
+            key = str(item.get("id") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            entries.append(item)
+    return entries
+
+
 def _job_state(directory: Path) -> Dict[str, Any]:
     """Lo stato del lavoro: pubblicato se c'e' il panel, altrimenti dedotto.
 
@@ -1291,6 +1313,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "shots": shots(directory, plan, data_dir=data_dir),
         "live": live_state(directory, data_dir),
         "font": font,
+        "questions": _questions_state(directory, data_dir),
         "feedback": _feedback_state(directory),
         "progress_source": "derived" if derived else "json",
     }
@@ -1320,6 +1343,7 @@ def _empty_session_state(
         "events": [],
         "artifacts": [],
         "gates": [],
+        "questions": [],
         "live": {"ready": 0, "total": 0, "chunks": []},
         "journal": [],
     }
@@ -1371,11 +1395,13 @@ def session_state(session_id: Optional[str] = None) -> Dict[str, Any]:
         live_chunks.append(entry)
     live = {**{key: value for key, value in live.items() if key != "chunks"},
             "chunks": live_chunks}
+    job = _session_job(session_id)
     return {
         "session": summary,
         "events": [dict(row) for row in session.events],
         "artifacts": list(snapshot.get("artifacts") or []),
         "gates": list(snapshot.get("gates") or []),
+        "questions": _questions_state(job, _data_dir(job)) if job is not None else [],
         "live": live,
         "journal": list(snapshot.get("journal") or []),
     }
@@ -1567,6 +1593,7 @@ def _empty_job_payload(directory: Any, why: str = "") -> Dict[str, Any]:
         "shots": [],
         "live": {"ready": 0, "total": 0, "chunks": []},
         "font": _empty_font(),
+        "questions": [],
         "feedback": _empty_feedback(),
         "progress_source": "",
         "jobs": [],
@@ -1629,6 +1656,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "shots": [],
             "live": {"ready": 0, "total": 0, "chunks": []},
             "font": _empty_font(),
+            "questions": [],
             "feedback": _empty_feedback(),
             "progress_source": "",
             "jobs": [],
@@ -2163,6 +2191,31 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
                     if session_mode
                     else _write_plan_choice(_data_dir(self._root()), choice)
                 )
+                self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
+                           "application/json; charset=utf-8")
+                return
+            if path == "/api/answer":
+                params = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                qid = (params.get("id") or [""])[0]
+                value = (params.get("value") or [""])[0]
+                if session_mode:
+                    job = _session_job(session_id)
+                else:
+                    jobs = discover(self._root())
+                    if jobs:
+                        chosen = (
+                            _default_index(jobs)
+                            if index is None
+                            else max(0, min(int(index), len(jobs) - 1))
+                        )
+                        job = jobs[chosen]
+                    else:
+                        job = None
+                if job is None:
+                    answer = {"ok": False, "id": qid, "reason": "nessun lavoro"}
+                else:
+                    answer = ask.answer(_data_dir(job), qid, value)
+                    answer["job"] = job.name
                 self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")
                 return

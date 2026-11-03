@@ -732,6 +732,7 @@ def verify_all(
     payload = report if isinstance(report, dict) else {}
     master_path = master
     results: List[Dict[str, Any]] = []
+    degraded: List[str] = []
     for check_id in checks or CHECK_ORDER:
         fn = CHECKS.get(str(check_id))
         if fn is None:
@@ -742,6 +743,7 @@ def verify_all(
         try:
             results.append(fn(master_path, payload))
         except Exception as exc:  # noqa: BLE001 - un check rotto e' un fallito
+            degraded.append(str(check_id))
             results.append(
                 _result(
                     str(check_id),
@@ -751,7 +753,12 @@ def verify_all(
                     f"check non eseguito: {type(exc).__name__}: {exc}",
                 )
             )
-    verdict = {"ok": all(item["passed"] for item in results), "checks": results}
+    verdict: Dict[str, Any] = {"ok": all(item["passed"] for item in results), "checks": results}
+    if degraded:
+        # Un check che non e' riuscito a misurare non e' la stessa cosa di un
+        # check che ha misurato male: il report lo dichiara a parte, cosi'
+        # ``degraded`` non diventa un sinonimo di "bocciato".
+        verdict["degraded"] = degraded
     if isinstance(report, dict):
         report["verification"] = verdict
         if isinstance(report.get("decisions"), list):

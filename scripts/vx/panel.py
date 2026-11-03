@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from . import degrade
+
 REFRESH_S = 1
 
 #: Quante righe di racconto il json porta con se'. Il tetto tiene le **ultime**:
@@ -49,12 +51,24 @@ footer b { color: #e8e6e3; font-weight: 600; }
 
 
 def _atomic(path: Path, text: str) -> None:
-    """Scrive il file accanto e lo sostituisce: chi legge vede prima o dopo."""
+    """Scrive il file accanto e lo sostituisce: chi legge vede prima o dopo.
+
+    Se la scrittura o la sostituzione falliscono, il temporaneo si toglie e
+    l'errore risale al chiamante: il file precedente resta intero. Chi non vuole
+    fermarsi lo gestisce in :meth:`Panel.write`, che e' l'unica porta.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(text, encoding="utf-8", newline="\n")
-    os.replace(temporary, path)
+    try:
+        temporary.write_text(text, encoding="utf-8", newline="\n")
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _real_file(path: Path) -> bool:
@@ -86,6 +100,10 @@ class Panel:
     #: Se c'e' un server acceso su questo lavoro, il pannello ci porta invece di
     #: restare un mondo a parte: il pannello semplice e' un ripiego, non la vista.
     watch_url: str = ""
+    #: I cedimenti di questo pannello (nome -> motivo). La pagina e' un modo di
+    #: guardare, non un cancello: se non si scrive, il lavoro continua e questo
+    #: elenco lo dice (e finisce in ``report["degraded"]`` via :mod:`vx.degrade`).
+    degraded: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.started is None:
@@ -162,19 +180,29 @@ class Panel:
         self.write()
 
     def write(self) -> Path:
-        """Scrive pagina e json **atomicamente**.
+        """Scrive pagina e json **atomicamente**, senza mai fermare il lavoro.
 
         Con piu' lavori in parallelo un lettore puo' aprire il file mentre viene
         riscritto: senza `os.replace` vedrebbe un JSON troncato e la pagina
         lampeggerebbe su "in attesa". Il file temporaneo si scrive accanto e si
         sostituisce in un colpo solo.
+
+        Un pannello e' un modo di guardare, non un cancello: permessi negati,
+        disco pieno o una cartella che non si crea diventano una voce in
+        :attr:`degraded` (e in :data:`vx.degrade`) e la funzione ritorna il
+        percorso. Il file gia' scritto resta intatto: la sostituzione atomica o
+        riesce o non tocca niente.
         """
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic(self.path, self.html())
-        _atomic(
-            self.path.parent / "progress.json",
-            json.dumps(self.as_dict(), indent=2, ensure_ascii=False) + "\n",
-        )
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            _atomic(self.path, self.html())
+            _atomic(
+                self.path.parent / "progress.json",
+                json.dumps(self.as_dict(), indent=2, ensure_ascii=False) + "\n",
+            )
+        except Exception as exc:  # noqa: BLE001 - la vista non e' il lavoro
+            self.degraded.setdefault("panel", f"{type(exc).__name__}: {exc}")
+            degrade.note("panel", exc)
         return self.path
 
     def as_dict(self) -> Dict[str, object]:

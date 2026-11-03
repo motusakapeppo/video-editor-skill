@@ -176,7 +176,7 @@ def test_feedback() -> None:
             raised = False
         except Exception:  # noqa: BLE001
             written, raised = {}, True
-        check("R4 registro non scrivibile: append ritorna, non solleva", not raised)
+        check("R4 registro non scrivibile: append ritorna, il lavoro continua", not raised)
         check(
             "R4 la riga non entra ma il motivo e' dichiarato",
             written.get("stored") is False and bool(written.get("error")),
@@ -199,7 +199,7 @@ def test_feedback() -> None:
         except Exception:  # noqa: BLE001
             rows, raised = [], True
         check(
-            "R5 riga troncata: si legge il resto, nessuna eccezione",
+            "R5 riga troncata: si legge il resto, il lavoro continua",
             not raised and len(rows) == 1 and rows[0]["job_id"] == "ok",
             len(rows),
         )
@@ -253,7 +253,7 @@ def test_learning() -> None:
             raised = False
         except Exception:  # noqa: BLE001
             written, raised = {}, True
-        check("R8 radice non creabile: store_failure non solleva", not raised)
+        check("R8 radice non creabile: store_failure ritorna, il lavoro continua", not raised)
         check(
             "R8 il corpus non entra e il motivo e' scritto",
             written.get("stored") is False and bool(written.get("error")),
@@ -300,7 +300,7 @@ def test_learning() -> None:
         except Exception:  # noqa: BLE001
             rows, raised = [], True
         check(
-            "R10 eventi troncati: si leggono i validi, nessuna eccezione",
+            "R10 eventi troncati: si leggono i validi, il lavoro continua",
             not raised and len(rows) == 1,
             len(rows),
         )
@@ -346,7 +346,7 @@ def test_guard() -> None:
         finally:
             auto.guard.audit = original
 
-        check("R12 audit che solleva: run_guard ritorna, non solleva", not raised)
+        check("R12 audit che solleva: run_guard ritorna, il lavoro continua", not raised)
         check(
             "R12 la guardia si dichiara saltata e degradata",
             section.get("skipped") is True and section.get("degraded") is True,
@@ -512,7 +512,7 @@ def test_session_and_report() -> None:
             raised = False
         except Exception:  # noqa: BLE001
             opened, raised = None, True
-        check("R19 VX_SESSION_DIR non creabile: begin non solleva", not raised)
+        check("R19 VX_SESSION_DIR non creabile: begin ritorna, il lavoro continua", not raised)
         check(
             "R19 la sessione vive in memoria, disabilitata col motivo",
             opened is not None and opened.active is False and bool(opened.last_error),
