@@ -137,6 +137,7 @@ TIMING_STAGES = (
     "plan",
     "bridge",
     "coherence",
+    "plan_choice",
     "font",
     "keyframes",
     "render",
@@ -985,13 +986,26 @@ def _coherence_section(
         section = coherence.disabled("--free/--no-coherence")
         _say(f"Coerenza: {section['reason']}")
         return section
-    frames = coherence.sample_frames(plan, workdir / "coherence")
-    section = coherence.evaluate(
-        plan,
-        bridge=bridge_report,
-        frames=frames,
-        text_required=bool(getattr(args, "subs", False)),
-    )
+    try:
+        frames = coherence.sample_frames(plan, workdir / "coherence")
+        section = coherence.evaluate(
+            plan,
+            bridge=bridge_report,
+            frames=frames,
+            text_required=bool(getattr(args, "subs", False)),
+        )
+    except Exception as exc:  # noqa: BLE001 - un referto rotto non ferma il render
+        reason = f"referto non calcolato: {type(exc).__name__}: {exc}"
+        _say(f"Coerenza: {reason}")
+        return {
+            "ok": False,
+            "violations": [],
+            "error": reason,
+            "metrics": {
+                "checked": False,
+                "unknown": [{"check": "coherence", "reason": reason}],
+            },
+        }
     metrics = section.get("metrics") or {}
     if section.get("ok"):
         _say(
@@ -1315,6 +1329,46 @@ def _run_font_gate(
         view_url=str(view_url or ""),
         notify=_say,
     )
+
+
+def _run_plan_gate(
+    args: Any,
+    workdir: Path,
+    plan: Any,
+) -> Dict[str, Any]:
+    """Stima il lavoro e, sopra il tetto, chiede full o fast.
+
+    Il budget arriva dal flag ``--budget``; senza flag dalle settings
+    (``budget.max_seconds``, 600 s). L'attesa e' ``--plan-wait``
+    (``budget.plan_wait_sec``, 180 s) e non blocca mai: allo scadere si prende
+    la versione rapida e la si dichiara. Il preset rapido deve arrivare al
+    render, non solo al referto: per questo si scrive su ``args.preset``.
+    """
+    budget = getattr(args, "budget", None)
+    if budget is None:
+        budget = float(
+            settings.get("budget.max_seconds", estimate.BUDGET_DEFAULT)
+            or estimate.BUDGET_DEFAULT
+        )
+    wait = getattr(args, "plan_wait", None)
+    if wait is None:
+        wait = float(
+            settings.get("budget.plan_wait_sec", estimate.PLAN_WAIT_DEFAULT)
+            or estimate.PLAN_WAIT_DEFAULT
+        )
+    result = estimate.plan_gate(
+        workdir,
+        plan,
+        budget=float(budget),
+        wait=float(wait),
+        preset=str(getattr(args, "preset", None) or settings.get("render.preset", "medium")),
+        crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
+        notify=_say,
+    )
+    if result["plan_choice"].get("chosen") == "fast":
+        setattr(args, "preset", estimate.FAST_PRESET)
+        setattr(args, "plan_choice_preset", estimate.FAST_PRESET)
+    return result
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> Path:
@@ -1968,6 +2022,21 @@ def _run_locked(
         or str(coherence_section.get("reason") or "ok"),
     )
 
+    # Il piano esiste: prima di partire si dichiara quanto ci vorra'. Se la
+    # stima supera il tetto (``--budget``/settings) si chiede full o fast;
+    # sotto il tetto non si chiede niente e non si scrive nessun file.
+    with clock.time("plan_choice"):
+        plan_choice = _run_plan_gate(args, workdir, plan)
+    plan = plan_choice["plan"]
+    _emit(
+        log,
+        "plan_choice",
+        "done" if plan_choice["plan_choice"].get("asked") else "skip",
+        f"{plan_choice['plan_choice'].get('chosen')} "
+        f"{plan_choice['estimate'].get('seconds')}s "
+        f"({plan_choice['plan_choice'].get('selected_by')})",
+    )
+
     # Il piano esiste: ora si propongono i font e si aspetta la scelta, prima del
     # render. Il cancello e' aperto solo se c'e' una vista e non l'hanno spento:
     # in autonomia senza pannello si prende il ``chosen`` e lo si dichiara.
@@ -2144,6 +2213,8 @@ def _run_locked(
         "keyframes_gate": key_section,
         "bridge": bridge_summary,
         "coherence": coherence_section,
+        "estimate": plan_choice["estimate"],
+        "plan_choice": plan_choice["plan_choice"],
         "render_estimate": render_estimate,
         "audio": audio_summary(analyses, ceiling_dbtp),
         "music": music_summary(plan, bridge_report),
@@ -2191,10 +2262,14 @@ def _run_locked(
     if render_cache:
         report["stage_cache"] = render_cache
     violations = coherence_section.get("violations") or []
-    if violations:
+    if violations or coherence_section.get("error"):
         report.setdefault("warnings", []).append(
             "coherence: "
-            + ", ".join(str(item.get("code")) for item in violations)
+            + (
+                ", ".join(str(item.get("code")) for item in violations)
+                if violations
+                else str(coherence_section.get("error"))
+            )
         )
     timings = report["timings"]
     _log(

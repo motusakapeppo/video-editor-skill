@@ -2634,6 +2634,18 @@ def build_parser() -> argparse.ArgumentParser:
         "nessun gain misurato sul segmento usato",
     )
     p.add_argument(
+        "--free",
+        action="store_true",
+        help="esonera il montaggio dai controlli di coerenza (varieta', "
+        "ripetizioni, frame inutilizzabili, apertura, ragione dei tagli); "
+        "il report lo dichiara spento, non lo finge verde",
+    )
+    p.add_argument(
+        "--no-coherence",
+        action="store_true",
+        help="alias di --free: nessun controllo di coerenza, e il report lo dice",
+    )
+    p.add_argument(
         "--panel",
         metavar="DIR",
         default=None,
