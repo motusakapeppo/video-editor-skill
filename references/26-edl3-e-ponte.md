@@ -241,6 +241,25 @@ picture senza duplicare le clip.
   che copre un layer superiore, un testo fuori dalla safe area sono errori.
 - Il round-trip `to_dict` / `from_dict` deve essere identico, come in 2.2.
 
+### 2.7.1 La CLI: un solo nome per la versione
+
+La versione vive in una costante sola, `vx.edl3.EDL3_VERSION` (`vx.edl3/1.2`):
+la usano il codice, l'help di `vx edl3` e questo documento. Un test
+(`tests/test_cli_edl3.py`) confronta le tre copie: cambiarne una sola fa
+fallire la suite.
+
+`vx edl3 validate FILE [--json]` carica il documento e chiama la **stessa**
+`Timeline3.validate` che usa il renderer, senza avviare ffmpeg. Esce 0 se non
+c'e' niente da dire, 2 con una riga per problema (`CODICE percorso: dettaglio`).
+Un campo di primo livello che non esiste (fuori dagli `x-`) e' `TIMELINE_SHAPE` e
+il percorso e' il campo stesso: un refuso non viene piu' ignorato in silenzio. `--json` stampa
+`{"ok", "document", "schema", "problems", "count"}` e nient'altro.
+
+`vx edl3 render` lascia nella workdir `progress.json` e `report.json` (le fasi
+`compile`, `render`, `master`, il master e `timeline_sec`): `vx serve DIR`
+riconosce il job e mostra il risultato. `--watch` vale anche qui e stampa
+l'indirizzo prima che il render parta.
+
 ### 2.8 Perche 3.0 e non 2.3
 
 Perche cambia la forma del documento: livelli tipizzati, effetti, ancore, sequenze

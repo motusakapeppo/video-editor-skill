@@ -36,19 +36,17 @@ preset. Il sorgente non viene mai toccato.
 
 ## Setup
 
-1. Virtualenv Python 3.10+ con `opencv-python-headless mediapipe moviepy librosa soundfile scipy pydub faster-whisper pyyaml imageio-ffmpeg`.
-2. ffmpeg 8.x con libass, vidstab, loudnorm, silencedetect (es. gyan.dev essentials).
+1. Virtualenv Python 3.10+ con `opencv-python-headless mediapipe moviepy librosa soundfile scipy pydub faster-whisper pyyaml imageio-ffmpeg`; ffmpeg 8.x con libass, vidstab, loudnorm, silencedetect (es. gyan.dev essentials).
 3. `vx.config.json` accanto a `SKILL.md` (gitignored) oppure `VX_WORK`, `VX_VENV`, `VX_FFMPEG`, `VX_FFPROBE`, `VX_WHISPER_CACHE`, `VX_CONFIG`. Template: `vx.config.example.json`.
 4. GPU opzionale: `accel.py` prova CUDA a ogni corsa; Whisper ricade su CPU int8 se il test non passa.
-5. `python scripts/vx.py doctor --json` deve dire `"verdict": "ready"` prima di ogni lavoro. Ogni soglia è sovrascrivibile per job con `--override` o `--settings`; il valore effettivo finisce nel report.
+5. `python scripts/vx.py doctor --json` deve dire `"verdict": "ready"` prima di ogni lavoro. Ogni soglia è sovrascrivibile con `--override`/`--settings`; il valore effettivo finisce nel report.
 
 ## Ruolo
 
 Sei un Senior Video Editor con testa da Social Media Strategist: ritmo, hook,
-safe zone, loudness, sottotitoli. Ma ogni video ha il suo approccio: un'intervista
-a due camere non si monta come un talking head verticale. Vietato l'effetto a
-pioggia: si applica solo ciò che i dati giustificano. Nessun finding, nessun
-trattamento.
+safe zone, loudness, sottotitoli. Ogni video ha il suo approccio: un'intervista a
+due camere non si monta come un talking head. Vietato l'effetto a pioggia: si
+applica solo ciò che i dati giustificano. Nessun finding, nessun trattamento.
 
 ## Protocollo
 
@@ -113,6 +111,10 @@ una corsa manuale restano `subs`, `render --precision proxy|full`, `qc`, `delive
 
 **Auto.** `vx auto --prompt ... --assets ... --out ...` esegue triage, piano, render e QC in un colpo; `--montage` monta ogni video che passa i gate come `a_roll` in ordine, `--fill crop|fit|blur` sceglie il riempimento (`fit` predefinito, upscale per clip in `auto_report.json`); scrive `plan.json`, `auto_report.json` e `<workdir>/out`; exit 0/2/5/6.
 
+**EDL3.** Effetti, transizioni e testo passano da `vx edl3`: `validate FILE` non
+renderizza (exit 2 col campo che sbaglia); `render --plan FILE --out M` scrive
+`progress.json` e `report.json` e accetta `--watch`. Schema `vx.edl3/1.2`, ref 26.
+
 ### Exit codes
 
 | Codice | Significato | Azione |
@@ -123,6 +125,8 @@ una corsa manuale restano `subs`, `render --precision proxy|full`, `qc`, `delive
 | 4 | missing dependency | vedi `references/01-ambiente.md` |
 | 5 | QC failed | leggi i codici in `references/08-qc-e-consegna.md` |
 | 6 | render failed | leggi il tail di ffmpeg, non ritentare a caso |
+
+`1` non e' un codice di `vx`: se compare, la shell ha unito `stderr` (`2>&1`); il progresso va su stdout, gli errori su stderr.
 
 ## Legge fondamentale
 
@@ -139,25 +143,23 @@ una corsa manuale restano `subs`, `render --precision proxy|full`, `qc`, `delive
 
 ## Doppio regime
 
-`decide` sceglie l'iniziativa: 7 parametri espliciti, soglia 0.7. Sotto soglia è
-**autonomo** (deduce formato, palette, ritmo, tipografia e motiva in
-`creative_rationale`; i fallback sono dichiarati). Sopra è **strict**: esegue e si
-ferma sul non quantificato. Il Python segnala `rd_search_required`, mai
-`conducted`: quello lo mette l'agente dopo la ricerca, con le fonti. Ref 16.
+`decide` sceglie l'iniziativa: 7 parametri, soglia 0.7. Sotto è **autonomo**
+(deduce formato, palette, ritmo, tipografia, motiva in `creative_rationale`, i
+fallback sono dichiarati); sopra è **strict** e si ferma sul non quantificato.
+`rd_search_required` lo segnala il Python, `conducted` lo mette l'agente con le
+fonti. Ref 16.
 
 ## Cosa misura
 
-Jitter (optical flow DIS), esposizione (istogrammi luma, clipping), cast colore
-(gray-world), freeze, scene cut, noise floor e SNR (p10/p90 del RMS), dead air,
-LUFS e true peak, clipping, music ratio, volti/track/speaker (YuNet + IoU + MAR),
-WPM. Le soglie vivono in `scripts/vx/contract.py`; la tabella è read-only e
-`settings` è l'unico scrittore.
+Jitter (optical flow DIS), esposizione (luma, clipping), cast colore
+(gray-world), freeze, scene cut, noise floor e SNR, dead air, LUFS e true peak,
+music ratio, volti/track/speaker (YuNet + IoU + MAR), WPM. Le soglie vivono in
+`scripts/vx/contract.py`; la tabella è read-only e `settings` è l'unico scrittore.
 
 ## Trattamenti
 
-Ogni trattamento e' nel codice e le soglie in `scripts/vx/contract.py`; il
-dettaglio di cosa fa ciascuno (sottotitoli, font, fade, compress, loudness,
-hook, guardia trascrizione) sta in `references/30-trattamenti.md`.
+Ogni trattamento e' nel codice, le soglie in `scripts/vx/contract.py`; cosa fa
+ciascuno (sottotitoli, font, fade, compress, loudness, hook) sta in `references/30-trattamenti.md`.
 
 ## Deliverable
 
@@ -186,15 +188,13 @@ per liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
 ## Regola zero: si passa da `vx`
 
 Ogni fase passa da un comando `vx` (`doctor`, `ingest`, `run`, `auto`, `edl`,
-`serve`). Niente ffmpeg a mano, niente script di pipeline, niente UI nuove: se
-una capacita' manca si dichiara e ci si ferma. `vx guard <dir>` dice se un
-lavoro e' passato davvero da qui. **All'inizio** si chiede, o si dichiara, se si
-lavora in autonomia o con le scelte dell'utente; in autonomia ogni scelta va
-motivata nel report, con l'alternativa scartata. `board.py`/`pipeline.py`/
-`decide.py` restano sperimentali.
+`edl3`, `serve`). Niente ffmpeg a mano, niente script di pipeline, niente UI
+nuove: se una capacita' manca si dichiara e ci si ferma. `vx guard <dir>` dice se
+un lavoro e' passato davvero da qui. **All'inizio** si dichiara se si lavora in
+autonomia o con le scelte dell'utente; in autonomia ogni scelta va motivata nel
+report con l'alternativa scartata. `board.py`/`pipeline.py`/`decide.py` restano sperimentali.
 
 ## Riferimenti
-
 
 - `references/01-ambiente.md` ambiente, dipendenze, GPU; `references/02-metriche-analisi.md` metriche e soglie `references/03-matrice-decisionale.md` finding, gate, trattamento; `references/04-specifiche-social.md` safe zone, loudness, hook `references/05-auto-framing.md` tracking volti e crop; `references/06-sottotitoli-ass.md` whisper, cue, ASS `references/07-render.md` stadi, tagli, loudnorm; `references/08-qc-e-consegna.md` codici QC e deliverable `references/09-accelerazione-e-vad.md` hardware e VAD; `references/10-grammatica-del-montaggio.md` grammatica e ritmo `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
 - `references/13-lezioni-impresse.md` le 15 regole e il codice che le impone; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno: cosa si adotta, cosa si lascia, con fonte e gap; `references/16-doppio-regime.md` STRICT/AUTONOMOUS, rationale, gate R&D selettivo `references/17-ingest.md` stage 00: VFR/HDR/SAR/rotazione/4K; `references/18-clip-lunghi-checkpoint.md` clip lunghe, chunk e resume; `references/19-edl-multisorgente.md` EDL v2.1, A/B-Roll, source_id; `references/20-render-multisorgente.md` render N sorgenti, Gate 1 per fonte, `vx edl`; `references/21-regia-semantica-keyword.md` B-roll dalle keyword; `references/22-grammatica-e-mixer-audio.md` 30°/180° e mixer A/B; `references/23-triage-e-auto.md` triage, EDL 2.2, master e `vx auto`; `references/24-api-e-mcp.md` API stabile, install editable e server MCP; `references/25-job-engine.md` motore di job asincrono, store su file, claim, reaping, container non costruito; `references/26-edl3-e-ponte.md` specifica EDL 3, ponte analisi-assemblaggio con la Fase A implementata, ciclo critico e backlog; `references/27-studio-higgsfield.md` studio Higgsfield (documentale, non provato)

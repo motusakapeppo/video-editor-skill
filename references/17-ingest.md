@@ -65,6 +65,21 @@ le evidenze sono sul timeline normalizzato, non su quello originale.
   anche i pixel disponibili al compositor. Per questo il target non scende mai
   sotto il crop dichiarato.
 
+## Exit code di `vx ingest`
+
+| Codice | Quando | Cosa fare |
+|--------|--------|-----------|
+| 0 | ingest concluso, brief completo o `--autonomous` | prosegui con `plan` |
+| 2 | flag o brief illeggibile | correggi l'argomento |
+| 3 | il brief non dichiara formato/hook/sottotitoli | mostra il briefing e fermati |
+| 4 | manca ffmpeg/ffprobe o una dipendenza | `references/01-ambiente.md` |
+
+Il successo e' **0**: le righe `[n/m]` sono progresso e vanno su stdout, non su
+stderr. Con `--json` non si stampa progresso affatto, cosi' stdout e' il
+documento e nient'altro; lo stderr resta per gli errori veri. Se una shell
+mostra `1` dopo un ingest riuscito, ha unito `stderr` con `2>&1`: non e' un
+codice di `vx` (D18).
+
 ## Test
 
 `tests/test_ingest.py`: unit VFR/HDR/SAR/rotazione, passthrough su CFR SDR,

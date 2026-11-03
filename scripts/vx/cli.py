@@ -57,6 +57,24 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+#: ``--json`` means the document is the only thing on stdout: progress lines are
+#: not a document and must not corrupt it.
+_JSON_MODE = False
+
+
+def _say(msg: str) -> None:
+    """Racconta un passo su stdout, mai sotto ``--json``.
+
+    ``vx ingest`` usava ``stderr`` anche per le righe normali: con
+    ``2>&1 | Select-Object`` in PowerShell ogni riga diventava un ErrorRecord e
+    un comando **riuscito** chiudeva con 1. Il progresso e' output del comando,
+    quindi va su stdout; lo ``stderr`` resta per gli errori veri.
+    """
+    if _JSON_MODE:
+        return
+    print(msg, flush=True)
+
+
 def _out(obj: Any) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
 
@@ -1741,17 +1759,17 @@ def _ingest(
         else probe_data
     )
     if normalization.is_staged:
-        _log(f"[0/6] ingest: {', '.join(normalization.filters_applied)}")
+        _say(f"[0/6] ingest: {', '.join(normalization.filters_applied)}")
     stage("ingest")
 
-    _log("[1/6] proxy a bassa risoluzione")
+    _say("[1/6] proxy a bassa risoluzione")
     proxy_info = proxy_mod.make_proxy(
         str(analysis_src), work / "proxy" / "proxy.mp4", width=args.width
     )
     proxy_path = proxy_info["path"]
     stage("proxy")
 
-    _log("[2/7] pre-analisi video (proxy)")
+    _say("[2/7] pre-analisi video (proxy)")
     video = analyze.analyze_video(
         str(analysis_src), sample_fps=args.sample_fps, proxy_path=proxy_path
     )
@@ -1761,7 +1779,7 @@ def _ingest(
         if normalization.is_staged
         else fingerprint["sha256"]
     )
-    _log("[3/7] parlato")
+    _say("[3/7] parlato")
     speech, transcript, chunked = _analyze_speech(
         str(analysis_src),
         workdir=work,
@@ -1774,10 +1792,10 @@ def _ingest(
         chunk_sec=_analysis_chunk_sec(args),
     )
     stage("speech")
-    _log("[4/7] pre-analisi audio")
+    _say("[4/7] pre-analisi audio")
     aud = audio.analyze_audio(str(analysis_src), vad_result=(chunked or {}).get("vad"))
     stage("audio")
-    _log("[5/7] volti e speaker")
+    _say("[5/7] volti e speaker")
     fac = faces.detect_faces_tracked(proxy_path, sample_fps=SAMPLE_FPS_FACE)
     # Detection ran on the proxy; every consumer below reads `analysis_probe`
     # dimensions (crop, report, plan). Convert once, here.
@@ -1789,7 +1807,7 @@ def _ingest(
         int(analysis_probe.get("height") or 0),
     )
     stage("faces")
-    _log("[6/7] anteprime")
+    _say("[6/7] anteprime")
     thumbs = proxy_mod.thumbs(str(src), work / "analysis", count=args.thumbs)
     sheet = proxy_mod.contact_sheet(thumbs, work / "analysis" / "contact.jpg")
     stage("thumbs")
@@ -1828,7 +1846,7 @@ def _ingest(
 
     brief = brief_override if brief_override is not None else _load_brief(args.brief)
     autonomous = bool(getattr(args, "autonomous", False))
-    _log("[7/7] triage")
+    _say("[7/7] triage")
     request = plan_mod.needs_triage(brief, rep, autonomous=autonomous)
     if autonomous:
         rep["triage"] = {
@@ -2435,9 +2453,91 @@ def cmd_edl(args: argparse.Namespace) -> int:
 
 
 @_session_command("edl3")
+def cmd_edl3_validate(args: argparse.Namespace) -> int:
+    """Valida un documento ``vx.edl3`` senza renderizzare: exit 0 se pulito."""
+    from . import edl3
+
+    path = Path(args.file)
+    try:
+        raw = _load_json(path)
+    except VxError as exc:
+        if args.json:
+            _out({"ok": False, "document": str(path), "error": str(exc), "problems": []})
+        else:
+            _log(f"[error] {exc}")
+        return EXIT_USAGE
+    try:
+        timeline = edl3.Timeline3.from_dict(raw)
+    except edl3.EDLError as exc:
+        problems = [{"code": exc.code, "where": exc.where, "detail": exc.detail}]
+        return _report_edl3_validate(args, path, problems, raw.get("version"))
+    problems = timeline.validate()
+    return _report_edl3_validate(args, path, problems, timeline.version)
+
+
+def _report_edl3_validate(
+    args: argparse.Namespace, path: Path, problems: list, version: Any
+) -> int:
+    """Pubblica l'esito di ``edl3 validate`` e traduce i problemi in exit 2."""
+    declared = str(version or "")
+    if args.json:
+        _out(
+            {
+                "ok": not problems,
+                "document": str(path),
+                "schema": declared,
+                "accepted": declared in edl3_versions(),
+                "problems": problems,
+                "count": len(problems),
+            }
+        )
+    elif problems:
+        for problem in problems:
+            where = problem.get("where") or ""
+            print(f"{problem['code']} {where}: {problem['detail']}")
+        print(f"{len(problems)} problema/i in {path}")
+    else:
+        print(f"ok: {path} — {declared}, nessun problema")
+    return EXIT_OK if not problems else EXIT_USAGE
+
+
+def edl3_versions() -> tuple:
+    """Le versioni accettate dal contratto, lette dalla costante unica."""
+    from . import edl3
+
+    return edl3.EDL3_VERSIONS
+
+
+#: Le fasi vere di un render EDL3: quelle che il pannello pubblica e che
+#: ``vx serve`` legge da ``progress.json``.
+_EDL3_PHASES: tuple = (
+    ("compile", "Compilo il documento EDL3."),
+    ("render", "Renderizzo la timeline."),
+    ("master", "Il master e' scritto."),
+)
+
+
+def _edl3_panel(work: Path, name: str, clips: int):
+    """Il pannello del lavoro EDL3, o ``None`` se la vista non si scrive."""
+    from . import panel as panel_mod
+
+    try:
+        panel = panel_mod.Panel(
+            Path(work) / "progress.html",
+            prompt=f"EDL3 - {name}",
+            clips=int(clips),
+            phases=_EDL3_PHASES,
+        )
+        panel.write()
+        return panel
+    except Exception:  # noqa: BLE001 - la vista non e' un cancello
+        return None
+
+
+@_session_command("edl3")
 def cmd_edl3(args: argparse.Namespace) -> int:
-    """Renderizza un documento ``vx.edl3/1``; con ``--live`` pubblica i pezzi."""
-    from . import edl3, edl3_render
+    """Renderizza un documento EDL3 (``EDL3_VERSION``); con ``--live`` pubblica i pezzi."""
+    from . import edl3, edl3_render, report as report_io
 
     session = _session_of(args)
     try:
@@ -2472,15 +2572,66 @@ def cmd_edl3(args: argparse.Namespace) -> int:
     if session is not None:
         session.set_job(work)
         session.stage("render", 0.0, f"Compilo {Path(args.plan).name}")
-    report = edl3_render.render(
-        timeline,
-        output,
-        workdir=work,
-        audio=args.audio,
-        chunks=args.chunks,
-        jobs=args.jobs,
-        live=bool(args.live),
-        effect_budget=int(budget),
+
+    # D17: il job esiste per `vx serve` dall'inizio, non solo quando il render
+    # finisce. Lo stesso `panel.Panel` degli altri comandi scrive
+    # progress.html/progress.json; il report minimo arriva a lavoro concluso.
+    work.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    panel = _edl3_panel(work, Path(args.plan).name, len(timeline.clips))
+    if panel is not None:
+        panel.record(5.0, "compile", elapsed=0.0)
+        panel.record(10.0, "render", elapsed=time.monotonic() - started)
+    if getattr(args, "watch", False) and panel is not None:
+        from . import watch as watch_mod
+
+        url = watch_mod.running(work) or watch_mod.spawn(work)
+        if url:
+            panel.watch_url = url
+            panel.write()
+            if not args.json:
+                print(f"Lo guardi qui: {url}", flush=True)
+        elif not args.json:
+            print("La vista non si e' aperta; il lavoro prosegue.", flush=True)
+
+    try:
+        report = edl3_render.render(
+            timeline,
+            output,
+            workdir=work,
+            audio=args.audio,
+            chunks=args.chunks,
+            jobs=args.jobs,
+            live=bool(args.live),
+            effect_budget=int(budget),
+        )
+    except BaseException as exc:  # noqa: BLE001 - the panel must hear the truth
+        if panel is not None:
+            panel.stop(f"fermato prima della fine: {type(exc).__name__}: {exc}")
+        raise
+
+    master = Path(report.get("output") or output)
+    elapsed = time.monotonic() - started
+    if panel is not None:
+        panel.record(95.0, "master", elapsed=elapsed)
+        panel.finish("Render completato", elapsed=elapsed, master=str(master))
+    report_io.write(
+        {
+            "schema": SCHEMA,
+            "version": VERSION,
+            "tool": _tool_block(),
+            "workdir": str(work),
+            "master": str(master),
+            "timeline_sec": round(float(timeline.duration), 3),
+            "edl3": {
+                "schema": timeline.version,
+                "declared": edl3.EDL3_VERSION,
+                "document": str(Path(args.plan).resolve()),
+                "clips": len(timeline.clips),
+            },
+            "render": report,
+        },
+        work / "report.json",
     )
     if session is not None:
         session.stage("render", 100.0, "Render completato")
@@ -3250,13 +3401,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_auto)
 
+    from . import edl3 as edl3_mod  # noqa: PLC0415 - one version, one spelling
+
+    version = edl3_mod.EDL3_VERSION
     p = add(
         "edl3",
-        "EDL 3: renderizza un documento vx.edl3/1 (--live pubblica i pezzi)",
+        f"EDL 3: valida o renderizza un documento {version} (--live pubblica i pezzi)",
     )
     edl3_sub = p.add_subparsers(dest="edl3_cmd", required=True)
+    e3v = edl3_sub.add_parser(
+        "validate", help=f"valida un documento {version} senza renderizzare"
+    )
+    e3v.add_argument("file", help=f"documento {version} (JSON)")
+    e3v.add_argument("--json", action="store_true")
+    e3v.set_defaults(func=cmd_edl3_validate)
     e3 = edl3_sub.add_parser("render", help="renderizza il documento in --out")
-    e3.add_argument("--plan", required=True, help="documento vx.edl3/1 (JSON)")
+    e3.add_argument("--plan", required=True, help=f"documento {version} (JSON)")
     e3.add_argument("--out", required=True, help="file master da scrivere")
     e3.add_argument("--workdir", default=None, help="cartella di lavoro (chunk, live)")
     e3.add_argument(
@@ -3285,6 +3445,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="pubblica ogni blocco appena e' pronto in <workdir>/live/ "
         "(chunk_NNN.mp4 + manifest.json), cosi' il player mostra il video vero",
+    )
+    e3.add_argument(
+        "--watch",
+        action="store_true",
+        help="apre la vista del lavoro e stampa l'indirizzo PRIMA del render: "
+        "vale anche per EDL3, che pubblica progress.json nella workdir",
     )
     e3.add_argument("--json", action="store_true")
     e3.set_defaults(func=cmd_edl3)
@@ -3415,6 +3581,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # The C++ side of OpenCV writes its own WARN lines on stderr even when the
+    # work is fine; merged into a pipeline those lines look like a failure, so a
+    # successful ingest could be reported with exit 1. vx's own errors are
+    # Python exceptions, not OpenCV chatter: keep only ERROR from the library.
+    os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
@@ -3423,8 +3594,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
-    global _ACTIVE_PROGRESS
+    global _ACTIVE_PROGRESS, _JSON_MODE
     _ACTIVE_PROGRESS = None
+    _JSON_MODE = bool(getattr(args, "json", False))
     try:
         _apply_settings(args)
         return int(args.func(args))
