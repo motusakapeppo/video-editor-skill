@@ -29,21 +29,45 @@ from .contract import EXIT_OK, EXIT_USAGE, VxError
 
 __all__ = ["audit", "to_text", "CODES"]
 
-#: The four files that say "this folder was born inside vx".
-SIGNATURE_FILES = ("source.json", "report.json", "plan.json", "progress.json")
+#: The files that say "this folder was born inside vx". ``auto_report.json`` is
+#: the report ``vx auto`` writes in its own workdir: without it, a normal auto
+#: job looked like a hand-made folder with a loose master.
+SIGNATURE_FILES = (
+    "source.json",
+    "report.json",
+    "auto_report.json",
+    "plan.json",
+    "progress.json",
+)
 #: The two folders that say the same, at the top of the job (as `vx serve` reads it).
 SIGNATURE_DIRS = ("proxy", "out")
 #: ``stage_*/`` (stage_00, stage_01 ...) is the staging convention of the skill.
 SIGNATURE_GLOBS = ("stage_*",)
 
 #: What makes an ``out/`` master legitimate: one of these exists at job root.
-REPORT_MARKERS = ("report.json", "deliverables.json")
+#: ``auto_report.json`` is auto's own report, written in the workdir.
+REPORT_MARKERS = ("report.json", "auto_report.json", "deliverables.json")
 
 #: Evidence of a publishable master (only the formats the pipeline delivers).
 MASTER_SUFFIXES = (".mp4",)
 
 #: Directories walked by the evidence scans but never part of a job's own code.
-SKIP_DIRS = {".git", "__pycache__", "node_modules"}
+#: They are scratch space the skill writes itself (``work/``, ``render/``,
+#: ``live/``, ``stage_00/``, ``keyframes/``): looking for hand-made code there
+#: would accuse a perfectly normal job.
+SKIP_DIRS = {
+    ".git",
+    "__pycache__",
+    "node_modules",
+    "work",
+    "render",
+    "live",
+    "keyframes",
+    "fonts",
+    "shots",
+}
+#: Prefixes of staged folders (``stage_00``, ``stage_01`` ...).
+SKIP_DIR_PREFIXES = ("stage_",)
 
 MAX_EVIDENCE = 6
 
@@ -72,7 +96,11 @@ def _rel(root: Path, path: Path) -> str:
 def _walk(root: Path) -> Iterable[Path]:
     """Every file under ``root``, skipping the folders no job writes by hand."""
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d not in SKIP_DIRS and not d.startswith(SKIP_DIR_PREFIXES)
+        )
         for name in sorted(filenames):
             yield Path(dirpath) / name
 

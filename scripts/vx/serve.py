@@ -36,7 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from . import keygate
+from . import guard, keygate
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
 UI_FILES = {
@@ -52,7 +52,7 @@ MAX_DEPTH = 2
 #: Sono file e cartelle che la skill scrive davvero: una cartella con solo un
 #: video dentro non basta, e non deve bastare.
 JOB_MARKER_DIRS = ("stage_00", "proxy", "out")
-JOB_MARKER_FILES = ("source.json", "report.json", "plan.json")
+JOB_MARKER_FILES = ("source.json", "report.json", "auto_report.json", "plan.json")
 
 #: Le fasi che si possono dedurre dai file presenti in un lavoro senza panel.
 #: ``audio`` non e' un segno di riconoscimento: da sola non fa un lavoro, ma
@@ -842,6 +842,55 @@ def _approval_state(directory: Path, pending: Mapping[str, Any]) -> Dict[str, An
     }
 
 
+def _empty_guard(why: str = "") -> Dict[str, Any]:
+    """Nessuna violazione dichiarata: la UI non mostra un allarme che non c'e'."""
+    return {
+        "ok": True,
+        "skipped": True,
+        "why": why,
+        "violations": [],
+        "warnings": [],
+    }
+
+
+def _guard_state(
+    directory: Path, report: Mapping[str, Any], *, ready: bool
+) -> Dict[str, Any]:
+    """L'audit di consegna, letto dal report o rifatto sulla cartella.
+
+    Un lavoro appena finito ha gia' ``report["guard"]``: e' la verita' misurata
+    da ``auto`` e non si ricalcola a ogni giro della UI. Per un master senza
+    report la guardia si esegue qui, ma solo quando il master esiste: durante il
+    render non c'e' niente da consegnare e non si paga l'hash del sorgente.
+    """
+    declared = report.get("guard") if isinstance(report, Mapping) else None
+    if isinstance(declared, Mapping):
+        section = dict(declared)
+        section.setdefault("ok", not (section.get("violations") or []))
+        section.setdefault("skipped", False)
+        section.setdefault("why", "")
+        section.setdefault("violations", [])
+        section.setdefault("warnings", [])
+        return section
+    if not ready:
+        return _empty_guard("lavoro in corso: la guardia non e' ancora stata eseguita")
+    try:
+        audit = guard.audit(directory)
+    except Exception as exc:  # noqa: BLE001 - la UI non muore per un audit
+        return _empty_guard(f"guardia non eseguibile: {type(exc).__name__}: {exc}")
+    return {
+        "ok": bool(audit.get("ok")),
+        "skipped": False,
+        "why": ""
+        if audit.get("ok")
+        else "il lavoro non passa l'audit: non e' consegnabile",
+        "violations": list(audit.get("violations") or []),
+        "warnings": list(audit.get("warnings") or []),
+        "dir": str(audit.get("dir") or directory),
+        "exit_code": int(audit.get("exit_code") or 0),
+    }
+
+
 def _outcome(
     *,
     percent: float,
@@ -886,8 +935,14 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     data_dir = _data_dir(directory)
     plan = _read_json(data_dir / "plan.json")
     report = _read_json(directory / "report.json")
+    if not report:
+        # ``auto`` scrive il proprio referto in ``auto_report.json``: senza
+        # leggerlo la UI non vedrebbe ne' le decisioni ne' la guardia.
+        report = _read_json(directory / "auto_report.json")
     if not report and data_dir != directory:
         report = _read_json(data_dir / "report.json")
+        if not report:
+            report = _read_json(data_dir / "auto_report.json")
     estimate = report.get("estimate") if isinstance(report.get("estimate"), Mapping) else {}
     plan_choice = report.get("plan_choice") if isinstance(report.get("plan_choice"), Mapping) else {}
     raw_decisions = report.get("decisions")
@@ -914,6 +969,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "lavoro vx senza progresso pubblicato" if derived else ""
     )
     percent = progress.get("percent") or 0.0
+    guard_section = _guard_state(data_dir, report, ready=ready)
     outcome = _outcome(
         percent=percent,
         current=progress.get("current"),
@@ -921,6 +977,10 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         ready=ready,
         waiting=bool(approval["waiting"]) or bool(font.get("pending")),
     )
+    # Un master scritto non e' un lavoro consegnato: la guardia ha l'ultima
+    # parola sull'esito, e ``done`` non e' un esito possibile con violazioni.
+    if outcome == "done" and guard_section.get("ok") is False:
+        outcome = "failed"
     return {
         "job": directory.name,
         "path": str(directory),
@@ -934,6 +994,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "plan_choice": plan_choice,
         "decisions": decision_log,
         "outcome": outcome,
+        "guard": guard_section,
         "phases": _derived_phases(directory) if derived else (progress.get("phases") or []),
         "journal": [] if derived else list(progress.get("journal") or []),
         "frames": frames,
@@ -968,6 +1029,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "plan_choice": {},
             "decisions": [],
             "outcome": "idle",
+            "guard": _empty_guard("nessun lavoro"),
             "phases": [],
             "journal": [],
             "frames": [],

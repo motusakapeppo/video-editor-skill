@@ -42,6 +42,7 @@ from . import (
     ffmpeg as ff,
     gates,
     grammar,
+    guard,
     ingest,
     keygate,
     lock,
@@ -333,6 +334,97 @@ def progress_path(args: Any) -> Path:
     punto e' il render invece di stimarlo.
     """
     return _resolve_workdir(args) / "render" / "ffmpeg-progress.txt"
+
+
+#: Cosa dichiara la guardia quando la si salta di proposito.
+GUARD_SKIP_WHY = "--no-guard: guardia di consegna saltata su richiesta"
+
+
+def run_guard(args: Any, workdir: Any) -> Dict[str, Any]:
+    """L'audit di ``vx.guard`` sulla workdir, nella forma che va nel report.
+
+    La guardia e' un giudizio sulla consegna, non un passo del render: non
+    solleva mai. Se non si puo' eseguire lo dichiara ``skipped`` col motivo,
+    perche' un audit rotto non trasforma un video in un fallimento.
+    """
+    if bool(getattr(args, "no_guard", False)):
+        return {
+            "ok": True,
+            "skipped": True,
+            "why": GUARD_SKIP_WHY,
+            "violations": [],
+            "warnings": [],
+        }
+    try:
+        audit = guard.audit(Path(workdir))
+    except Exception as exc:  # noqa: BLE001 - l'audit non e' la consegna
+        return {
+            "ok": True,
+            "skipped": True,
+            "why": f"guardia non eseguibile: {type(exc).__name__}: {exc}",
+            "violations": [],
+            "warnings": [],
+        }
+    violations = [dict(item) for item in audit.get("violations") or []]
+    warnings = [dict(item) for item in audit.get("warnings") or []]
+    ok = bool(audit.get("ok"))
+    return {
+        "ok": ok,
+        "skipped": False,
+        "why": "" if ok else "il lavoro non passa l'audit: non e' consegnabile",
+        "violations": violations,
+        "warnings": warnings,
+        "dir": str(audit.get("dir") or workdir),
+        "signature": list(audit.get("signature") or []),
+        "exit_code": int(audit.get("exit_code") or 0),
+    }
+
+
+def apply_guard(
+    report: Dict[str, Any], section: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Scrive l'esito della guardia nel report e decide se il lavoro e' ``done``.
+
+    Il master che esiste e il lavoro consegnabile sono due cose diverse: con
+    violazioni il report dice ``outcome_suggested: "failed"`` e porta il motivo,
+    senza fermare il processo. ``delivered`` e' la sola chiave che risponde alla
+    domanda "questo lavoro si puo' consegnare?".
+    """
+    report["guard"] = dict(section)
+    delivered = bool(section.get("skipped") or section.get("ok"))
+    report["delivered"] = delivered
+    if delivered:
+        report["outcome_suggested"] = "done"
+        return report
+    report["outcome_suggested"] = "failed"
+    violations = [
+        item for item in section.get("violations") or [] if isinstance(item, Mapping)
+    ]
+    codes = ", ".join(str(item.get("code")) for item in violations if item.get("code"))
+    count = len(violations)
+    reason = (
+        f"guardia: {count} violazion{'e' if count == 1 else 'i'}"
+        + (f" ({codes})" if codes else "")
+        + " — il lavoro non e' consegnabile"
+    )
+    report.setdefault("failures", []).append(reason)
+    return report
+
+
+def guard_line(section: Any) -> str:
+    """La riga di narrazione: chiara, e solo quando c'e' qualcosa da dire."""
+    if not isinstance(section, Mapping):
+        return ""
+    if section.get("skipped"):
+        return f"Guardia: saltata ({section.get('why') or '--no-guard'})"
+    if section.get("ok"):
+        return ""
+    count = len(section.get("violations") or [])
+    if count == 1:
+        return "Guardia: 1 violazione, il lavoro non e' consegnabile"
+    if count > 1:
+        return f"Guardia: {count} violazioni, il lavoro non e' consegnabile"
+    return "Guardia: il lavoro non e' consegnabile"
 
 
 def _discover(args: Any) -> List[asset_triage.AssetInfo]:
@@ -2872,6 +2964,60 @@ def _run_locked(
                 else str(coherence_section.get("error"))
             )
         )
+    # La guardia di consegna: l'audit di `vx.guard` sulla workdir, dopo le
+    # consegne e prima del report finale. Il report provvisorio e' la prova che
+    # il master e' tracciato (G2), quindi si scrive prima di interrogare
+    # l'audit; quello finale lo riscrive con l'esito dentro.
+    auto_report = workdir / "auto_report.json"
+    _write_json_atomic(auto_report, report)
+    with clock.time("guard"):
+        guard_section = run_guard(args, workdir)
+    apply_guard(report, guard_section)
+    # Le falsificazioni del registro, eseguite sul master consegnato: dopo il
+    # QC e la guardia, prima che il report finale venga scritto. Un verdetto
+    # negativo non ferma il processo — il master esiste — ma resta nel report
+    # con la misura che lo sostiene.
+    from . import verify as verify_mod
+
+    try:
+        with clock.time("verify"):
+            verification = verify_mod.verify_all(report, out)
+    except Exception as exc:  # noqa: BLE001 - un verdetto rotto non e' la consegna
+        verification = {
+            "ok": False,
+            "checks": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        report["verification"] = verification
+    if not verification.get("ok"):
+        failed = ", ".join(
+            str(item.get("id"))
+            for item in verification.get("checks") or ()
+            if not item.get("passed")
+        )
+        report.setdefault("warnings", []).append(
+            "verification: "
+            + (
+                f"check falliti ({failed})"
+                if failed
+                else str(verification.get("error") or "verdetto assente")
+            )
+        )
+    report["timings"] = clock.as_dict()
+    _emit(
+        log,
+        "guard",
+        "skip"
+        if guard_section.get("skipped")
+        else ("done" if guard_section.get("ok") else "fail"),
+        str(
+            guard_section.get("why")
+            or (
+                f"{len(guard_section.get('violations') or [])} violazioni, "
+                "il lavoro non e' consegnabile"
+            )
+        ),
+    )
     # I tempi misurati di questo giro sono la calibrazione del prossimo: la
     # riga si scrive qui, dopo il report, e un errore non ferma la consegna.
     try:
@@ -2885,9 +3031,11 @@ def _run_locked(
     )
     _emit(log, "timings", "done", json.dumps(timings, ensure_ascii=False))
     _emit(log, "run", "done", f"{len(produced)} consegne")
-    (workdir / "auto_report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    # Un master che esiste non e' un lavoro consegnato: la riga lo dice anche
+    # a chi legge solo i log, e la riscrittura porta la guardia nel report.
+    if not report.get("delivered", True):
+        _log("[auto] guardia non superata: il video c'e', la consegna no")
+    _write_json_atomic(auto_report, report)
     log.close()
     return report
 
