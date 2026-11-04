@@ -772,7 +772,191 @@ def write_feedback_request(
     )
 
 
-def _discover(args: Any) -> List[asset_triage.AssetInfo]:
+#: Il prefisso dell'asset_id della traccia passata con ``--music``: non e' un
+#: percorso relativo alla cartella asset (il brano puo' stare ovunque), quindi
+#: non puo' chiamarsi come un file scoperto.
+MUSIC_ASSET_PREFIX = "music:"
+
+
+def _music_asset_id(path: Path) -> str:
+    return MUSIC_ASSET_PREFIX + path.name
+
+
+def _music_asset(path: Path, *, order_index: int = 10**9) -> asset_triage.AssetInfo:
+    """La traccia come asset del pool: si legge, non si scrive (regola zero).
+
+    Il file non deve stare dentro ``--assets``: ``--music`` e' un percorso
+    esplicito del brano. L'id porta un prefisso per non confondersi con i file
+    scoperti e il ruolo e' gia' ``music``, cosi' il triage non deve indovinare.
+    """
+    try:
+        info = probe.probe_asset(str(path))
+    except Exception as exc:  # noqa: BLE001 - un file illeggibile e' un errore d'uso
+        raise contract.VxError(
+            f"--music: {path} non leggibile come audio "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+    if str(getattr(info, "kind", "")) != "audio" or not bool(
+        getattr(info, "has_audio", False)
+    ):
+        raise contract.VxError(
+            f"--music: {path} non e' una traccia audio "
+            f"(tipo {getattr(info, 'kind', 'sconosciuto')!r})"
+        )
+    duration = float(getattr(info, "duration", 0.0) or 0.0)
+    if not math.isfinite(duration) or duration <= 0:
+        raise contract.VxError(f"--music: {path} ha durata zero: non e' un brano")
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    return asset_triage.AssetInfo(
+        asset_id=_music_asset_id(path),
+        kind="audio",
+        path=str(path),
+        duration_sec=duration,
+        has_audio=True,
+        sha256=_sha256(path),
+        size=size,
+        role="music",
+        order_index=order_index,
+    )
+
+
+def measure_music_bpm(path: Path) -> Dict[str, Any]:
+    """BPM misurato dalla traccia, con il metodo che l'ha misurato.
+
+    ``bpm`` resta ``None`` quando la griglia non ha ne' tempo ne' battute: un
+    numero inventato sarebbe peggio di un montaggio senza griglia. La funzione
+    non solleva sui problemi di decodifica: il chiamante deve poter dichiarare
+    ``bpm_source: "unavailable"`` invece di morire su una traccia strana.
+    """
+    try:
+        grid = grammar.beat_grid(str(path))
+    except Exception as exc:  # noqa: BLE001 - la misura mancante e' un dato
+        return {
+            "bpm": None,
+            "measured": False,
+            "method": f"error:{type(exc).__name__}",
+            "confidence": 0.0,
+            "beats": 0,
+            "duration": None,
+            "note": (
+                "BPM non misurabile dalla traccia "
+                f"({type(exc).__name__}: {exc}): griglia spenta, taglio sul contenuto"
+            ),
+        }
+    bpm = float(getattr(grid, "bpm", 0.0) or 0.0)
+    beats = len(getattr(grid, "beats", ()) or ())
+    method = str(getattr(grid, "method", "") or "")
+    if bpm <= 0 or beats < 2:
+        why = "nessun tempo" if bpm <= 0 else f"{beats} battute"
+        return {
+            "bpm": None,
+            "measured": False,
+            "method": method,
+            "confidence": round(float(getattr(grid, "confidence", 0.0) or 0.0), 3),
+            "beats": beats,
+            "duration": round(float(getattr(grid, "duration", 0.0) or 0.0), 3),
+            "note": (
+                f"BPM non misurabile dalla traccia ({why}, metodo {method or 'nessuno'}): "
+                "griglia spenta, il montaggio segue il contenuto"
+            ),
+        }
+    return {
+        "bpm": round(bpm, 2),
+        "measured": True,
+        "method": method,
+        "confidence": round(float(getattr(grid, "confidence", 0.0) or 0.0), 3),
+        "beats": beats,
+        "duration": round(float(getattr(grid, "duration", 0.0) or 0.0), 3),
+        "note": "",
+    }
+
+
+def _declared_bpm(args: Any) -> Optional[float]:
+    raw = getattr(args, "bpm", None)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise contract.VxError(f"--bpm deve essere un numero > 0, ricevuto {raw!r}") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise contract.VxError(f"--bpm deve essere un numero > 0, ricevuto {raw!r}")
+    return value
+
+
+def _music_plan(args: Any) -> Dict[str, Any]:
+    """Il brano richiesto, il BPM e la sua provenienza, prima del triage.
+
+    Precedenza: ``--bpm`` dichiarato vince sulla traccia; senza, vince la misura
+    della traccia; se la traccia non e' misurabile il BPM e' ``None`` e la
+    provenienza ``unavailable`` (la griglia resta spenta e il report lo dice).
+    Il file si legge soltanto: nessuna scrittura, nessuna copia in ``--assets``.
+    """
+    declared = _declared_bpm(args)
+    raw = getattr(args, "music", None)
+    section: Dict[str, Any] = {
+        "requested": bool(raw),
+        "path": None,
+        "duration": None,
+        "bpm": None,
+        "bpm_source": "declared" if declared is not None else "not_requested",
+        "declared_bpm": declared,
+        "measured": None,
+        "method": None,
+        "confidence": None,
+        "beats": None,
+        "sha256": None,
+        "read_only": True,
+        "replaced": [],
+        "note": "",
+        "asset": None,
+    }
+    if not raw:
+        if declared is not None:
+            section.update({"bpm": declared, "bpm_source": "declared"})
+        return section
+
+    path = Path(str(raw)).expanduser()
+    if not path.is_file():
+        raise contract.VxError(
+            f"--music: file inesistente: {path} "
+            "(il brano si legge soltanto: nessun master scritto)"
+        )
+    asset = _music_asset(path)
+    measured = measure_music_bpm(path)
+    section.update(
+        {
+            "path": str(path),
+            "duration": round(float(asset.duration_sec), 3),
+            "sha256": asset.sha256 or _sha256(path),
+            "measured_bpm": measured.get("bpm"),
+            "measured": bool(measured.get("measured")),
+            "method": measured.get("method"),
+            "confidence": measured.get("confidence"),
+            "beats": measured.get("beats"),
+            "note": str(measured.get("note") or ""),
+            "asset": asset,
+        }
+    )
+    if declared is not None:
+        section.update({"bpm": declared, "bpm_source": "declared"})
+        section["note"] = (
+            f"BPM dichiarato {declared:g}: vince sulla traccia "
+            f"(misurata {measured.get('bpm') if measured.get('bpm') else 'non misurabile'})"
+        )
+    elif measured.get("bpm"):
+        section.update({"bpm": measured["bpm"], "bpm_source": "music"})
+    else:
+        section.update({"bpm": None, "bpm_source": "unavailable"})
+    return section
+
+
+def _discover(
+    args: Any, music: Optional[Mapping[str, Any]] = None
+) -> List[asset_triage.AssetInfo]:
     try:
         assets = asset_triage.discover_assets(
             args.assets, manifest=getattr(args, "manifest", None)
@@ -781,6 +965,29 @@ def _discover(args: Any) -> List[asset_triage.AssetInfo]:
         raise contract.VxError(f"--assets: {exc}") from exc
     if not assets:
         raise contract.VxError(f"--assets: nessun asset riconosciuto in {args.assets}")
+    if music and music.get("requested"):
+        # ``--music`` e' il letto musicale, non uno dei tanti: gli altri audio
+        # del pool (manifest compreso) non entrano, e il report dice quali.
+        resolved = Path(str(music["path"])).resolve()
+        kept: List[asset_triage.AssetInfo] = []
+        replaced: List[str] = []
+        for asset in assets:
+            try:
+                same = Path(asset.path).resolve() == resolved
+            except OSError:
+                same = False
+            if same or (asset.kind == "audio" and asset.role != "dialogue"):
+                replaced.append(asset.asset_id)
+                continue
+            kept.append(asset)
+        if not any(Path(item.path).resolve() == resolved for item in kept):
+            asset = music.get("asset")
+            if not isinstance(asset, asset_triage.AssetInfo):
+                asset = _music_asset(Path(str(music["path"])))
+            kept.append(asset)
+        if isinstance(music, dict):
+            music["replaced"] = replaced
+        assets = kept
     return assets
 
 
@@ -2771,6 +2978,62 @@ def music_summary(plan: Any, report: Any) -> List[Dict[str, Any]]:
     return beds
 
 
+def _beat_report(
+    plan: Any,
+    provenance: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Quanti tagli ha prodotto la griglia e quanto sono densi.
+
+    ``cuts`` e' il numero di confini interni alla traccia principale (clip meno
+    uno): un numero che si puo' confrontare col BPM, non un'impressione.
+    """
+    duration = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+    tracks = [
+        track
+        for track in getattr(plan, "video_tracks", ()) or ()
+        if str(getattr(track, "role", "")) == "a_roll"
+    ]
+    clips = sum(len(getattr(track, "clips", ()) or ()) for track in tracks)
+    cuts = sum(
+        max(0, len(getattr(track, "clips", ()) or ()) - 1) for track in tracks
+    )
+    block = payload.get("beat_grid") if isinstance(payload, Mapping) else None
+    block = block if isinstance(block, Mapping) else {}
+    return {
+        "bpm": provenance.get("bpm"),
+        "bpm_source": provenance.get("bpm_source"),
+        "enabled": bool(provenance.get("enabled")),
+        "mode": str(block.get("mode") or "auto"),
+        "clips": clips,
+        "cuts": cuts,
+        "density_per_sec": round(cuts / duration, 3) if duration > 0 else None,
+    }
+
+
+def _audio_tracks_report(plan: Any) -> List[Dict[str, Any]]:
+    """La timeline audio in chiaro: bus, clip e sorgenti (il letto e' ``music``)."""
+    rows: List[Dict[str, Any]] = []
+    for track in getattr(plan, "audio_tracks", ()) or ():
+        clips = list(getattr(track, "clips", ()) or ())
+        rows.append(
+            {
+                "track_id": int(getattr(track, "track_id", 0) or 0),
+                "role": str(getattr(track, "role", "") or ""),
+                "clips": len(clips),
+                "source_ids": sorted(
+                    {str(clip.source_id) for clip in clips if getattr(clip, "source_id", "")}
+                ),
+                "dst_in": round(min((float(c.dst_in) for c in clips), default=0.0), 3),
+                "dst_out": round(max((float(c.dst_out) for c in clips), default=0.0), 3),
+                "gain_db": round(
+                    min((float(c.gain_db) for c in clips), default=0.0), 2
+                ),
+            }
+        )
+    return rows
+
+
 def _render_effects(report: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """The render parameters the report declared: keyframes and resolved filters.
 
@@ -3743,6 +4006,7 @@ def font_gate(
     root = Path(workdir)
     say = notify if notify is not None else _say
     section: Dict[str, Any] = {
+        "scope": "captions",
         "family": "",
         "licence": "",
         "source": "",
@@ -4650,6 +4914,22 @@ def _merged_brief(
     return merged, sources
 
 
+def _overlay_font(font: Mapping[str, Any]) -> Dict[str, Any]:
+    """Il font dei titoli dichiara il suo mestiere, distinto da quello dei sottotitoli.
+
+    Due font nello stesso report non sono un errore: il cancello veste le
+    caption, il brief veste hook e CTA. ``scope`` e una nota breve lo dicono a
+    chi legge, e le chiavi esistenti (``family``, ``note``, ``fonts_dir``)
+    restano dove sono.
+    """
+    out = dict(font)
+    out["scope"] = "overlays"
+    scope_note = "font dei titoli (overlays): puo' differire dal font dei sottotitoli"
+    existing = str(out.get("note") or "")
+    out["note"] = f"{existing}; {scope_note}" if existing else scope_note
+    return out
+
+
 def _run_typography(
     workdir: Path,
     plan: Any,
@@ -4685,7 +4965,7 @@ def _run_typography(
     width, height = int(plan.resolution[0]), int(plan.resolution[1])
     duration = max(0.2, float(plan.duration_sec))
     aspect = str(getattr(plan, "aspect_ratio", "9:16") or "9:16")
-    font = _typography_font(brief.font, caption_font, workdir)
+    font = _overlay_font(_typography_font(brief.font, caption_font, workdir))
     # Il fontsdir della prova deve essere lo stesso che brucera' il render: la
     # card di prova con un ripiego misurerebbe un altro carattere.
     probe_fonts = str(font.get("fonts_dir") or caption_font.get("fonts_dir") or "")
@@ -5209,6 +5489,7 @@ def _decide_payload(
     assets: Sequence[Any],
     section: Mapping[str, Any],
     montage_mode: bool,
+    music: Optional[Mapping[str, Any]] = None,
 ) -> tuple[Dict[str, Any], str]:
     """``parse_and_decide`` coi parametri della ricetta; degrada se serve un BPM.
 
@@ -5216,8 +5497,18 @@ def _decide_payload(
     --bpm o scrivilo nel prompt"), ma qui non c'e' nessun flag da passare: il
     lavoro riparte senza griglia e il report dichiara il parametro ignorato,
     invece di morire su una ricetta che chiedeva piu' di quanto il prompt dia.
+
+    Il BPM puo' venire da ``--bpm`` (dichiarato) o dalla traccia ``--music``
+    (misurato). In entrambi i casi lo si passa come numero esplicito, cosi'
+    ``decide`` accende la griglia; la provenienza vera si riscrive nel blocco
+    dopo, perche' "flag" non distingue un numero scritto da uno misurato.
     """
     grid, bpm = _recipe_beat_args(section)
+    source = ""
+    music = music or {}
+    if music.get("bpm") is not None:
+        bpm = float(music["bpm"])
+        source = str(music.get("bpm_source") or "")
     common = {
         "asset_pool": assets,
         "force_mode": "autonomous" if getattr(args, "autonomous", False) else None,
@@ -5225,13 +5516,89 @@ def _decide_payload(
     }
     try:
         payload = decide.parse_and_decide(args.prompt, beat_grid=grid, bpm=bpm, **common)
-        return payload, ""
     except contract.VxError as exc:
         if grid == "on" and "BPM" in str(exc):
             degrade.note("recipe.beat_grid", exc)
             payload = decide.parse_and_decide(args.prompt, beat_grid=None, bpm=None, **common)
+            payload["beat_grid"] = dict(payload.get("beat_grid") or {})
+            payload["beat_grid"].update(
+                {
+                    "enabled": False,
+                    "bpm": None,
+                    "source": source or "unavailable",
+                }
+            )
             return payload, str(exc)
         raise
+    block = payload.get("beat_grid")
+    if isinstance(block, dict):
+        if music.get("requested") and music.get("bpm_source") == "unavailable" and str(
+            block.get("source") or ""
+        ) not in ("prompt",):
+            # La misura manca e nessuno ha dichiarato un tempo: il default che
+            # l'autonomia riempie nel brief non e' una misura e non deve
+            # accendere la griglia. Si spegne qui e lo si dichiara.
+            block.update(
+                {
+                    "enabled": False,
+                    "bpm": None,
+                    "source": "unavailable",
+                    "note": (
+                        "BPM non misurabile dalla traccia: griglia spenta, "
+                        "il montaggio segue il contenuto"
+                    ),
+                }
+            )
+            return payload, str(block["note"])
+        if source and str(block.get("source") or "") not in ("prompt",):
+            block["source"] = source
+            block["bpm"] = round(float(bpm), 3)
+            block["source_note"] = (
+                "BPM misurato dalla traccia --music"
+                if source == "music"
+                else "BPM dichiarato con --bpm"
+            )
+    return payload, ""
+
+
+def _beat_provenance(
+    payload: Mapping[str, Any], music: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """``bpm``, ``bpm_source`` e ``enabled`` come li ha davvero usati il piano.
+
+    Il blocco del payload nasce da ``decide`` e parla di "flag"; qui si
+    riporta la provenienza vera (traccia misurata, numero dichiarato, prompt) e,
+    quando ``--music`` non e' misurabile e nessuno ha dichiarato un tempo, si
+    dichiara ``unavailable`` con ``bpm: null`` e la griglia spenta: un'assenza
+    scritta, non un silenzio.
+    """
+    block = payload.get("beat_grid")
+    block = block if isinstance(block, Mapping) else {}
+    enabled = bool(block.get("enabled"))
+    bpm = block.get("bpm")
+    source = str(block.get("source") or "")
+    if music.get("requested"):
+        requested = str(music.get("bpm_source") or "")
+        if requested in ("music", "declared"):
+            bpm = music.get("bpm")
+            source = requested
+            enabled = bool(bpm) and enabled
+        elif enabled and source in ("prompt", "flag"):
+            source = "declared" if source == "flag" else "prompt"
+        else:
+            bpm = None
+            source = "unavailable"
+            enabled = False
+    try:
+        value = float(bpm) if bpm is not None else None
+    except (TypeError, ValueError):
+        value = None
+    if value is not None and value > 0:
+        value = round(value, 2)
+    else:
+        value = None
+        source = source or ("unavailable" if music.get("requested") else "none")
+    return {"bpm": value, "bpm_source": source, "enabled": enabled}
 
 
 def _declare_beat_grid(
@@ -5728,15 +6095,33 @@ def _run_locked(
         # ha scelto, non si finge che il default sia una scelta.
         args.subs = str(subtitles_answer.get("value") or "") != "nessuno"
 
+    with clock.time("music"):
+        # La traccia si legge prima del triage: il suo BPM decide la griglia, e
+        # il file inesistente deve fermare il lavoro prima di scrivere un master.
+        music_section = _music_plan(args)
+    _emit(
+        log,
+        "music",
+        "done" if music_section.get("requested") else "skip",
+        (
+            f"{music_section.get('path')} "
+            f"bpm={music_section.get('bpm')} ({music_section.get('bpm_source')})"
+            if music_section.get("requested")
+            else "nessuna traccia --music"
+        ),
+    )
+    if music_section.get("note"):
+        _say(f"Musica: {music_section['note']}")
+
     with clock.time("triage"):
-        assets = _discover(args)
+        assets = _discover(args, music_section)
         assets_by_id = {asset.asset_id: asset for asset in assets}
         fill_mode = _fill_mode(fill)
         montage_mode = bool(montage)
 
         try:
             payload, recipe_decide_note = _decide_payload(
-                args, assets, recipe_section, montage_mode
+                args, assets, recipe_section, montage_mode, music=music_section
             )
         except decide.AmbiguousContractError as exc:
             raise contract.VxError(f"prompt ambiguo in STRICT: {exc}") from exc
@@ -5770,6 +6155,25 @@ def _run_locked(
     with clock.time("hash"):
         source_sha = _source_hashes(selected_assets)
     _declare_beat_grid(recipe_section, payload, recipe_decide_note)
+    beat_provenance = _beat_provenance(payload, music_section)
+    if music_section.get("requested"):
+        music_section.update(
+            {
+                "bpm": beat_provenance["bpm"],
+                "bpm_source": beat_provenance["bpm_source"],
+                "grid_enabled": beat_provenance["enabled"],
+            }
+        )
+        if beat_provenance["bpm_source"] == "unavailable":
+            _say(
+                "Musica: BPM non misurabile, griglia spenta; il montaggio segue "
+                "il contenuto (dichiarato nel report)."
+            )
+        elif beat_provenance["bpm_source"] == "music":
+            _say(
+                f"Musica: {beat_provenance['bpm']:g} BPM misurati dalla traccia "
+                f"({music_section.get('method') or 'misura'}), griglia accesa."
+            )
     old_lufs, target_tp = loudness_target(payload)
     loudness_row = _recipe_loudness(recipe_section, old_lufs, target_tp)
     recipe_section["loudness"] = loudness_row
@@ -6277,6 +6681,21 @@ def _run_locked(
         degrade.note("decisions", exc)
         decision_log = []
 
+    # Il letto musicale: la sezione dichiara la traccia (percorso, durata, BPM
+    # misurato o dichiarato) e ogni letto porta il suo percorso, cosi' un
+    # ``music.path`` non va cercato in due posti diversi.
+    music_beds = music_summary(plan, bridge_report)
+    music_report = {
+        key: value for key, value in music_section.items() if key != "asset"
+    }
+    if music_section.get("requested"):
+        for bed in music_beds:
+            bed["path"] = music_section.get("path")
+            bed["duration"] = music_section.get("duration")
+            bed["bpm"] = beat_provenance.get("bpm")
+            bed["bpm_source"] = beat_provenance.get("bpm_source")
+    beat_report = _beat_report(plan, beat_provenance, payload)
+
     report: Dict[str, Any] = {
         "ok": True,
         "payload_version": str(payload.get("contract_version") or contract.VERSION),
@@ -6284,6 +6703,11 @@ def _run_locked(
         "fps": float(fps),
         "loudness_target": {"lufs": target_lufs, "true_peak_db": target_tp},
         "timeline_sec": float(plan.duration_sec),
+        "bpm": beat_provenance.get("bpm"),
+        "bpm_source": beat_provenance.get("bpm_source"),
+        "beat": beat_report,
+        "music_source": music_report,
+        "audio_tracks": _audio_tracks_report(plan),
         "assets": {
             "total": len(assets),
             "selected": len(selected),
@@ -6322,7 +6746,7 @@ def _run_locked(
         "creative": creative_section,
         "render_estimate": render_estimate,
         "audio": audio_summary(analyses, ceiling_dbtp),
-        "music": music_summary(plan, bridge_report),
+        "music": music_beds,
         "selected": [
             {
                 "asset_id": entry.get("asset_id"),
@@ -6608,6 +7032,17 @@ def run(
         raise contract.VxError(
             "--out non puo' stare dentro --assets: la cartella sorgente non si scrive"
         )
+    # Il brano si controlla prima di toccare la workdir: un file inesistente e'
+    # un errore d'uso (exit 2), non un lavoro iniziato e poi fermato.
+    music_raw = getattr(args, "music", None)
+    if music_raw:
+        music_path = Path(str(music_raw)).expanduser()
+        if not music_path.is_file():
+            raise contract.VxError(
+                f"--music: file inesistente: {music_path} "
+                "(il brano si legge soltanto: nessun master scritto)"
+            )
+    _declared_bpm(args)
     if _inside(workdir, assets_dir):
         raise contract.VxError(
             "--workdir non puo' stare dentro --assets: la cartella sorgente non si scrive"

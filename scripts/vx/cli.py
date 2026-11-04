@@ -4206,6 +4206,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--manifest", default=None, help="manifest JSON con ruoli e ancore")
     p.add_argument(
+        "--music",
+        default=None,
+        metavar="FILE",
+        help="traccia musicale da leggere (sola lettura): il BPM si misura dalla "
+        "traccia, il file diventa il letto musicale sotto il parlato",
+    )
+    p.add_argument(
+        "--bpm",
+        type=float,
+        default=None,
+        metavar="N",
+        help="BPM dichiarato: vince sulla traccia; senza --music accende la "
+        "griglia anche senza un numero nel prompt",
+    )
+    p.add_argument(
         "--autonomous",
         action="store_true",
         help="forza la modalita autonoma: nessuna domanda, i default sono registrati",

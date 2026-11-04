@@ -404,7 +404,7 @@ def _beat_enabled(mode: str, bpm: float, source: str, pacing: dict) -> bool:
         return True
     # auto: only when something actually declared a tempo, not when the
     # autonomous branch merely filled a default.
-    if source in ("flag", "prompt", "audio"):
+    if source in ("flag", "prompt", "audio", "music", "declared"):
         return True
     return str(pacing.get("cut_policy") or "") in ("beat_synced", "onset_synced")
 
