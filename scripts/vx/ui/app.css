@@ -410,6 +410,11 @@ body {
 body.is-done .col-work > .result { order: 6; }
 body.is-done .col-work > .regia { order: 7; }
 
+/* Un master pronto c'è anche quando il lavoro è chiuso male: il file va mostrato
+   nella stessa posizione, senza farlo cercare in fondo alla pagina. */
+body.has-master .col-work > .result { order: 6; }
+body.has-master .col-work > .regia { order: 7; }
+
 .col-rail { min-width: 0; }
 
 .rail-inner {
@@ -1425,6 +1430,58 @@ body.is-failed .hero.is-closed .hero-num { color: #ff9d9d; }
   border-color: rgba(255, 178, 107, .5);
   background: rgba(255, 178, 107, .13);
   font-weight: 700;
+}
+
+/* La verifica di una scelta: verde se tiene, rosso se la smentisce. */
+.dtag.is-verify {
+  color: var(--ink-3);
+  border-color: var(--line);
+}
+
+.dtag.is-verify.is-ok {
+  color: var(--ok);
+  border-color: rgba(111, 224, 164, .34);
+  background: rgba(111, 224, 164, .07);
+}
+
+.dtag.is-verify.is-bad {
+  color: #ffb0b0;
+  border-color: rgba(255, 157, 157, .45);
+  background: rgba(255, 157, 157, .1);
+  font-weight: 700;
+}
+
+.decision-verify {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--line-strong);
+  font: 500 12px/1.6 var(--mono);
+  color: var(--ink-2);
+}
+
+.decision-verify.is-failed {
+  border-left-color: rgba(255, 157, 157, .55);
+  color: #f0d2d2;
+}
+
+.decision-verify-head {
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.decision-verify.is-failed .decision-verify-head { color: #ff9d9d; }
+.decision-verify.is-passed .decision-verify-head { color: var(--ok); }
+
+.decision-verify-check {
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: .08em;
+  color: var(--ink-3);
 }
 
 .decision-body {

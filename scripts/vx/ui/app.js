@@ -217,6 +217,22 @@
     return finished ? 'done' : state.current ? 'running' : 'idle';
   }
 
+  // Un cancello è una domanda **al lavoro che sta girando**: solo un lavoro in
+  // corso ha qualcuno che aspetta una risposta. La regola è questa, una sola per
+  // font, fotogrammi, piano e domande: `active` vero (lock o stato fresco),
+  // oppure nessun esito dichiarato e processo ancora vivo nel registro.
+  function jobRunning(state) {
+    if (!state || typeof state !== 'object') return false;
+    if (state.active === true) return true;
+    // "running" è un lavoro in corso dichiarato: la testina si muove, e una
+    // domanda può ancora cambiare qualcosa.
+    const outcome = String(state.outcome || '').trim().toLowerCase();
+    if (outcome === 'running') return true;
+    const progress =
+      state.progress && typeof state.progress === 'object' ? state.progress : null;
+    return !outcome && Boolean(progress && progress.alive === true);
+  }
+
   // Il motivo arriva da `note`: si riporta com'è, senza inventarne uno.
   function verdictSentence(kind, note) {
     const reason = String(note || '').trim();
@@ -240,6 +256,138 @@
     if (n >= 1048576) return (n / 1048576).toFixed(1).replace('.', ',') + ' MB';
     if (n >= 1024) return Math.round(n / 1024) + ' kB';
     return n + ' B';
+  }
+
+  /* ------------------------------------------------------- esito di un chiuso */
+
+  // Un lavoro chiuso male non si racconta con «Lavoro concluso»: si racconta con
+  // la ragione più utile che lo stato porta già — una verifica fallita (dice
+  // *perché*), una guardia (dice *cosa*), un cancello rimasto aperto (dice *cosa
+  // manca*) — e solo alla fine con la nota del lavoro.
+
+  const CHECK_LABEL = {
+    contrast: 'contrasto',
+    duration: 'durata',
+    variety: 'varietà',
+    loudness: 'volume',
+    silence: 'silenzio',
+    sharpness: 'nitidezza',
+    coverage: 'copertura',
+    sync: 'sincronia',
+  };
+
+  function checkLabel(name) {
+    const key = String(name || '').trim().toLowerCase();
+    return CHECK_LABEL[key] || key.replace(/_/g, ' ') || 'controllo';
+  }
+
+  // La verifica che smentisce una scelta, se il report ne ha dichiarata una.
+  function failedVerification(state) {
+    const rows = Array.isArray(state.decisions) ? state.decisions : [];
+    for (let i = 0; i < rows.length; i += 1) {
+      const check = rows[i] && rows[i].verification;
+      if (!check || typeof check !== 'object') continue;
+      if (check.passed === false && String(check.why || '').trim()) return check;
+    }
+    return null;
+  }
+
+  // Il cancello rimasto aperto quando il lavoro si è chiuso.
+  function gateLeftOpen(state) {
+    const font = state.font && state.font.pending === true && !state.font.chosen;
+    if (font) return 'carattere';
+    const approval = state.approval && typeof state.approval === 'object' ? state.approval : {};
+    if (approval.waiting === true) return 'fotogrammi';
+    const questions = Array.isArray(state.questions) ? state.questions : [];
+    if (questions.some((q) => q && q.answered !== true)) return 'domande';
+    const plan = state.plan_choice && typeof state.plan_choice === 'object' ? state.plan_choice : {};
+    if (plan.pending === true && !plan.chosen) return 'versione del lavoro';
+    return '';
+  }
+
+  function closeReport(state, verdict) {
+    const ready = state.master_ready === true;
+    const name = String(state.master || '').trim() || 'master.mp4';
+    const bytes = Number(state.master_bytes) || 0;
+    const masterBit = ready
+      ? "Il master c'è (" + name + (bytes > 0 ? ', ' + sizeLabel(bytes) : '') +
+        '): si può aprire e guardare.'
+      : "Il master non esiste: non c'è un file da aprire.";
+    const gate = verdict === 'done' ? '' : gateLeftOpen(state);
+    const frames = Array.isArray(state.frames) ? state.frames.length : 0;
+    const shots = Array.isArray(state.shots) ? state.shots.length : 0;
+    const counted = frames
+      ? frames + (frames === 1 ? ' fotogramma' : ' fotogrammi')
+      : shots + ' shot';
+    const bits = [counted, mmss(state.elapsed_sec) + ' di lavoro'];
+    if (gate) bits.push('cancello aperto: ' + gate);
+    if (state.approved === true) bits.push('approvati');
+    const meta = bits.join(' · ');
+
+    if (verdict === 'done') {
+      return {
+        word: OUTCOME_WORD.done,
+        title: OUTCOME_TITLE.done,
+        text: verdictSentence('done', state.note),
+        meta,
+      };
+    }
+
+    if (verdict === 'failed') {
+      const bad = failedVerification(state);
+      if (bad) {
+        const label = checkLabel(bad.check);
+        const why = String(bad.why || '').trim();
+        return {
+          word: 'Non riuscito · ' + label,
+          title: 'Non riuscito: la verifica «' + label + '» non passa',
+          text: upperFirst(why) + (/[.!?]$/.test(why) ? '' : '.') + ' ' + masterBit,
+          meta,
+        };
+      }
+      const guard = state.guard && typeof state.guard === 'object' ? state.guard : {};
+      const violations = Array.isArray(guard.violations) ? guard.violations : [];
+      if (guard.ok === false || violations.length) {
+        const first = String(violations[0] || guard.why || '').trim();
+        return {
+          word: 'Non riuscito · guardia',
+          title: 'Non riuscito: non passa la guardia di consegna',
+          text:
+            (first ? upperFirst(first) + (/[.!?]$/.test(first) ? '' : '.') + ' ' : '') + masterBit,
+          meta,
+        };
+      }
+      if (gate) {
+        return {
+          word: 'Non riuscito · ' + gate,
+          title: 'Non riuscito: il cancello «' + gate + '» è rimasto aperto',
+          text: 'Nessuno ha risposto e il lavoro è finito lo stesso. ' + masterBit,
+          meta,
+        };
+      }
+      return {
+        word: OUTCOME_WORD.failed,
+        title: OUTCOME_TITLE.failed,
+        text: verdictSentence('failed', state.note) + ' ' + masterBit,
+        meta,
+      };
+    }
+
+    if (verdict === 'stopped') {
+      return {
+        word: OUTCOME_WORD.stopped,
+        title: OUTCOME_TITLE.stopped,
+        text: verdictSentence('stopped', state.note) + ' ' + masterBit,
+        meta,
+      };
+    }
+
+    return {
+      word: OUTCOME_WORD.incomplete,
+      title: OUTCOME_TITLE.incomplete,
+      text: verdictSentence('incomplete', state.note) + ' ' + masterBit,
+      meta,
+    };
   }
 
   /* ------------------------------------------------------------------ numero */
@@ -539,6 +687,9 @@
 
     el.resultMeta.textContent = ready ? 'pronto' : closed ? 'assente' : 'non ancora';
     el.resultMeta.classList.toggle('is-ready', ready);
+    // Con un master pronto la zona del risultato sale sopra la Regia: è il file
+    // che si vuole aprire, e non deve stare in fondo alla pagina.
+    body.classList.toggle('has-master', ready);
 
     if (el.resultBody.dataset.signature === signature) return;
     el.resultBody.dataset.signature = signature;
@@ -696,11 +847,12 @@
 
   /* ------------------------------------------------------------ approvazione */
 
-  // Il pulsante esiste solo se c'è un piano e un'attesa: `required` accende il
-  // blocco, `waiting` lo rende cliccabile, `approved` lo chiude. Mai per ipotesi.
+  // Il pulsante esiste solo se c'è un piano e un'attesa **di un lavoro in corso**:
+  // `required` accende il blocco, `waiting` lo rende cliccabile, `approved` lo
+  // chiude. Mai per ipotesi, e mai su un lavoro che non sta più aspettando.
   function paintApproval(state) {
     const approval = state.approval && typeof state.approval === 'object' ? state.approval : null;
-    const required = !!(approval && approval.required === true);
+    const required = !!(approval && approval.required === true) && jobRunning(state);
 
     el.action.hidden = !required;
     if (!required) {
@@ -955,6 +1107,24 @@
         tags.append(confTag);
       }
 
+      // La verifica è il controllo che tiene o smentisce la scelta: se è
+      // fallita si vede già dalla riga chiusa, non solo aprendola.
+      const verification =
+        item.verification && typeof item.verification === 'object' ? item.verification : null;
+      if (verification) {
+        const failed = verification.passed === false;
+        const verifyTag = document.createElement('span');
+        verifyTag.className =
+          'dtag is-verify' + (failed ? ' is-bad' : verification.passed === true ? ' is-ok' : '');
+        verifyTag.textContent = failed
+          ? 'verifica fallita'
+          : verification.passed === true
+            ? 'verifica ok'
+            : 'non verificata';
+        verifyTag.title = String(verification.why || '').trim();
+        tags.append(verifyTag);
+      }
+
       head.append(caret, question, answer, tags);
       row.append(head);
 
@@ -976,6 +1146,39 @@
           list.append(li);
         });
         block.append(decisionLabel('Prove'), list);
+        body.append(block);
+      }
+
+      // La verifica, per esteso: cosa è stato misurato e cosa serviva.
+      if (verification) {
+        const why = String(verification.why || '').trim();
+        const check = String(verification.check || '').trim();
+        const block = document.createElement('div');
+        const line = document.createElement('p');
+        line.className =
+          'decision-verify' +
+          (verification.passed === false ? ' is-failed' : verification.passed === true ? ' is-passed' : '');
+        const lead = document.createElement('span');
+        lead.className = 'decision-verify-head';
+        lead.textContent =
+          verification.passed === false
+            ? 'Verifica fallita'
+            : verification.passed === true
+              ? 'Verifica passata'
+              : 'Verifica non automatica';
+        line.append(lead);
+        if (check) {
+          const tag = document.createElement('span');
+          tag.className = 'decision-verify-check num';
+          tag.textContent = check;
+          line.append(tag);
+        }
+        if (why) {
+          const say = document.createElement('span');
+          say.textContent = ' — ' + why;
+          line.append(say);
+        }
+        block.append(decisionLabel('Verifica'), line);
         body.append(block);
       }
 
@@ -1633,7 +1836,9 @@
     const pc = state.plan_choice && typeof state.plan_choice === 'object' ? state.plan_choice : null;
     const pending = !!(pc && pc.pending === true && !pc.chosen);
 
-    if (!pending) {
+    // Come i font: la scelta della versione si chiede solo a un lavoro che sta
+    // girando. A lavoro chiuso il dialogo sparisce e la scelta resta una decisione.
+    if (!pending || !jobRunning(state)) {
       if (el.planGate.open) closePlanGate();
       return;
     }
@@ -1752,9 +1957,13 @@
     return bits.join(' · ');
   }
 
-  function voteSubLine(verdict) {
+  function voteSubLine(verdict, hasMaster) {
     if (verdict === 'done') return 'Puoi guardarlo con calma: il voto non blocca niente.';
-    if (verdict === 'failed') return "Non è arrivato al master. Dì com'è andata lo stesso.";
+    if (verdict === 'failed') {
+      return hasMaster
+        ? "Il master c'è, ma il lavoro non è passato: com'è andata lo stesso?"
+        : "Non è arrivato al master. Dì com'è andata lo stesso.";
+    }
     if (verdict === 'incomplete') return "Il master non c'è: il voto resta utile lo stesso.";
     if (verdict === 'stopped') return "Si è fermato prima della fine: com'è andata fino a lì?";
     return "Dimmi com'è andata.";
@@ -1896,7 +2105,7 @@
     if (!show) return;
 
     el.voteMeta.textContent = voteMetaLine(state);
-    el.voteSub.textContent = voteSubLine(verdict);
+    el.voteSub.textContent = voteSubLine(verdict, state.master_ready === true);
 
     const answer = stored || voteGivenLocal;
     if (answer) {
@@ -2604,7 +2813,10 @@
     const font = state && state.font;
     const pending = !!(font && font.pending === true && !font.chosen);
 
-    if (!pending) {
+    // Il dialogo è una domanda al lavoro in corso: se il lavoro è chiuso non c'è
+    // più nessuno che aspetta, e chiedere la scelta sarebbe una richiesta a
+    // vuoto. La scelta registrata resta leggibile nella sua decisione.
+    if (!pending || !jobRunning(state)) {
       if (el.fontGate.open) closeGate();
       return;
     }
@@ -3232,7 +3444,9 @@
       verdict === 'stopped' ||
       verdict === 'failed' ||
       verdict === 'incomplete';
-    const approved = state.approved === true;
+    // Cosa dire in testa quando il lavoro è chiuso: una riga per l'esito, non
+    // un'etichetta che copre il motivo.
+    const closing = closed ? closeReport(state, verdict) : null;
 
     body.classList.toggle('is-done', verdict === 'done');
     body.classList.toggle('is-stopped', verdict === 'stopped');
@@ -3252,7 +3466,7 @@
     el.jobTitle.textContent = prompt || 'Lavoro senza titolo';
     document.title = 'vx — ' + (prompt ? prompt.slice(0, 70) : 'lavoro in corso');
 
-    el.stateWord.textContent = OUTCOME_WORD[verdict] || 'In corso';
+    el.stateWord.textContent = closing ? closing.word : (OUTCOME_WORD[verdict] || 'In corso');
     el.jobClock.textContent = mmss(state.elapsed_sec);
 
     const clips = Number(state.clips) || 0;
@@ -3301,7 +3515,9 @@
     if (!closed && unknown && why) {
       // «sto lavorando · nessun aggiornamento da 12 s»: il battito resta sotto.
       el.heroSub.textContent = why;
-    } else if (finished || verdict === 'done') {
+    } else if (verdict === 'done' || (finished && !closed)) {
+      // «tutte le fasi» vale solo per un lavoro arrivato in fondo: un fallito al
+      // 100% ha finito il giro, non le fasi.
       el.heroSub.textContent = pad2(phases.length) + ' fasi su ' + pad2(phases.length);
     } else if (activeIndex >= 0) {
       el.heroSub.textContent = 'fase ' + pad2(activeIndex + 1) + ' di ' + pad2(phases.length);
@@ -3323,27 +3539,18 @@
       phases.length === 0 ? 'nessuna fase' : pad2(phases.length) + ' fasi';
 
     // ora / esito / cancelli
-    paintGates(state, closed);
+    // Nessun cancello a lavoro chiuso: le domande si mostrano solo a chi sta
+    // ancora lavorando (vedi `jobRunning`).
+    paintGates(state, closed || !jobRunning(state));
     if (closed) {
       el.now.hidden = true;
       hideNow();
       el.verdict.hidden = false;
       el.verdict.className = 'verdict is-' + verdict;
       el.verdictMark.textContent = OUTCOME_MARK[verdict] || '–';
-      el.verdictTitle.textContent = OUTCOME_TITLE[verdict] || 'Lavoro concluso';
-      el.verdictText.textContent = verdictSentence(verdict, state.note);
-      // Il conteggio accanto all'esito è quello che si è visto: i fotogrammi se
-      // ci sono, altrimenti gli shot del montaggio (zero fotogrammi non è un dato).
-      const shots = Array.isArray(state.shots) ? state.shots.length : 0;
-      const counted = frames.length
-        ? frames.length + (frames.length === 1 ? ' fotogramma' : ' fotogrammi')
-        : shots + ' shot';
-      el.verdictMeta.textContent =
-        counted +
-        ' · ' +
-        mmss(state.elapsed_sec) +
-        ' di lavoro' +
-        (approved ? ' · approvati' : '');
+      el.verdictTitle.textContent = closing.title;
+      el.verdictText.textContent = closing.text;
+      el.verdictMeta.textContent = closing.meta;
     } else {
       el.verdict.hidden = true;
       el.now.hidden = false;
