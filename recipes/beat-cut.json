@@ -1,0 +1,22 @@
+{
+  "schema": "vx.recipe/1",
+  "name": "beat-cut",
+  "description": "Taglio serrato sulla griglia ritmica, testo d'impatto, resa scura a -10,5 LUFS.",
+  "extends": null,
+  "brief": {},
+  "settings": {
+    "render": {
+      "effect_budget": 4
+    }
+  },
+  "params": {
+    "beat_grid": "on",
+    "shot_max": 0.8,
+    "effects_per_shot": 1.0,
+    "font": "Antonio",
+    "font_size": 106,
+    "hook_at": 0.1,
+    "cta": true,
+    "loudness": -10.5
+  }
+}
