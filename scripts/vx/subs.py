@@ -57,6 +57,7 @@ __all__ = [
     "declared_box",
     "wrap_text",
     "write_hook_ass",
+    "merge_ass",
     "SUBTITLE_STYLES",
     "DEFAULT_PRESET",
     "style_for",
@@ -1028,27 +1029,38 @@ def write_hook_ass(
     duration_s=3.0,
     style="hook",
     font=None,
+    size=None,
+    margin_v=None,
+    alignment=2,
 ) -> Path:
-    """One ASS event for the hook card: uppercase, no karaoke, one Dialogue line."""
+    """One ASS event for the hook card: uppercase, no karaoke, one Dialogue line.
+
+    ``size`` overrides the computed body in pixels (the brief can name a real
+    number, e.g. 106 px); ``margin_v``/``alignment`` place the card without
+    changing the default top-bottom geometry every existing caller relies on.
+    """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
     body = " ".join(str(text).split()).upper()
     family = font or DEFAULT_FONT
     margin_lr = 60
-    margin_v = 40
+    margin_v = 40 if margin_v is None else max(0, int(margin_v))
     base = int(round(0.045 * out_h))
     avail = max(64, int(out_w) - 2 * margin_lr)
-    size = max(
-        24,
-        min(
-            base,
-            int(
-                avail
-                / (max(1, len(body)) * _advance_for(str(family), uppercase=True))
+    if size is not None:
+        size = max(1, int(size))
+    else:
+        size = max(
+            24,
+            min(
+                base,
+                int(
+                    avail
+                    / (max(1, len(body)) * _advance_for(str(family), uppercase=True))
+                ),
             ),
-        ),
-    )
+        )
     outline = _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
     shadow = _scaled(SHADOW_HORIZONTAL, out_h, 1080)
 
@@ -1067,7 +1079,7 @@ def write_hook_ass(
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: {style},{family},{size},&H00FFFFFF,&H0000D7FF,&H00000000,"
         f"{BACK_COLOUR},-1,0,0,0,100,100,0,0,{BORDER_STYLE_VERTICAL},"
-        f"{outline},{shadow},2,{margin_lr},{margin_lr},{margin_v},1\n"
+        f"{outline},{shadow},{int(alignment)},{margin_lr},{margin_lr},{margin_v},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
@@ -1081,6 +1093,102 @@ def write_hook_ass(
     )
     target.write_text(header + event, encoding="utf-8", newline="\n")
     return target.resolve()
+
+
+def merge_ass(paths: Sequence[Any], dst: Any) -> str:
+    """Write one ASS carrying the styles and events of ``paths``, in order.
+
+    ``render_edl`` exposes a single ``subtitles=`` filter, so an hook card, a
+    CTA card and the speech captions cannot travel as three files: they travel
+    as one honest render layer (``overlays.ass``/``text.ass``) while the source
+    files (``hook.ass``, ``subs.ass``, ``captions.ass``) stay on disk with the
+    names that say what they are. A style name shared by two files is renamed
+    for the later one; a byte-identical style is reused, not duplicated.
+    """
+    targets = [Path(path) for path in paths]
+    if not targets:
+        raise ValueError("vx.subs.merge_ass: nessun file da unire")
+    play_x = 1080
+    play_y = 1920
+    style_format = (
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding"
+    )
+    event_format = (
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+        "Effect, Text"
+    )
+    used: Dict[str, str] = {}
+    styles: List[str] = []
+    events: List[str] = []
+    for index, path in enumerate(targets):
+        section = ""
+        local: Dict[str, str] = {}
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.rstrip()
+            stripped = line.strip()
+            if stripped == "[Script Info]":
+                section = "info"
+                continue
+            if stripped == "[V4+ Styles]":
+                section = "styles"
+                continue
+            if stripped == "[Events]":
+                section = "events"
+                continue
+            if not stripped:
+                continue
+            if section == "info":
+                if stripped.startswith("PlayResX:"):
+                    play_x = int(stripped.split(":", 1)[1].strip() or play_x)
+                elif stripped.startswith("PlayResY:"):
+                    play_y = int(stripped.split(":", 1)[1].strip() or play_y)
+                continue
+            if section == "styles":
+                if stripped.startswith("Format:"):
+                    style_format = line
+                elif stripped.startswith("Style:"):
+                    fields = stripped[len("Style:") :].strip().split(",")
+                    original = fields[0].strip()
+                    name = original
+                    if name in used and used[name] != line:
+                        name = f"{original}_{index + 1}"
+                        fields[0] = name
+                        line = "Style: " + ",".join(fields)
+                    used[name] = line
+                    local[original] = name
+                    styles.append(line)
+                continue
+            if section == "events":
+                if stripped.startswith("Format:"):
+                    event_format = line
+                elif stripped.startswith("Dialogue:"):
+                    fields = stripped[len("Dialogue:") :].strip().split(",", 9)
+                    old = fields[3].strip()
+                    fields[3] = local.get(old, old)
+                    events.append("Dialogue: " + ",".join(fields))
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {play_x}\n"
+        f"PlayResY: {play_y}\n"
+        "WrapStyle: 2\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        f"{style_format}\n"
+        + "\n".join(styles)
+        + "\n\n[Events]\n"
+        f"{event_format}\n"
+        + "\n".join(events)
+        + ("\n" if events else "")
+    )
+    target = Path(dst)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(header, encoding="utf-8", newline="\n")
+    return str(target.resolve())
 
 
 # --------------------------------------------------------------------------- #

@@ -73,6 +73,8 @@ from . import (
     render,
     resources,
     settings,
+    subs,
+    textbrief,
 )
 
 # The delivery spec the renderer is asked to hit and the QC gate re-measures.
@@ -236,6 +238,7 @@ TIMING_STAGES = (
     "plan_choice",
     "creative",
     "font",
+    "typography",
     "keyframes",
     "render",
     "qc",
@@ -2687,6 +2690,277 @@ def _run_key_gate(
     )
 
 
+def _typography_font(
+    requested: Any, caption_font: Mapping[str, Any], workdir: Path
+) -> Dict[str, Any]:
+    """The family the ASS can carry, and where it comes from.
+
+    ``fontlib.Store`` and the bundled ``assets/fonts`` are the only two places a
+    family can come from; the job's own ``fonts/`` directory (the font gate
+    choice) is the third. A family the brief names but nobody has is never
+    invented: the bundled face is used and ``fallback`` says so with the note
+    that lands in the report.
+    """
+    from . import fontlib, fontproposal
+    from . import fonts as fonts_mod
+
+    family = str(requested or "").strip()
+    chosen = str(caption_font.get("family") or "").strip()
+    if not family:
+        if chosen:
+            return {
+                "requested": "",
+                "family": chosen,
+                "source": "job",
+                "fallback": False,
+                "note": "",
+            }
+        return {
+            "requested": "",
+            "family": subs.DEFAULT_FONT,
+            "source": "bundled",
+            "fallback": False,
+            "note": "",
+        }
+    if chosen and chosen.lower() == family.lower():
+        return {
+            "requested": family,
+            "family": chosen,
+            "source": "job",
+            "fallback": False,
+            "note": "",
+        }
+    found = []
+    try:
+        found = fontlib.Store(fontproposal._store_root()).find(family)
+    except Exception:  # noqa: BLE001 - un indice illeggibile non e' un font
+        found = []
+    if found:
+        from . import typography
+
+        try:
+            applied = typography.apply(
+                fontlib.Store(fontproposal._store_root()), found[0], workdir
+            )
+        except Exception as exc:  # noqa: BLE001 - licenza/file: ripiego dichiarato
+            fallback = chosen or subs.DEFAULT_FONT
+            return {
+                "requested": family,
+                "family": fallback,
+                "source": "job" if chosen else "bundled",
+                "fallback": True,
+                "note": (
+                    f"font {family!r} e' nello store ma non entra nel lavoro "
+                    f"({type(exc).__name__}: {exc}): uso {fallback}, ripiego dichiarato"
+                ),
+            }
+        return {
+            "requested": family,
+            "family": str(applied.get("family") or found[0].family),
+            "source": "store",
+            "fallback": False,
+            "note": "",
+            "fonts_dir": str(applied.get("fonts_dir") or ""),
+            "licence": str(applied.get("licence") or ""),
+        }
+    bundled = {
+        str(item.get("family") or "").lower(): item
+        for item in fonts_mod.discover()
+    }
+    if family.lower() in bundled:
+        return {
+            "requested": family,
+            "family": str(bundled[family.lower()]["family"]),
+            "source": "bundled",
+            "fallback": False,
+            "note": "",
+        }
+    fallback = chosen or subs.DEFAULT_FONT
+    source = "job" if chosen else "bundled"
+    return {
+        "requested": family,
+        "family": fallback,
+        "source": source,
+        "fallback": True,
+        "note": (
+            f"font {family!r} non e' in fontlib.Store ne' nel bundle: "
+            f"uso {fallback} ({source}), ripiego dichiarato"
+        ),
+    }
+
+
+def _hook_fallback_text(bridge_report: Any) -> str:
+    """Le prime parole del parlato, solo quando il brief chiede un hook senza frase."""
+    captions = getattr(bridge_report, "captions", ()) if bridge_report is not None else ()
+    for item in captions or ():
+        text = " ".join(str(item.get("text") or "").split())
+        if text:
+            return " ".join(text.split()[:6])
+    return ""
+
+
+def _run_typography(
+    workdir: Path,
+    plan: Any,
+    prompt: Any,
+    caption_font: Mapping[str, Any],
+    captions_ass: Optional[str],
+    bridge_report: Any = None,
+) -> tuple[Dict[str, Any], Optional[str]]:
+    """Piano -> ASS -> render: il ponte che mancava.
+
+    Legge solo cio' che il brief dichiara (``hook:``/``cta:``, il secondo, la
+    famiglia, il corpo, lo stile). Scrive ``hook.ass`` e ``subs.ass`` con i
+    writer di :mod:`vx.subs`; ``overlays.ass``/``text.ass`` e' il livello unico
+    che ``render_edl`` brucia, perche' il suo filtro ``subtitles=`` ne accetta
+    uno solo. Senza testo nel brief non scrive niente e lo dichiara: il
+    percorso delle caption esistenti resta esattamente quello di prima.
+    """
+    brief = textbrief.parse_brief_text(prompt)
+    if not brief.asks_text:
+        return (
+            {
+                "applied": False,
+                "reason": brief.reason,
+                "brief": brief.to_dict(),
+            },
+            captions_ass,
+        )
+
+    width, height = int(plan.resolution[0]), int(plan.resolution[1])
+    duration = max(0.2, float(plan.duration_sec))
+    font = _typography_font(brief.font, caption_font, workdir)
+    files: Dict[str, str] = {}
+    texts: List[Dict[str, Any]] = []
+
+    hook_text = brief.hook_text
+    if not hook_text and brief.asks_hook:
+        hook_text = _hook_fallback_text(bridge_report)
+    hook_path: Optional[Path] = None
+    if hook_text:
+        hook_at = max(0.0, min(float(brief.hook_at), duration - 0.2))
+        hook_dur = max(0.2, min(float(brief.hook_dur), duration - hook_at))
+        hook_style = (
+            brief.style
+            if brief.style and brief.style.lower() not in ("karaoke", "clean")
+            else "hook"
+        )
+        hook_path = Path(
+            subs.write_hook_ass(
+                workdir / "hook.ass",
+                hook_text,
+                out_w=width,
+                out_h=height,
+                start_s=hook_at,
+                duration_s=hook_dur,
+                style=hook_style,
+                font=font["family"],
+                size=brief.size,
+            )
+        )
+        files["hook"] = str(hook_path)
+        texts.append(
+            {
+                "kind": "hook",
+                "text": " ".join(hook_text.split()).upper(),
+                "at": round(hook_at, 3),
+                "end": round(hook_at + hook_dur, 3),
+                "file": "hook.ass",
+            }
+        )
+
+    subs_path: Optional[Path] = None
+    if brief.cta_text:
+        cta_dur = max(0.2, min(float(brief.cta_dur), duration - 0.1))
+        earliest = 0.0
+        if hook_text:
+            earliest = min(duration - 0.2, hook_at + min(hook_dur, duration - hook_at) + 0.05)
+        default_at = max(earliest, duration - cta_dur - 0.1)
+        requested_at = brief.cta_at if brief.cta_at is not None else default_at
+        cta_at = max(0.0, min(float(requested_at), duration - 0.2))
+        cta_dur = max(0.2, min(cta_dur, duration - cta_at))
+        subs_path = Path(
+            subs.write_hook_ass(
+                workdir / "subs.ass",
+                brief.cta_text,
+                out_w=width,
+                out_h=height,
+                start_s=cta_at,
+                duration_s=cta_dur,
+                style="cta",
+                font=font["family"],
+                size=brief.size,
+            )
+        )
+        files["subs"] = str(subs_path)
+        texts.append(
+            {
+                "kind": "cta",
+                "text": " ".join(brief.cta_text.split()).upper(),
+                "at": round(cta_at, 3),
+                "end": round(cta_at + cta_dur, 3),
+                "file": "subs.ass",
+            }
+        )
+
+    if not texts:
+        return (
+            {
+                "applied": False,
+                "reason": (
+                    "il brief nomina hook/CTA ma non da' la frase e non c'e' "
+                    "parlato da cui prenderla: nessun ASS scritto"
+                ),
+                "brief": brief.to_dict(),
+                "font": font,
+            },
+            captions_ass,
+        )
+
+    missing: List[str] = []
+    if brief.asks_hook and not hook_text:
+        missing.append("hook: nessuna frase nel brief ne' nel parlato")
+    if brief.asks_cta and not brief.cta_text:
+        missing.append("cta: nessuna frase nel brief")
+
+    layers = [str(path) for path in (hook_path, subs_path) if path is not None]
+    if len(layers) == 1:
+        render_layer = layers[0]
+    else:
+        render_layer = subs.merge_ass(layers, workdir / "overlays.ass")
+    if captions_ass:
+        # Le caption esistenti restano il loro file: si uniscono al livello che
+        # il render brucia, non si riscrivono e non spariscono.
+        render_layer = subs.merge_ass(
+            [captions_ass, render_layer], workdir / "text.ass"
+        )
+    files["render"] = render_layer
+    return (
+        {
+            "applied": True,
+            "reason": "",
+            "brief": brief.to_dict(),
+            "font": font,
+            "files": files,
+            "texts": texts,
+            "missing": missing,
+            "render": {
+                "filter": "subtitles",
+                "note": (
+                    "render_edl espone un solo subtitles=: hook, CTA e caption "
+                    "viaggiano in un livello unico (overlays.ass/text.ass); "
+                    "hook_path separato richiede il parametro in render_edl"
+                ),
+            },
+            "captions": {
+                "path": str(captions_ass) if captions_ass else None,
+                "merged": bool(captions_ass),
+            },
+        },
+        render_layer,
+    )
+
+
 def _caption_font(workdir: Path) -> Dict[str, str]:
     """Famiglia scelta e cartella font per l'ASS dell'auto; vuota = preset.
 
@@ -3204,6 +3478,42 @@ def _run_locked(
                 "il master resta sul preset"
             )
 
+    # Il ponte piano -> ASS -> render. Sta dopo il cancello dei font (la
+    # famiglia scelta deve poter arrivare al `Fontname`) e prima del render:
+    # senza testo nel brief non scrive nessun file e restituisce l'ASS delle
+    # caption esistenti, cioe' il comportamento di prima.
+    try:
+        with clock.time("typography"):
+            typography_section, typography_render = _run_typography(
+                workdir,
+                plan,
+                getattr(args, "prompt", ""),
+                caption_font,
+                captions_ass,
+                bridge_report,
+            )
+    except Exception as exc:  # noqa: BLE001 - la scrittura del testo non e' il render
+        degrade.note("typography", exc)
+        typography_section = {
+            "applied": False,
+            "degraded": True,
+            "reason": f"tipografia non applicata: {type(exc).__name__}: {exc}",
+        }
+        typography_render = captions_ass
+    _emit(
+        log,
+        "typography",
+        "done" if typography_section.get("applied") else "skip",
+        ", ".join(
+            f"{item['kind']}@{item['at']}s"
+            for item in typography_section.get("texts") or ()
+        )
+        or str(typography_section.get("reason") or ""),
+    )
+    typography_fonts_dir = str(
+        (typography_section.get("font") or {}).get("fonts_dir") or ""
+    )
+
     exemptions = grammar.camera_exemptions(plan)
     try:
         grammar.assert_cinematic_rules(plan)
@@ -3273,11 +3583,13 @@ def _run_locked(
                     ),
                     progress_file=progress_file,
                     fill=fill_mode,
-                    subtitles=captions_ass,
+                    subtitles=typography_render,
                     reframe=reframe_map,
                     restore=restore_map,
                     ceiling_dbtp=ceiling_dbtp,
-                    fonts_dir=caption_font["fonts_dir"] or None,
+                    fonts_dir=typography_fonts_dir
+                    or caption_font["fonts_dir"]
+                    or None,
                     cache_report=render_cache,
                 )
         finally:
@@ -3359,6 +3671,7 @@ def _run_locked(
         },
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "font": font_section,
+        "typography": typography_section,
         "keyframes_gate": key_section,
         "questions": questions,
         "decisions": decision_log,
@@ -3413,6 +3726,12 @@ def _run_locked(
         )
     if render_cache:
         report["stage_cache"] = render_cache
+    if typography_section.get("applied") and typography_section.get("font", {}).get(
+        "fallback"
+    ):
+        report.setdefault("warnings", []).append(
+            "typography: " + str(typography_section["font"].get("note") or "font di ripiego")
+        )
     violations = coherence_section.get("violations") or []
     if violations or coherence_section.get("error"):
         report.setdefault("warnings", []).append(
