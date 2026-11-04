@@ -33,9 +33,20 @@ def main() -> int:
         plan.output,
     )
     check(
-        "un solo taglio, intera sorgente",
-        plan.cuts == [{"in": 0.0, "out": 10.0}],
-        plan.cuts,
+        "tagli sulla griglia di battuta, non un taglio unico",
+        len(plan.cuts) > 1
+        and all(cut.get("provenance", {}).get("kind") == "beat" for cut in plan.cuts[:-1]),
+        f"{len(plan.cuts)} tagli",
+    )
+    check(
+        "copertura contigua della sorgente",
+        plan.cuts[0]["in"] == 0.0
+        and plan.cuts[-1]["out"] == 10.0
+        and all(
+            abs(a["out"] - b["in"]) < 1e-6
+            for a, b in zip(plan.cuts, plan.cuts[1:])
+        ),
+        (plan.cuts[0]["in"], plan.cuts[-1]["out"]),
     )
 
     color = next((t for t in plan.treatments if t.get("name") == "color_fix"), None)
@@ -73,7 +84,10 @@ def main() -> int:
     bridge = plan.brief.get("bridge") or {}
     unsupported = {item.get("field") for item in bridge.get("unsupported") or []}
     check(
-        "BPM dichiarato non eseguito", "pacing.bpm_target" in unsupported, unsupported
+        "BPM dichiarato eseguito, non rimandato",
+        "pacing.bpm_target" not in unsupported
+        and "beat_grid" in (bridge.get("executed") or []),
+        (unsupported, bridge.get("executed")),
     )
     check(
         "font dichiarato non eseguito",

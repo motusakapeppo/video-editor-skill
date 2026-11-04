@@ -1491,6 +1491,274 @@ def edl_loudness_graph(
     return f"[0:a]{chain}[aout]"
 
 
+# --------------------------------------------------------------------------- #
+# per-clip effects: the vx.effects bridge applied inside the EDL graph
+# --------------------------------------------------------------------------- #
+
+#: Where a clip's effects may live, in priority order. ``clip.effects`` is the
+#: timeline shape (``Clip3``); the other three are the plan-level tables an
+#: ``EDLPlan`` can carry without touching the frozen ``ClipSegment``.
+EFFECT_CONTAINERS = ("effects", "effects_by_clip", "clip_effects")
+
+
+def _effect_bridge():
+    """The shared ffmpeg bridge, imported only when a plan actually has effects."""
+    from .effects import ffmpeg as effect_ffmpeg  # noqa: PLC0415
+
+    return effect_ffmpeg
+
+
+def _effects_budget(plan: Any) -> float:
+    """Per-spec budget: the plan's own declaration, then settings, then 8."""
+    for container in (getattr(plan, "render", None), getattr(plan, "output", None)):
+        if isinstance(container, Mapping) and container.get("effect_budget") is not None:
+            try:
+                return float(container["effect_budget"])
+            except (TypeError, ValueError):
+                break
+    try:
+        from . import settings as settings_mod  # noqa: PLC0415
+
+        raw = settings_mod.get("render.effect_budget")
+    except Exception:  # noqa: BLE001 - a missing settings layer is not a failure
+        raw = None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(_effect_bridge().DEFAULT_BUDGET)
+
+
+def _clip_effect_entries(plan: Any, clip: Any) -> List[Any]:
+    """The effect entries declared for one clip, in application order.
+
+    A clip's own ``effects`` wins. Otherwise the plan-level tables are read by
+    ``clip_id``: the frozen ``ClipSegment`` cannot grow a field, so a plan may
+    carry ``plan.effects`` / ``plan.render["effects"]`` instead. No entry means
+    the clip renders exactly as before.
+    """
+    direct = getattr(clip, "effects", None)
+    if direct:
+        return list(direct) if isinstance(direct, (list, tuple)) else [direct]
+    clip_id = str(getattr(clip, "clip_id", "") or "")
+    if not clip_id:
+        return []
+    tables: List[Any] = [getattr(plan, name, None) for name in EFFECT_CONTAINERS]
+    render_cfg = getattr(plan, "render", None)
+    if isinstance(render_cfg, Mapping):
+        tables.append(render_cfg.get("effects"))
+    for table in tables:
+        if isinstance(table, Mapping):
+            found = table.get(clip_id)
+            if found is None:
+                continue
+            return list(found) if isinstance(found, (list, tuple)) else [found]
+        if isinstance(table, (list, tuple)):
+            for item in table:
+                if isinstance(item, Mapping) and str(item.get("clip_id") or "") == clip_id:
+                    payload = item.get("effects", item.get("spec", item))
+                    if isinstance(item.get("effects"), (list, tuple)):
+                        return list(item["effects"])
+                    return [payload]
+    return []
+
+
+def _effect_spec(entry: Any, where: str) -> Dict[str, Any]:
+    """One entry as a canonical ``vx.effects`` spec, or a declared refusal.
+
+    Accepted shapes: a historical name (``"zoom"``), a full spec with
+    ``primitives``, a wrapper ``{"spec": ...}``, and a timeline ``Effect``
+    (``{"kind", "params"}``) whose kind is one of the compose primitives or a
+    historical name. Everything else is refused with a code: it is never
+    dropped in silence.
+    """
+    from .effects import compose as effect_compose  # noqa: PLC0415
+
+    if isinstance(entry, str):
+        try:
+            return effect_compose.expand(entry)
+        except effect_compose.SpecError as exc:
+            raise RenderFailure(
+                {
+                    "step": "render_effects",
+                    "where": where,
+                    "code": "SPEC_INVALID",
+                    "message": str(exc),
+                }
+            ) from exc
+    if not isinstance(entry, Mapping):
+        to_dict = getattr(entry, "to_dict", None)
+        if callable(to_dict):
+            converted = to_dict()
+            if isinstance(converted, Mapping):
+                return _effect_spec(converted, where)
+        kind_attr = getattr(entry, "kind", None)
+        params_attr = getattr(entry, "params", None)
+        if isinstance(kind_attr, str) and kind_attr and isinstance(params_attr, Mapping):
+            return _effect_spec(
+                {"kind": kind_attr, "params": dict(params_attr)}, where
+            )
+        raise RenderFailure(
+            {
+                "step": "render_effects",
+                "where": where,
+                "code": "EFFECT_SHAPE",
+                "message": f"un effetto deve essere una specifica o un nome, non {type(entry).__name__}",
+            }
+        )
+    if "spec" in entry:
+        return _effect_spec(entry["spec"], where + ".spec")
+    if "primitives" in entry:
+        try:
+            return effect_compose.expand(entry)
+        except effect_compose.SpecError as exc:
+            raise RenderFailure(
+                {
+                    "step": "render_effects",
+                    "where": where,
+                    "code": "SPEC_INVALID",
+                    "message": str(exc),
+                }
+            ) from exc
+    kind = entry.get("kind")
+    if not isinstance(kind, str) or not kind:
+        raise RenderFailure(
+            {
+                "step": "render_effects",
+                "where": where,
+                "code": "EFFECT_SHAPE",
+                "message": "la specifica non ha 'primitives', 'spec' né 'kind'",
+            }
+        )
+    params = dict(entry.get("params") or {})
+    keyframes = entry.get("keyframes") or {}
+    if keyframes:
+        raise RenderFailure(
+            {
+                "step": "render_effects",
+                "where": where,
+                "code": "EFFECT_KEYFRAMES_NOT_RENDERED",
+                "message": f"{kind}: i keyframe non sono tradotti in una primitiva vx.effects",
+            }
+        )
+    if kind in effect_compose.PRIMITIVES:
+        return effect_compose.expand(
+            {
+                "id": str(entry.get("id") or kind),
+                "primitives": [{"kind": kind, "params": params}],
+            }
+        )
+    if kind in effect_compose.HISTORICAL_NAMES:
+        if params:
+            raise RenderFailure(
+                {
+                    "step": "render_effects",
+                    "where": where,
+                    "code": "EFFECT_PARAMS_NOT_MAPPED",
+                    "message": f"{kind}: il nome storico non accetta parametri per-clip",
+                }
+            )
+        return _effect_spec(kind, where)
+    raise RenderFailure(
+        {
+            "step": "render_effects",
+            "where": where,
+            "code": "EFFECT_KIND_NOT_RENDERED",
+            "message": f"l'effetto {kind!r} non è una primitiva né un nome storico di vx.effects",
+        }
+    )
+
+
+def _clip_effects_graph(
+    plan: Any,
+    clip: Any,
+    index: int,
+    chain: str,
+    tail_label: str,
+    *,
+    width: int,
+    height: int,
+    fps: float,
+    budget: float,
+) -> Tuple[List[str], int, float]:
+    """Splice one clip's effects after ``chain`` and hand back labelled lines.
+
+    ``chain`` is the unlabelled tail ``_edl_normalise`` produced; the last line
+    this returns produces ``tail_label``. The bridge's own normalisation line is
+    dropped (the clip is already normalised), while its ``stages`` — chain
+    fragments and multi-input lines alike — are spliced verbatim. Each spec gets
+    its own namespace, so several clips share one ``filter_complex``.
+
+    Returns ``(lines, specs_applied, cost)``. An empty or all-disabled spec
+    leaves ``chain`` exactly as it was: no line, no label, no counter.
+    """
+    entries = _clip_effect_entries(plan, clip)
+    if not entries:
+        return [chain + tail_label], 0, 0.0
+    clip_id = str(getattr(clip, "clip_id", "") or f"clip{index}")
+    applied: List[Tuple[str, Dict[str, Any]]] = []
+    for position, entry in enumerate(entries):
+        spec = _effect_spec(entry, f"{clip_id}.effects[{position}]")
+        enabled = [
+            primitive
+            for primitive in spec.get("primitives") or []
+            if primitive.get("enabled", True)
+        ]
+        if enabled:
+            applied.append((f"{clip_id}.effects[{position}]", spec))
+    if not applied:
+        return [chain + tail_label], 0, 0.0
+
+    duration = float(clip.dst_out) - float(clip.dst_in)
+    if duration <= 0:
+        raise RenderFailure(
+            {
+                "step": "render_effects",
+                "clip_id": clip_id,
+                "code": "CLIP_DURATION",
+                "message": f"durata non positiva ({duration!r}) per gli effetti",
+            }
+        )
+    bridge = _effect_bridge()
+    prefixes = [f"fxc{index}_{serial}_" for serial in range(len(applied))]
+    lines: List[str] = [chain + f"[{prefixes[0]}0]"]
+    total = 0.0
+    for serial, (where, spec) in enumerate(applied):
+        is_last = serial + 1 == len(applied)
+        target = str(tail_label).strip("[]") if is_last else f"{prefixes[serial + 1]}0"
+        try:
+            compiled = bridge.plan_spec(
+                spec,
+                width=int(width),
+                height=int(height),
+                fps=float(fps),
+                duration=duration,
+                budget=float(budget),
+                source=f"[{prefixes[serial]}in]",
+                output=target,
+                namespace=prefixes[serial],
+            )
+        except bridge.RenderSpecError as exc:
+            raise RenderFailure(
+                {
+                    "step": "render_effects",
+                    "where": where,
+                    "clip_id": clip_id,
+                    "code": exc.code,
+                    "message": exc.message,
+                }
+            ) from exc
+        block = [
+            line.strip()
+            for line in str(compiled["filter_complex"]).split(";\n")
+            if line.strip()
+        ]
+        # block[0] is the bridge's scale/crop/fps normalisation line: the clip
+        # already went through _edl_normalise, so only its output label matters.
+        lines.extend(block[1:])
+        total += float(compiled["cost"])
+    return lines, len(applied), total
+
+
 def build_edl_filtergraph(
     plan: Any,
     source_to_index: Mapping[str, int],
@@ -1502,6 +1770,7 @@ def build_edl_filtergraph(
     restore: Optional[Mapping[str, Any]] = None,
     ceiling_dbtp: Optional[float] = None,
     fonts_dir: Optional[str] = None,
+    effects_report: Optional[Dict[str, Any]] = None,
 ) -> str:
     """A-Roll is concatenated; audio is split into dialogue and music buses; B-roll is overlaid.
 
@@ -1521,11 +1790,27 @@ def build_edl_filtergraph(
     ``fonts_dir`` points libass at this job's font directory (chosen font plus the
     bundled one, see ``typography.apply``); ``None`` keeps the bundled
     ``assets/fonts`` and the graph this engine shipped.
+
+    Per-clip effects: a clip that declares ``effects`` (or the plan-level table
+    ``plan.effects`` keyed by ``clip_id``) gets the ``vx.effects`` bridge
+    spliced in after its normalisation, in a namespace of its own. A plan with
+    no effects — or with only empty/all-disabled specs — yields the graph this
+    engine shipped, byte for byte. ``effects_report``, when given, is filled
+    with ``{per_clip, budget_used, ...}`` for the render report.
     """
     width, height = (int(value) for value in plan.resolution)
     policy = _fill_policy(fill)
     video_clips = _edl_clips(plan, layers={0})
     audio_clips = _edl_audio_clips(plan)
+    budget = _effects_budget(plan)
+    effects: Dict[str, Any] = {
+        "per_clip": 0,
+        "budget_used": 0.0,
+        "budget": round(float(budget), 3),
+        "cost_total": 0.0,
+        "specs": 0,
+        "clips": {},
+    }
     audio = bool(audio_clips) if has_audio is None else bool(has_audio)
     if not video_clips:
         raise RenderFailure("EDL has no layer-0 video clips")
@@ -1541,18 +1826,36 @@ def build_edl_filtergraph(
     parts: List[str] = []
     for index, clip in enumerate(video_clips):
         index_in = source_to_index[clip.source_id]
-        parts.append(
-            _edl_normalise(
-                clip,
-                index_in,
-                width,
-                height,
-                fill=policy,
-                reframe=reframe.get(clip.clip_id) if reframe else None,
-                restore=restore.get(clip.clip_id) if restore else None,
-            )
-            + f"[v{index}]"
+        chain = _edl_normalise(
+            clip,
+            index_in,
+            width,
+            height,
+            fill=policy,
+            reframe=reframe.get(clip.clip_id) if reframe else None,
+            restore=restore.get(clip.clip_id) if restore else None,
         )
+        lines, applied, cost = _clip_effects_graph(
+            plan,
+            clip,
+            index,
+            chain,
+            f"[v{index}]",
+            width=width,
+            height=height,
+            fps=float(plan.fps),
+            budget=budget,
+        )
+        parts.extend(lines)
+        if applied:
+            effects["per_clip"] += 1
+            effects["specs"] += applied
+            effects["cost_total"] += cost
+            effects["budget_used"] = max(float(effects["budget_used"]), cost)
+            effects["clips"][str(clip.clip_id)] = {
+                "specs": applied,
+                "cost": round(cost, 3),
+            }
 
     if audio:
         dialogue_clips, beds = _edl_audio_buses(plan)
@@ -1670,8 +1973,30 @@ def build_edl_filtergraph(
             chain += (
                 f",fade=t=out:st={max(0.0, duration - fade_out):.6f}:d={fade_out:.6f}"
             )
-        chain += f",setpts=PTS-STARTPTS+{float(clip.dst_in):.6f}/TB[ov{index}]"
-        parts.append(chain)
+        lines, applied, cost = _clip_effects_graph(
+            plan,
+            clip,
+            len(video_clips) + index,
+            chain,
+            f"[ovfx{index}]",
+            width=width,
+            height=height,
+            fps=float(plan.fps),
+            budget=budget,
+        )
+        parts.extend(lines)
+        if applied:
+            effects["per_clip"] += 1
+            effects["specs"] += applied
+            effects["cost_total"] += cost
+            effects["budget_used"] = max(float(effects["budget_used"]), cost)
+            effects["clips"][str(clip.clip_id)] = {
+                "specs": applied,
+                "cost": round(cost, 3),
+            }
+        parts.append(
+            f"[ovfx{index}]setpts=PTS-STARTPTS+{float(clip.dst_in):.6f}/TB[ov{index}]"
+        )
         parts.append(
             f"{base}[ov{index}]overlay=enable='between(t,"
             f"{float(clip.dst_in):.6f},{float(clip.dst_out):.6f})':"
@@ -1691,6 +2016,10 @@ def build_edl_filtergraph(
         )
     else:
         parts.append(f"{base}null[vout]")
+    effects["budget_used"] = round(float(effects["budget_used"]), 3)
+    effects["cost_total"] = round(float(effects["cost_total"]), 3)
+    if effects_report is not None:
+        effects_report.update(effects)
     return ";".join(parts)
 
 
@@ -1754,6 +2083,7 @@ def render_edl(
     ceiling_dbtp: Optional[float] = None,
     cache_report: Optional[Dict[str, Any]] = None,
     fonts_dir: Optional[str] = None,
+    effects_report: Optional[Dict[str, Any]] = None,
 ) -> Any:
     work = Path(workdir)
     work.mkdir(parents=True, exist_ok=True)
@@ -1768,6 +2098,7 @@ def render_edl(
         raise RenderFailure("true-peak ceiling requested but the EDL has no audio")
     mapping = edl_input_map(staged_sources)
     policy = _fill_policy(fill)
+    effects_section: Dict[str, Any] = effects_report if effects_report is not None else {}
     graph = build_edl_filtergraph(
         plan,
         mapping,
@@ -1778,8 +2109,22 @@ def render_edl(
         restore=restore,
         ceiling_dbtp=ceiling_dbtp if loudness is None else None,
         fonts_dir=fonts_dir,
+        effects_report=effects_section,
     )
     script = write_script(graph, work / "edl_graph.txt")
+    try:
+        (work / "render_effects.json").write_text(
+            json.dumps(
+                {"render": {"effects": dict(effects_section)}},
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
     out = Path(output_path)
 
     cache: Optional[_StageCache] = None

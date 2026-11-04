@@ -51,6 +51,7 @@ _CLIP_KEYS = {
     "transition_out",
     "gain_db",
     "compress",
+    "provenance",
 }
 _TRANSITION_KEYS = {"type", "duration_sec"}
 _DUCKING_KEYS = {
@@ -230,6 +231,7 @@ class ClipSegment:
     transition_out: Optional[Transition] = None
     gain_db: float = 0.0
     compress: bool = False
+    provenance: tuple = ()
 
     @property
     def duration(self) -> float:
@@ -796,6 +798,8 @@ def _clip_to_dict(clip: ClipSegment) -> Dict[str, Any]:
         data["gain_db"] = clip.gain_db
     if clip.compress:
         data["compress"] = True
+    if clip.provenance:
+        data["provenance"] = [dict(item) for item in clip.provenance]
     return data
 
 
@@ -931,7 +935,25 @@ def _clip_from_dict(
         ),
         gain_db=raw.get("gain_db", 0.0),
         compress=bool(raw.get("compress", False)),
+        provenance=_provenance_from_dict(raw.get("provenance")),
     )
+
+
+def _provenance_from_dict(raw: Any) -> Tuple[Dict[str, Any], ...]:
+    """Provenance records on a clip: a string, one object, or a list of them."""
+    if isinstance(raw, Mapping):
+        return (dict(raw),)
+    if isinstance(raw, str):
+        return ({"kind": raw},)
+    if isinstance(raw, (list, tuple)):
+        out: List[Dict[str, Any]] = []
+        for item in raw:
+            if isinstance(item, Mapping):
+                out.append(dict(item))
+            elif isinstance(item, str):
+                out.append({"kind": item})
+        return tuple(out)
+    return ()
 
 
 def _transition_from_dict(

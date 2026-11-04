@@ -1057,51 +1057,173 @@ def payload_to_edl_plan(
         and float(scene_block.get("duration_sec")) > 0
         else 0.0
     )
+
+    # Per-entry usable length, in payload order. A requested duration truncates
+    # the last one; the beat grid then works on exactly this material.
+    lengths: List[float] = []
+    remaining = requested
     for index, entry in enumerate(a_entries):
         asset_id = entry.get("asset_id")
         if not isinstance(asset_id, str) or not asset_id:
             raise VxError(f"selected a_roll[{index}] has no asset_id")
-        ref = _source_ref(asset_id)
-        media_duration = _media_duration(asset_id)
-        length = min(_target(entry, asset_id), media_duration)
+        length = min(_target(entry, asset_id), _media_duration(asset_id))
         if requested > 0.0:
-            # La durata chiesta comanda: si taglia l'ultima clip e si chiude.
-            remaining = requested - cursor
             if remaining <= 1e-3:
                 break
             length = min(length, remaining)
         if length <= 0:
             raise VxError(f"asset {asset_id!r} has no usable duration")
-        referenced[_source_id(asset_id)] = ref
-        a_clips.append(
-            edl_plan.ClipSegment(
-                clip_id=f"v0_{index}",
-                source_id=_source_id(asset_id),
-                src_in=0.0,
-                src_out=length,
-                dst_in=cursor,
-                dst_out=cursor + length,
-                layer=0,
-                role="main_talking_head",
+        lengths.append(length)
+        if requested > 0.0:
+            remaining -= length
+    if not lengths:
+        raise VxError("a_roll total duration is zero")
+    plain_total = sum(lengths)
+
+    # -- beat grid ---------------------------------------------------------- #
+    # The BPM used to sit in the brief while the planner declared it could not
+    # cut on it. Now it decides the boundaries: the same grid grammar.snap_cuts
+    # uses, with provenance written onto every clip.
+    beat_block = payload.get("beat_grid")
+    beat_block = beat_block if isinstance(beat_block, Mapping) else {}
+    pacing_block = {}
+    context_block = payload.get("execution_context")
+    if isinstance(context_block, Mapping):
+        creative = context_block.get("creative_rationale")
+        if isinstance(creative, Mapping):
+            pacing_block = creative.get("pacing") or {}
+    try:
+        beat_bpm = float(beat_block.get("bpm") or 0.0)
+    except (TypeError, ValueError):
+        beat_bpm = 0.0
+    if beat_bpm <= 0:
+        raw_bpm = pacing_block.get("bpm_target")
+        if isinstance(raw_bpm, (int, float)) and not isinstance(raw_bpm, bool):
+            beat_bpm = float(raw_bpm)
+    beat_mode = str(beat_block.get("mode") or "auto")
+    beat_enabled = bool(beat_block.get("enabled"))
+    if "enabled" not in beat_block:
+        beat_enabled = beat_mode != "off" and beat_bpm > 0 and str(
+            pacing_block.get("cut_policy") or ""
+        ) in ("beat_synced", "onset_synced")
+    if beat_mode == "off":
+        beat_enabled = False
+
+    beat_plan = None
+    if beat_enabled and beat_bpm > 0:
+        from . import grammar
+
+        materials = []
+        for index, entry in enumerate(a_entries[: len(lengths)]):
+            asset_id = entry.get("asset_id")
+            materials.append(
+                {
+                    "label": str(asset_id),
+                    "asset_id": asset_id,
+                    "duration": float(lengths[index]),
+                }
             )
+        try:
+            subdivision = int(beat_block.get("subdivision") or 1)
+        except (TypeError, ValueError):
+            subdivision = 1
+        if subdivision not in (1, 2, 4):
+            subdivision = 1
+        try:
+            offset = float(beat_block.get("offset") or 0.0)
+        except (TypeError, ValueError):
+            offset = 0.0
+        beat_plan = grammar.plan_beat_shots(
+            materials,
+            bpm=beat_bpm,
+            fps=float(fps),
+            subdivision=subdivision,
+            offset=offset,
+            energy=beat_block.get("energy"),
+            total=plain_total,
+            method=f"beat-grid:{beat_block.get('source') or 'auto'}",
         )
-        dialogue_clips.append(
-            edl_plan.ClipSegment(
-                clip_id=f"a0_{index}",
-                source_id=_source_id(asset_id),
-                src_in=0.0,
-                src_out=length,
-                dst_in=cursor,
-                dst_out=cursor + length,
-                layer=0,
-                role="dialogue",
-                gain_db=0.0,
+
+    if beat_plan is not None and beat_plan.shots:
+        for index, shot in enumerate(beat_plan.shots):
+            asset_id = shot.get("asset_id")
+            entry_index = int(shot.get("source_index", 0))
+            if not isinstance(asset_id, str) or not asset_id:
+                asset_id = a_entries[entry_index].get("asset_id")
+            if not isinstance(asset_id, str) or not asset_id:
+                raise VxError("beat plan shot has no asset_id")
+            ref = _source_ref(asset_id)
+            referenced[_source_id(asset_id)] = ref
+            provenance = (dict(shot.get("provenance") or {"kind": "beat"}),)
+            a_clips.append(
+                edl_plan.ClipSegment(
+                    clip_id=f"v0_{index}",
+                    source_id=_source_id(asset_id),
+                    src_in=float(shot["src_in"]),
+                    src_out=float(shot["src_out"]),
+                    dst_in=float(shot["dst_in"]),
+                    dst_out=float(shot["dst_out"]),
+                    layer=0,
+                    role="main_talking_head",
+                    provenance=provenance,
+                )
             )
-        )
-        cursor += length
+            dialogue_clips.append(
+                edl_plan.ClipSegment(
+                    clip_id=f"a0_{index}",
+                    source_id=_source_id(asset_id),
+                    src_in=float(shot["src_in"]),
+                    src_out=float(shot["src_out"]),
+                    dst_in=float(shot["dst_in"]),
+                    dst_out=float(shot["dst_out"]),
+                    layer=0,
+                    role="dialogue",
+                    gain_db=0.0,
+                    provenance=provenance,
+                )
+            )
+        cursor = beat_plan.total
+    else:
+        for index, entry in enumerate(a_entries[: len(lengths)]):
+            asset_id = entry.get("asset_id")
+            ref = _source_ref(asset_id)
+            length = float(lengths[index])
+            referenced[_source_id(asset_id)] = ref
+            a_clips.append(
+                edl_plan.ClipSegment(
+                    clip_id=f"v0_{index}",
+                    source_id=_source_id(asset_id),
+                    src_in=0.0,
+                    src_out=length,
+                    dst_in=cursor,
+                    dst_out=cursor + length,
+                    layer=0,
+                    role="main_talking_head",
+                )
+            )
+            dialogue_clips.append(
+                edl_plan.ClipSegment(
+                    clip_id=f"a0_{index}",
+                    source_id=_source_id(asset_id),
+                    src_in=0.0,
+                    src_out=length,
+                    dst_in=cursor,
+                    dst_out=cursor + length,
+                    layer=0,
+                    role="dialogue",
+                    gain_db=0.0,
+                )
+            )
+            cursor += length
     duration = cursor
     if duration <= 0:
         raise VxError("a_roll total duration is zero")
+    beat_notes: List[str] = []
+    if beat_plan is not None:
+        beat_notes.append(
+            f"beat grid {beat_plan.bpm:.2f} BPM: {len(beat_plan.cuts)} tagli, "
+            f"{beat_plan.off_grid} fuori griglia, densita' {beat_plan.density:.2f}/s"
+        )
 
     anchor_map: Dict[str, float] = {}
     for pair in anchors:
@@ -1213,6 +1335,7 @@ def payload_to_edl_plan(
     notes: List[str] = []
     payload_version = payload.get("contract_version") or "?"
     notes.append(f"payload v{payload_version} -> EDL v{edl_plan.EDL_CONTRACT_VERSION}")
+    notes.extend(beat_notes)
     if b_clips and not any_anchor:
         notes.append("b-roll distribuiti uniformemente: nessun ancoraggio dichiarato")
     if not music_clips:

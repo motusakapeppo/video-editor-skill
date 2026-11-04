@@ -14,8 +14,9 @@ Citations live in references/10-grammatica-del-montaggio.md.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from . import contract
 from .edl_plan import EDLPlan
@@ -43,15 +44,34 @@ class Grid:
         }
 
 
-def beat_grid(path: str, *, max_seconds: float = 180.0) -> Grid:
-    """Tempo, beat and onset times from the audio track (librosa, CPU, no GPU needed)."""
-    try:
-        import librosa
-        import numpy as np
-    except Exception as exc:  # noqa: BLE001 - optional stack
-        return Grid(method=f"unavailable: {exc}")
+def beat_grid(
+    path: str, *, max_seconds: float = 180.0, engine: str = "auto"
+) -> Grid:
+    """Tempo, beat and onset times from the audio track.
 
-    import subprocess
+    ``engine="auto"`` uses librosa when it is installed; ``engine="numpy"`` (and
+    any librosa failure) goes through :func:`numpy_beat_grid`, which reads the
+    same decoded PCM with an FFT flux envelope, autocorrelation and a comb
+    search. The returned ``method`` always says which path measured the grid.
+    """
+    if engine not in ("auto", "numpy"):
+        raise ValueError(f"engine {engine!r} not in auto/numpy")
+    if engine == "auto":
+        try:
+            return _librosa_beat_grid(path, max_seconds=max_seconds)
+        except Exception as exc:  # noqa: BLE001 - optional stack, fall back
+            fallback = numpy_beat_grid_from_path(path, max_seconds=max_seconds)
+            if fallback.method.startswith("numpy"):
+                fallback.method += f" (librosa failed: {type(exc).__name__})"
+            return fallback
+    return numpy_beat_grid_from_path(path, max_seconds=max_seconds)
+
+
+def _librosa_beat_grid(path: str, *, max_seconds: float = 180.0) -> Grid:
+    """The librosa path; raises when the optional stack is not importable."""
+    import librosa
+    import numpy as np
+
     import tempfile
     from pathlib import Path
 
@@ -107,6 +127,232 @@ def beat_grid(path: str, *, max_seconds: float = 180.0) -> Grid:
         method="librosa-beat+onset",
         confidence=confidence,
     )
+
+
+# --------------------------------------------------------------------------- #
+# librosa-free beat grid: onset flux + autocorrelation + comb, all numpy
+# --------------------------------------------------------------------------- #
+
+NUMPY_HOP = 256
+NUMPY_FFT = 1024
+
+
+def _onset_envelope_numpy(
+    pcm: Any, sr: int, *, hop: int = NUMPY_HOP, n_fft: int = NUMPY_FFT
+) -> tuple:
+    """Positive energy flux of the decoded PCM, one value per hop.
+
+    Non-overlapping blocks on purpose: a 1024-sample FFT window reports an
+    attack up to a window length before it happens, which at 30 fps is already
+    more than one frame of grid error. Blocks of ``hop`` samples put the attack
+    inside the block that contains it, so the phase is accurate to < 16 ms.
+    """
+    import numpy as np
+
+    x = np.asarray(pcm, dtype=np.float32).reshape(-1)
+    hop = max(64, int(hop))
+    n = x.size // hop
+    if n < 8:
+        return np.zeros(0, dtype=np.float32), float(sr) / hop
+    blocks = x[: n * hop].reshape(n, hop).astype(np.float64)
+    energy = np.sqrt((blocks * blocks).mean(axis=1))
+    env = np.maximum(0.0, np.diff(np.log1p(energy * 120.0)))
+    env = np.concatenate([[0.0], env])
+    env = env - float(env.min())
+    return env.astype(np.float32), float(sr) / hop
+
+
+def _comb_score(env: Any, period: float) -> tuple[float, float]:
+    """Best mean envelope value on a grid of ``period`` frames, all phases."""
+    import numpy as np
+
+    n = env.size
+    if period < 2 or n < period * 3:
+        return 0.0, 0.0
+    best, best_phase = -1.0, 0.0
+    for phase in range(max(1, int(math.ceil(period)))):
+        idx = np.rint(np.arange(phase, n, period)).astype(int)
+        idx = idx[idx < n]
+        if idx.size < 3:
+            continue
+        score = float(env[idx].mean())
+        if score > best:
+            best, best_phase = score, float(phase)
+    return best, best_phase
+
+
+def _refine_period(
+    env: Any, env_fps: float, bpm: float, phase_frames: float
+) -> tuple[float, float]:
+    """Sub-frame refinement: parabolic peak fit, then a line through the peaks.
+
+    Integer-frame comb phases are 16 ms apart at 16 kHz / hop 256; a 30 fps frame
+    is 33 ms, so without this step a grid can miss by half a frame on its own.
+    """
+    import numpy as np
+
+    period = 60.0 / bpm * env_fps
+    n = env.size
+    ks: List[float] = []
+    peaks: List[float] = []
+    k = 0
+    while True:
+        expected = phase_frames + k * period
+        if expected >= n - 2:
+            break
+        lo = int(max(1, expected - period * 0.25))
+        hi = int(min(n - 1, expected + period * 0.25 + 1))
+        if hi <= lo:
+            break
+        idx = lo + int(np.argmax(env[lo:hi]))
+        y0, y1, y2 = float(env[idx - 1]), float(env[idx]), float(env[idx + 1])
+        denom = y0 - 2.0 * y1 + y2
+        frac = 0.5 * (y0 - y2) / denom if abs(denom) > 1e-12 else 0.0
+        ks.append(float(k))
+        peaks.append(idx + float(np.clip(frac, -1.0, 1.0)))
+        k += 1
+    if len(ks) >= 4:
+        slope, intercept = np.polyfit(np.asarray(ks), np.asarray(peaks), 1)
+        if 0.85 * period <= float(slope) <= 1.15 * period:
+            period, phase_frames = float(slope), float(intercept)
+    phase_frames %= period
+    return period, phase_frames
+
+
+def _tempo_numpy(
+    env: Any, env_fps: float, bpm_min: float, bpm_max: float
+) -> tuple[float, float, float, float]:
+    """(bpm, phase_seconds, score, contrast) from a numpy onset envelope."""
+    import numpy as np
+
+    n = env.size
+    if n < 8:
+        return 0.0, 0.0, 0.0, 0.0
+    centred = env - float(env.mean())
+    ac = np.correlate(centred, centred, "full")[n - 1 :]
+    if ac.size < 4 or ac[0] <= 0:
+        return 0.0, 0.0, 0.0, 0.0
+    ac = ac / ac[0]
+    lags = np.arange(ac.size, dtype=float)
+    lag_bpm = np.where(lags > 0, 60.0 * env_fps / np.maximum(lags, 1e-9), 0.0)
+    prior = np.exp(-0.5 * (np.log2(np.maximum(lag_bpm, 1e-9) / 110.0) / 0.9) ** 2)
+    salience = np.where(
+        (lag_bpm >= bpm_min) & (lag_bpm <= bpm_max),
+        np.maximum(ac, 0.0) * prior,
+        0.0,
+    )
+    if not np.any(salience > 0):
+        return 0.0, 0.0, 0.0, 0.0
+    coarse = float(lag_bpm[int(np.argmax(salience))])
+    baseline = float(env.mean()) + 1e-9
+
+    scored: List[tuple[float, float, float]] = []
+    for bpm in np.arange(
+        max(bpm_min, coarse * 0.94), min(bpm_max, coarse * 1.06) + 0.01, 0.1
+    ):
+        score, phase = _comb_score(env, 60.0 / bpm * env_fps)
+        if score > 0:
+            scored.append((float(bpm), float(phase), score))
+    if not scored:
+        return 0.0, 0.0, 0.0, 0.0
+    scored.sort(key=lambda item: item[2], reverse=True)
+    best_bpm, best_phase, best_score = scored[0]
+    second = next(
+        (item[2] for item in scored[1:] if abs(item[0] - best_bpm) > 2.0),
+        scored[1][2] if len(scored) > 1 else best_score,
+    )
+    period, phase_frames = _refine_period(env, env_fps, best_bpm, best_phase)
+    return (
+        60.0 * env_fps / period,
+        phase_frames / env_fps,
+        best_score / baseline,
+        best_score / max(second, 1e-9),
+    )
+
+
+def numpy_beat_grid(
+    pcm: Any,
+    sr: int,
+    *,
+    bpm_min: float = 60.0,
+    bpm_max: float = 200.0,
+    max_seconds: float = 180.0,
+) -> Grid:
+    """Beat grid without librosa, from an already decoded mono PCM array.
+
+    The declaration is in ``Grid.method``: ``numpy-onset-autocorr``. This is the
+    fallback the pipeline uses when the optional stack is missing, and the test
+    drives it directly so the fallback is proven even on machines that do have
+    librosa installed.
+    """
+    import numpy as np
+
+    x = np.asarray(pcm, dtype=np.float32).reshape(-1)
+    if max_seconds and max_seconds > 0:
+        x = x[: int(float(max_seconds) * float(sr))]
+    if x.size < NUMPY_FFT:
+        return Grid(method="numpy: audio too short")
+    env, env_fps = _onset_envelope_numpy(x, sr)
+    if env.size < 8 or float(env.max()) <= 0.0:
+        return Grid(method="numpy: no onset energy")
+    bpm, phase, score, contrast = _tempo_numpy(env, env_fps, bpm_min, bpm_max)
+    if bpm <= 0:
+        return Grid(method="numpy: no tempo in range")
+
+    duration = float(x.size) / float(sr)
+    period = 60.0 / bpm
+    beats: List[float] = []
+    k = 0
+    while True:
+        when = phase + k * period
+        if when >= duration:
+            break
+        if when >= 0:
+            beats.append(round(when, 4))
+        k += 1
+    threshold = float(env.mean()) + 0.5 * float(env.std())
+    peaks = np.where(
+        (env[1:-1] > threshold)
+        & (env[1:-1] >= env[:-2])
+        & (env[1:-1] > env[2:])
+    )[0] + 1
+    onsets = [round(float(index) / env_fps, 4) for index in peaks[:512]]
+    return Grid(
+        bpm=float(bpm),
+        beats=beats,
+        onsets=onsets,
+        duration=duration,
+        method="numpy-onset-autocorr",
+        confidence=float(contrast),
+    )
+
+
+def numpy_beat_grid_from_path(path: str, *, max_seconds: float = 180.0) -> Grid:
+    """Decode the first audio stream with ``vx.audio`` and hand it to numpy."""
+    from . import audio
+
+    try:
+        pcm = audio._decode_pcm(path, sr=audio.PCM_SR)
+    except Exception as exc:  # noqa: BLE001 - the grid must not stop an edit
+        return Grid(method=f"numpy: decode failed ({type(exc).__name__}: {exc})"[:160])
+    if pcm.size == 0:
+        return Grid(method="numpy: empty audio")
+    return numpy_beat_grid(pcm, audio.PCM_SR, max_seconds=max_seconds)
+
+
+def subdivision_for_energy(energy: float) -> int:
+    """Cuts per beat from a 0..1 energy reading: 1, 2 or 4.
+
+    A calm bed gets one cut per beat; a dense one gets the half and quarter
+    subdivisions, which is the same ladder the brief offers ("battuta, 1/2,
+    1/4"). Values outside 0..1 are clamped rather than trusted.
+    """
+    value = max(0.0, min(1.0, float(energy)))
+    if value >= 0.66:
+        return 4
+    if value >= 0.33:
+        return 2
+    return 1
 
 
 PERCEPTUAL_TOLERANCE_FRAMES = 1
@@ -393,6 +639,234 @@ def plan_multisource(
             else ""
         ),
     }
+
+
+@dataclass
+class BeatPlan:
+    """A cut plan laid on the musical grid, with the provenance of each cut.
+
+    ``cuts`` are absolute timeline boundaries: ``t`` is the grid time,
+    ``frame`` the nearest frame, ``beat`` the 1-based beat and ``subdivision``
+    the position inside that beat. ``provenance`` is exactly what
+    ``coherence.CUT_SOURCES`` accepts, so a beat cut is never ``unjustified``.
+    """
+
+    bpm: float = 0.0
+    fps: float = 30.0
+    subdivision: int = 1
+    step_sec: float = 0.0
+    offset: float = 0.0
+    cuts: List[Dict[str, Any]] = field(default_factory=list)
+    shots: List[Dict[str, Any]] = field(default_factory=list)
+    total: float = 0.0
+    off_grid: int = 0
+    method: str = "grid"
+    report: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def density(self) -> float:
+        return round(len(self.cuts) / self.total, 4) if self.total > 0 else 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "bpm": round(self.bpm, 3),
+            "fps": self.fps,
+            "subdivision": self.subdivision,
+            "step_sec": round(self.step_sec, 6),
+            "offset": round(self.offset, 4),
+            "total": round(self.total, 4),
+            "method": self.method,
+            "off_grid": self.off_grid,
+            "density": self.density,
+            "cuts": list(self.cuts),
+            "shots": list(self.shots),
+            "report": dict(self.report),
+        }
+
+
+def _material_list(materials: Any) -> List[Dict[str, Any]]:
+    """Normalize floats / mappings / sequences into labelled materials."""
+    if materials is None:
+        return []
+    if isinstance(materials, (int, float)) and not isinstance(materials, bool):
+        materials = [float(materials)]
+    if isinstance(materials, Mapping):
+        materials = [materials]
+    out: List[Dict[str, Any]] = []
+    for index, item in enumerate(materials):
+        if isinstance(item, Mapping):
+            duration = float(item.get("duration") or item.get("duration_sec") or 0.0)
+            label = str(item.get("label") or item.get("asset_id") or f"m{index}")
+            asset_id = item.get("asset_id")
+            entry = {"label": label, "duration": duration, "source_index": index}
+            if asset_id is not None:
+                entry["asset_id"] = str(asset_id)
+            out.append(entry)
+        else:
+            out.append(
+                {"label": f"m{index}", "duration": float(item), "source_index": index}
+            )
+    return out
+
+
+def plan_beat_shots(
+    materials: Any,
+    *,
+    bpm: float,
+    fps: float = 30.0,
+    subdivision: int = 1,
+    offset: float = 0.0,
+    energy: Optional[float] = None,
+    total: Optional[float] = None,
+    method: str = "grid",
+) -> BeatPlan:
+    """Cut ``materials`` on the beat grid, or on 1/2 - 1/4 beats by energy.
+
+    The grid is absolute: ``t_k = offset + k * (60 / bpm) / subdivision``. Each
+    shot takes the next grid line it can reach. When a material is shorter than
+    the next line, the shot ends with the material (never stretched), the cut is
+    counted in ``off_grid`` and reported, so the caller can say how many shots
+    fell outside the music instead of hiding it.
+    """
+    rate = float(fps)
+    if not math.isfinite(rate) or rate <= 0:
+        raise ValueError(f"fps must be a positive number, got {fps!r}")
+    bpm_value = float(bpm)
+    if not math.isfinite(bpm_value) or bpm_value <= 0:
+        raise ValueError(f"bpm must be a positive number, got {bpm!r}")
+    div = int(subdivision)
+    if div not in (1, 2, 4):
+        raise ValueError(f"subdivision must be 1, 2 or 4, got {subdivision!r}")
+    if energy is not None and subdivision == 1:
+        div = subdivision_for_energy(float(energy))
+
+    mats = _material_list(materials)
+    capacity = sum(max(0.0, item["duration"]) for item in mats)
+    total_cap = float(total) if total is not None else capacity
+    total_cap = max(0.0, min(total_cap, capacity)) if total is not None else capacity
+    if total_cap <= 0 or not mats:
+        return BeatPlan(
+            bpm=bpm_value,
+            fps=rate,
+            subdivision=div,
+            step_sec=round(60.0 / bpm_value / div, 6),
+            offset=float(offset),
+            method=method,
+            report={"error": "no material", "off_grid": 0, "cuts": 0},
+        )
+
+    step = 60.0 / bpm_value / div
+    cursor = 0.0
+    off_grid = 0
+    shots: List[Dict[str, Any]] = []
+    cuts: List[Dict[str, Any]] = []
+    shot_index = 0
+
+    def _cut(index_on_grid: int, when: float) -> Dict[str, Any]:
+        frame = int(round(when * rate))
+        beat_number = int(index_on_grid // div) + 1
+        sub_index = int(index_on_grid % div)
+        return {
+            "t": round(when, 6),
+            "frame": frame,
+            "frame_error": round(frame - when * rate, 6),
+            "beat": beat_number,
+            "beat_number": beat_number,
+            "subdivision_index": sub_index,
+            "subdivision_position": round(sub_index / div, 4),
+            "provenance": {"kind": "beat", "beat": beat_number},
+        }
+
+    for material in mats:
+        left = max(0.0, float(material["duration"]))
+        used = 0.0
+        while left > 1e-9 and cursor < total_cap - 1e-9:
+            index_on_grid = int(math.floor((cursor - offset) / step + 1e-9)) + 1
+            boundary = offset + index_on_grid * step
+            available = cursor + left
+            on_grid = boundary <= available + 1e-9 and boundary <= total_cap + 1e-9
+            if on_grid:
+                take = boundary - cursor
+                end = boundary
+            else:
+                take = min(available, total_cap) - cursor
+                end = cursor + take
+                off_grid += 1
+            if take <= 1e-9:
+                break
+            shot = {
+                "index": shot_index,
+                "source_index": int(material["source_index"]),
+                "label": material["label"],
+                "src_in": round(used, 6),
+                "src_out": round(used + take, 6),
+                "dst_in": round(cursor, 6),
+                "dst_out": round(end, 6),
+                "duration": round(take, 6),
+                "frames": int(round(take * rate)),
+                "on_grid": on_grid,
+                "beat": int(index_on_grid // div) + 1 if on_grid else None,
+                "beat_number": int(index_on_grid // div) + 1 if on_grid else None,
+                "provenance": (
+                    {"kind": "beat", "beat": int(index_on_grid // div) + 1}
+                    if on_grid
+                    else {"kind": "material_end"}
+                ),
+            }
+            if material.get("asset_id") is not None:
+                shot["asset_id"] = material["asset_id"]
+            shots.append(shot)
+            if on_grid:
+                cuts.append(_cut(index_on_grid, end))
+            cursor = end
+            used += take
+            left -= take
+            shot_index += 1
+        if cursor >= total_cap - 1e-9:
+            break
+
+    errors = [
+        abs(float(cut["frame"]) - float(cut["t"]) * rate) for cut in cuts
+    ]
+    hist: Dict[str, int] = {}
+    for value in errors:
+        key = f"{round(value, 1):.1f}"
+        hist[key] = hist.get(key, 0) + 1
+    report = {
+        "bpm": round(bpm_value, 3),
+        "fps": rate,
+        "subdivision": div,
+        "step_sec": round(step, 6),
+        "cuts": len(cuts),
+        "shots": len(shots),
+        "off_grid": off_grid,
+        "density_cuts_per_sec": round(len(cuts) / total_cap, 4),
+        "density_shots_per_sec": round(len(shots) / total_cap, 4),
+        "mean_shot_sec": round(total_cap / len(shots), 4) if shots else 0.0,
+        "reference_shot_sec": 0.67,
+        "max_frame_error": round(max(errors), 3) if errors else 0.0,
+        "within_1_frame": sum(1 for value in errors if value <= 1.0),
+        "frame_error_hist": hist,
+        "off_grid_reason": (
+            "material shorter than the next beat subdivision: the shot ends "
+            "with the clip instead of stretching"
+            if off_grid
+            else ""
+        ),
+    }
+    return BeatPlan(
+        bpm=bpm_value,
+        fps=rate,
+        subdivision=div,
+        step_sec=round(step, 6),
+        offset=float(offset),
+        cuts=cuts,
+        shots=shots,
+        total=round(cursor, 6),
+        off_grid=off_grid,
+        method=method,
+        report=report,
+    )
 
 
 class GrammarError(Exception):
