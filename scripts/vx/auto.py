@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -875,6 +876,660 @@ def _frame_sharpness(gray: Any) -> Optional[float]:
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())
     except Exception:  # noqa: BLE001
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Il punto di presa: la clip si sceglie per qualita', il punto per misura
+# --------------------------------------------------------------------------- #
+
+#: Passo del profilo di nitidezza usato per scegliere il punto di presa. 0.15 s
+#: sono ~4 fotogrammi a 30 fps: abbastanza fitto per non saltare il passaggio da
+#: sfocatura a fuoco, abbastanza largo per non decodificare ogni frame.
+IN_POINT_STEP_SEC = 0.15
+
+#: Quota della distribuzione della clip sotto cui un fotogramma e' "sotto la
+#: qualita' preferita": 35% del 75° percentile. La varianza del Laplaciano
+#: dipende da risoluzione e compressione (360x640 da WhatsApp non arriva a 50),
+#: quindi la soglia assoluta del triage non puo' decidere da sola cosa buttare.
+IN_POINT_RELATIVE_SHARE = 0.35
+
+#: Pavimento assoluto, molto basso: sotto questo numero il fotogramma e' nero,
+#: vetro o rumore, non immagine. E' l'unico giudizio che non dipende dalla clip:
+#: la varianza del Laplaciano di un 360x640 da telefono sta intorno a 30-60
+#: anche quando l'immagine e' buona, quindi una soglia alta qui svuoterebbe il
+#: montaggio invece di proteggerlo.
+IN_POINT_ABSOLUTE_FLOOR = 5.0
+
+#: Secondi di materiale che devono restare dopo il punto di presa: meno di una
+#: battuta non e' un piano, e' un fotogramma.
+IN_POINT_MIN_KEEP_SEC = 0.6
+
+#: Quota massima di materiale che il filtro puo' togliere a una clip. Oltre
+#: questa soglia il montaggio terrebbe troppo poco: il tratto scartato rientra
+#: come ``below_preferred``, dichiarato, e la timeline resta pubblicabile.
+IN_POINT_MAX_REMOVAL = 0.25
+
+#: Due campioni consecutivi sotto questo scarto medio (scala 0..255) sono lo
+#: stesso fotogramma: e' la definizione di freeze usata qui, non un pan lento.
+IN_POINT_FREEZE_DIFF = 0.5
+
+
+def percentile(values: Sequence[float], share: float) -> float:
+    """Percentile lineare (stessa definizione di ``numpy.percentile``), senza numpy."""
+    rows = sorted(float(value) for value in values)
+    if not rows:
+        return 0.0
+    if len(rows) == 1:
+        return rows[0]
+    position = max(0.0, min(1.0, float(share))) * (len(rows) - 1)
+    low = int(math.floor(position))
+    high = int(math.ceil(position))
+    if low == high:
+        return rows[low]
+    weight = position - low
+    return rows[low] * (1.0 - weight) + rows[high] * weight
+
+
+def coherence_black_luma() -> float:
+    """La soglia del nero del cancello di coerenza: una sola verita', non due."""
+    from . import coherence
+
+    return float(coherence.BLACK_LUMA)
+
+
+def _frozen_flags(
+    samples: Sequence[Mapping[str, Any]], *, step: float, freeze_seconds: float
+) -> List[bool]:
+    """Dove un fermo immagine dura abbastanza da non essere materiale."""
+    count = len(samples)
+    frozen = [False] * count
+    start: Optional[int] = None
+    for index in range(1, count + 1):
+        static = False
+        if index < count:
+            diff = samples[index].get("diff")
+            static = diff is not None and float(diff) <= IN_POINT_FREEZE_DIFF
+        if static:
+            if start is None:
+                start = index - 1
+        elif start is not None:
+            if (index - 1 - start) * float(step) >= float(freeze_seconds):
+                for mark in range(start, index):
+                    frozen[mark] = True
+            start = None
+    return frozen
+
+
+def _clip_thresholds(samples: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
+    """Le due soglie della clip: assoluta (pavimento) e relativa (distribuzione)."""
+    values = [float(row.get("sharpness") or 0.0) for row in samples]
+    p75 = percentile(values, 0.75)
+    return {
+        "absolute": float(IN_POINT_ABSOLUTE_FLOOR),
+        "relative": round(float(IN_POINT_RELATIVE_SHARE) * p75, 3),
+        "preferred": round(
+            max(float(IN_POINT_ABSOLUTE_FLOOR), float(IN_POINT_RELATIVE_SHARE) * p75), 3
+        ),
+        "p75": round(p75, 3),
+    }
+
+
+def _usable_runs(
+    samples: Sequence[Mapping[str, Any]],
+    *,
+    step: float,
+    threshold: float,
+    black_luma: float,
+    freeze_seconds: float,
+) -> List[Dict[str, Any]]:
+    """Le corse continue di campioni utilizzabili, con inizio e fine in secondi.
+
+    Un campione e' utilizzabile quando sta sopra ``threshold`` (il pavimento
+    assoluto), la luma non e' nera e il fotogramma non e' dentro un freeze
+    abbastanza lungo da contare (``freeze_seconds``). Il freeze si misura sullo
+    scarto fra campioni consecutivi: una zoomata sfocata cambia i pixel, un
+    fermo immagine no.
+    """
+    count = len(samples)
+    frozen = _frozen_flags(samples, step=step, freeze_seconds=freeze_seconds)
+    usable = [
+        (
+            bool(frozen[index]) is False
+            and float(samples[index].get("sharpness") or 0.0) >= float(threshold)
+            and float(samples[index].get("luma") or 0.0) >= float(black_luma)
+        )
+        for index in range(count)
+    ]
+    runs: List[Dict[str, Any]] = []
+    first: Optional[int] = None
+    for index in range(count + 1):
+        if index < count and usable[index]:
+            if first is None:
+                first = index
+        elif first is not None:
+            runs.append(
+                {
+                    "from": first,
+                    "to": index - 1,
+                    "start": float(samples[first]["t"]),
+                    "end": float(samples[index - 1]["t"]) + float(step),
+                    "seconds": (index - first) * float(step),
+                }
+            )
+            first = None
+    return runs
+
+
+def choose_in_point(
+    samples: Sequence[Mapping[str, Any]],
+    *,
+    step: float = IN_POINT_STEP_SEC,
+    black_luma: float,
+    freeze_seconds: float,
+    min_keep: float = IN_POINT_MIN_KEEP_SEC,
+    duration: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """Il punto di presa scelto per misura dentro una clip, o ``None``.
+
+    La soglia non e' quella assoluta del triage: la varianza laplaciana dipende
+    da risoluzione e compressione, e su un 360x640 da telefono finirebbe sotto
+    50 quasi tutto, anche materiale buono a occhio. Qui contano due numeri
+    dichiarati per clip:
+
+    * ``relative`` = 35% del 75° percentile della curva (``preferred``);
+    * ``absolute`` = :data:`IN_POINT_ABSOLUTE_FLOOR`, il pavimento nero/vetro.
+
+    Regola, in ordine:
+
+    * se la clip **apre gia'** sopra la soglia preferita, il punto resta 0: il
+      piano di un materiale buono non cambia;
+    * altrimenti si prende il **picco di nitidezza** della parte preferita che
+      lascia almeno ``min_keep`` secondi dopo di se' (il primo fotogramma di un
+      telefono e' spesso uno zoom sfocato);
+    * si tolgono solo i tratti **davvero inutilizzabili** (sotto il pavimento,
+      neri o in freeze), e mai piu' di :data:`IN_POINT_MAX_REMOVAL` della clip:
+      oltre quella quota il tratto rientra, dichiarato ``below_preferred``;
+    * nessun campione sopra il pavimento: ``None``, la clip va esclusa.
+
+    Il materiale utile e' la finestra ``[usable_start, usable_end]``; la durata
+    dei segmenti resta quella della griglia, si sposta solo il punto di presa.
+    """
+    rows = list(samples)
+    if not rows:
+        return None
+    total = float(duration) if duration is not None else float(rows[-1]["t"]) + float(step)
+    total = max(float(step), total)
+    thresholds = _clip_thresholds(rows)
+    preferred = float(thresholds["preferred"])
+    floor = float(thresholds["absolute"])
+    if float(thresholds["p75"]) < floor:
+        return None
+    frozen = _frozen_flags(rows, step=step, freeze_seconds=freeze_seconds)
+
+    def _ok(index: int) -> bool:
+        row = rows[index]
+        return (
+            not frozen[index]
+            and float(row.get("luma") or 0.0) >= float(black_luma)
+            and float(row.get("sharpness") or 0.0) >= floor
+        )
+
+    usable_index = [index for index in range(len(rows)) if _ok(index)]
+    if not usable_index:
+        return None
+    usable_start = float(rows[usable_index[0]]["t"])
+    usable_end = min(total, float(rows[usable_index[-1]]["t"]) + float(step))
+    if usable_end - usable_start <= 0.0:
+        return None
+    removed = max(0.0, total - (usable_end - usable_start))
+    kept_head = 0.0
+    if total > 0 and removed / total > float(IN_POINT_MAX_REMOVAL):
+        # Mai svuotare: oltre la quota ammessa il tratto scartato rientra.
+        usable_start = 0.0
+        usable_end = total
+        kept_head = removed
+    window = max(1e-6, usable_end - usable_start)
+    usable_fraction = round(window / total, 3) if total > 0 else 0.0
+    preferred_count = sum(
+        1
+        for index in usable_index
+        if float(rows[index].get("sharpness") or 0.0) >= preferred
+    )
+    below_fraction = round(
+        max(0.0, window - preferred_count * float(step)) / total, 3
+    ) if total > 0 else 0.0
+    preferred_index = [
+        index
+        for index in usable_index
+        if float(rows[index].get("sharpness") or 0.0) >= preferred
+    ]
+    wrap_start = (
+        round(float(rows[preferred_index[0]]["t"]), 6)
+        if preferred_index
+        else round(usable_start, 6)
+    )
+    head = rows[0]
+    head_ok = (
+        0 in usable_index
+        and float(head.get("sharpness") or 0.0) >= preferred
+        and float(usable_end) + 1e-9 >= float(min_keep)
+    )
+    if head_ok:
+        return {
+            "src_in": 0.0,
+            "usable_start": 0.0,
+            "usable_end": round(usable_end, 6),
+            "wrap_start": 0.0,
+            "sharpness": round(float(head.get("sharpness") or 0.0), 3),
+            "moved": False,
+            "short_window": False,
+            "usable_fraction": usable_fraction,
+            "below_preferred_fraction": below_fraction,
+            "thresholds": thresholds,
+            "kept_below_preferred": bool(kept_head),
+            "why": (
+                f"la clip e' gia' sopra la soglia preferita dal primo fotogramma "
+                f"(nitidezza {float(head.get('sharpness') or 0.0):.1f} >= "
+                f"{preferred:.1f}): punto invariato"
+            ),
+        }
+    pool = preferred_index or usable_index
+    best: Optional[Mapping[str, Any]] = None
+    for index in pool:
+        row = rows[index]
+        if float(usable_end) - float(row["t"]) + 1e-9 < float(min_keep):
+            continue
+        if best is None or float(row.get("sharpness") or 0.0) > float(
+            best.get("sharpness") or 0.0
+        ):
+            best = row
+    short_window = best is None
+    if best is None:
+        best = max(
+            (rows[index] for index in pool),
+            key=lambda row: float(row.get("sharpness") or 0.0),
+        )
+    src_in = round(float(best["t"]), 6)
+    return {
+        "src_in": src_in,
+        "usable_start": round(usable_start, 6),
+        "usable_end": round(usable_end, 6),
+        "wrap_start": wrap_start,
+        "sharpness": round(float(best.get("sharpness") or 0.0), 3),
+        "moved": src_in > 1e-9,
+        "short_window": bool(short_window),
+        "usable_fraction": usable_fraction,
+        "below_preferred_fraction": below_fraction,
+        "thresholds": thresholds,
+        "kept_below_preferred": bool(kept_head),
+        "why": (
+            f"picco di nitidezza {float(best.get('sharpness') or 0.0):.1f} "
+            f"(soglia preferita {preferred:.1f} = 35% del 75° percentile "
+            f"{float(thresholds['p75']):.1f}; pavimento {floor:.1f}) dentro la "
+            f"finestra utile [{usable_start:.2f}, {usable_end:.2f}]s"
+            + (
+                f": la finestra resta {usable_end - src_in:.2f}s, sotto la "
+                f"battuta di {float(min_keep):.2f}s (dichiarato)"
+                if short_window
+                else f": restano {usable_end - src_in:.2f}s di materiale"
+            )
+        ),
+    }
+
+
+def measure_frame_profile(
+    path: Any, *, step: float = IN_POINT_STEP_SEC
+) -> Optional[Dict[str, Any]]:
+    """Il profilo per-frame di una sorgente, o ``None`` se non si misura.
+
+    Stessa metrica del triage e del cancello di coerenza (varianza del
+    Laplaciano sul grigio), campionata ogni ``step`` secondi. Senza OpenCV o
+    senza frame leggibili non si inventa niente: ``None``, e il piano prosegue
+    col comportamento di sempre dichiarando ``in_point: not_measured``.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except Exception:  # noqa: BLE001 - senza OpenCV non c'e' profilo
+        return None
+    try:
+        capture = cv2.VideoCapture(str(path))
+    except Exception:  # noqa: BLE001
+        return None
+    if not capture.isOpened():
+        capture.release()
+        return None
+    samples: List[Dict[str, Any]] = []
+    previous: Any = None
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        frames = float(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+        duration = (frames / fps) if fps > 0.0 and frames > 0.0 else 0.0
+        if duration <= 0.0:
+            return None
+        at = 0.0
+        while at < duration - 1e-6:
+            capture.set(cv2.CAP_PROP_POS_MSEC, at * 1000.0)
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                at += float(step)
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            luma = float(gray.mean()) / 255.0
+            small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA)
+            small = small.astype("float32")
+            diff = (
+                255.0
+                if previous is None
+                else float(np.mean(np.abs(small - previous)))
+            )
+            previous = small
+            samples.append(
+                {
+                    "t": round(at, 4),
+                    "sharpness": round(sharpness, 3),
+                    "luma": round(luma, 5),
+                    "diff": round(diff, 3),
+                }
+            )
+            at += float(step)
+    except Exception:  # noqa: BLE001 - una decodifica rotta non inventa un profilo
+        return None
+    finally:
+        capture.release()
+    if not samples:
+        return None
+    return {
+        "method": "laplacian_variance",
+        "metric": "sharpness",
+        "step_sec": float(step),
+        "duration": round(duration, 4),
+        "samples": samples,
+    }
+
+
+def frame_choice(
+    selected: Sequence[Mapping[str, Any]],
+    assets_by_id: Mapping[str, asset_triage.AssetInfo],
+    staged: Mapping[str, Any],
+    *,
+    black_luma: float,
+    freeze_seconds: float,
+    measure: Optional[Callable[[Any], Optional[Dict[str, Any]]]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """``asset_id -> punto di presa`` per gli a_roll, misurato o dichiarato.
+
+    Per ogni a_roll si misura il profilo della sorgente **messa in scena** (la
+    stessa che la coerenza campiona) e si sceglie il punto con
+    :func:`choose_in_point`. Se il profilo non esiste, la voce e'
+    ``quality: "not_measured"`` e il piano usa il comportamento di sempre. Se
+    nessun istante sta sopra il pavimento assoluto, la voce e'
+    ``excluded: True`` con la misura che lo dice: chi costruisce il piano la
+    toglie e la dichiara.
+    """
+    read = measure or measure_frame_profile
+    out: Dict[str, Dict[str, Any]] = {}
+    for entry in selected:
+        if entry.get("role") != "a_roll":
+            continue
+        asset_id = str(entry.get("asset_id") or "")
+        if not asset_id or asset_id in out:
+            continue
+        asset = assets_by_id.get(asset_id)
+        path = ""
+        result = staged.get(asset_id)
+        if result is not None:
+            path = str(_staged_path(result))
+        elif asset is not None:
+            path = str(asset.path or "")
+        profile = read(path) if path else None
+        if not profile:
+            out[asset_id] = {
+                "quality": "not_measured",
+                "in_point": "not_measured",
+                "src_in": 0.0,
+                "sharpness": None,
+                "usable_start": None,
+                "usable_end": None,
+                "excluded": False,
+                "moved": False,
+                "samples": [],
+                "why": (
+                    "not_measured: profilo per-frame non disponibile (analisi "
+                    "non eseguita o proxy assente), punto di presa non misurato, "
+                    "piano invariato"
+                ),
+            }
+            continue
+        samples = list(profile.get("samples") or [])
+        chosen = choose_in_point(
+            samples,
+            step=float(profile.get("step_sec") or IN_POINT_STEP_SEC),
+            black_luma=float(black_luma),
+            freeze_seconds=float(freeze_seconds),
+            duration=profile.get("duration"),
+        )
+        if chosen is None:
+            best = max(
+                (float(item.get("sharpness") or 0.0) for item in samples), default=0.0
+            )
+            thresholds = _clip_thresholds(samples)
+            out[asset_id] = {
+                "quality": "unusable",
+                "in_point": "unusable",
+                "src_in": 0.0,
+                "sharpness": round(best, 3),
+                "usable_start": 0.0,
+                "usable_end": 0.0,
+                "excluded": True,
+                "moved": False,
+                "thresholds": thresholds,
+                "samples": samples,
+                "why": (
+                    f"nessun istante utilizzabile: nitidezza massima {best:.1f}, "
+                    f"75° percentile {float(thresholds['p75']):.1f} sotto il "
+                    f"pavimento {float(thresholds['absolute']):.1f} "
+                    f"({len(samples)} campioni)"
+                ),
+                "profile": {
+                    "method": str(profile.get("method") or ""),
+                    "samples": len(samples),
+                    "step_sec": float(profile.get("step_sec") or IN_POINT_STEP_SEC),
+                    "threshold_absolute": float(thresholds["absolute"]),
+                    "threshold_relative": float(thresholds["relative"]),
+                    "threshold_preferred": float(thresholds["preferred"]),
+                    "curve": [
+                        [round(float(item["t"]), 3), round(float(item["sharpness"]), 2)]
+                        for item in samples
+                    ],
+                },
+            }
+            continue
+        out[asset_id] = {
+            **chosen,
+            "quality": "measured",
+            "in_point": round(float(chosen["src_in"]), 6),
+            "excluded": False,
+            "samples": samples,
+            "profile": {
+                "method": str(profile.get("method") or ""),
+                "samples": len(samples),
+                "step_sec": float(profile.get("step_sec") or IN_POINT_STEP_SEC),
+                "threshold_absolute": float(chosen["thresholds"]["absolute"]),
+                "threshold_relative": float(chosen["thresholds"]["relative"]),
+                "threshold_preferred": float(chosen["thresholds"]["preferred"]),
+                "curve": [
+                    [round(float(item["t"]), 3), round(float(item["sharpness"]), 2)]
+                    for item in samples
+                ],
+            },
+        }
+    return out
+
+
+def opening_in_point(
+    choice: Mapping[str, Dict[str, Any]], asset_id: Any
+) -> Dict[str, Any]:
+    """``opening.in_point``: il punto d'ingresso con la sua nitidezza e il perche'.
+
+    Tre campi sempre presenti (``src_in``, ``sharpness``, ``why``), il profilo
+    quando e' stato misurato, ``not_measured`` quando non c'era niente da
+    misurare. Una clip scartata non ha un punto d'ingresso: lo dice.
+    """
+    row = choice.get(str(asset_id or "")) if choice else None
+    if not isinstance(row, Mapping):
+        return {
+            "src_in": None,
+            "sharpness": None,
+            "why": "not_measured: nessun profilo per la clip d'apertura",
+            "quality": "not_measured",
+        }
+    quality = str(row.get("quality") or "")
+    out: Dict[str, Any] = {
+        "src_in": row.get("src_in"),
+        "sharpness": row.get("sharpness"),
+        "why": str(row.get("why") or ""),
+        "quality": quality,
+        "moved": bool(row.get("moved")),
+    }
+    if quality == "measured":
+        out["in_point"] = row.get("in_point")
+        out["usable_start"] = row.get("usable_start")
+        out["usable_end"] = row.get("usable_end")
+        out["usable_fraction"] = row.get("usable_fraction")
+        out["threshold_absolute"] = (row.get("thresholds") or {}).get("absolute")
+        out["threshold_relative"] = (row.get("thresholds") or {}).get("relative")
+        out["profile"] = row.get("profile")
+    elif quality == "not_measured":
+        out["in_point"] = "not_measured"
+    elif quality == "unusable":
+        out["in_point"] = "unusable"
+        out["profile"] = row.get("profile")
+    return out
+
+
+def segment_quality(
+    plan: Any, choice: Mapping[str, Dict[str, Any]], *, step: float = IN_POINT_STEP_SEC
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Classifica il **punto di presa** di ogni segmento layer-0.
+
+    ``below_preferred`` sono i segmenti che partono sotto la soglia preferita
+    della propria clip ma sopra il pavimento: restano nel montaggio, dichiarati.
+    ``unusable`` sono quelli che partono sotto il pavimento: non dovrebbero
+    esistere, e se esistono il report lo dice invece di nasconderli.
+    """
+    out: Dict[str, List[Dict[str, Any]]] = {"below_preferred": [], "unusable": []}
+    for track in getattr(plan, "video_tracks", ()) or ():
+        for clip in getattr(track, "clips", ()) or ():
+            if int(getattr(clip, "layer", 0) or 0) != 0:
+                continue
+            row = choice.get(str(getattr(clip, "source_id", ""))) or {}
+            samples = row.get("samples") or []
+            if not samples:
+                continue
+            at = float(getattr(clip, "src_in", 0.0) or 0.0)
+            nearest = min(samples, key=lambda item: abs(float(item["t"]) - at))
+            value = round(float(nearest.get("sharpness") or 0.0), 2)
+            thresholds = row.get("thresholds") or {}
+            preferred = float(thresholds.get("preferred") or 0.0)
+            floor = float(thresholds.get("absolute") or 0.0)
+            record = {
+                "clip_id": str(getattr(clip, "clip_id", "") or ""),
+                "asset_id": str(getattr(clip, "source_id", "") or ""),
+                "src_in": round(at, 3),
+                "sharpness": value,
+                "threshold_preferred": preferred,
+            }
+            if value < floor:
+                out["unusable"].append(record)
+            elif value < preferred:
+                out["below_preferred"].append(record)
+    return out
+
+
+def plan_declaration(
+    choice: Mapping[str, Dict[str, Any]],
+    *,
+    segments: Optional[Mapping[str, Sequence[Mapping[str, Any]]]] = None,
+    plan: Any = None,
+    material_sec: Optional[float] = None,
+) -> Dict[str, Any]:
+    """La sezione ``report["plan"]``: soglie per clip, punti di presa, scarti."""
+    in_points: List[Dict[str, Any]] = []
+    excluded: List[Dict[str, Any]] = []
+    for asset_id, row in choice.items():
+        quality = str(row.get("quality") or "")
+        thresholds = row.get("thresholds") or {}
+        if quality == "not_measured":
+            in_points.append(
+                {
+                    "asset_id": asset_id,
+                    "in_point": "not_measured",
+                    "why": str(row.get("why") or ""),
+                }
+            )
+            continue
+        if quality == "unusable":
+            excluded.append(
+                {
+                    "asset_id": asset_id,
+                    "reason": "unusable",
+                    "measure": {
+                        "metric": "laplacian_variance",
+                        "threshold_absolute": thresholds.get("absolute"),
+                        "threshold_relative": thresholds.get("relative"),
+                        "p75": thresholds.get("p75"),
+                        "sharpness": row.get("sharpness"),
+                        "samples": (row.get("profile") or {}).get("samples"),
+                    },
+                    "why": str(row.get("why") or ""),
+                }
+            )
+            continue
+        in_points.append(
+            {
+                "asset_id": asset_id,
+                "in_point": row.get("in_point"),
+                "src_in": row.get("src_in"),
+                "sharpness": row.get("sharpness"),
+                "usable_start": row.get("usable_start"),
+                "usable_end": row.get("usable_end"),
+                "usable_fraction": row.get("usable_fraction"),
+                "below_preferred_fraction": row.get("below_preferred_fraction"),
+                "threshold_absolute": thresholds.get("absolute"),
+                "threshold_relative": thresholds.get("relative"),
+                "threshold_preferred": thresholds.get("preferred"),
+                "p75": thresholds.get("p75"),
+                "kept_below_preferred": bool(row.get("kept_below_preferred")),
+                "moved": bool(row.get("moved")),
+                "why": str(row.get("why") or ""),
+            }
+        )
+    below = list((segments or {}).get("below_preferred") or ())
+    unusable = list((segments or {}).get("unusable") or ())
+    declaration: Dict[str, Any] = {
+        "metric": "laplacian_variance",
+        "threshold_absolute": float(IN_POINT_ABSOLUTE_FLOOR),
+        "threshold_relative_share": float(IN_POINT_RELATIVE_SHARE),
+        "max_removal": float(IN_POINT_MAX_REMOVAL),
+        "in_points": in_points,
+        "excluded": excluded,
+        "excluded_count": len(excluded),
+        "below_preferred": below,
+        "below_preferred_count": len(below),
+        "unusable_segments": unusable,
+        "unusable_segment_count": len(unusable),
+    }
+    if plan is not None:
+        duration = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+        declaration["timeline_sec"] = round(duration, 3)
+        if material_sec is not None and float(material_sec) > 0:
+            declaration["material_sec"] = round(float(material_sec), 3)
+            declaration["duration_retained"] = round(
+                duration / float(material_sec), 4
+            )
+    return declaration
 
 
 def _opening_clip(plan: Any) -> Optional[Any]:
@@ -4525,14 +5180,38 @@ def _run_locked(
             source_refs, media_info_map = _source_refs(staged)
     _notify(progress, 20.0, "ingest", log=log)
 
+    # Il punto di presa si sceglie per misura, non per caso: la clip si guarda
+    # fotogramma per fotogramma (profilo di nitidezza), e il piano monta da
+    # li'. Senza profilo non si inventa niente: si usa il comportamento di
+    # sempre e il report dice ``not_measured``.
+    with clock.time("in_point"):
+        in_points = frame_choice(
+            selected,
+            assets_by_id,
+            staged,
+            black_luma=float(coherence_black_luma()),
+            freeze_seconds=float(contract.THRESHOLDS["freeze_min"]),
+        )
+    for asset_id, row in in_points.items():
+        if row.get("excluded"):
+            _say(f"Clip esclusa: {asset_id} — {row.get('why')}")
+        elif row.get("quality") == "measured" and row.get("moved"):
+            _say(
+                f"Punto di presa: {asset_id} da {float(row['src_in']):.2f}s "
+                f"(nitidezza {float(row['sharpness']):.1f}) — {row.get('why')}"
+            )
+        elif row.get("quality") == "not_measured":
+            _say(f"Punto di presa: {asset_id} non misurato (piano invariato)")
+
     with clock.time("plan"):
         plan = contract.payload_to_edl_plan(
-            payload, source_refs, media_info_map, fps=fps
+            payload, source_refs, media_info_map, fps=fps, quality=in_points
         )
         errors = plan.validate()
         if errors:
             raise contract.VxError("EDL non valido: " + "; ".join(errors))
         media_by_source = _media_by_source_key(plan, staged, media_info_map)
+        segment_rows = segment_quality(plan, in_points)
 
     bridge_summary: Dict[str, Any] = {
         "enabled": False,
@@ -5036,6 +5715,12 @@ def _run_locked(
         },
         "opening": opening,
         "plan_notes": list(getattr(plan, "notes", ()) or ()),
+        "plan": plan_declaration(
+            in_points,
+            segments=segment_rows,
+            plan=plan,
+            material_sec=timeline_est,
+        ),
         "camera_exemptions": exemptions,
         "gate1": gate1.to_dict(),
         "qc": qc_result,
@@ -5054,6 +5739,39 @@ def _run_locked(
         report.setdefault("warnings", []).append(
             "duration_shortfall: chiesti {requested_sec:g} s, consegnati "
             "{delivered_sec:g} s".format(**shortfall)
+        )
+    if isinstance(opening, dict):
+        opening["in_point"] = opening_in_point(
+            in_points, (opening.get("chosen") or {}).get("asset_id")
+        )
+        report["opening"] = opening
+    excluded_plan = [
+        item for item in report["plan"].get("excluded") or () if isinstance(item, Mapping)
+    ]
+    if excluded_plan:
+        report.setdefault("warnings", []).append(
+            "plan: {count} clip escluse perche' inutilizzabili ({names}): "
+            "la timeline usa il resto".format(
+                count=len(excluded_plan),
+                names=", ".join(str(item.get("asset_id")) for item in excluded_plan),
+            )
+        )
+    below_plan = list(report["plan"].get("below_preferred") or ())
+    if below_plan:
+        report.setdefault("warnings", []).append(
+            "plan: {count} segmenti sotto la qualita' preferita (non sotto il "
+            "pavimento): tenuti e dichiarati".format(count=len(below_plan))
+        )
+    retained = report["plan"].get("duration_retained")
+    if isinstance(retained, (int, float)) and float(retained) < 0.85:
+        report.setdefault("warnings", []).append(
+            "plan: la timeline tiene il {pct:.0f}% del materiale ottenibile "
+            "({timeline:.2f}s su {material:.2f}s): il resto e' davvero "
+            "inutilizzabile".format(
+                pct=float(retained) * 100.0,
+                timeline=float(report["plan"].get("timeline_sec") or 0.0),
+                material=float(report["plan"].get("material_sec") or 0.0),
+            )
         )
     if adapted and adapted.get("warning"):
         report.setdefault("warnings", []).append(str(adapted["warning"]))

@@ -941,6 +941,7 @@ def payload_to_edl_plan(
     anchors: Sequence[Tuple[str, float]] = (),
     aspect_ratio: Optional[str] = None,
     resolution: Optional[Tuple[int, int]] = None,
+    quality: Optional[Mapping[str, Any]] = None,
 ) -> Any:  # edl_plan.EDLPlan
     """Project a scene payload v1.5.0 (with ``asset_triage``) into an EDLPlan.
 
@@ -949,6 +950,15 @@ def payload_to_edl_plan(
     the notes and never routed. A-roll lands on video layer 0, b-roll on layer
     1, the dialogue bus mirrors A-roll, and at most one music bed is placed with
     its declared gain. ``sources`` carries only the refs actually referenced.
+
+    ``quality`` is the per-asset verdict of the frame probe (``auto`` measures
+    it, a test can pass it): ``{"src_in": s, "usable_end": e, "excluded": bool,
+    "quality": "measured"|"not_measured"|"unusable", "why": ...}``. A measured
+    window moves the take point and bounds the usable material — the segment
+    durations are still the beat grid's, so rhythm does not move. A clip with
+    no usable instant is dropped from the plan and declared in the notes; if it
+    is the only a_roll the plan keeps it (a timeline cannot be empty) and says
+    so. No verdict means no change: the EDL is byte-identical to before.
     """
     # Local import: contract.py is the frozen leaf and imports nothing local at
     # module level. edl_plan is pure data, so this mirrors the local import of
@@ -1031,6 +1041,81 @@ def payload_to_edl_plan(
     b_entries = [entry for entry in selected if entry.get("role") == "b_roll"]
     music_entries = [entry for entry in selected if entry.get("role") == "music"]
 
+    # -- punto di presa misurato -------------------------------------------- #
+    # ``quality`` arriva dal probe dei fotogrammi. Non e' un permesso: e' una
+    # misura. Una clip senza istanti sopra il pavimento non entra nel piano (se
+    # resta qualcosa da montare) e le sue note dicono la misura che l'ha
+    # esclusa. Una clip con materiale buono si monta dalla finestra utile, con
+    # il punto di presa sul picco: la durata pianificata non cambia.
+    verdicts: Dict[str, Mapping[str, Any]] = {}
+    if isinstance(quality, Mapping):
+        for key, value in quality.items():
+            if isinstance(value, Mapping):
+                verdicts[str(key)] = value
+    quality_notes: List[str] = []
+    excluded_ids: List[str] = []
+    for entry in a_entries:
+        asset_id = entry.get("asset_id")
+        row = verdicts.get(str(asset_id or "")) or {}
+        if row.get("excluded"):
+            excluded_ids.append(str(asset_id))
+    original_total = len(a_entries)
+    if excluded_ids and len(excluded_ids) < original_total:
+        kept = [
+            entry
+            for entry in a_entries
+            if str(entry.get("asset_id")) not in excluded_ids
+        ]
+        for asset_id in excluded_ids:
+            row = verdicts.get(asset_id) or {}
+            quality_notes.append(
+                "clip esclusa dal piano: {asset} ({why}); {count} su {total} "
+                "a_roll, la timeline usa il resto".format(
+                    asset=asset_id,
+                    why=str(row.get("why") or "nessun istante utilizzabile"),
+                    count=len(excluded_ids),
+                    total=original_total,
+                )
+            )
+        a_entries = kept
+    elif excluded_ids:
+        for asset_id in excluded_ids:
+            row = verdicts.get(asset_id) or {}
+            quality_notes.append(
+                "nessuna clip utilizzabile, si monta lo stesso {asset}: {why}".format(
+                    asset=asset_id,
+                    why=str(row.get("why") or "nessun istante utilizzabile"),
+                )
+            )
+
+    def _take_window(
+        asset_id: str,
+    ) -> Tuple[float, float, float, Mapping[str, Any]]:
+        """``(usable_start, usable_end, in_point, verdict)`` per un a-roll."""
+        row = verdicts.get(str(asset_id or "")) or {}
+        total = _media_duration(asset_id)
+        if not row or row.get("excluded"):
+            return 0.0, total, 0.0, {}
+        try:
+            start = float(row.get("usable_start") or 0.0)
+        except (TypeError, ValueError):
+            start = 0.0
+        try:
+            point = float(row.get("src_in") or 0.0)
+        except (TypeError, ValueError):
+            point = start
+        raw_end = row.get("usable_end")
+        try:
+            end = float(raw_end) if raw_end is not None else total
+        except (TypeError, ValueError):
+            end = total
+        start = max(0.0, min(start, total))
+        end = max(start, min(end, total))
+        point = max(start, min(point, end))
+        if end - start <= 0.0:
+            return 0.0, total, 0.0, row
+        return start, end, point, row
+
     if not a_entries:
         raise VxError("payload.asset_triage has no a_roll: cannot build a timeline")
 
@@ -1067,14 +1152,21 @@ def payload_to_edl_plan(
     )
 
     # Per-entry usable length, in payload order. A requested duration truncates
-    # the last one; the beat grid then works on exactly this material.
+    # the last one; the beat grid then works on exactly this material. The
+    # usable window is the material the probe accepts (only truly unusable
+    # stretches are gone, never more than 25%): the take point inside it moves,
+    # the planned shot lengths do not.
     lengths: List[float] = []
+    starts: List[float] = []
+    ends: List[float] = []
+    points: List[float] = []
     remaining = requested
     for index, entry in enumerate(a_entries):
         asset_id = entry.get("asset_id")
         if not isinstance(asset_id, str) or not asset_id:
             raise VxError(f"selected a_roll[{index}] has no asset_id")
-        length = min(_target(entry, asset_id), _media_duration(asset_id))
+        start, end, point, _row = _take_window(asset_id)
+        length = min(_target(entry, asset_id), end - start)
         if requested > 0.0:
             if remaining <= 1e-3:
                 break
@@ -1082,6 +1174,9 @@ def payload_to_edl_plan(
         if length <= 0:
             raise VxError(f"asset {asset_id!r} has no usable duration")
         lengths.append(length)
+        starts.append(start)
+        ends.append(end)
+        points.append(point)
         if requested > 0.0:
             remaining -= length
     if not lengths:
@@ -1153,6 +1248,7 @@ def payload_to_edl_plan(
         )
 
     if beat_plan is not None and beat_plan.shots:
+        cursors: Dict[int, float] = {}
         for index, shot in enumerate(beat_plan.shots):
             asset_id = shot.get("asset_id")
             entry_index = int(shot.get("source_index", 0))
@@ -1160,6 +1256,29 @@ def payload_to_edl_plan(
                 asset_id = a_entries[entry_index].get("asset_id")
             if not isinstance(asset_id, str) or not asset_id:
                 raise VxError("beat plan shot has no asset_id")
+            begin = float(starts[entry_index]) if entry_index < len(starts) else 0.0
+            stop = float(ends[entry_index]) if entry_index < len(ends) else begin
+            row = verdicts.get(asset_id) or {}
+            wrap = float(row.get("wrap_start") or begin)
+            wrap = max(begin, min(wrap, stop))
+            if entry_index not in cursors:
+                cursors[entry_index] = (
+                    float(points[entry_index])
+                    if entry_index < len(points)
+                    else begin
+                )
+            cursor = cursors[entry_index]
+            take = float(shot["src_out"]) - float(shot["src_in"])
+            if cursor + take > stop + 1e-9:
+                # Il materiale utile e' finito: si riparte dalla testa
+                # preferita della finestra (mai dallo scarto sotto il
+                # pavimento). La durata dello shot non cambia.
+                cursor = wrap
+            if cursor + take > stop + 1e-9:
+                take = max(0.0, stop - cursor)
+            src_in = round(cursor, 6)
+            src_out = round(cursor + take, 6)
+            cursors[entry_index] = cursor + take
             ref = _source_ref(asset_id)
             referenced[_source_id(asset_id)] = ref
             provenance = (dict(shot.get("provenance") or {"kind": "beat"}),)
@@ -1167,8 +1286,8 @@ def payload_to_edl_plan(
                 edl_plan.ClipSegment(
                     clip_id=f"v0_{index}",
                     source_id=_source_id(asset_id),
-                    src_in=float(shot["src_in"]),
-                    src_out=float(shot["src_out"]),
+                    src_in=src_in,
+                    src_out=src_out,
                     dst_in=float(shot["dst_in"]),
                     dst_out=float(shot["dst_out"]),
                     layer=0,
@@ -1180,8 +1299,8 @@ def payload_to_edl_plan(
                 edl_plan.ClipSegment(
                     clip_id=f"a0_{index}",
                     source_id=_source_id(asset_id),
-                    src_in=float(shot["src_in"]),
-                    src_out=float(shot["src_out"]),
+                    src_in=src_in,
+                    src_out=src_out,
                     dst_in=float(shot["dst_in"]),
                     dst_out=float(shot["dst_out"]),
                     layer=0,
@@ -1196,15 +1315,18 @@ def payload_to_edl_plan(
             asset_id = entry.get("asset_id")
             ref = _source_ref(asset_id)
             length = float(lengths[index])
+            begin = float(points[index]) if index < len(points) else 0.0
+            stop = float(ends[index]) if index < len(ends) else begin + length
+            take = max(0.0, min(length, stop - begin))
             referenced[_source_id(asset_id)] = ref
             a_clips.append(
                 edl_plan.ClipSegment(
                     clip_id=f"v0_{index}",
                     source_id=_source_id(asset_id),
-                    src_in=0.0,
-                    src_out=length,
+                    src_in=begin,
+                    src_out=begin + take,
                     dst_in=cursor,
-                    dst_out=cursor + length,
+                    dst_out=cursor + take,
                     layer=0,
                     role="main_talking_head",
                 )
@@ -1213,16 +1335,16 @@ def payload_to_edl_plan(
                 edl_plan.ClipSegment(
                     clip_id=f"a0_{index}",
                     source_id=_source_id(asset_id),
-                    src_in=0.0,
-                    src_out=length,
+                    src_in=begin,
+                    src_out=begin + take,
                     dst_in=cursor,
-                    dst_out=cursor + length,
+                    dst_out=cursor + take,
                     layer=0,
                     role="dialogue",
                     gain_db=0.0,
                 )
             )
-            cursor += length
+            cursor += take
     duration = cursor
     if duration <= 0:
         raise VxError("a_roll total duration is zero")
@@ -1244,13 +1366,18 @@ def payload_to_edl_plan(
     b_clips: List[Any] = []
     any_anchor = False
     n_broll = len(b_entries)
+    # One b-roll per slot: the pool cannot overlap on layer 1, so an overlay is
+    # never longer than the gap between two placements. On a long timeline this
+    # changes nothing (the target is already shorter than the gap); on a short
+    # one it is the difference between a plan and a validation error.
+    b_slot = (duration / float(n_broll + 1)) if n_broll else duration
     for index, entry in enumerate(b_entries):
         asset_id = entry.get("asset_id")
         if not isinstance(asset_id, str) or not asset_id:
             raise VxError(f"selected b_roll[{index}] has no asset_id")
         ref = _source_ref(asset_id)
         media_duration = _media_duration(asset_id)
-        length = min(_target(entry, asset_id), media_duration, duration)
+        length = min(_target(entry, asset_id), media_duration, duration, b_slot)
         if length <= 0:
             raise VxError(f"asset {asset_id!r} has no usable duration")
         if asset_id in anchor_map:
@@ -1344,6 +1471,40 @@ def payload_to_edl_plan(
     payload_version = payload.get("contract_version") or "?"
     notes.append(f"payload v{payload_version} -> EDL v{edl_plan.EDL_CONTRACT_VERSION}")
     notes.extend(beat_notes)
+    notes.extend(quality_notes)
+    for index, entry in enumerate(a_entries[: len(lengths)]):
+        asset_id = str(entry.get("asset_id") or "")
+        start = float(starts[index]) if index < len(starts) else 0.0
+        point = float(points[index]) if index < len(points) else start
+        row = verdicts.get(asset_id) or {}
+        if row.get("quality") != "measured":
+            continue
+        if start > 1e-9:
+            notes.append(
+                "clip {asset}: tolti {cut:.3f}s sotto il pavimento assoluto "
+                "(niente nero/vetro); il materiale utile parte da {start:.3f}s".format(
+                    asset=asset_id,
+                    cut=start,
+                    start=start,
+                )
+            )
+        if point > start + 1e-9:
+            notes.append(
+                "punto di presa misurato: {asset} da {point:.3f}s "
+                "(nitidezza {sharp:.1f}, soglia preferita {pref:.1f}, "
+                "finestra utile fino a {end:.3f}s)".format(
+                    asset=asset_id,
+                    point=point,
+                    sharp=float(row.get("sharpness") or 0.0),
+                    pref=float((row.get("thresholds") or {}).get("preferred") or 0.0),
+                    end=float(row.get("usable_end") or point),
+                )
+            )
+        if row.get("short_window"):
+            notes.append(
+                "finestra utile piu' corta della battuta: la coda e' off_grid, "
+                "dichiarata nel piano di battuta"
+            )
     if b_clips and not any_anchor:
         notes.append("b-roll distribuiti uniformemente: nessun ancoraggio dichiarato")
     if not music_clips:
