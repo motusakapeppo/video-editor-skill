@@ -56,6 +56,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -149,6 +150,14 @@ def child_env() -> Dict[str, str]:
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # Le prove non devono scrivere nel registro di sessione **dell'utente**:
+    # ogni `auto` lanciato da un test lasciava una sessione nella vista vera, e
+    # la vista mostra l'ultima (e' cosi' che in pagina e' comparso un lavoro di
+    # prova chiamato "prova progresso"). Isolato per questa corsa, non globale.
+    env.setdefault(
+        "VX_SESSION_DIR",
+        str(Path(tempfile.gettempdir()) / "vx-tests-sessions" / f"run-{os.getpid()}"),
+    )
     return env
 
 
