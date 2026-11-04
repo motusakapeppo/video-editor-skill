@@ -171,6 +171,76 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def audio_bed(path: Path, seconds: float, frequency: float = 440.0) -> None:
+    """A continuous bed already at the delivery loudness (-14 LUFS)."""
+    run(
+        [
+            ffmpeg.ffmpeg(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency={frequency}:sample_rate=48000:duration={seconds}",
+            "-af",
+            "loudnorm=I=-14:TP=-1:LRA=11",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-y",
+            str(path),
+        ]
+    )
+
+
+def frame_rate(path: Path) -> str:
+    """``r_frame_rate`` exactly as ffprobe reports it (a rational)."""
+    proc = subprocess.run(
+        [
+            ffmpeg.ffprobe(),
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.stdout.strip()
+
+
+def audio_seconds(path: Path) -> float:
+    proc = subprocess.run(
+        [
+            ffmpeg.ffprobe(),
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        return float(proc.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx_effects_render_") as temporary:
         root = Path(temporary)
@@ -1275,6 +1345,308 @@ def main() -> int:
             and fixture_report["audio_map"] == "[aout]"
             and abs(probe(base / "master.mp4")["duration"] - 3.5) <= 1.0 / 30 + 1e-6,
             (base / "master.mp4").stat().st_size if (base / "master.mp4").is_file() else 0,
+        )
+
+        print("\nR16 -- i difetti silenziosi: una politica di riempimento, un crop, un gate")
+        # D8: the crop rect is cut from the source geometry, then the document's
+        # fill policy stages it. A crop of the left-centre 32% of a 16:9 frame in
+        # a 16:9 canvas must show no side band and must keep what it framed.
+        d8_source = root / "d8_source.mp4"
+        run(
+            [
+                ffmpeg.ffmpeg(), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                "-i", "color=c=0x2e8b57:s=640x360:r=30:d=2,"
+                "drawbox=x=280:y=140:w=80:h=80:color=white:t=fill",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+                "-pix_fmt", "yuv420p", "-an", "-y", str(d8_source),
+            ]
+        )
+        d8_doc = edl3.Timeline3(
+            fps=FPS,
+            size=(640, 360),
+            clips=[
+                edl3.Clip3(
+                    id="c",
+                    source=str(d8_source),
+                    src_in=0.0,
+                    src_out=1.0,
+                    effects=[
+                        edl3.Effect(
+                            "crop",
+                            {"x": 0.34, "y": 0.0, "width": 0.32, "height": 1.0},
+                        )
+                    ],
+                )
+            ],
+        )
+        d8_script = edl3_render.compile_timeline(d8_doc, audio="drop")["filter_script"]
+        check(
+            "R16/D8 il crop e' sulla geometria sorgente, prima del resize finale",
+            d8_script.index("crop=w=iw*") < d8_script.index("scale=640:360"),
+            [line[:110] for line in d8_script.splitlines() if line.startswith("[0:v]")],
+        )
+        check(
+            "R16/D8 un documento con crop sceglie la politica crop (nessun pad)",
+            "pad=640:360" not in d8_script
+            and "force_original_aspect_ratio=increase" in d8_script,
+            [line[:110] for line in d8_script.splitlines() if line.startswith("[0:v]")],
+        )
+        explicit_fit = edl3_render.compile_timeline(
+            edl3.Timeline3(
+                fps=FPS,
+                size=(640, 360),
+                fill="fit",
+                clips=d8_doc.clips,
+            ),
+            audio="drop",
+        )["filter_script"]
+        check(
+            "R16/D8 fill='fit' esplicito: la stessa clip resta nelle bande",
+            "pad=640:360" in explicit_fit
+            and "force_original_aspect_ratio=decrease" in explicit_fit,
+            [line[:110] for line in explicit_fit.splitlines() if line.startswith("[0:v]")],
+        )
+        d8_out = root / "d8" / "master.mp4"
+        edl3_render.render(d8_doc, d8_out, workdir=root / "d8", audio="drop")
+        d8_image = frame(d8_out, 0.4, root / "d8_frame.png")
+        d8_height, d8_width = d8_image.shape[:2]
+        d8_left = float(d8_image[:, :8].mean())
+        d8_right = float(d8_image[:, -8:].mean())
+        d8_centre = float(
+            d8_image[
+                d8_height // 2 - 10 : d8_height // 2 + 10,
+                d8_width // 2 - 10 : d8_width // 2 + 10,
+            ].mean()
+        )
+        check(
+            "R16/D8 crop 0.32: nessuna banda laterale (i bordi sono immagine)",
+            d8_left > 5.0 and d8_right > 5.0,
+            f"left {d8_left:.1f} right {d8_right:.1f}",
+        )
+        check(
+            "R16/D8 crop 0.32: il centro e' conservato (riquadro bianco)",
+            d8_centre > 200.0,
+            f"centre {d8_centre:.1f}",
+        )
+
+        # D9: a dissolve on an absolutely placed clip is refused by render, with
+        # the reason, instead of vanishing from the graph without a trace.
+        placed_doc = edl3.Timeline3(
+            fps=FPS,
+            size=(WIDTH, HEIGHT),
+            clips=[
+                edl3.Clip3(
+                    id="a", source=str(source), src_in=0.0, src_out=1.0,
+                    dst_in=0.0, dst_out=1.0,
+                ),
+                edl3.Clip3(
+                    id="b", source=str(source), src_in=0.0, src_out=1.0,
+                    dst_in=1.0, dst_out=2.0,
+                    transition_in=edl3.Transition("crossfade", 0.25),
+                ),
+            ],
+        )
+        placed_out = root / "placed" / "master.mp4"
+        placed_error = None
+        try:
+            edl3_render.render(placed_doc, placed_out, workdir=root / "placed", audio="drop")
+        except edl3_render.CompileError as exc:
+            placed_error = exc
+        check(
+            "R16/D9 una crossfade su clip posizionata e' rifiutata, non ignorata",
+            placed_error is not None
+            and placed_error.code == "TRANSITION_DST"
+            and "dst_in" in placed_error.detail
+            and not placed_out.exists(),
+            "" if placed_error is None else f"{placed_error.code}: {placed_error.detail[:80]}",
+        )
+
+        # D7: one fill policy for the whole document. A landscape clip in a
+        # portrait canvas must be staged the same way whether or not it carries a
+        # declarative filter: black bands on both frames, or on neither.
+        def mixed_document(policy: str) -> edl3.Timeline3:
+            return edl3.Timeline3(
+                fps=FPS,
+                size=(WIDTH, 568),
+                fill=policy,
+                clips=[
+                    edl3.Clip3(id="plain", source=str(source), src_in=0.0, src_out=1.0),
+                    edl3.Clip3(
+                        id="fx",
+                        source=str(source),
+                        src_in=0.0,
+                        src_out=1.0,
+                        effects=[edl3.Effect("vignette", {"angle": 0.6})],
+                    ),
+                ],
+            )
+
+        def border_means(path: Path, at: float, label: str) -> tuple:
+            image = frame(path, at, root / f"d7_{label}.png")
+            return float(image[:8].mean()), float(image[-8:].mean())
+
+        fit_out = root / "d7_fit" / "master.mp4"
+        edl3_render.render(
+            mixed_document("fit"), fit_out, workdir=root / "d7_fit", audio="drop"
+        )
+        fit_plain = border_means(fit_out, 0.4, "fit_plain")
+        fit_fx = border_means(fit_out, 1.4, "fit_fx")
+        check(
+            "R16/D7 fill=fit: entrambe le clip hanno le bande (stessa politica)",
+            all(value < 5.0 for value in fit_plain + fit_fx),
+            f"plain {fit_plain[0]:.1f}/{fit_plain[1]:.1f} "
+            f"fx {fit_fx[0]:.1f}/{fit_fx[1]:.1f}",
+        )
+        crop_out = root / "d7_crop" / "master.mp4"
+        edl3_render.render(
+            mixed_document("crop"), crop_out, workdir=root / "d7_crop", audio="drop"
+        )
+        crop_plain = border_means(crop_out, 0.4, "crop_plain")
+        crop_fx = border_means(crop_out, 1.4, "crop_fx")
+        check(
+            "R16/D7 fill=crop: nessuna clip porta bande (stessa politica)",
+            all(value > 5.0 for value in crop_plain + crop_fx),
+            f"plain {crop_plain[0]:.1f}/{crop_plain[1]:.1f} "
+            f"fx {crop_fx[0]:.1f}/{crop_fx[1]:.1f}",
+        )
+
+        # D20: two -14 LUFS masters summed by amix land far above the spec. The
+        # render must report a master that is not deliverable, with the numbers.
+        gate_bed = root / "gate_bed.m4a"
+        audio_bed(gate_bed, 2.0)
+        hot_doc = edl3.Timeline3(
+            fps=FPS,
+            size=(WIDTH, 568),
+            clips=[edl3.Clip3(id="picture", source=str(source), src_in=0.0, src_out=2.0)],
+            audio=[
+                edl3.AudioTrack3(
+                    role="dialogue",
+                    clips=[
+                        edl3.AudioClip3(
+                            source=str(gate_bed), src_in=0.0, src_out=2.0,
+                            dst_in=0.0, dst_out=2.0,
+                        )
+                    ],
+                ),
+                edl3.AudioTrack3(
+                    role="music",
+                    clips=[
+                        edl3.AudioClip3(
+                            source=str(gate_bed), src_in=0.0, src_out=2.0,
+                            dst_in=0.0, dst_out=2.0,
+                        )
+                    ],
+                ),
+            ],
+        )
+        hot_report = edl3_render.render(
+            hot_doc, root / "gate" / "master.mp4", workdir=root / "gate", audio="mix"
+        )
+        hot_gate = hot_report["loudness"]
+        hot_lufs = float(hot_gate["measured"]["lufs"] or 0.0)
+        check(
+            "R16/D20 un master somma (-8 LUFS) e' bocciato dal gate",
+            hot_gate["ok"] is False
+            and hot_report["deliverable"] is False
+            and -12.0 < hot_lufs < -5.0,
+            f"{hot_lufs:.2f} LUFS ok={hot_gate['ok']}",
+        )
+        check(
+            "R16/D20 il report dice i valori misurati, non 'ok'",
+            "measured" in hot_gate["detail"]
+            and f"{hot_lufs:.2f}" in hot_gate["detail"]
+            and any("loudness gate failed" in item for item in hot_report["warnings"]),
+            hot_gate["detail"][:120],
+        )
+        check(
+            "R16/D20 il gate accetta -14 +/- 1 e il vero picco sotto -1",
+            edl3_render.loudness_gate(-14.2, -1.5)["ok"] is True
+            and edl3_render.loudness_gate(-16.1, -1.5)["ok"] is False
+            and edl3_render.loudness_gate(-14.0, -0.4)["ok"] is False,
+            edl3_render.loudness_gate(-14.0, -0.4)["detail"][:90],
+        )
+
+        # D21: a continuous music bed under a document with two dissolves. The
+        # bed follows the shortened timeline (one cut per join) instead of being
+        # refused, and the mix still ends with the picture.
+        bed = root / "join_bed.m4a"
+        audio_bed(bed, 6.0)
+        join_doc = edl3.Timeline3(
+            fps=FPS,
+            size=(WIDTH, 240),
+            clips=[
+                edl3.Clip3(id="a", source=str(source), src_in=0.0, src_out=2.0),
+                edl3.Clip3(
+                    id="b", source=str(source), src_in=0.0, src_out=2.0,
+                    transition_in=edl3.Transition("crossfade", 0.5),
+                ),
+                edl3.Clip3(
+                    id="c", source=str(source), src_in=0.0, src_out=2.0,
+                    transition_in=edl3.Transition("crossfade", 0.5),
+                ),
+            ],
+            audio=[
+                edl3.AudioTrack3(
+                    role="music",
+                    clips=[
+                        edl3.AudioClip3(
+                            source=str(bed), src_in=0.0, src_out=6.0,
+                            dst_in=0.0, dst_out=6.0,
+                        )
+                    ],
+                )
+            ],
+        )
+        join_out = root / "joins" / "master.mp4"
+        join_error = None
+        try:
+            join_report = edl3_render.render(
+                join_doc, join_out, workdir=root / "joins", audio="mix"
+            )
+        except edl3_render.CompileError as exc:  # pragma: no cover - the defect
+            join_error = exc
+            join_report = {}
+        frame_seconds = 1.0 / FPS
+        check(
+            "R16/D21 music bed + 2 join: il render non rifiuta il bed",
+            join_error is None and join_out.is_file(),
+            "" if join_error is None else str(join_error)[:120],
+        )
+        check(
+            "R16/D21 durata audio = durata video (5.0 s, entro un frame)",
+            join_error is None
+            and abs(probe(join_out)["duration"] - 5.0) <= frame_seconds + 1e-6
+            and abs(audio_seconds(join_out) - 5.0) <= frame_seconds + 1e-3,
+            f"video {probe(join_out)['duration']:.3f}s audio "
+            f"{audio_seconds(join_out):.3f}s",
+        )
+        check(
+            "R16/D21 il mix resta nel target di loudness",
+            join_error is None and join_report.get("loudness", {}).get("ok") is True,
+            join_report.get("loudness", {}).get("measured"),
+        )
+
+        # D6: a declared 29.97 is the exact NTSC rational, not 29 or 2997/100.
+        ntsc_doc = edl3.Timeline3(
+            fps=29.97,
+            size=(WIDTH, HEIGHT),
+            clips=[edl3.Clip3(id="n", source=str(source), src_in=0.0, src_out=1.0)],
+        )
+        ntsc_plan = edl3_render.compile_timeline(ntsc_doc, audio="drop")
+        ntsc_out = root / "ntsc" / "master.mp4"
+        ntsc_report = edl3_render.render(
+            ntsc_doc, ntsc_out, workdir=root / "ntsc", audio="drop"
+        )
+        check(
+            "R16/D6 il piano dichiara 30000/1001",
+            ntsc_plan["fps_text"] == "30000/1001"
+            and ntsc_report["fps_text"] == "30000/1001",
+            (ntsc_plan["fps_text"], ntsc_report["fps_text"]),
+        )
+        check(
+            "R16/D6 ffprobe r_frame_rate = 30000/1001",
+            frame_rate(ntsc_out) == "30000/1001",
+            frame_rate(ntsc_out),
         )
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")

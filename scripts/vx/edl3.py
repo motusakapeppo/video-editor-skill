@@ -24,9 +24,20 @@ F2-T07 wires the Chromium/ASS backend. Refusing loudly is the contract.
 of ``Clip3.source``). The inner timeline must itself be valid and the nesting
 depth may not exceed :data:`MAX_NESTING_DEPTH`.
 
-``Transition`` kinds are ``fade_in``, ``fade_out`` and ``crossfade``. The
-compiler implements the first two and refuses ``crossfade`` with
-``UNSUPPORTED_TRANSITION``.
+``Transition`` kinds are ``fade_in``, ``fade_out`` and ``crossfade``. All three
+are rendered; a dissolve needs sequential placement (no ``dst_in``/``dst_out``
+on the clips) because it shortens the timeline, and a dissolve declared on an
+absolutely placed clip is refused with ``TRANSITION_DST`` naming the fields.
+
+Fill policy
+-----------
+``Timeline3.fill`` declares how a clip that does not match the canvas is
+staged: ``fit`` scales it to fit and pads the remainder with black, ``crop``
+scales it to cover and centre-crops it. It is one policy for the whole
+document, so two clips in the same video can never show bars on one and a crop
+on the next. A document that declares nothing resolves to ``fit``, except when
+a clip (or adjustment layer) declares a ``crop``: a crop is a reframe, and a
+reframe that left bands would not have reframed anything.
 
 ``AudioTrack3`` / ``Ducking3`` are carried so that an EDL 2.2 document can be
 migrated without dropping its music bed or its ducking declaration. The slice
@@ -74,7 +85,7 @@ EDL3_VERSIONS = ("vx.edl3/1", "vx.edl3/1.1", "vx.edl3/1.2")
 #: The version from which ``preset_ref`` is *applied*, not merely carried: before
 #: it the reference was an inert annotation, and an additive minor keeps such a
 #: document valid, so the renderer must not start applying it either.
-PRESET_APPLIED_VERSION = "vx.edl3/1.2"
+PRESET_APPLIED_VERSION = EDL3_VERSION
 #: Declared types a template parameter may expose.
 EXPOSED_TYPES = ("string", "number", "int", "color", "bool")
 #: What a provenance record may point at.
@@ -92,6 +103,35 @@ EFFECT_DENSITY_WINDOW = 10.0
 
 INTERPOLATIONS = frozenset({"linear", "hold", "bezier"})
 TRANSITION_KINDS = frozenset({"fade_in", "fade_out", "crossfade"})
+
+#: The top-level keys a ``vx.edl3`` document may declare. Anything else (bar an
+#: open ``x-`` extension) is a typo, and a typo silently dropped is a document
+#: that renders something the author did not write: :meth:`Timeline3.from_dict`
+#: refuses it and names the field. One list, read by the renderer and by
+#: ``vx edl3 validate`` alike.
+TIMELINE_KEYS = frozenset(
+    {
+        "fps",
+        "size",
+        "clips",
+        "version",
+        "sequences",
+        "adjustments",
+        "text_layers",
+        "captions",
+        "audio",
+        "ducking",
+        "fill",
+        "brand_ref",
+        "profile_ref",
+        "variant",
+        "ext",
+    }
+)
+
+#: The document's single fill policy: ``fit`` letterboxes, ``crop`` covers.
+FILL_POLICIES = frozenset({"fit", "crop"})
+DEFAULT_FILL_POLICY = "fit"
 
 #: The dissolve catalogue: ``style`` -> the ``xfade`` transition that renders it,
 #: the family it belongs to and the reason a director reaches for it. Thirty
@@ -280,8 +320,9 @@ RENDERABLE_EFFECTS = frozenset(
         if spec.backend == BACKEND_FILTER
     }
 )
-#: Transition kinds the compiler implements.
-RENDERABLE_TRANSITIONS = frozenset({"fade_in", "fade_out", "crossfade"})
+#: Transition kinds the compiler implements: one list, so a kind accepted by the
+#: validator is exactly a kind the renderer knows.
+RENDERABLE_TRANSITIONS = TRANSITION_KINDS
 #: A dissolve longer than this share of the shorter adjacent shot eats the shot
 #: (``grammar.dissolve_limit`` declares the same 25%).
 CROSSFADE_MAX_SHARE = 0.25
@@ -292,6 +333,8 @@ __all__ = [
     "MAX_NESTING_DEPTH",
     "INTERPOLATIONS",
     "TRANSITION_KINDS",
+    "FILL_POLICIES",
+    "DEFAULT_FILL_POLICY",
     "TRANSITION_RECIPES",
     "BACKENDS",
     "EFFECT_REGISTRY",
@@ -380,6 +423,27 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _rate(value: Any, default: float = -1.0) -> float:
+    """A declared frame rate, as a number.
+
+    A rate may be written the way ffmpeg writes it (``"30000/1001"``) or the
+    way a profile writes it (``29.97``). The value is kept as the real number:
+    truncating it to ``int`` turned a declared 29.97 into 29 fps, and the file
+    then was not the one the plan described (D6).
+    """
+    if isinstance(value, str) and "/" in value:
+        numerator, _, denominator = value.partition("/")
+        try:
+            numerator_f = float(numerator)
+            denominator_f = float(denominator)
+        except ValueError:
+            return default
+        if denominator_f == 0.0:
+            return default
+        return numerator_f / denominator_f
+    return _float(value, default)
 
 
 def _ease_in_out(x: float) -> float:
@@ -1761,7 +1825,7 @@ def check_effect_density(
 class Timeline3:
     """The versioned document."""
 
-    fps: int
+    fps: float
     size: Tuple[int, int]
     clips: List[Clip3] = field(default_factory=list)
     version: str = EDL3_VERSION
@@ -1771,6 +1835,11 @@ class Timeline3:
     captions: List[CaptionTrack] = field(default_factory=list)
     audio: List[AudioTrack3] = field(default_factory=list)
     ducking: Optional[Ducking3] = None
+    #: The document's single fill policy (:data:`FILL_POLICIES`), or ``None``
+    #: when it declares none. An undeclared policy is resolved by the compiler:
+    #: ``fit`` unless a ``crop`` effect asks for a reframe. Declaring ``fit``
+    #: explicitly keeps the bands even when a clip carries a crop.
+    fill: Optional[str] = None
     #: Reference to the project's brand.json.
     brand_ref: Optional[str] = None
     #: Named genre profile from :mod:`vx.profiles` (D033). Declared data: no
@@ -1784,10 +1853,10 @@ class Timeline3:
 
     def __post_init__(self) -> None:
         self.version = str(self.version)
-        try:
-            self.fps = int(self.fps)
-        except (TypeError, ValueError):
-            self.fps = -1
+        # A declared rate is a real number, not an integer: 29.97 and 23.976 are
+        # deliverable rates, and ``int()`` stamped 29 and 23 on the file (D6).
+        self.fps = _rate(self.fps)
+        self.fill = None if self.fill in (None, "") else str(self.fill)
         raw_size = self.size
         if isinstance(raw_size, Mapping):
             width, height = raw_size.get("width", 0), raw_size.get("height", 0)
@@ -1934,6 +2003,13 @@ class Timeline3:
             add("SCHEMA_VERSION", "version", f"unsupported version {self.version!r}")
         if self.fps <= 0:
             add("FPS_INVALID", "fps", f"fps must be positive, got {self.fps}")
+        if self.fill is not None and self.fill not in FILL_POLICIES:
+            add(
+                "FILL_POLICY",
+                "fill",
+                f"fill policy {self.fill!r} not in {sorted(FILL_POLICIES)}: "
+                "one policy for the whole document",
+            )
         if self.width <= 0 or self.height <= 0:
             add(
                 "SIZE_INVALID",
@@ -2041,11 +2117,11 @@ class Timeline3:
             add("PROFILE_UNKNOWN", "profile_ref", "empty profile reference")
             return
 
-        if self.version != "vx.edl3/1.2":
+        if self.version != PRESET_APPLIED_VERSION:
             add(
                 "SCHEMA_VERSION",
                 "profile_ref",
-                f"profile_ref needs vx.edl3/1.2, the document declares {self.version!r}",
+                f"profile_ref needs {PRESET_APPLIED_VERSION}, the document declares {self.version!r}",
             )
             return
 
@@ -2315,7 +2391,8 @@ class Timeline3:
                     add(
                         "TRANSITION_UNKNOWN",
                         f"{transition_where}.kind",
-                        f"unknown transition kind {transition.kind!r}",
+                        f"unknown transition kind {transition.kind!r}; "
+                        f"valid kinds: {sorted(TRANSITION_KINDS)}",
                     )
                 if not math.isfinite(transition.duration) or transition.duration <= 0.0:
                     add(
@@ -2361,8 +2438,13 @@ class Timeline3:
                     add(
                         "TRANSITION_DST",
                         transition_where,
-                        "a crossfade shortens the timeline, so it cannot sit on a "
-                        "clip that already declares where it starts",
+                        "a crossfade is an overlap that shortens the timeline, but "
+                        f"clip {clip.id!r} already declares its absolute placement "
+                        f"(dst_in={clip.dst_in}, dst_out={clip.dst_out}): with "
+                        "dst_in/dst_out the clip is placed, not concatenated, so the "
+                        "dissolve would be silently dropped. Either remove the "
+                        "dst_in/dst_out (sequential mode, where the dissolve is what "
+                        "shortens the timeline) or remove the crossfade",
                     )
                 else:
                     base_before = [
@@ -2575,7 +2657,7 @@ class Timeline3:
             return
         if any(clip.dst_in is None or clip.dst_out is None for clip in self.clips):
             return
-        if self.version != "vx.edl3/1.2":
+        if self.version != PRESET_APPLIED_VERSION:
             return
 
         from . import profiles, structure  # noqa: PLC0415 - read only, never imported
@@ -2821,7 +2903,9 @@ class Timeline3:
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {
             "version": self.version,
-            "fps": self.fps,
+            "fps": (
+                int(self.fps) if float(self.fps).is_integer() else self.fps
+            ),
             "size": [self.width, self.height],
             "clips": [clip.to_dict() for clip in self.clips],
             "sequences": {
@@ -2835,6 +2919,10 @@ class Timeline3:
         }
         if self.brand_ref:
             data["brand_ref"] = self.brand_ref
+        if self.fill:
+            # Only a declared policy is written, so a document that never
+            # mentions ``fill`` serialises exactly as before.
+            data["fill"] = self.fill
         if self.profile_ref:
             data["profile_ref"] = self.profile_ref
         if self.variant:
@@ -2857,6 +2945,17 @@ class Timeline3:
         for key, value in data.items():
             if isinstance(key, str) and key.startswith("x-"):
                 ext[key] = value
+        unknown = sorted(
+            str(key)
+            for key in data
+            if not str(key).startswith("x-") and key not in TIMELINE_KEYS
+        )
+        if unknown:
+            raise EDLError(
+                "TIMELINE_SHAPE",
+                f"unknown field(s) {unknown}; allowed: {sorted(TIMELINE_KEYS)}",
+                unknown[0],
+            )
         return cls(
             fps=data.get("fps", 0),
             size=(int(_float(width)), int(_float(height))),
@@ -2881,6 +2980,7 @@ class Timeline3:
             ),
             brand_ref=data.get("brand_ref"),
             profile_ref=data.get("profile_ref"),
+            fill=data.get("fill"),
             variant=data.get("variant"),
             ext=ext,
         )

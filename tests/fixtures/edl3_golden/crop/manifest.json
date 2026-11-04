@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "video_sha256": "5f67e34b4c6a957424a4d794f3eae5b9b13ba32c284f00e5dcb34bc3d06d53a0",
+  "video_sha256": "ee0ed5a36f70a8b0d8fac31738baa1d073d8a1718528192936dafc71252d9277",
   "times": [
     0.3,
     0.9
@@ -10,21 +10,21 @@
     568
   ],
   "frame_sha256": {
-    "0.300000": "e4154e619a59a3161521d899b2e277601e7a37df2e43bae3fdd88fbb311db93c",
-    "0.900000": "8b0a02d240ca580bc18a820f027828187a98504513cc05d3194b5de6ddb63c01"
+    "0.300000": "94bd5359671852d97da60d1f4e468e563684f63ab2b24cedbc927503728b2939",
+    "0.900000": "9ff8903816b955c843ae8acd5d89f6f7dbf8ea02d92fdb50eb7455c7c07235fb"
   },
   "frames": [
     {
       "time": 0.3,
       "file": "0.300.png",
-      "sha256": "e4154e619a59a3161521d899b2e277601e7a37df2e43bae3fdd88fbb311db93c",
-      "size_bytes": 43829
+      "sha256": "94bd5359671852d97da60d1f4e468e563684f63ab2b24cedbc927503728b2939",
+      "size_bytes": 42419
     },
     {
       "time": 0.9,
       "file": "0.900.png",
-      "sha256": "8b0a02d240ca580bc18a820f027828187a98504513cc05d3194b5de6ddb63c01",
-      "size_bytes": 39793
+      "sha256": "9ff8903816b955c843ae8acd5d89f6f7dbf8ea02d92fdb50eb7455c7c07235fb",
+      "size_bytes": 36399
     }
   ]
 }

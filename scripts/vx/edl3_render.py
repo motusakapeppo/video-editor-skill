@@ -32,7 +32,9 @@ Implemented end to end
   and never inside a single clip; the font is the work's own file (bundled
   ``assets/fonts`` or a pinned path), never a system fallback;
 * the audio bus: dialogue concatenated, music placed with ``adelay``, ducked by
-  ``sidechaincompress`` keyed on the dialogue, summed with ``amix``.
+  ``sidechaincompress`` keyed on the dialogue, summed with ``amix``. A dissolve
+  shortens the picture, so the music bed is cut and crossfaded on the same joins
+  and stays on the shortened timeline instead of being refused.
 
 Refused loudly, never skipped
 -----------------------------
@@ -47,15 +49,21 @@ layer with a field the emitter does not render (``keyframes.*``, multi-line
 text) → ``PARAM_NOT_RENDERED`` naming the field; a family with no file of the
 work → ``FONT_MISSING``. Caption tracks stay ``UNSUPPORTED_EFFECT``: their
 contract declares no style, so painting them would mean inventing one. Nested
-sequences → ``UNSUPPORTED_SEQUENCE``. ``crossfade`` → ``UNSUPPORTED_TRANSITION``.
-Audio is ``UNSUPPORTED_AUDIO`` under the default ``audio="refuse"`` policy;
+sequences → ``UNSUPPORTED_SEQUENCE``. A dissolve on an absolutely placed clip
+(``dst_in``/``dst_out``) → ``TRANSITION_DST``: the clip is placed, not
+concatenated, so the overlap exists only in sequential mode. Audio is
+``UNSUPPORTED_AUDIO`` under the default ``audio="refuse"`` policy;
 ``audio="mix"`` builds the bus and ``audio="drop"`` states the picture-only
 policy.
 
-Loudness: EDL3 declares no loudness target and carries no findings, so the bus
-is not normalised. That is the same rule the EDL renderer applies at stage 04
-(no finding -> remux, do not invent a normalisation); the mixed bus is trimmed
-to the picture duration and encoded with the house AAC settings.
+Loudness: EDL3 declares no loudness target of its own, so the bus is not
+normalised -- and that is exactly why the master is *measured*. A mixed bus sums
+its masters (``amix`` with ``normalize=0``) and can land at -8 LUFS while every
+individual source was fine. :func:`loudness_gate` therefore judges the encoded
+file against the delivery spec (-14 +/- 1 LUFS, true peak <= -1 dBTP) and the
+report carries ``loudness`` and ``deliverable``: a master outside the spec is
+reported as not deliverable, with the measured values, never as done. The mixed
+bus is trimmed to the picture duration and encoded with the house AAC settings.
 
 ``compile_timeline`` is pure: it never runs ffmpeg. ``render`` writes the
 script, runs ffmpeg with ``-filter_complex_script`` and returns the report.
@@ -78,6 +86,7 @@ class _EmptyTrack:
 
 from .edl3 import (
     BACKENDS,
+    DEFAULT_FILL_POLICY,
     EDL3_VERSION,
     EDL3_VERSIONS,
     EFFECT_REGISTRY,
@@ -127,6 +136,19 @@ CHROMIUM_QUALIFYING = frozenset(
 #: Declared compiler settings. F3 flips ``chromium_available`` through settings
 #: without editing a single routing branch.
 DEFAULT_SETTINGS: Dict[str, Any] = {"chromium_available": False}
+
+#: NTSC rates are exact rationals, never their decimal rounding: a declared
+#: 29.97 is 30000/1001, and writing "29.97" makes ffmpeg stamp 2997/100 on the
+#: file, which is not the rate the plan declared (D6).
+NTSC_RATES: Tuple[Tuple[float, int, int], ...] = (
+    (23.976, 24000, 1001),
+    (29.97, 30000, 1001),
+    (47.952, 48000, 1001),
+    (59.94, 60000, 1001),
+    (119.88, 120000, 1001),
+)
+#: How close a declared decimal must be to a named NTSC rate to be that rate.
+RATE_TOLERANCE = 1e-3
 #: Mechanisms this compiler actually emits per kind. A node that declares
 #: anything else is refused: a report may never name a mechanism the graph does
 #: not use.
@@ -173,6 +195,13 @@ CLIP_ORDER = (
 )
 AUDIO_BITRATE = "192k"
 AUDIO_RATE = 48000
+#: The delivery loudness spec the master is measured against: integrated
+#: loudness and true peak. A mixed bus can sum two masters (`amix` with
+#: ``normalize=0``) and land at -8.2 LUFS; the render then reports a master that
+#: is not deliverable instead of calling it done (D20).
+LOUDNESS_TARGET_LUFS = -14.0
+LOUDNESS_TOLERANCE_LU = 1.0
+TRUE_PEAK_CEILING_DBTP = -1.0
 #: Dialogue joint fade, mirroring the house 12 ms cut fade.
 DIALOGUE_FADE_SEC = 0.012
 #: ffmpeg's ``-benchmark`` line on this build: Windows omits utime/stime/rtime,
@@ -230,6 +259,7 @@ HARD_CODES = frozenset(
         "STRUCTURE_INTERVIEW",
         "FPS_INVALID",
         "SIZE_INVALID",
+        "FILL_POLICY",
         "TIMELINE_EMPTY",
         "DUPLICATE_CLIP_ID",
         "CLIP_RANGE",
@@ -288,6 +318,7 @@ REFUSAL_CODES = frozenset(
         "AUDIO_POLICY",
         "SETTINGS_UNKNOWN",
         "SETTINGS_TYPE",
+        "FILL_POLICY",
         "BACKEND_UNKNOWN",
         "BACKEND_PROPERTY",
         "BACKEND_UNIMPLEMENTED",
@@ -381,6 +412,10 @@ __all__ = [
     "SENDCMD_TRACKS",
     "CHROMIUM_QUALIFYING",
     "DEFAULT_SETTINGS",
+    "NTSC_RATES",
+    "LOUDNESS_TARGET_LUFS",
+    "LOUDNESS_TOLERANCE_LU",
+    "TRUE_PEAK_CEILING_DBTP",
     "RULES",
     "AUDIO_POLICIES",
     "HARD_CODES",
@@ -392,6 +427,11 @@ __all__ = [
     "SDR_DELIVERY",
     "HDR_DELIVERY",
     "delivery_colour",
+    "loudness_gate",
+    "fill_policy",
+    "fps_ratio",
+    "fps_literal",
+    "timebase_literal",
     "CompileError",
     "resolve_settings",
     "select_backend",
@@ -703,13 +743,13 @@ def _crop_fragment(
     if sized:
         # zoompan's clock is the output frame index, so the same track expression
         # is written against ``on / fps``.
-        clock = f"(on/{_num(float(fps))})"
+        clock = f"(on/{fps_literal(fps)})"
         zoom = fraction("width", 1.0, clock)
         x = fraction("x", 0.0, clock)
         y = fraction("y", 0.0, clock)
         return (
             f"zoompan=z='1/({zoom})':x='iw*({x})':y='ih*({y})':d=1:"
-            f"s={int(width)}x{int(height)}:fps={_num(float(fps))}"
+            f"s={int(width)}x{int(height)}:fps={fps_literal(fps)}"
         )
     return (
         f"crop=w=iw*({fraction('width', 1.0)}):h=ih*({fraction('height', 1.0)}):"
@@ -751,6 +791,37 @@ def filter_number(value: float) -> str:
     """A stable decimal literal: never an exponent, never a trailing zero."""
     text = f"{float(value):.10f}".rstrip("0").rstrip(".")
     return "0" if text in ("", "-0") else text
+
+
+def fps_ratio(fps: Any) -> Tuple[int, int]:
+    """The declared rate as an exact ``(numerator, denominator)``.
+
+    Decimals that name an NTSC rate map back to their rational (29.97 →
+    30000/1001), integers stay integers and anything else keeps the closest
+    rational the expression parser can carry.
+    """
+    value = float(fps)
+    for named, numerator, denominator in NTSC_RATES:
+        if abs(value - named) <= RATE_TOLERANCE:
+            return numerator, denominator
+    if abs(value - round(value)) <= 1e-9:
+        return int(round(value)), 1
+    from fractions import Fraction  # noqa: PLC0415 - only for odd rates
+
+    ratio = Fraction(value).limit_denominator(1001)
+    return max(1, ratio.numerator), ratio.denominator
+
+
+def fps_literal(fps: Any) -> str:
+    """The rate as ffmpeg writes it: ``30``, ``30000/1001``, ``25/2``."""
+    numerator, denominator = fps_ratio(fps)
+    return str(numerator) if denominator == 1 else f"{numerator}/{denominator}"
+
+
+def timebase_literal(fps: Any) -> str:
+    """The inverse of :func:`fps_literal`: ``1/30``, ``1001/30000``."""
+    numerator, denominator = fps_ratio(fps)
+    return f"{denominator}/{numerator}"
 
 
 #: Template placeholders the formatter fills from the *plan*, not from the node.
@@ -808,17 +879,79 @@ def filter_fragment(
         ) from exc
 
 
+def fill_policy(timeline: Timeline3) -> str:
+    """The document's effective fill policy.
+
+    ``Timeline3.fill`` is the declaration. A document that does not declare one
+    is not automatically letterboxed: a ``crop`` effect is itself a declaration
+    of intent -- a crop is a reframe, and a reframe that left black bands at the
+    sides would not have reframed anything. So a document carrying a crop
+    compiles with ``crop`` unless it explicitly says ``fill="fit"``. Either way
+    it is *one* policy for every clip, so two clips can never disagree (D7).
+    """
+    declared = getattr(timeline, "fill", None)
+    if declared is not None:
+        declared = str(declared)
+        if declared:
+            return declared
+
+    def crops(effects: Any) -> bool:
+        return any(
+            getattr(effect, "kind", "") == "crop" for effect in effects or ()
+        )
+
+    for clip in getattr(timeline, "clips", ()) or ():
+        if crops(getattr(clip, "effects", ())):
+            return "crop"
+    for layer in getattr(timeline, "adjustments", ()) or ():
+        if crops(getattr(layer, "effects", ())):
+            return "crop"
+    return DEFAULT_FILL_POLICY
+
+
+def _fit_stage(policy: str, width: int, height: int) -> List[str]:
+    """The document's one fill policy, applied to the clip's geometry.
+
+    ``fit`` scales the frame down until it fits and pads the remainder (the
+    historical letterbox). ``crop`` scales it up until it covers the canvas and
+    centre-crops the overflow, so there is never a band. Both are the
+    *document's* policy: a document cannot stage one clip with bars and the
+    next one with a crop (D7).
+
+    Cropping here is the policy's cover crop, on the geometry it is given --
+    never the clip's own ``crop`` effect, which runs before any resizing.
+    """
+    if policy == "crop":
+        return [
+            f"scale={width}:{height}:"
+            "force_original_aspect_ratio=increase:flags=bicubic",
+            f"crop={width}:{height}:(iw-{width})/2:(ih-{height})/2",
+        ]
+    return [
+        f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=bicubic",
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+    ]
+
+
 def _filter_stage(
     effects: Mapping[str, List[Any]],
     canvas: Tuple[int, int],
-    fps: int,
+    fps: float,
 ) -> List[str]:
     """The declarative filters for one clip, plus the stage's own guarantees.
 
     A template may legitimately re-declare the frame rate or the canvas
-    (``zoompan`` does both), so the stage re-stamps the timeline rate and crops
-    back to the clip canvas. A geometry effect therefore cannot change a clip's
-    duration or the deliverable's size, whatever its template does.
+    (``zoompan`` does both), so the stage re-stamps the timeline rate and fits
+    the result back to the clip canvas. A geometry effect therefore cannot
+    change a clip's duration or the deliverable's size, whatever its template
+    does.
+
+    The restore is a *cover* on purpose: a template that crops its own window
+    (``shake``, ``whip_pan``, a push-in) shrinks the frame as part of the
+    effect, so covering keeps the effect full-frame. It cannot undo the
+    document's fill policy, because the clip reaches this stage already staged
+    at the canvas by ``_fit_stage``: a canvas-sized frame is a cover's fixed
+    point.
     """
     fragments: List[str] = []
     for kind, instances in effects.items():
@@ -832,11 +965,11 @@ def _filter_stage(
     width, height = canvas
     # The declared rate is a real number, not an integer: 23.976 and 29.97 are
     # deliverable rates (profiles.FPS_CHOICES) and `int()` would silently stamp
-    # 23 and 29 on them. filter_number keeps integer rates byte-identical.
-    rate = filter_number(float(fps))
+    # 23 and 29 on them. fps_literal keeps integer rates byte-identical.
+    rate = fps_literal(fps)
     fragments.extend(
         [
-            f"settb=1/{rate}",
+            f"settb={timebase_literal(fps)}",
             "setpts=N",
             f"fps={rate}",
             f"scale={width}:{height}:"
@@ -1096,9 +1229,10 @@ def _clip_plan(
     backend: str,
     width: int,
     height: int,
-    fps: int,
+    fps: float,
     spec_plan: Optional[Mapping[str, Any]] = None,
     normalize_clock: bool = False,
+    fill: str = "fit",
 ) -> Dict[str, Any]:
     duration = clip.timeline_duration
     generator = clip.generator_declaration
@@ -1138,15 +1272,15 @@ def _clip_plan(
     geometry: List[str] = []
     crop = effects.get("crop")
     if crop:
+        # The rect is in source geometry: it is cut before anything is resized,
+        # so it is a real crop of the frame and not a slice of a scaled one
+        # (D8). The fit that follows is the document's own policy.
         geometry.append(
             _crop_fragment(
                 crop[0], width=scaled_width, height=scaled_height, fps=fps
             )
         )
-    geometry.append(
-        f"scale={scaled_width}:{scaled_height}:"
-        "force_original_aspect_ratio=decrease:flags=bicubic"
-    )
+    geometry.extend(_fit_stage(fill, scaled_width, scaled_height))
     # The composed spec runs as its own set of stages. They come before the
     # historical per-kind effects so the spec's transform is a real first stage,
     # while a document that never declares a spec keeps the exact graph it had.
@@ -1160,7 +1294,8 @@ def _clip_plan(
         tail.append(_color_fragment(index, ordinal, color, fps, duration))
     for blur in effects.get("blur") or []:
         tail.append(_blur_fragment(blur))
-    tail.extend(_filter_stage(effects, (scaled_width, scaled_height), fps))
+    settled = _filter_stage(effects, (scaled_width, scaled_height), fps)
+    tail.extend(settled)
     if spec_blocks:
         blocks.append({"kind": "filters", "filters": geometry})
         blocks.extend(spec_blocks)
@@ -1194,14 +1329,18 @@ def _clip_plan(
         else:
             compose_fragment = COMPOSE_BUILDERS[compose_op](**compose_params)
 
-    canvas = [f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2", "setsar=1"]
+    # The clip is staged at the canvas by ``_fit_stage`` (one policy, the
+    # document's); ``setsar`` stays the last word so a filter template's own
+    # scaling cannot leave a pixel-aspect behind, and the clock is normalised
+    # when a join needs it.
+    canvas: List[str] = ["setsar=1"]
     if normalize_clock:
         # A dissolve needs both links on the same clock. ``fps`` fixes the frame
         # rate and ``settb`` the timebase: a 29.97 source and a 30 fps document
         # (or two sources cut from different files) then meet xfade without the
         # "timebase do not match" refusal. Documents without a dissolve keep
         # their byte-identical graph.
-        canvas += [f"fps={fps}", f"settb=1/{fps}"]
+        canvas += [f"fps={fps_literal(fps)}", f"settb={timebase_literal(fps)}"]
     chains: List[str] = []
     if transform is None:
         clip_blocks = blocks + [
@@ -1211,7 +1350,8 @@ def _clip_plan(
     else:
         chains = _render_blocks(index, f"[{index}:v]", blocks, f"fg{index}")
         chains.append(
-            f"color=c=black:s={width}x{height}:r={fps}:d={_num(duration)}[bg{index}]"
+            f"color=c=black:s={width}x{height}:r={fps_literal(fps)}:"
+            f"d={_num(duration)}[bg{index}]"
         )
         centred = (
             f"[bg{index}][fg{index}]overlay="
@@ -1388,6 +1528,23 @@ def _audio_bus(
         )
         return index
 
+    def declare_span(clip: Any, start: float, seconds: float) -> int:
+        """One input for a piece of a source, from ``start`` for ``seconds``."""
+        nonlocal cursor
+        index = cursor
+        cursor += 1
+        input_args.extend(
+            [
+                "-ss",
+                _num(start),
+                "-t",
+                _num(seconds),
+                "-i",
+                clip.source,
+            ]
+        )
+        return index
+
     dialogue_labels: List[str] = []
     for position, clip in enumerate(dialogue):
         label = f"dlg{position}"
@@ -1404,14 +1561,27 @@ def _audio_bus(
         [(index, clip) for index, clip in enumerate(base_clips)],
         timeline.crossfade_joins(),
     )
-    if joins and music:
-        raise CompileError(
-            "TRANSITION_AUDIO_UNSUPPORTED",
-            "a crossfade shortens the timeline, and the music bed is placed at "
-            "absolute times: mixing the two would move one against the other. "
-            "Declare the bed as dialogue, or drop it",
-            "audio",
+    # A dissolve shortens the picture, so the audio bus is shortened on the same
+    # joins. ``join_cuts`` is that boundary set in the *declared* (uncut) audio
+    # clock: (uncut start of the join, seconds removed there).
+    join_cuts: List[Tuple[float, float]] = []
+    uncut_cursor = 0.0
+    for position, clip in enumerate(base_clips):
+        if position in joins:
+            join_cuts.append((uncut_cursor, float(joins[position])))
+        uncut_cursor += max(0.0, float(clip.timeline_duration))
+
+    def shortened_at(seconds_in: float) -> float:
+        """Uncut position -> position on the shortened timeline.
+
+        A piece that begins *on* a join begins where that join's crossfade
+        begins, so the join at the piece's own start counts too.
+        """
+        removed = sum(
+            length for start, length in join_cuts if start <= seconds_in + 1e-9
         )
+        return seconds_in - removed
+
     if joins and dialogue_labels and len(dialogue_labels) != len(base_clips):
         raise CompileError(
             "TRANSITION_AUDIO_UNSUPPORTED",
@@ -1470,14 +1640,72 @@ def _audio_bus(
 
     music_labels: List[str] = []
     for position, clip in enumerate(music):
-        label = f"mus{position}"
-        index = declare(clip)
-        filters = ",".join(
-            _audio_clip_filters(
-                clip, delay=True, time_filters=_audio_time_filters(timeline, clip)
+        time_filters = _audio_time_filters(timeline, clip)
+        cuts = [
+            (start, length)
+            for start, length in join_cuts
+            if clip.dst_in < start < clip.dst_out - 1e-9
+        ]
+        if cuts and time_filters:
+            raise CompileError(
+                "TRANSITION_AUDIO_UNSUPPORTED",
+                "the music bed is retimed (reverse/ramp) and a crossfade cuts it "
+                "at a join: the two transforms have no declared order. Declare the "
+                "bed without a speed/reverse, or drop the dissolve",
+                "audio",
             )
-        )
-        chains.append(f"[{index}:a]{filters}[{label}]")
+        bounds = [float(clip.dst_in)] + [start for start, _ in cuts] + [
+            float(clip.dst_out)
+        ]
+        pieces: List[Tuple[float, float, float]] = []
+        for index in range(len(bounds) - 1):
+            lower, upper = bounds[index], bounds[index + 1]
+            if upper - lower <= 1e-9:
+                continue
+            source_start = float(clip.src_in) + (lower - float(clip.dst_in))
+            pieces.append((source_start, upper - lower, shortened_at(lower)))
+        if not pieces:
+            continue
+        for piece_index in range(1, len(pieces)):
+            dissolve = cuts[piece_index - 1][1]
+            if min(pieces[piece_index - 1][1], pieces[piece_index][1]) < dissolve - 1e-9:
+                raise CompileError(
+                    "TRANSITION_AUDIO_UNSUPPORTED",
+                    "the music bed starts or ends inside a dissolve "
+                    f"({dissolve:.3f}s at {cuts[piece_index - 1][0]:.3f}s): the "
+                    "piece is shorter than the crossfade, so the bed would be cut "
+                    "twice. Move the bed's edge off the join",
+                    "audio",
+                )
+        labels: List[str] = []
+        for piece_index, (source_start, seconds, start_on_timeline) in enumerate(
+            pieces
+        ):
+            label = f"mus{position}_{piece_index}"
+            input_index = declare_span(clip, source_start, seconds)
+            filters = [f"atrim=start=0.000000:end={_num(seconds)}", "asetpts=PTS-STARTPTS"]
+            filters.append(
+                f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo"
+            )
+            filters.extend(time_filters)
+            if clip.gain_db != 0.0:
+                filters.append(f"volume={float(clip.gain_db):.3f}dB")
+            chains.append(f"[{input_index}:a]{','.join(filters)}[{label}]")
+            labels.append(label)
+        current = labels[0]
+        for piece_index in range(1, len(labels)):
+            seconds = cuts[piece_index - 1][1]
+            out = f"musx{position}_{piece_index}"
+            chains.append(
+                f"[{current}][{labels[piece_index]}]acrossfade=d={_num(seconds)}:"
+                f"c1=tri:c2=tri[{out}]"
+            )
+            current = out
+        label = f"mus{position}"
+        start_ms = int(round(max(0.0, pieces[0][2]) * 1000.0))
+        # ``adelay`` is always written, including 0: the music bed's placement is
+        # part of the bus's shape, and a zero delay is still a declaration.
+        chains.append(f"[{current}]adelay={start_ms}|{start_ms}[{label}]")
         music_labels.append(label)
     if len(music_labels) == 1:
         music_label: Optional[str] = music_labels[0]
@@ -2285,6 +2513,7 @@ def compile_timeline(
     normalize_clock = bool(timeline.crossfade_joins())
 
     backend = choose_backend(timeline)
+    fill = fill_policy(timeline)
 
     plans: Dict[int, Dict[str, Any]] = {}
     for clip_index, clip in enumerate(timeline.clips):
@@ -2340,6 +2569,7 @@ def compile_timeline(
             timeline.fps,
             spec_plan,
             normalize_clock=normalize_clock,
+            fill=fill,
         )
         if clip_index in presets_applied:
             plans[clip_index]["preset"] = clip.preset_provenance()
@@ -2452,7 +2682,7 @@ def compile_timeline(
             input_args.extend(
                 [
                     "-framerate",
-                    _num(float(timeline.fps)),
+                    fps_literal(timeline.fps),
                     "-loop",
                     "1",
                     "-t",
@@ -2516,6 +2746,8 @@ def compile_timeline(
         "backend": backend,
         "audio_policy": audio,
         "fps": float(timeline.fps),
+        "fps_text": fps_literal(timeline.fps),
+        "fill": fill,
         "duration": float(timeline.duration),
         "color": delivery_colour(timeline.profile_ref),
         "filter_script": ";\n".join(chains) + "\n",
@@ -2682,8 +2914,9 @@ def _encode(
         args.append("-an")
     # The deliverable's clock is the document's declared rate, never the source's.
     # Without this option the encoder keeps the input frame rate, so a 24 fps
-    # document rendered from a 30 fps source ships at 30 fps.
-    args.extend(["-r", filter_number(float(plan["fps"]))])
+    # document rendered from a 30 fps source ships at 30 fps. The rate is written
+    # as the exact rational: "29.97" would be stamped 2997/100, not 30000/1001.
+    args.extend(["-r", fps_literal(plan["fps"])])
     if not _input_runs_at_declared_rate(plan):
         # Resampling to another clock lets the cfr encoder emit up to two frames
         # past the source's last one, so the tail is bounded by the duration the
@@ -2861,6 +3094,94 @@ def auto_chunks(duration: float) -> Optional[int]:
     return max(2, int(math.ceil(seconds / AUTO_CHUNK_SECONDS)))
 
 
+def loudness_gate(
+    measured_lufs: Any,
+    measured_true_peak: Any,
+    *,
+    target_lufs: float = LOUDNESS_TARGET_LUFS,
+    tolerance_lu: float = LOUDNESS_TOLERANCE_LU,
+    true_peak_ceiling: float = TRUE_PEAK_CEILING_DBTP,
+) -> Dict[str, Any]:
+    """Judge the master's loudness against the delivery spec.
+
+    Measured values only: a caller cannot pass a declared target and have the
+    gate agree. ``ok`` is ``True`` only when the integrated loudness is inside
+    ``target ± tolerance`` *and* the true peak is at or below the ceiling. A
+    master that fails is not deliverable, and every value that failed travels
+    with the verdict so the report can say why (D20).
+    """
+    goal = float(target_lufs)
+    tolerance = float(tolerance_lu)
+    ceiling = float(true_peak_ceiling)
+    measured_i = None if measured_lufs is None else float(measured_lufs)
+    measured_tp = None if measured_true_peak is None else float(measured_true_peak)
+
+    failures: List[str] = []
+    parts: List[str] = []
+    if measured_i is None:
+        failures.append("loudness_missing")
+        parts.append("integrated loudness was not measurable")
+    else:
+        delta = abs(measured_i - goal)
+        if delta > tolerance + 1e-9:
+            failures.append("loudness")
+        parts.append(
+            f"measured {measured_i:.2f} LUFS (target {goal:.1f} +/- "
+            f"{tolerance:.1f}, delta {delta:.2f} LU)"
+        )
+    if measured_tp is None:
+        failures.append("true_peak_missing")
+        parts.append("true peak was not measurable")
+    else:
+        if measured_tp > ceiling + 1e-9:
+            failures.append("true_peak")
+        parts.append(
+            f"true peak {measured_tp:.2f} dBTP (ceiling {ceiling:.1f})"
+        )
+    ok = not failures
+    return {
+        "ok": ok,
+        "deliverable": ok,
+        "measured": {"lufs": measured_i, "true_peak": measured_tp},
+        "target": {
+            "lufs": goal,
+            "tolerance_lu": tolerance,
+            "true_peak": ceiling,
+        },
+        "failures": failures,
+        "detail": "; ".join(parts)
+        + (
+            ""
+            if ok
+            else ": the master is outside the delivery spec and is not deliverable"
+        ),
+    }
+
+
+def _audit_master(destination: Path, has_audio: bool) -> Dict[str, Any]:
+    """Measure the encoded master and run the gate on the measurement."""
+    if not has_audio:
+        return {
+            "ok": True,
+            "deliverable": True,
+            "skipped": "the document declares no audio bus",
+            "measured": {"lufs": None, "true_peak": None},
+            "target": {
+                "lufs": LOUDNESS_TARGET_LUFS,
+                "tolerance_lu": LOUDNESS_TOLERANCE_LU,
+                "true_peak": TRUE_PEAK_CEILING_DBTP,
+            },
+            "failures": [],
+            "detail": "no audio bus: loudness not applicable",
+        }
+    from . import qc  # noqa: PLC0415 - the measurement only
+
+    measurement = qc.lufs_of(destination)
+    return loudness_gate(
+        measurement.get("input_i"), measurement.get("input_tp")
+    )
+
+
 def render(
     timeline: Timeline3,
     output: Any,
@@ -2967,6 +3288,15 @@ def render(
         report["settings_source"] = settings_source
         report["chunks_auto"] = auto_chunked
         report["jobs"] = max(1, int(jobs))
+        audit = _audit_master(
+            destination, bool(timeline.audio) and audio != "drop"
+        )
+        report["loudness"] = audit
+        report["deliverable"] = bool(audit["deliverable"])
+        if not audit["ok"]:
+            report.setdefault("warnings", []).append(
+                "loudness gate failed: " + audit["detail"]
+            )
         return report
     nested = _render_nested(timeline, script_dir, timeout, audio, settings, font_files)
     generators = _materialize_generators(timeline, script_dir, probe)
@@ -2992,6 +3322,8 @@ def render(
         "output_size": destination.stat().st_size,
         "duration": timeline.duration,
         "fps": timeline.fps,
+        "fps_text": fps_literal(timeline.fps),
+        "fill": fill_policy(timeline),
         "size": [timeline.width, timeline.height],
         "color": plan["color"],
         "filter_script": plan["filter_script"],
@@ -3013,6 +3345,13 @@ def render(
         "stderr_tail": proc.tail(5),
         "benchmark": {"encode_kib": _bench_maxrss(proc.stderr)},
     }
+    audit = _audit_master(destination, plan["audio_map"] is not None)
+    report["loudness"] = audit
+    report["deliverable"] = bool(audit["deliverable"])
+    if not audit["ok"]:
+        report["warnings"] = list(report["warnings"]) + [
+            "loudness gate failed: " + audit["detail"]
+        ]
     return report
 
 

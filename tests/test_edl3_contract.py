@@ -816,6 +816,125 @@ def check_compiler_refusals() -> None:
     )
 
 
+def check_silent_defects() -> None:
+    """D6, D7 and D9: what the document declares is what the compiler does."""
+    print("\n-- D6: the declared rate is a rate, not an integer")
+    ntsc = timeline(fps=29.97)
+    check("29.97 stays 29.97 (it used to be truncated to 29)", ntsc.fps == 29.97, ntsc.fps)
+    check(
+        "29.97 is serialised as declared",
+        ntsc.to_dict()["fps"] == 29.97,
+        ntsc.to_dict()["fps"],
+    )
+    rational = edl3.Timeline3.from_dict(
+        {"fps": "30000/1001", "size": [320, 568], "clips": [clip().to_dict()]}
+    )
+    check(
+        "a rational rate string is read as its value",
+        abs(rational.fps - 30000 / 1001) < 1e-9,
+        rational.fps,
+    )
+    check(
+        "the compiler writes the exact rational",
+        edl3_render.fps_literal(ntsc.fps) == "30000/1001"
+        and edl3_render.timebase_literal(ntsc.fps) == "1001/30000",
+        (edl3_render.fps_literal(ntsc.fps), edl3_render.timebase_literal(ntsc.fps)),
+    )
+    check(
+        "an integer rate is untouched",
+        edl3_render.fps_literal(30) == "30"
+        and edl3_render.timebase_literal(30) == "1/30",
+        (edl3_render.fps_literal(30), edl3_render.timebase_literal(30)),
+    )
+
+    print("\n-- D7: one fill policy for the whole document")
+    default_doc = timeline()
+    check(
+        "fill is not declared by default and stays out of the JSON",
+        default_doc.fill is None and "fill" not in json.loads(canonical(default_doc)),
+        default_doc.fill,
+    )
+    crop_doc = timeline(fill="crop")
+    check(
+        "a declared fill policy survives the round trip",
+        canonical(edl3.Timeline3.from_dict(json.loads(canonical(crop_doc))))
+        == canonical(crop_doc),
+        crop_doc.fill,
+    )
+    bad_fill = timeline(fill="stretch")
+    check(
+        "an unknown fill policy is FILL_POLICY",
+        codes(bad_fill) == ["FILL_POLICY"],
+        codes(bad_fill),
+    )
+    crop_effect = edl3.Effect(
+        "crop", {"x": 0.0, "y": 0.0, "width": 0.32, "height": 1.0}
+    )
+    check(
+        "a crop effect declares the cover policy when fill is unset",
+        edl3_render.fill_policy(timeline(clips=[clip(effects=[crop_effect])]))
+        == "crop",
+        edl3_render.fill_policy(timeline(clips=[clip(effects=[crop_effect])])),
+    )
+    check(
+        "an explicit fill='fit' wins over the crop effect",
+        edl3_render.fill_policy(
+            timeline(clips=[clip(effects=[crop_effect])], fill="fit")
+        )
+        == "fit",
+        "fit",
+    )
+    # A mixed document: one clip plain, one with a declarative filter. Both
+    # must be staged with the declared policy, never one padded and one cropped.
+    for policy, want in (("fit", "decrease"), ("crop", "increase")):
+        mixed = timeline(
+            clips=[
+                clip(id="plain"),
+                clip(id="fx", effects=[edl3.Effect("vignette", {"angle": 0.6})]),
+            ],
+            fill=policy,
+        )
+        script = edl3_render.compile_timeline(mixed, audio="drop")["filter_script"]
+        chains = [
+            line for line in script.splitlines() if line.startswith(("[0:v]", "[1:v]"))
+        ]
+        check(
+            f"fill={policy}: both clips are staged with the same policy",
+            len(chains) == 2
+            and all(
+                f"force_original_aspect_ratio={want}" in line for line in chains
+            ),
+            [line[:70] for line in chains],
+        )
+
+    print("\n-- D9: a dissolve on a placed clip is refused, never silently dropped")
+    placed = timeline(
+        clips=[
+            clip(id="a", dst_in=0.0, dst_out=2.0),
+            clip(
+                id="b",
+                dst_in=2.0,
+                dst_out=4.0,
+                transition_in=edl3.Transition("crossfade", 0.5),
+            ),
+        ]
+    )
+    refused = [p for p in placed.validate() if p["code"] == "TRANSITION_DST"]
+    check("TRANSITION_DST is reported", bool(refused), codes(placed))
+    check(
+        "the message names dst_in/dst_out and says why",
+        bool(refused)
+        and "dst_in" in refused[0]["detail"]
+        and "silently dropped" in refused[0]["detail"],
+        refused[0]["detail"][:110] if refused else "",
+    )
+    check(
+        "the compiler refuses instead of dropping the dissolve",
+        compile_code(placed) == "TRANSITION_DST",
+        compile_code(placed),
+    )
+
+
 def main() -> int:
     started = time.monotonic()
     document = full_document()
@@ -823,6 +942,7 @@ def main() -> int:
     check_entities(document)
     check_codes()
     check_compiler_refusals()
+    check_silent_defects()
 
     elapsed = time.monotonic() - started
     print(f"\n{PASS} PASS / {FAIL} FAIL  ({elapsed:.2f}s)")
