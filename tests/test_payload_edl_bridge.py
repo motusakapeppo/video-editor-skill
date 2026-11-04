@@ -258,10 +258,16 @@ def main() -> int:
         fps=25.0,
     )
     short_b = short_plan.video_tracks[1].clips[0]
+    # Regola (dichiarata in contract): un b-roll occupa al massimo **uno slot**,
+    # ``duration / (n + 1)``, cosi' fra due overlay resta sempre a-roll visibile
+    # e due b-roll non si sovrappongono mai. Su una timeline di 2 s con un solo
+    # b-roll lo slot e' 1 s, e il b-roll piu' lungo viene accorciato a quello.
+    slot = 2.0 / (1 + 1)
     check(
-        "b-roll più lungo della timeline viene accorciato",
+        "b-roll più lungo della timeline sta in uno slot e non la supera",
         short_plan.validate() == []
-        and abs((short_b.dst_out - short_b.dst_in) - 2.0) < 1e-9,
+        and abs((short_b.dst_out - short_b.dst_in) - slot) < 1e-9
+        and short_b.dst_out <= 2.0 + 1e-9,
         (short_b.dst_in, short_b.dst_out),
     )
 
