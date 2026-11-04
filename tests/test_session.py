@@ -638,33 +638,51 @@ def check_robustness() -> None:
           (torn[:1], sess.last_error))
     check("R7 nessun file temporaneo resta dopo il replace", leftovers == [], leftovers)
 
-    # metrica: 500 eventi, poi 10 richieste consecutive senza errori.
+    # metrica: 500 eventi non devono pesare piu' di 5. La misura e' **relativa**
+    # (stessa macchina, stesso carico, due registri) perche' un tetto assoluto
+    # misura il carico della suite, non la vista: sotto sei figli che renderizzano
+    # 10 richieste possono superare il secondo senza che la vista sia lenta.
+    def _ten_requests(directory) -> Tuple[float, List[Tuple[int, int]]]:
+        old_root = os.environ.get("VX_SESSION_DIR")
+        os.environ["VX_SESSION_DIR"] = str(directory)
+        server = serve.Server(port=0, session=True).start()
+        answers: List[Tuple[int, int]] = []
+        start = time.monotonic()
+        try:
+            for _ in range(10):
+                status, body = get_status(server.url + "api/state")
+                answers.append((status, len(body)))
+        finally:
+            server.stop()
+            if old_root is None:
+                os.environ.pop("VX_SESSION_DIR", None)
+            else:
+                os.environ["VX_SESSION_DIR"] = old_root
+        return time.monotonic() - start, answers
+
     base = root("scale")
     sess = session.Session.begin("auto", ["auto"], base, root=base)
     for index in range(500):
         sess.stage("scala", float(index % 100), "z" * 8)
     sess.end("done")
-    old_root = os.environ.get("VX_SESSION_DIR")
-    os.environ["VX_SESSION_DIR"] = str(base)
-    server = serve.Server(port=0, session=True).start()
-    start = time.monotonic()
-    answers = []
-    try:
-        for _ in range(10):
-            status, body = get_status(server.url + "api/state")
-            answers.append((status, len(body)))
-    finally:
-        server.stop()
-        if old_root is None:
-            os.environ.pop("VX_SESSION_DIR", None)
-        else:
-            os.environ["VX_SESSION_DIR"] = old_root
-    elapsed = time.monotonic() - start
+
+    small = root("scale_small")
+    little = session.Session.begin("auto", ["auto"], small, root=small)
+    for index in range(5):
+        little.stage("scala", float(index), "z" * 8)
+    little.end("done")
+
+    elapsed, answers = _ten_requests(base)
+    baseline, small_answers = _ten_requests(small)
     check("R8 500 eventi e 10 richieste: tutte 200, nessun errore",
           all(status == 200 for status, _ in answers) and len(answers) == 10,
           answers[:2])
-    check("R8 la vista regge almeno 10 richieste al secondo",
-          elapsed <= 1.0, f"{10 / elapsed:.1f} req/s in {elapsed:.3f}s")
+    check(
+        "R8 500 eventi costano al massimo 5x 5 eventi (misura relativa)",
+        elapsed <= max(0.25, baseline * 5.0),
+        f"500: {elapsed:.3f}s, 5: {baseline:.3f}s, rapporto "
+        f"{elapsed / baseline:.1f}x",
+    )
 
 
 def main() -> int:
