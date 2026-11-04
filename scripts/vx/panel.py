@@ -6,8 +6,12 @@ websocket, senza dipendenze. Ogni fase ha tre stati — fatta, in corso, da fare
 e c'e' la barra del tempo.
 
 Serve a due cose: chi guarda vede dove siamo senza leggere un log, e `vx serve`
-(livello 3) partira' dallo stesso `progress.json` invece di inventare un secondo
-formato.
+(livello 3) legge lo **stesso** `progress.json` invece di inventare un secondo
+formato. Il JSON si scrive sempre accanto a questo HTML; per `auto` la cartella
+del pannello e' la **workdir risolta** (quella di `plan.json` e `report.json`),
+non la cartella del master, cosi' `vx serve <workdir>` trova il progresso.
+Un'eventuale copia del solo HTML accanto al master e' una comodita': la fonte
+di verita' resta una, il `progress.json` nella workdir.
 """
 
 from __future__ import annotations
@@ -100,6 +104,9 @@ class Panel:
     #: Se c'e' un server acceso su questo lavoro, il pannello ci porta invece di
     #: restare un mondo a parte: il pannello semplice e' un ripiego, non la vista.
     watch_url: str = ""
+    #: Copia del **solo HTML** in un secondo posto (comodita' accanto al master).
+    #: Il json non si duplica: `progress.json` vive nella cartella del pannello.
+    copy: Optional[Path] = None
     #: I cedimenti di questo pannello (nome -> motivo). La pagina e' un modo di
     #: guardare, non un cancello: se non si scrive, il lavoro continua e questo
     #: elenco lo dice (e finisce in ``report["degraded"]`` via :mod:`vx.degrade`).
@@ -200,6 +207,8 @@ class Panel:
                 self.path.parent / "progress.json",
                 json.dumps(self.as_dict(), indent=2, ensure_ascii=False) + "\n",
             )
+            if self.copy is not None and Path(self.copy) != Path(self.path):
+                _atomic(self.copy, self.html())
         except Exception as exc:  # noqa: BLE001 - la vista non e' il lavoro
             self.degraded.setdefault("panel", f"{type(exc).__name__}: {exc}")
             degrade.note("panel", exc)

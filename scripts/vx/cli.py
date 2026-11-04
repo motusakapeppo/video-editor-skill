@@ -21,7 +21,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from .contract import (
     EXIT_MISSING_DEP,
@@ -2848,6 +2848,17 @@ def cmd_edl3(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _auto_panel_dir(args: argparse.Namespace, workdir: Path) -> Path:
+    """Dove vive il pannello di ``auto``: ``--panel`` vince sulla workdir risolta.
+
+    Il default e' la **workdir** (accanto a ``plan.json``/``report.json``), non
+    la cartella del master: ``vx serve <workdir>`` deve trovare lo stesso
+    ``progress.json`` che il lavoro scrive.
+    """
+    target = getattr(args, "panel", None)
+    return Path(str(target)) if target else Path(workdir)
+
+
 @_session_command("auto")
 def cmd_auto(args: argparse.Namespace) -> int:
     """Prompt + folder -> triage -> EDL -> render -> QC -> deliverables -> report."""
@@ -2855,10 +2866,11 @@ def cmd_auto(args: argparse.Namespace) -> int:
     from . import settings
     from .grammar import GrammarError
 
+    workdir = auto._resolve_workdir(args)
     session = _session_of(args)
     if session is not None:
         try:
-            session.set_job(auto._resolve_workdir(args))
+            session.set_job(workdir)
         except Exception:  # noqa: BLE001 - il registro non deve fermare il giro
             pass
         session.stage("triage", 0.0, "Avvio del lavoro")
@@ -2872,12 +2884,12 @@ def cmd_auto(args: argparse.Namespace) -> int:
 
         global _NARRATING
         _NARRATING = True
-        target = getattr(args, "panel", None)
-        if target is None and not getattr(args, "no_panel", False):
-            # Default: il pannello vive accanto al master, dove si va a cercarlo.
-            out = Path(str(getattr(args, "out", "") or "out.mp4"))
-            target = str(out.parent / f"{out.stem}-auto")
-        if target and not getattr(args, "no_panel", False):
+        target = (
+            None
+            if getattr(args, "no_panel", False)
+            else str(_auto_panel_dir(args, workdir))
+        )
+        if target:
             from . import panel as panel_mod
 
             panel_dir = Path(target)
@@ -2887,6 +2899,13 @@ def cmd_auto(args: argparse.Namespace) -> int:
                 clips=_media_count(getattr(args, "assets", "")),
                 phases=list(narrate.PHASES.items()),
             )
+            # Se il master e' fuori dalla workdir, accanto al master resta una
+            # copia del solo HTML (comodita'): il json che la vista legge e' uno
+            # solo, quello nella workdir.
+            out = Path(str(getattr(args, "out", "") or "out.mp4"))
+            extra = out.parent / f"{out.stem}-auto" / "progress.html"
+            if extra.resolve() != Path(panel.path).resolve():
+                panel.copy = extra
             if getattr(args, "watch", False):
                 # Il daemon e' uno solo: se e' acceso lo si usa, altrimenti si
                 # avvia. Un secondo server per lo stesso lavoro sarebbe una
@@ -3134,8 +3153,21 @@ def _port_free(port: int) -> bool:
 
 
 def _choose_port(preferred: Optional[int]) -> int:
-    """La porta chiesta se e' libera, altrimenti la prima libera dopo; 0 = il sistema."""
-    first = UP_PORT if preferred in (None, 0) else int(preferred)
+    """La porta chiesta se e' libera, altrimenti la prima libera dopo; 0 = il sistema.
+
+    Una porta *chiesta* (un riavvio vuole tenersi la sua) si aspetta: il
+    processo appena fermato la lascia per qualche istante, e prendere subito la
+    successiva cambierebbe l'URL di una vista che l'utente ha gia' aperta. Solo
+    se resta occupata dopo l'attesa si scende alla prima libera piu' avanti.
+    """
+    asked = preferred not in (None, 0)
+    first = UP_PORT if not asked else int(preferred)
+    if asked:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if _port_free(first):
+                return first
+            time.sleep(0.2)
     for offset in range(UP_PORT_TRIES):
         candidate = first + offset
         if candidate > 65535:
@@ -3145,6 +3177,23 @@ def _choose_port(preferred: Optional[int]) -> int:
     return 0
 
 
+def _console_free_python() -> str:
+    """L'interprete da usare per un processo di sfondo, senza finestra.
+
+    Su Windows ``python.exe`` di un virtualenv e' un **lanciatore**: esegue il
+    python vero come figlio. Il lanciatore eredita ``CREATE_NO_WINDOW``, ma il
+    figlio no, e un eseguibile di console senza console ne riceve una nuova:
+    ecco la finestra nera con il percorso del python che compariva a ogni
+    ``vx up``. ``pythonw.exe`` non ha sottosistema console e non ne crea mai.
+    """
+    exe = Path(sys.executable)
+    if os.name == "nt":
+        windowless = exe.with_name("pythonw.exe")
+        if windowless.is_file():
+            return str(windowless)
+    return str(exe)
+
+
 def _daemon_command(extra: Sequence[str]) -> List[str]:
     """Come rilanciare questo stesso vx, senza dipendere dal PATH dell'utente.
 
@@ -3152,7 +3201,7 @@ def _daemon_command(extra: Sequence[str]) -> List[str]:
     invece del launcher ``vx.exe``: un processo solo, quindi il pid scritto in
     ``up.json`` e' davvero quello del server.
     """
-    python = str(Path(sys.executable))
+    python = _console_free_python()
     script = Path(__file__).resolve().parents[1] / "vx.py"
     if script.is_file():
         return [python, str(script), *extra]
@@ -3169,15 +3218,22 @@ def _spawn_daemon(port: int) -> Optional[subprocess.Popen]:
         ["serve", "--session", "--port", str(port), "--up", str(target)]
     )
     base = 0
+    startupinfo = None
     if os.name == "nt":
         # Staccato dalla console del padre e senza finestra: sopravvive alla fine.
         base = 0x00000008 | 0x08000000
+        # Seconda cintura: anche se un interprete decidesse di allocare una
+        # console, la finestra nasce nascosta e non ruba il fuoco.
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
     options = dict(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         close_fds=True,
         start_new_session=os.name != "nt",
+        startupinfo=startupinfo,
     )
     if os.name == "nt":
         # CREATE_BREAKAWAY_FROM_JOB: se chi lancia vive dentro un job "kill on
@@ -3196,15 +3252,98 @@ def _spawn_daemon(port: int) -> Optional[subprocess.Popen]:
         return None
 
 
-def _start_up(preferred: Optional[int] = None) -> Dict[str, Any]:
-    """Riusa il daemon vivo, altrimenti lo avvia e aspetta che risponda."""
-    running = _daemon(wait=3.0)
-    if running:
-        return {**running, "reused": True}
+def _code_files() -> List[Path]:
+    """I file che il daemon ha in memoria: ``serve.py`` e gli asset della UI."""
+    from . import serve as serve_mod
+
+    entry = Path(serve_mod.__file__).resolve()
+    files = [entry]
     try:
-        _up_file().unlink(missing_ok=True)
+        files.extend(sorted((entry.parent / "ui").glob("*")))
     except OSError:
         pass
+    return files
+
+
+def _stale_code(record: Mapping[str, Any]) -> Optional[tuple]:
+    """``(file, mtime)`` del codice piu' nuovo del daemon, o ``None``.
+
+    Il confronto e' con ``started_utc``: un file toccato **dopo** l'avvio e'
+    codice che il processo in memoria non ha mai letto. Solo i file della
+    skill, mai l'orologio del sistema: un orologio sfasato non deve far
+    riavviare un daemon sano.
+    """
+    raw = str(record.get("started_utc") or "")
+    if not raw:
+        return None
+    from datetime import datetime, timezone
+
+    try:
+        started = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    start = started.timestamp()
+    # ``started_utc`` e' troncato al secondo: senza un secondo di tolleranza un
+    # file scritto poco prima dell'avvio sembrerebbe "piu' nuovo" del daemon e
+    # ogni `vx up` riavvierebbe un processo sano.
+    floor = start + 1.0
+    newest: Optional[tuple] = None
+    for path in _code_files():
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > floor and (newest is None or mtime > newest[1]):
+            newest = (path, mtime)
+    return newest
+
+
+def _start_up(preferred: Optional[int] = None) -> Dict[str, Any]:
+    """Riusa il daemon vivo, altrimenti lo avvia e aspetta che risponda.
+
+    Prima di riusarlo si guarda il codice: se ``serve.py`` o un file di ``ui/``
+    e' piu' nuovo di ``started_utc``, il daemon sta servendo la versione di
+    prima. Si ferma **solo il proprio pid** e si riavvia; se non si riesce, lo
+    si dice invece di far finta che la vista sia aggiornata.
+    """
+    running = _daemon(wait=3.0)
+    was_running = bool(running)
+    if running:
+        stale = _stale_code(running)
+        if stale is None:
+            return {**running, "reused": True}
+        from datetime import datetime, timezone
+
+        path, mtime = stale
+        stamp = datetime.fromtimestamp(mtime, timezone.utc).replace(microsecond=0)
+        _log(
+            f"[up] {path.name} e' piu' nuovo del daemon "
+            f"(avviato {running.get('started_utc')}, file {stamp.isoformat()}): "
+            f"riavvio il pid {running.get('pid')}"
+        )
+        if _stop_pid(int(running.get("pid") or 0)):
+            try:
+                _up_file().unlink(missing_ok=True)
+            except OSError:
+                pass
+        else:
+            running["stale_code"] = path.name
+            running["restart_failed"] = (
+                "non riesco a fermare il daemon: sta servendo codice vecchio"
+            )
+            _log(f"[up] {running['restart_failed']} (pid {running.get('pid')})")
+            return {**running, "reused": True}
+    else:
+        try:
+            _up_file().unlink(missing_ok=True)
+        except OSError:
+            pass
+    if was_running and preferred is None:
+        # Un riavvio non deve cambiare l'indirizzo: la scheda aperta punta a
+        # quella porta, e spostarla su 8101 vuol dire una vista che sparisce.
+        preferred = running.get("port")
     child = _spawn_daemon(_choose_port(preferred))
     if child is None:
         return {}
@@ -3220,6 +3359,11 @@ def _start_up(preferred: Optional[int] = None) -> Dict[str, Any]:
         # che risponde e' il nostro. Il pid non si confronta con ``child.pid``
         # perche' l'interprete di un venv e' un rinvio a un secondo processo.
         if pid and port and _pid_alive(pid) and _answers(port, 0.5):
+            if was_running:
+                _log(
+                    f"[up] daemon riavviato su codice nuovo: pid {pid}, "
+                    f"started_utc {record.get('started_utc')}"
+                )
             return {**record, "pid": pid, "port": port, "url": _url_of(port),
                     "reused": False}
         if child.poll() is not None:

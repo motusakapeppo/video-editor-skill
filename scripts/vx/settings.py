@@ -161,6 +161,13 @@ DEFAULTS: Dict[str, Any] = {
         "network": True,
         "wait_sec": 180.0,
     },
+    "serve": {
+        # Dopo quanti secondi un ``progress.json`` fermo non e' piu' una
+        # percentuale da mostrare: se il lavoro e' vivo (lock o battito) la
+        # vista dice che sta lavorando, altrimenti dice che non c'e' nulla in
+        # corso. La soglia e' in secondi, non in "quanto sembra vecchio".
+        "progress_stale_sec": 10.0,
+    },
     "qc": {
         "duration_drift_ms": 40.0,
         "frame_count_delta": 1,

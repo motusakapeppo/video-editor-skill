@@ -250,6 +250,14 @@ def check_daemon() -> None:
     check("U6b `up --open` su daemon acceso non apre una seconda scheda",
           code == 0 and opened == [], opened)
 
+    # U6c/U6d: niente finestra nera e nessun cambio d'indirizzo al riavvio.
+    hidden = cli._console_free_python()
+    check("U6c il daemon usa un interprete senza console (pythonw)",
+          os.name != "nt" or hidden.lower().endswith("pythonw.exe"), hidden)
+    spare = free_port()
+    check("U6d una porta chiesta resta la stessa se e' libera",
+          cli._choose_port(spare) == spare, spare)
+
     try:
         state = get_state(record["port"])
     except Exception as exc:  # noqa: BLE001

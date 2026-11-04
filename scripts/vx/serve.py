@@ -51,6 +51,14 @@ UI_FILES = {
     "app.js": "text/javascript; charset=utf-8",
 }
 
+#: Gli asset della UI non si mettono in cache: dopo un aggiornamento della skill
+#: un reload deve mostrare il codice vero, non quello di un'ora prima.
+NO_STORE = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 #: Quanti livelli di cartelle guardare sotto la radice.
 MAX_DEPTH = 2
 
@@ -1356,6 +1364,140 @@ def _feedback_state(directory: Path) -> Dict[str, Any]:
     }
 
 
+#: Quanto un ``progress.json`` fermo resta una percentuale da mostrare. Oltre
+#: questa soglia il numero non e' piu' una misura del presente: la vista dice
+#: che il lavoro sta girando (se lo e') invece di ripetere un valore vecchio.
+PROGRESS_STALE_DEFAULT = 10.0
+
+
+def _progress_stale_sec() -> float:
+    """La soglia da ``settings`` (``serve.progress_stale_sec``), con un floor sano."""
+    try:
+        from . import settings as settings_mod
+
+        value = float(
+            settings_mod.get("serve.progress_stale_sec", PROGRESS_STALE_DEFAULT)
+        )
+    except Exception:  # noqa: BLE001 - una configurazione rotta non ferma la vista
+        value = PROGRESS_STALE_DEFAULT
+    return max(0.1, value)
+
+
+def _progress_age(directory: Path) -> Optional[float]:
+    """Da quanti secondi ``progress.json`` non cambia, o ``None`` se non c'e'."""
+    try:
+        info = (Path(directory) / "progress.json").stat()
+    except OSError:
+        return None
+    return max(0.0, time.time() - info.st_mtime)
+
+
+def _age_words(age: Optional[float]) -> str:
+    if age is None:
+        return ""
+    seconds = int(round(max(0.0, age)))
+    return "adesso" if seconds < 1 else f"{seconds} s fa"
+
+
+def _beat_liveness(
+    beat: Optional[Mapping[str, Any]], locked: bool
+) -> Dict[str, Any]:
+    """Il battito e' recente? La liveness si decide qui, una volta, nel backend.
+
+    ``_beat_state`` porta ``at_epoch`` (l'istante assoluto dell'ultimo
+    heartbeat): l'eta' si ricalcola adesso, cosi' una cache di stato non fa
+    sembrare vivo un battito di dieci minuti fa.
+    """
+    age: Optional[float] = None
+    if isinstance(beat, Mapping) and beat.get("at_epoch") is not None:
+        try:
+            age = max(0.0, time.time() - float(beat["at_epoch"]))
+        except (TypeError, ValueError):
+            age = None
+    fresh = bool(age is not None and age <= ACTIVE_SEC)
+    reasons = []
+    if locked:
+        reasons.append("lock vivo")
+    if fresh:
+        reasons.append("battito di sessione")
+    return {"alive": bool(locked or fresh), "beat_fresh": fresh, "beat_age": age,
+            "why": " e ".join(reasons)}
+
+
+def _progress_block(
+    directory: Path,
+    *,
+    published: bool,
+    percent: Any,
+    locked: bool,
+    beat: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """La percentuale **vera**, con la sua eta' e la ragione per cui c'e' o no.
+
+    Tre stati, una sola verita':
+
+    * ``json`` giovane: la percentuale di ``progress.json`` con la sua eta';
+    * ``json`` vecchio ma lavoro vivo (lock o battito): ``value`` e' ``None`` e
+      la vista dice «sto lavorando · nessun aggiornamento da N s», non 0%;
+    * assente: ``value`` e' ``None``; se il lavoro e' vivo lo dice, altrimenti
+      dichiara che non c'e' un lavoro in corso. Un vecchio numero non si ripete.
+    """
+    threshold = _progress_stale_sec()
+    age = _progress_age(directory) if published else None
+    live = _beat_liveness(beat, locked)
+    raw = None
+    if published:
+        try:
+            raw = float(percent) if percent is not None else None
+        except (TypeError, ValueError):
+            raw = None
+
+    if published and raw is not None and age is not None and age <= threshold:
+        return {
+            "value": round(raw, 1),
+            "source": "json",
+            "age_sec": round(age, 1),
+            "alive": True,
+            "why": "percentuale da progress.json · aggiornata " + _age_words(age),
+        }
+    if published and age is not None:
+        seconds = int(round(max(0.0, age)))
+        if live["alive"]:
+            why = f"sto lavorando · nessun aggiornamento da {seconds} s"
+        else:
+            why = f"nessun lavoro in corso · ultimo aggiornamento {seconds} s fa"
+        return {
+            "value": None,
+            "source": "json",
+            "age_sec": round(age, 1),
+            "alive": bool(live["alive"]),
+            "why": why,
+        }
+    # Nessun progress.json (o un lavoro dedotto senza panel).
+    if live["alive"]:
+        beat_age = live.get("beat_age") if live.get("beat_fresh") else None
+        why = (
+            "sto lavorando · nessun aggiornamento da "
+            f"{int(round(max(0.0, float(beat_age))))} s"
+            if beat_age is not None
+            else "sto lavorando · nessun progresso pubblicato"
+        )
+        return {
+            "value": None,
+            "source": "session" if live["beat_fresh"] else "lock",
+            "age_sec": None,
+            "alive": True,
+            "why": why,
+        }
+    return {
+        "value": None,
+        "source": "none",
+        "age_sec": None,
+        "alive": False,
+        "why": "nessun lavoro in corso · nessun progress.json da leggere",
+    }
+
+
 def _beat_state(directory: Path) -> Dict[str, Any]:
     """L'ultimo battito che la sessione ha scritto per **questo** lavoro.
 
@@ -1426,6 +1568,14 @@ def _beat_uncached(folder: Path, directory: Path) -> Dict[str, Any]:
                 continue
         elif str(row.get("job") or "") != name:
             continue
+        at_epoch = None
+        try:
+            started = datetime.fromisoformat(str(session.started_utc or ""))
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            at_epoch = started.timestamp() + float(_number(row.get("t")) or 0.0)
+        except (TypeError, ValueError):
+            at_epoch = None
         return {
             "stage": str(row.get("stage") or ""),
             "detail": str(row.get("detail") or ""),
@@ -1433,6 +1583,7 @@ def _beat_uncached(folder: Path, directory: Path) -> Dict[str, Any]:
             "eta_sec": round(float(_number(row.get("eta_sec")) or 0.0), 3),
             "percent": _number(row.get("percent")),
             "at_sec": round(float(_number(row.get("t")) or 0.0), 3),
+            "at_epoch": None if at_epoch is None else round(at_epoch, 3),
         }
     return {}
 
@@ -1868,6 +2019,14 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         # parola sull'esito, e ``done`` non e' un esito possibile con violazioni.
         if outcome == "done" and guard_section.get("ok") is False:
             outcome = "failed"
+    beat = _beat_state(directory)
+    progress_block = _progress_block(
+        directory,
+        published=not derived,
+        percent=percent,
+        locked=bool(activity["locked"]),
+        beat=beat,
+    )
     return {
         "job": directory.name,
         "path": str(directory),
@@ -1902,7 +2061,8 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         "font": font,
         "questions": _questions_state(directory, data_dir),
         "feedback": _feedback_state(directory),
-        "beat": _beat_state(directory),
+        "beat": beat,
+        "progress": progress_block,
         "progress_source": "derived" if derived else "json",
     }
 
@@ -1939,6 +2099,19 @@ def _job_state_stamp(directory: Path) -> tuple:
     return tuple(stamps)
 
 
+def _refresh_progress(payload: Dict[str, Any], directory: Path) -> Dict[str, Any]:
+    """Ricalcola solo il blocco ``progress``: eta' e battito invecchiano anche
+    quando i file non cambiano, e uno stato in cache non deve mentire."""
+    payload["progress"] = _progress_block(
+        directory,
+        published=not bool(payload.get("derived")),
+        percent=payload.get("percent"),
+        locked=bool(payload.get("locked")),
+        beat=payload.get("beat") if isinstance(payload.get("beat"), Mapping) else {},
+    )
+    return payload
+
+
 def _job_state_cached(directory: Path) -> Dict[str, Any]:
     """Lo stato completo di un lavoro, riusato finche' la cartella non cambia.
 
@@ -1954,7 +2127,7 @@ def _job_state_cached(directory: Path) -> Dict[str, Any]:
     with _cache_lock:
         entry = _job_state_cache.get(key)
     if entry is not None and entry[0] == stamp:
-        return entry[1]
+        return _refresh_progress(entry[1], directory)
     value = _job_state(directory)
     # Se la cartella si e' mossa mentre leggevamo, non si mette in cache: lo
     # stamp di prima descriverebbe uno stato che non e' piu' quello.
@@ -1983,10 +2156,18 @@ def _session_job_view(
     """
     raw = str(snapshot.get("job_path") or "") or (str(job) if job is not None else "")
     if not raw:
+        why = "la sessione non dichiara una cartella di lavoro: niente da rileggere"
         return {
             "job": None,
             "jobs": [],
-            "reason": "la sessione non dichiara una cartella di lavoro: niente da rileggere",
+            "reason": why,
+            "progress": {
+                "value": None,
+                "source": "none",
+                "age_sec": None,
+                "alive": False,
+                "why": why,
+            },
         }
     directory = Path(raw)
     try:
@@ -1994,19 +2175,35 @@ def _session_job_view(
     except OSError:
         exists = False
     if not exists:
+        why = f"la cartella del lavoro non esiste piu': {directory}"
         return {
             "job": None,
             "jobs": [],
-            "reason": f"la cartella del lavoro non esiste piu': {directory}",
+            "reason": why,
+            "progress": {
+                "value": None,
+                "source": "none",
+                "age_sec": None,
+                "alive": False,
+                "why": why,
+            },
         }
     try:
         payload = _job_state_cached(directory)
     except Exception as exc:  # noqa: BLE001 - la vista della sessione non muore
         degrade.note("serve", exc)
+        why = f"lo stato del lavoro non si legge: {type(exc).__name__}: {exc}"
         return {
             "job": None,
             "jobs": [],
-            "reason": f"lo stato del lavoro non si legge: {type(exc).__name__}: {exc}",
+            "reason": why,
+            "progress": {
+                "value": None,
+                "source": "none",
+                "age_sec": None,
+                "alive": False,
+                "why": why,
+            },
         }
     entry = {
         "index": 0,
@@ -2045,6 +2242,14 @@ LATEST_TTL_SEC = 5.0
 _latest_cache: Dict[str, tuple] = {}
 
 
+def _root_mtime(base: str) -> int:
+    """Lo stamp della radice delle sessioni: cambia quando nasce una cartella."""
+    try:
+        return Path(base).stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
 def _latest_session_id() -> str:
     """L'id della sessione piu' recente, senza riscandire il registro ogni volta."""
     try:
@@ -2052,9 +2257,12 @@ def _latest_session_id() -> str:
     except Exception:  # noqa: BLE001 - senza radice si torna al comportamento di prima
         return ""
     now = time.monotonic()
+    stamp = _root_mtime(base)
     with _cache_lock:
         entry = _latest_cache.get(base)
-    if entry is not None and entry[0] > now:
+    # La radice e' la verita': una sessione appena nata cambia il suo mtime, e
+    # la cache non deve continuare a rispondere "nessuna sessione" per 5 s.
+    if entry is not None and entry[0] > now and entry[2] == stamp:
         return entry[1]
     try:
         value = session_store.latest() or ""
@@ -2063,7 +2271,7 @@ def _latest_session_id() -> str:
     with _cache_lock:
         if len(_latest_cache) > 16:
             _latest_cache.clear()
-        _latest_cache[base] = (now + LATEST_TTL_SEC, value)
+        _latest_cache[base] = (now + LATEST_TTL_SEC, value, _root_mtime(base))
     return value
 
 
@@ -2089,6 +2297,13 @@ def _empty_session_state(
         "job": None,
         "jobs": [],
         "reason": reason,
+        "progress": {
+            "value": None,
+            "source": "none",
+            "age_sec": None,
+            "alive": False,
+            "why": reason,
+        },
     }
 
 
@@ -2154,6 +2369,15 @@ def session_state(session_id: Optional[str] = None) -> Dict[str, Any]:
         "journal": list(snapshot.get("journal") or []),
     }
     payload.update(_session_job_view(snapshot, job))
+    # La stessa verita' del lavoro, in cima alla risposta: la pagina legge
+    # ``job.progress``, ma il contratto di ``/api/state`` porta il blocco anche qui.
+    payload["progress"] = (payload.get("job") or {}).get("progress") or {
+        "value": None,
+        "source": "none",
+        "age_sec": None,
+        "alive": False,
+        "why": "nessun lavoro nella sessione: nessuna percentuale da mostrare",
+    }
     return payload
 
 
@@ -2350,6 +2574,13 @@ def _empty_job_payload(directory: Any, why: str = "") -> Dict[str, Any]:
         "questions": [],
         "feedback": _empty_feedback(),
         "beat": {},
+        "progress": {
+            "value": None,
+            "source": "none",
+            "age_sec": None,
+            "alive": False,
+            "why": why or "nessun lavoro da leggere",
+        },
         "progress_source": "",
         "jobs": [],
         "selected": 0,
@@ -2415,6 +2646,13 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "questions": [],
             "feedback": _empty_feedback(),
             "beat": {},
+            "progress": {
+                "value": None,
+                "source": "none",
+                "age_sec": None,
+                "alive": False,
+                "why": "nessun lavoro in corso · nessun progress.json da leggere",
+            },
             "progress_source": "",
             "jobs": [],
             "selected": 0,
@@ -2706,7 +2944,7 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             path, index = query(self.path)
             if path in ("/", "/index.html"):
                 body = _ui("index.html") or PAGE.encode("utf-8")
-                self._send(body, "text/html; charset=utf-8")
+                self._send(body, "text/html; charset=utf-8", extra=NO_STORE)
                 return
             if path.startswith("/ui/"):
                 name = Path(path[len("/ui/"):]).name
@@ -2714,7 +2952,7 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
                 if body is None:
                     self._send(b"not found", "text/plain", status=404)
                     return
-                self._send(body, UI_FILES[name])
+                self._send(body, UI_FILES[name], extra=NO_STORE)
                 return
             if path == "/api/state":
                 try:

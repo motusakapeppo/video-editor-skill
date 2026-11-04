@@ -3058,6 +3058,7 @@
       questions: [],
       feedback: { asked: false, given: false, rating: null, summary: {} },
       beat: {},
+      progress: { value: null, source: '', age_sec: null, alive: false, why: '' },
       progress_source: '',
     };
   }
@@ -3186,7 +3187,19 @@
     if (approving) return;
     const phases = Array.isArray(state.phases) ? state.phases : [];
     const frames = Array.isArray(state.frames) ? state.frames : [];
-    const percent = clamp(Number(state.percent) || 0, 0, 100);
+    // La fonte di verita' e' `progress.value`: `state.percent` resta il ripiego
+    // per i payload di una versione precedente del server.
+    const report =
+      state.progress && typeof state.progress === 'object' ? state.progress : null;
+    const reported =
+      report && report.value !== null && report.value !== undefined
+        ? Number(report.value)
+        : NaN;
+    const percent = clamp(
+      Number.isFinite(reported) ? reported : Number(state.percent) || 0,
+      0,
+      100
+    );
 
     // Una lettura transitoria (file scritto a metà, lavoro appena sparito) non
     // deve cancellare quello che si sta già guardando.
@@ -3245,10 +3258,23 @@
     const clips = Number(state.clips) || 0;
     el.clipChip.textContent = clips === 1 ? '1 clip' : clips > 1 ? clips + ' clip' : 'clip non dichiarate';
 
+    // Il server manda la percentuale **vera** in `progress`: se `value` e' null
+    // non c'e' un numero da mostrare (progresso assente o fermo), e uno zero
+    // sarebbe un'affermazione falsa. La ragione e' `progress.why`.
+    const known =
+      Boolean(report) &&
+      report.value !== null &&
+      report.value !== undefined &&
+      Number.isFinite(Number(report.value));
+    const unknown = Boolean(report) && !known && Boolean(String(report.why || '').trim());
+
     // A lavoro chiuso senza percentuale pubblicata (nessun panel) non c'è uno
-    // 0%: al posto del numero il segno dell'esito. La barra è piena solo quando
-    // il lavoro è davvero arrivato in fondo.
-    const mark = closed && percent < 1 ? OUTCOME_MARK[verdict] || '–' : '';
+    // 0%: al posto del numero il segno dell'esito. Un lavoro aperto senza
+    // progresso vivo non mostra 0% ma un trattino e la ragione. La barra è piena
+    // solo quando il lavoro è davvero arrivato in fondo.
+    const mark =
+      (closed && percent < 1 ? OUTCOME_MARK[verdict] || '–' : '') ||
+      (!closed && unknown ? '—' : '');
     el.hero.classList.toggle('is-closed', Boolean(mark));
     el.heroUnit.hidden = Boolean(mark);
     if (mark) {
@@ -3271,7 +3297,11 @@
 
     const activeIndex = phases.findIndex((p) => p.key === state.current);
     el.heroLabel.textContent = mark ? 'esito' : 'avanzamento';
-    if (finished || verdict === 'done') {
+    const why = report ? String(report.why || '').trim() : '';
+    if (!closed && unknown && why) {
+      // «sto lavorando · nessun aggiornamento da 12 s»: il battito resta sotto.
+      el.heroSub.textContent = why;
+    } else if (finished || verdict === 'done') {
       el.heroSub.textContent = pad2(phases.length) + ' fasi su ' + pad2(phases.length);
     } else if (activeIndex >= 0) {
       el.heroSub.textContent = 'fase ' + pad2(activeIndex + 1) + ' di ' + pad2(phases.length);
