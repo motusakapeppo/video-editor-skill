@@ -14,6 +14,7 @@ import argparse
 import functools
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -2701,6 +2702,246 @@ def _report_edl3_validate(
     return EXIT_OK if not problems else EXIT_USAGE
 
 
+#: Le chiavi dei due schemi, per riconoscere il documento senza guardare il
+#: nome del file: ``plan.json`` di ``auto`` non dichiara ``schema``, dichiara
+#: ``contract_version``/``timeline``/``tracks``.
+def _edl3_declared_version(raw: Mapping[str, Any]) -> str:
+    """La versione EDL3 dichiarata dal documento, o ``""`` se non lo e'."""
+    for key in ("version", "schema"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.startswith("vx.edl3/"):
+            return value
+    return ""
+
+
+def _edl2_declared_schema(raw: Mapping[str, Any]) -> str:
+    """Lo schema 2.2 dichiarato, o ``""`` se il documento non e' un piano 2.2."""
+    from .edl_plan import EDL_SCHEMA
+
+    schema = raw.get("schema")
+    if isinstance(schema, str) and schema.startswith("vx.edl/"):
+        return schema
+    contract = raw.get("contract_version")
+    if isinstance(contract, str):
+        parts = contract.split(".")
+        if len(parts) >= 2 and parts[0].isdigit():
+            return f"vx.edl/{parts[0]}.{parts[1]}"
+    if isinstance(raw.get("timeline"), Mapping) and isinstance(
+        raw.get("tracks"), Mapping
+    ):
+        # The auto `plan.json`: 2.2 shape without the `schema` label.
+        return EDL_SCHEMA
+    return ""
+
+
+def _declared_duration(raw: Mapping[str, Any]) -> Any:
+    """La ``timeline.duration_sec`` dichiarata, o ``None`` se manca."""
+    timeline = raw.get("timeline")
+    if not isinstance(timeline, Mapping):
+        return None
+    value = timeline.get("duration_sec")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _report_edl3_migrate(args: argparse.Namespace, payload: Dict[str, Any]) -> int:
+    """Pubblica il report di ``edl3 migrate``: exit 2 quando non scrive nulla."""
+    ok = bool(payload.get("ok"))
+    if args.json:
+        _out(payload)
+        return EXIT_OK if ok else EXIT_USAGE
+
+    schema = payload.get("schema") or {}
+    if ok:
+        duration = payload.get("duration_sec") or {}
+        seconds = float(duration.get("to") or 0.0)
+        print(
+            f"ok: {payload.get('clips', 0)} clip, {payload.get('fps')} fps, "
+            f"{seconds:.3f}s - {schema.get('from')} -> {schema.get('to')} -> "
+            f"{payload.get('out')}"
+        )
+    else:
+        error = payload.get("error") or {}
+        line = f"{error.get('code')}: {error.get('detail')}"
+        where = error.get("where")
+        if where:
+            line = f"{line} ({where})"
+        print(line)
+        for item in payload.get("loss") or []:
+            print(f"loss {item['code']} {item['where']}: {item['detail']}")
+        print(f"migrazione rifiutata: {payload.get('plan')}")
+    for note in payload.get("notes") or []:
+        print(f"nota: {note}")
+    return EXIT_OK if ok else EXIT_USAGE
+
+
+def _migrate_already_edl3(
+    args: argparse.Namespace,
+    raw: Mapping[str, Any],
+    plan_path: Path,
+    out_path: Path,
+    version: str,
+) -> int:
+    """Copia un documento EDL3 invariato e lo dice: la migrazione e' idempotente."""
+    from . import edl3
+
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "plan": str(plan_path),
+        "out": None,
+        "schema": {"from": version, "to": version},
+        "clips": 0,
+        "fps": None,
+        "duration_sec": {"from": None, "to": None},
+        "loss": [],
+        "notes": [],
+        "changed": False,
+        "already": version,
+    }
+    try:
+        timeline = edl3.Timeline3.from_dict(dict(raw))
+        problems = timeline.validate()
+    except edl3.EDLError as exc:
+        problems = [{"code": exc.code, "where": exc.where, "detail": exc.detail}]
+        timeline = None
+    if problems or timeline is None:
+        payload["problems"] = problems
+        payload["error"] = {
+            "code": (problems[0]["code"] if problems else "EDL3_INVALID"),
+            "detail": "; ".join(
+                f"{item['code']} at {item['where']}: {item['detail']}"
+                for item in problems
+            ),
+            "where": str(plan_path),
+        }
+        return _report_edl3_migrate(args, payload)
+
+    if out_path.resolve() != plan_path.resolve():
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(plan_path, out_path)
+    seconds = round(float(timeline.duration), 6)
+    payload.update(
+        {
+            "ok": True,
+            "out": str(out_path),
+            "clips": len(timeline.clips),
+            "fps": timeline.fps,
+            "duration_sec": {"from": seconds, "to": seconds},
+            "notes": [
+                f"gia' {version}: copiato invariato, nessuna modifica"
+            ],
+        }
+    )
+    return _report_edl3_migrate(args, payload)
+
+
+@_session_command("edl3")
+def cmd_edl3_migrate(args: argparse.Namespace) -> int:
+    """Migra un piano ``vx.edl/2.2`` (anche il ``plan.json`` di ``auto``) in EDL3."""
+    from . import edl3, edl3_migrate
+
+    plan_path = Path(args.plan)
+    out_path = Path(args.out)
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "plan": str(plan_path),
+        "out": None,
+        "schema": {"from": None, "to": None},
+        "clips": 0,
+        "fps": None,
+        "duration_sec": {"from": None, "to": None},
+        "loss": [],
+        "notes": [],
+        "changed": False,
+        "already": None,
+    }
+
+    try:
+        raw = _load_json(plan_path)
+    except VxError as exc:
+        payload["error"] = {
+            "code": "PLAN_UNREADABLE",
+            "detail": str(exc),
+            "where": str(plan_path),
+        }
+        return _report_edl3_migrate(args, payload)
+
+    version = _edl3_declared_version(raw)
+    if version:
+        return _migrate_already_edl3(args, raw, plan_path, out_path, version)
+
+    source_schema = _edl2_declared_schema(raw)
+    if not source_schema:
+        payload["error"] = {
+            "code": "PLAN_SCHEMA",
+            "detail": (
+                f"{plan_path} is neither a vx.edl/2.2 plan nor a "
+                f"{edl3.EDL3_VERSION} document (keys: {sorted(raw)[:8]})"
+            ),
+            "where": str(plan_path),
+        }
+        return _report_edl3_migrate(args, payload)
+
+    payload["schema"] = {"from": source_schema, "to": edl3.EDL3_VERSION}
+    payload["duration_sec"] = {"from": _declared_duration(raw), "to": None}
+
+    try:
+        document = edl3_migrate.migrate(raw)
+    except edl3_migrate.MigrationError as exc:
+        payload["error"] = {
+            "code": exc.code,
+            "detail": exc.detail,
+            "where": exc.where or str(plan_path),
+        }
+        return _report_edl3_migrate(args, payload)
+
+    try:
+        losses = edl3_migrate.audit(raw)
+        declared = edl3_migrate.notes(raw)
+    except edl3_migrate.MigrationError as exc:
+        payload["error"] = {
+            "code": exc.code,
+            "detail": exc.detail,
+            "where": exc.where or str(plan_path),
+        }
+        return _report_edl3_migrate(args, payload)
+
+    payload["notes"] = declared
+    if losses:
+        payload["loss"] = losses
+        payload["error"] = {
+            "code": "MIGRATION_LOSS",
+            "detail": (
+                f"{len(losses)} parte/i del piano 2.2 non hanno un campo in "
+                f"{edl3.EDL3_VERSION}: nessun documento scritto"
+            ),
+            "where": str(plan_path),
+        }
+        return _report_edl3_migrate(args, payload)
+
+    timeline = edl3.Timeline3.from_dict(document)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    payload.update(
+        {
+            "ok": True,
+            "out": str(out_path),
+            "changed": True,
+            "clips": len(document["clips"]),
+            "fps": document["fps"],
+            "duration_sec": {
+                "from": payload["duration_sec"]["from"],
+                "to": round(float(timeline.duration), 6),
+            },
+        }
+    )
+    return _report_edl3_migrate(args, payload)
+
+
 def edl3_versions() -> tuple:
     """Le versioni accettate dal contratto, lette dalla costante unica."""
     from . import edl3
@@ -4143,6 +4384,18 @@ def build_parser() -> argparse.ArgumentParser:
     e3v.add_argument("file", help=f"documento {version} (JSON)")
     e3v.add_argument("--json", action="store_true")
     e3v.set_defaults(func=cmd_edl3_validate)
+    e3m = edl3_sub.add_parser(
+        "migrate",
+        help=f"migra un piano vx.edl/2.2 (anche il plan.json di auto) in {version}",
+    )
+    e3m.add_argument(
+        "--plan",
+        required=True,
+        help="piano vx.edl/2.2 (o il plan.json scritto da `vx auto`)",
+    )
+    e3m.add_argument("--out", required=True, help=f"documento {version} da scrivere")
+    e3m.add_argument("--json", action="store_true")
+    e3m.set_defaults(func=cmd_edl3_migrate)
     e3 = edl3_sub.add_parser("render", help="renderizza il documento in --out")
     e3.add_argument("--plan", required=True, help=f"documento {version} (JSON)")
     e3.add_argument("--out", required=True, help="file master da scrivere")
