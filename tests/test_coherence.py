@@ -737,6 +737,29 @@ def test_cli_flags() -> None:
 
 
 def main() -> int:
+    # La soglia di nitidezza e' per risoluzione: 50 alla tela 1080 vale ~5,6 su
+    # un 360x640. Il numero assoluto su un sorgente piccolo dichiarava "mosso"
+    # quasi tutto il girato (reel da 15,2 s ridotto a 1,9 s di materiale).
+    check(
+        "soglia nitidezza alla tela 1080 resta 50",
+        abs(coherence._sharpness_limit(1080, 1080) - 50.0) < 0.01,
+        coherence._sharpness_limit(1080, 1080),
+    )
+    check(
+        "soglia nitidezza su 360x640 scende a ~5,6",
+        abs(coherence._sharpness_limit(640, 360) - 5.56) < 0.05,
+        coherence._sharpness_limit(640, 360),
+    )
+    check(
+        "soglia nitidezza su 478x850 e' ~9,8",
+        abs(coherence._sharpness_limit(850, 478) - 9.79) < 0.05,
+        coherence._sharpness_limit(850, 478),
+    )
+    check(
+        "sotto il pavimento non si scende, qualunque risoluzione",
+        coherence._sharpness_limit(100, 100) == coherence.SHARPNESS_FLOOR,
+        coherence._sharpness_limit(100, 100),
+    )
     with tempfile.TemporaryDirectory(prefix="vx-coherence-") as tmp:
         pics = _patterns(Path(tmp))
         test_healthy(pics)

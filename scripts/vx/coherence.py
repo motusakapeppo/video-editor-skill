@@ -444,6 +444,25 @@ def _distance(left: str, right: str) -> Optional[float]:
     return differing / float(len(left) * 4)
 
 
+#: Il pavimento assoluto della nitidezza: sotto questo nessuna risoluzione salva
+#: (nero, vetro, un muro uniforme).
+SHARPNESS_FLOOR = 5.0
+
+
+def _sharpness_limit(height: int, width: int) -> float:
+    """La soglia di nitidezza **alla risoluzione del fotogramma**.
+
+    La varianza laplaciana scala col quadrato del lato: 50 su una tela 1080 vale
+    circa 5,5 su un 360x640. Applicare il numero assoluto a un sorgente piccolo
+    dichiara "mosso" quasi tutto il girato - misurato: un reel da 15,2 s ridotto
+    a 1,9 s di materiale "utilizzabile". Il valore del contratto vale alla tela
+    di riferimento (1080); qui si riscala, con un pavimento dichiarato.
+    """
+    declared = float(THRESHOLDS["triage_sharpness_low"])
+    scale = (min(int(height), int(width)) / 1080.0) ** 2
+    return max(SHARPNESS_FLOOR, declared * scale)
+
+
 def _sharpness(gray: Any) -> Optional[float]:
     """Varianza del laplaciano, la stessa misura del triage; ``None`` se assente."""
     try:
@@ -844,6 +863,7 @@ def evaluate(
     hashes: Dict[int, str] = {}
     lumas: Dict[int, float] = {}
     sharpness: Dict[int, float] = {}
+    sizes: Dict[int, Tuple[int, int]] = {}
     unreadable: List[int] = []
     for shot in shots:
         index = shot["index"]
@@ -858,6 +878,7 @@ def evaluate(
             continue
         hashes[index] = _fingerprint(gray)
         try:
+            sizes[index] = (int(gray.shape[0]), int(gray.shape[1]))
             lumas[index] = float(gray.mean()) / 255.0
         except Exception:  # noqa: BLE001
             unreadable.append(index)
@@ -1075,10 +1096,11 @@ def evaluate(
         value = sharpness.get(index)
         if value is None:
             continue
-        limit = float(THRESHOLDS["triage_sharpness_low"])
+        height, width = sizes.get(index, (1080, 1080))
+        limit = _sharpness_limit(height, width)
         if value < limit:
             metrics["blurred_frames"].append(
-                {"index": index, "sharpness": round(value, 2)}
+                {"index": index, "sharpness": round(value, 2), "limit": round(limit, 2)}
             )
             violations.append(
                 _violation(
