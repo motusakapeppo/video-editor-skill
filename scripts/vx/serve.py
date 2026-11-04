@@ -1356,6 +1356,87 @@ def _feedback_state(directory: Path) -> Dict[str, Any]:
     }
 
 
+def _beat_state(directory: Path) -> Dict[str, Any]:
+    """L'ultimo battito che la sessione ha scritto per **questo** lavoro.
+
+    ``/api/state`` in modalita' lavoro non porta ``events``: il battito si legge
+    dal registro della sessione piu' recente e si attribuisce per ``job_path``
+    (o, quando manca, per nome del lavoro). Un battito di un'altra cartella non
+    vale: senza un battito che parli di questo lavoro si torna vuoto, mai un
+    battito inventato.
+
+    Il registro puo' pesare megabyte e la pagina lo chiede ogni secondo: si
+    rilegge solo quando i file di eventi cambiano davvero (mtime e dimensione).
+    Se il lavoro non e' quello dell'ultima sessione (due comandi insieme) si
+    guardano le sessioni recenti, dalla piu' nuova: un battito vivo di un'altra
+    cartella non deve nascondere il nostro.
+    """
+    try:
+        base = session_store.default_root()
+        names = session_store.list_sessions(root=base)[:5]
+    except Exception:  # noqa: BLE001 - la vista perde il battito, non il lavoro
+        return {}
+    for name in names:
+        folder = Path(base) / name
+        beat = _cached_scan(
+            f"beat:{folder}:{directory}",
+            lambda folder=folder: _beat_uncached(folder, directory),
+            lambda _value, folder=folder: _event_stamp(folder),
+        )
+        if beat:
+            return beat
+    return {}
+
+
+def _event_stamp(folder: Path) -> tuple:
+    """Lo stamp dei file da cui il battito dipende: cambia solo se cambiano."""
+    stamps: List[Any] = []
+    try:
+        names = sorted(path.name for path in folder.glob("events*.jsonl"))
+    except OSError:
+        names = []
+    for name in (session_store.STATE_NAME, *names):
+        try:
+            info = (folder / name).stat()
+            stamps.append((name, info.st_mtime_ns, info.st_size))
+        except OSError:
+            stamps.append((name, 0, 0))
+    return tuple(stamps)
+
+
+def _beat_uncached(folder: Path, directory: Path) -> Dict[str, Any]:
+    """La ricerca vera: l'ultimo ``heartbeat`` che parla di ``directory``."""
+    session = _session_value(folder.name)
+    if session is None:
+        return {}
+    try:
+        target = Path(directory).resolve()
+    except OSError:
+        target = Path(directory).absolute()
+    name = Path(directory).name
+    for row in reversed(list(session.events or [])):
+        if str(row.get("type") or "") != "heartbeat":
+            continue
+        raw = str(row.get("job_path") or "")
+        if raw:
+            try:
+                if Path(raw).resolve() != target:
+                    continue
+            except OSError:
+                continue
+        elif str(row.get("job") or "") != name:
+            continue
+        return {
+            "stage": str(row.get("stage") or ""),
+            "detail": str(row.get("detail") or ""),
+            "elapsed_sec": round(float(_number(row.get("elapsed_sec")) or 0.0), 3),
+            "eta_sec": round(float(_number(row.get("eta_sec")) or 0.0), 3),
+            "percent": _number(row.get("percent")),
+            "at_sec": round(float(_number(row.get("t")) or 0.0), 3),
+        }
+    return {}
+
+
 #: Gli esiti che un giudizio puo' dichiarare sono quelli del registro; il
 #: ``running`` dello stato qui diventa ``incomplete`` (un lavoro in corso non e'
 #: un lavoro finito da votare).
@@ -1802,6 +1883,7 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         "font": font,
         "questions": _questions_state(directory, data_dir),
         "feedback": _feedback_state(directory),
+        "beat": _beat_state(directory),
         "progress_source": "derived" if derived else "json",
     }
 
@@ -2082,6 +2164,7 @@ def _empty_job_payload(directory: Any, why: str = "") -> Dict[str, Any]:
         "font": _empty_font(),
         "questions": [],
         "feedback": _empty_feedback(),
+        "beat": {},
         "progress_source": "",
         "jobs": [],
         "selected": 0,
@@ -2146,6 +2229,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "font": _empty_font(),
             "questions": [],
             "feedback": _empty_feedback(),
+            "beat": {},
             "progress_source": "",
             "jobs": [],
             "selected": 0,

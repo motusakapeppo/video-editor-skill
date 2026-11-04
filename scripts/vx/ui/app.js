@@ -52,12 +52,36 @@
     estimateActual: $('estimateActual'),
     estimateMape: $('estimateMape'),
     estimateFlash: $('estimateFlash'),
-    feedback: $('feedback'),
-    feedbackAsk: $('feedbackAsk'),
-    feedbackActions: $('feedbackActions'),
-    feedbackNote: $('feedbackNote'),
-    feedbackGiven: $('feedbackGiven'),
-    feedbackError: $('feedbackError'),
+    voteCard: $('voteCard'),
+    voteAsk: $('voteAsk'),
+    voteMeta: $('voteMeta'),
+    voteSub: $('voteSub'),
+    voteTitle: $('voteTitle'),
+    voteScale: $('voteScale'),
+    voteHint: $('voteHint'),
+    voteChips: $('voteChips'),
+    voteNote: $('voteNote'),
+    voteSend: $('voteSend'),
+    voteClose: $('voteClose'),
+    voteFlash: $('voteFlash'),
+    voteError: $('voteError'),
+    voteErrorText: $('voteErrorText'),
+    voteDone: $('voteDone'),
+    voteDoneNum: $('voteDoneNum'),
+    voteDoneSay: $('voteDoneSay'),
+    voteDoneTicks: $('voteDoneTicks'),
+    voteDoneNote: $('voteDoneNote'),
+    gateStop: $('gateStop'),
+    gateStopQ: $('gateStopQ'),
+    gateStopOpts: $('gateStopOpts'),
+    gateStopMsg: $('gateStopMsg'),
+    nowHead: $('nowHead'),
+    nowLabel: $('nowLabel'),
+    nowClock: $('nowClock'),
+    life: $('life'),
+    lifeTicks: $('lifeTicks'),
+    lifeSay: $('lifeSay'),
+    heroStall: $('heroStall'),
     live: $('live'),
     liveMeta: $('liveMeta'),
     liveBody: $('liveBody'),
@@ -1658,78 +1682,494 @@
 
   /* -------------------------------------------------------------- voto finale */
 
-  let feedbackJob = null;
-  let feedbackSending = false;
-  let localRating = null;
+  // Una scheda sola, sotto l'esito: dice cosa si sta valutando e chiede un
+  // numero. Il clic su una tacca sceglie soltanto: si vede la scelta, poi
+  // «Registra». Nessun dialogo: il master resta guardabile mentre decidi.
 
-  function paintFeedback(state, verdict) {
-    if (feedbackJob !== jobIndex) {
-      feedbackJob = jobIndex;
-      localRating = null;
-      el.feedbackError.textContent = '';
-      el.feedbackNote.value = '';
+  const VOTE_WORD = { 1: 'sbagliata', 2: 'debole', 3: 'passabile', 4: 'buona', 5: 'giusta' };
+  const VOTE_OUTCOME = {
+    done: 'consegnato',
+    stopped: 'fermato',
+    failed: 'non riuscito',
+    incomplete: 'senza master',
+  };
+  const VOTE_HINT = '1–5 per scegliere, Invio per registrare, Esc per chiudere senza votare.';
+
+  let voteJob = null;
+  let voteRating = null;
+  let voteSending = false;
+  let voteDismissed = false;
+  let voteGivenLocal = null;
+
+  const chipWords = () =>
+    Array.from(el.voteChips.querySelectorAll('.vote-chip'))
+      .filter((chip) => chip.getAttribute('aria-pressed') === 'true')
+      .map((chip) => String(chip.dataset.note || ''));
+
+  // La durata che si sta giudicando, presa dal piano: mai un numero inventato.
+  function jobSpan(state) {
+    let end = 0;
+    (Array.isArray(state.timeline) ? state.timeline : []).forEach((row) => {
+      end = Math.max(end, Number(row && row.t_out) || 0);
+    });
+    if (!end) {
+      (Array.isArray(state.shots) ? state.shots : []).forEach((shot) => {
+        end = Math.max(end, Number(shot && shot.t_out) || 0);
+      });
     }
-
-    const fb = state.feedback && typeof state.feedback === 'object' ? state.feedback : null;
-    const asked = !!(fb && fb.asked === true);
-    const given = !!(fb && fb.given === true);
-    const rating = given ? Number(fb.rating) || null : localRating;
-    // Il voto si chiede solo a lavoro consegnato: è un favore, non un cancello.
-    const show = verdict === 'done' && (asked || given || rating !== null);
-
-    el.feedback.hidden = !show;
-    if (!show) return;
-
-    const answered = Boolean(rating);
-    el.feedbackAsk.hidden = answered;
-    el.feedbackActions.hidden = answered;
-    el.feedbackGiven.hidden = !answered;
-    el.feedbackGiven.textContent = answered
-      ? 'Il tuo voto: ' + rating + '/5 — grazie, registrato.'
-      : '';
+    return end;
   }
 
-  async function sendFeedback(rating, button) {
-    if (feedbackSending || !rating) return;
-    feedbackSending = true;
-    el.feedbackError.textContent = '';
-    el.feedbackActions.querySelectorAll('.vote').forEach((node) => {
-      node.disabled = true;
+  function voteMetaLine(state) {
+    const bits = [];
+    const shots = Array.isArray(state.shots) ? state.shots.length : 0;
+    const span = jobSpan(state);
+    if (shots > 0) bits.push(shots + ' shot');
+    if (span > 0) bits.push(mmss(span));
+    const kind = outcomeOf(state, false);
+    const word = VOTE_OUTCOME[kind];
+    if (word) bits.push(word);
+    return bits.join(' · ');
+  }
+
+  function voteSubLine(verdict) {
+    if (verdict === 'done') return 'Puoi guardarlo con calma: il voto non blocca niente.';
+    if (verdict === 'failed') return "Non è arrivato al master. Dì com'è andata lo stesso.";
+    if (verdict === 'incomplete') return "Il master non c'è: il voto resta utile lo stesso.";
+    if (verdict === 'stopped') return "Si è fermato prima della fine: com'è andata fino a lì?";
+    return "Dimmi com'è andata.";
+  }
+
+  function paintVoteSegments() {
+    el.voteScale.querySelectorAll('.vote-seg').forEach((seg) => {
+      const value = Number(seg.dataset.rating);
+      const on = voteRating === value;
+      seg.classList.toggle('is-on', on);
+      seg.classList.toggle('is-under', voteRating !== null && value < voteRating);
+      seg.setAttribute('aria-checked', on ? 'true' : 'false');
     });
-    button.setAttribute('aria-busy', 'true');
+  }
+
+  function resetVoteForm() {
+    voteRating = null;
+    voteSending = false;
+    el.voteNote.value = '';
+    el.voteChips.querySelectorAll('.vote-chip').forEach((chip) => {
+      chip.setAttribute('aria-pressed', 'false');
+    });
+    el.voteSend.disabled = true;
+    el.voteSend.removeAttribute('aria-busy');
+    el.voteError.hidden = true;
+    el.voteErrorText.textContent = '';
+    el.voteFlash.textContent = '';
+    el.voteFlash.style.opacity = '1';
+    el.voteHint.textContent = VOTE_HINT;
+    paintVoteSegments();
+  }
+
+  function chooseVote(value) {
+    if (!Number.isFinite(value) || value < 1 || value > 5) return;
+    voteRating = value;
+    paintVoteSegments();
+    el.voteSend.disabled = voteSending;
+    el.voteHint.textContent =
+      value + ' su 5 · ' + VOTE_WORD[value] + ' — Invio per registrare, Esc per chiudere.';
+  }
+
+  function noteForVote() {
+    const parts = chipWords();
+    const free = String(el.voteNote.value || '').trim();
+    if (free) parts.push(free);
+    return parts.join(' · ').slice(0, 240);
+  }
+
+  function showVoteGiven(rating, tail) {
+    el.voteAsk.hidden = true;
+    el.voteDone.hidden = false;
+    el.voteDoneNum.textContent = rating + '/5';
+    el.voteDoneSay.textContent = VOTE_WORD[rating] || '';
+    el.voteDoneTicks.textContent = '';
+    for (let step = 1; step <= 5; step += 1) {
+      const tick = document.createElement('i');
+      if (step <= rating) tick.className = 'is-on';
+      el.voteDoneTicks.append(tick);
+    }
+    el.voteDoneNote.textContent = tail || 'registrato';
+  }
+
+  function dismissVote() {
+    voteDismissed = true;
+    el.voteCard.hidden = true;
+  }
+
+  async function sendVote() {
+    if (voteSending || !voteRating) return;
+    const rating = voteRating;
+    voteSending = true;
+    el.voteSend.disabled = true;
+    el.voteSend.setAttribute('aria-busy', 'true');
+    el.voteError.hidden = true;
+    el.voteErrorText.textContent = '';
+    flash(el.voteFlash, 'Registro il voto…', '', 'vote-flash num');
 
     try {
-      const base = scoped('/api/feedback');
-      const note = String(el.feedbackNote.value || '').trim();
-      let url = base + (base.indexOf('?') === -1 ? '?' : '&') + 'rating=' + rating;
+      let url = scoped('/api/feedback');
+      url += (url.indexOf('?') === -1 ? '?' : '&') + 'rating=' + rating;
+      const note = noteForVote();
       if (note) url += '&note=' + encodeURIComponent(note);
       const response = await fetch(url, { method: 'POST' });
       const result = await response.json();
 
       if (result && result.ok === true) {
-        localRating = rating;
-        el.feedbackNote.value = '';
-        feedbackSending = false;
-        paintFeedback(lastState || {}, lastVerdict);
+        voteGivenLocal = rating;
+        el.voteNote.value = '';
+        el.voteChips.querySelectorAll('.vote-chip').forEach((chip) => {
+          chip.setAttribute('aria-pressed', 'false');
+        });
+        showVoteGiven(rating, 'registrato ora');
+        el.voteCard.classList.remove('is-thanked');
+        void el.voteCard.offsetWidth; // riavvia il velo di conferma
+        el.voteCard.classList.add('is-thanked');
+        voteSending = false;
+        el.voteSend.removeAttribute('aria-busy');
         await tick();
         return;
       }
-      el.feedbackError.textContent =
-        (result && result.reason) || 'Il voto non è stato registrato: riprova.';
+
+      // Il server ha detto di no: il motivo si mostra com'è, la scheda resta.
+      el.voteErrorText.textContent = String(
+        (result && result.reason) || 'il server non ha risposto con un motivo'
+      );
+      el.voteError.hidden = false;
+      window.clearTimeout(el.voteFlash._timer);
+      el.voteFlash.textContent = '';
     } catch (error) {
-      el.feedbackError.textContent = 'Il voto non è stato registrato: il server non risponde.';
+      el.voteErrorText.textContent = 'il server non risponde';
+      el.voteError.hidden = false;
+      window.clearTimeout(el.voteFlash._timer);
+      el.voteFlash.textContent = '';
     }
 
-    feedbackSending = false;
-    button.removeAttribute('aria-busy');
-    el.feedbackActions.querySelectorAll('.vote').forEach((node) => {
-      node.disabled = false;
-    });
+    voteSending = false;
+    el.voteSend.removeAttribute('aria-busy');
+    el.voteSend.disabled = !voteRating;
   }
 
-  el.feedbackActions.querySelectorAll('.vote').forEach((button) => {
-    button.addEventListener('click', () => sendFeedback(Number(button.dataset.rating), button));
+  function paintVote(state, verdict) {
+    if (voteJob !== jobIndex) {
+      voteJob = jobIndex;
+      voteGivenLocal = null;
+      voteDismissed = false;
+      el.voteCard.classList.remove('is-thanked');
+      resetVoteForm();
+    }
+
+    const fb = state.feedback && typeof state.feedback === 'object' ? state.feedback : {};
+    const asked = fb.asked === true;
+    const stored = fb.given === true ? Number(fb.rating) || null : null;
+    const running = verdict === 'running' || verdict === 'idle';
+    // `auto` dice `asked` a fine lavoro; `given` resta vero anche dopo un
+    // ricarico, così il voto dato continua a leggersi. In corso non si chiede.
+    const show = !voteDismissed && !running && (asked || stored !== null || voteGivenLocal !== null);
+
+    el.voteCard.hidden = !show;
+    if (!show) return;
+
+    el.voteMeta.textContent = voteMetaLine(state);
+    el.voteSub.textContent = voteSubLine(verdict);
+
+    const answer = stored || voteGivenLocal;
+    if (answer) {
+      showVoteGiven(answer, stored ? 'registrato' : 'registrato ora');
+      return;
+    }
+    el.voteAsk.hidden = false;
+    el.voteDone.hidden = true;
+  }
+
+  el.voteScale.querySelectorAll('.vote-seg').forEach((seg) => {
+    seg.addEventListener('click', () => chooseVote(Number(seg.dataset.rating)));
   });
+
+  el.voteChips.querySelectorAll('.vote-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const on = chip.getAttribute('aria-pressed') === 'true';
+      chip.setAttribute('aria-pressed', on ? 'false' : 'true');
+    });
+  });
+
+  el.voteSend.addEventListener('click', () => sendVote());
+  el.voteClose.addEventListener('click', () => dismissVote());
+
+  // Tastiera: 1–5 sceglie, Invio registra, Esc chiude senza votare.
+  document.addEventListener('keydown', (event) => {
+    if (el.voteCard.hidden || el.voteAsk.hidden) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (el.fontGate.open || el.planGate.open || !el.frameView.hidden) return;
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      dismissVote();
+      return;
+    }
+
+    const focused = document.activeElement;
+    const onButton =
+      focused && focused.tagName === 'BUTTON' && el.voteCard.contains(focused);
+
+    if (!onButton && event.key.length === 1 && event.key >= '1' && event.key <= '5') {
+      event.preventDefault();
+      chooseVote(Number(event.key));
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      if (onButton) return; // il clic del pulsante fa già il suo lavoro
+      event.preventDefault();
+      sendVote();
+    }
+  });
+
+  /* ------------------------------------------------------------ segno di vita */
+
+  // La percentuale può non muoversi per minuti: accanto al numero ci sono il
+  // dettaglio vero, da quanto dura la fase, quanto manca — e un battito. Il
+  // battito sono le tacche degli ultimi secondi: se la sessione tace, si vede.
+  const LIFE_SLOTS = 14;
+
+  let beatKey = null;
+  let beatAt = 0;
+  let beatTrail = [];
+  let percentSeen = null;
+
+  function paintLifeTicks() {
+    if (!el.lifeTicks.children.length) {
+      for (let slot = 0; slot < LIFE_SLOTS; slot += 1) {
+        el.lifeTicks.append(document.createElement('i'));
+      }
+    }
+    const ticks = el.lifeTicks.children;
+    const tail = beatTrail.slice(-LIFE_SLOTS);
+    const offset = ticks.length - tail.length;
+    for (let index = 0; index < ticks.length; index += 1) {
+      const position = index - offset;
+      const on = position >= 0 && tail[position] === true;
+      ticks[index].classList.toggle('is-on', on);
+      ticks[index].style.opacity = on
+        ? String(0.3 + (0.7 * (position + 1)) / Math.max(1, tail.length))
+        : '0.09';
+    }
+  }
+
+  function paintNow(state, closed) {
+    const percent = clamp(Number(state.percent) || 0, 0, 100);
+    const moment = performance.now();
+    const phases = Array.isArray(state.phases) ? state.phases : [];
+
+    // Un numero fermo lo dice: «fermo al 42% da 3:12». Mai una percentuale che
+    // resta identica per minuti senza una parola accanto.
+    if (!percentSeen || percentSeen.value !== Math.round(percent)) {
+      percentSeen = { value: Math.round(percent), at: moment };
+    }
+    const still = (moment - percentSeen.at) / 1000;
+    const frozen = !closed && percent > 0 && still >= 40;
+    el.heroStall.hidden = !frozen;
+    if (frozen) {
+      el.heroStall.textContent = 'fermo al ' + Math.round(percent) + '% da ' + mmss(still);
+    }
+
+    // `beat` è l'ultimo heartbeat che la sessione ha scritto per questo lavoro.
+    const beat = state.beat && typeof state.beat === 'object' ? state.beat : {};
+    const key =
+      beat.at_sec === undefined || beat.at_sec === null
+        ? ''
+        : [beat.at_sec, beat.stage, beat.detail].join('|');
+    const fresh = Boolean(key) && key !== beatKey;
+    if (fresh) {
+      beatKey = key;
+      beatAt = moment;
+    }
+    beatTrail.push(fresh);
+    if (beatTrail.length > LIFE_SLOTS) beatTrail = beatTrail.slice(-LIFE_SLOTS);
+    paintLifeTicks();
+
+    const age = fresh ? 0 : Math.round((moment - beatAt) / 1000);
+    const alive = Boolean(key) && !closed;
+    const quiet = alive && age >= 4;
+    el.life.hidden = !alive;
+    el.life.classList.toggle('is-quiet', quiet);
+    if (alive) {
+      el.lifeSay.textContent = quiet
+        ? 'in silenzio da ' + age + ' s'
+        : age < 1
+          ? 'battito'
+          : 'battito ' + age + ' s fa';
+    }
+
+    el.nowClock.hidden = !alive;
+    if (alive) {
+      const bits = ['qui da ' + mmss(beat.elapsed_sec)];
+      const eta = Number(beat.eta_sec) || 0;
+      if (eta > 0) bits.push('mancano ~' + mmss(eta));
+      el.nowClock.textContent = bits.join(' · ');
+    }
+
+    el.nowLabel.textContent = beat.stage ? 'Ora · ' + beat.stage : 'Ora';
+
+    const detail = String(beat.detail || '').trim();
+    const active = phases.find((phase) => phase.key === state.current);
+    if (detail && detail !== 'lavoro in corso') {
+      el.nowText.textContent = detail;
+    } else if (state.current) {
+      el.nowText.textContent = active
+        ? String(active.label)
+        : 'Fase «' + state.current + '» in corso: la descrizione non è arrivata.';
+    } else {
+      el.nowText.textContent =
+        'In attesa: il lavoro non ha ancora dichiarato la fase in corso.';
+    }
+
+    const note = String(state.note || '').trim();
+    el.nowNote.textContent = note;
+    el.nowNote.hidden = !note;
+  }
+
+  function hideNow() {
+    el.heroStall.hidden = true;
+    el.life.hidden = true;
+    el.nowClock.hidden = true;
+    beatTrail = [];
+    beatKey = null;
+    paintLifeTicks();
+  }
+
+  /* ------------------------------------------------------------------ cancelli */
+
+  // Un cancello aperto è l'unico caso in cui il lavoro *deve* sembrare fermo:
+  // la pagina lo dice e offre la risposta, invece di lasciare la barra immobile.
+
+  let gateKey = null;
+  let gateBusy = false;
+
+  function openGates(state) {
+    const gates = [];
+    (Array.isArray(state.questions) ? state.questions : []).forEach((question) => {
+      if (!question || question.answered === true) return;
+      gates.push({
+        kind: 'ask',
+        id: String(question.id || ''),
+        text: String(question.question || ''),
+        options: Array.isArray(question.options) ? question.options : [],
+        waiting_for: Number(question.waiting_for) || 0,
+      });
+    });
+    const approval = state.approval && typeof state.approval === 'object' ? state.approval : {};
+    if (approval.waiting === true && gates.length === 0) {
+      gates.push({
+        kind: 'keyframes',
+        id: 'keyframes',
+        text: 'Approva i fotogrammi chiave: il render è fermo qui.',
+        options: [],
+        waiting_for: 0,
+      });
+    }
+    return gates;
+  }
+
+  async function answerGate(id, value, button) {
+    if (!id || gateBusy) return;
+    gateBusy = true;
+    button.disabled = true;
+    flash(el.gateStopMsg, 'Registro la risposta…', '', 'gate-stop-msg num');
+    try {
+      let url = scoped('/api/answer');
+      url +=
+        (url.indexOf('?') === -1 ? '?' : '&') +
+        'id=' + encodeURIComponent(id) +
+        '&value=' + encodeURIComponent(value);
+      const response = await fetch(url, { method: 'POST' });
+      const result = await response.json();
+      if (result && result.ok === true) {
+        flash(el.gateStopMsg, 'Risposta registrata: il lavoro riparte.', 'ok', 'gate-stop-msg num');
+        gateKey = null;
+        await tick();
+      } else {
+        flash(
+          el.gateStopMsg,
+          String((result && result.reason) || 'la risposta non è stata registrata'),
+          'warn',
+          'gate-stop-msg num'
+        );
+        button.disabled = false;
+      }
+    } catch (error) {
+      flash(
+        el.gateStopMsg,
+        'Il server non risponde: la risposta non è registrata.',
+        'warn',
+        'gate-stop-msg num'
+      );
+      button.disabled = false;
+    }
+    gateBusy = false;
+  }
+
+  function paintGates(state, closed) {
+    const gates = closed ? [] : openGates(state);
+    if (!gates.length) {
+      if (!el.gateStop.hidden) {
+        el.gateStop.hidden = true;
+        el.gateStopOpts.textContent = '';
+        el.gateStopMsg.textContent = '';
+      }
+      gateKey = null;
+      return;
+    }
+
+    el.gateStop.hidden = false;
+    const gate = gates[0];
+    const key = gate.kind + '|' + gate.id + '|' + gate.text;
+    if (key === gateKey) return;
+    gateKey = key;
+
+    el.gateStopQ.textContent = gate.text || 'Il lavoro aspetta una tua risposta.';
+    el.gateStopOpts.textContent = '';
+
+    if (gate.kind === 'keyframes') {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'gate-opt';
+      button.textContent = 'Approva i fotogrammi';
+      button.addEventListener('click', () => {
+        if (el.approve.disabled) return;
+        el.approve.click();
+        flash(el.gateStopMsg, 'Approvazione in corso…', '', 'gate-stop-msg num');
+      });
+      el.gateStopOpts.append(button);
+    } else {
+      gate.options.forEach((option) => {
+        const value = String(option && option.value !== undefined ? option.value : '');
+        const label = String((option && (option.label || option.value)) || '') || value;
+        if (!value) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'gate-opt';
+        button.textContent = label;
+        button.addEventListener('click', () => answerGate(gate.id, value, button));
+        el.gateStopOpts.append(button);
+      });
+      if (!el.gateStopOpts.children.length) {
+        el.gateStopOpts.append(
+          document.createTextNode('La domanda non porta opzioni: si risponde da terminale.')
+        );
+      }
+    }
+
+    const waited = gate.waiting_for > 0 ? 'Aspetta da ' + mmss(gate.waiting_for) + '.' : '';
+    const more = gates.length > 1 ? ' Altre ' + (gates.length - 1) + ' in coda.' : '';
+    el.gateStopMsg.className = 'gate-stop-msg num';
+    el.gateStopMsg.textContent = waited + more;
+  }
 
   /* ---------------------------------------------------------------------- live */
 
@@ -2273,6 +2713,12 @@
     stopLive();
     el.estimateFlash.hidden = true;
     el.estimateFlash.textContent = '';
+    hideNow();
+    percentSeen = null;
+    el.gateStop.hidden = true;
+    el.gateStopOpts.textContent = '';
+    el.gateStopMsg.textContent = '';
+    gateKey = null;
     hasDrawn = false;
     el.frames.dataset.signature = '';
     el.resultBody.dataset.signature = '';
@@ -2356,7 +2802,7 @@
     paintRegia(state, closed);
     paintEstimate(state, verdict);
     paintLive(state, closed);
-    paintFeedback(state, verdict);
+    paintVote(state, verdict);
 
     const prompt = String(state.prompt || '').trim();
     el.jobTitle.textContent = prompt || 'Lavoro senza titolo';
@@ -2400,9 +2846,11 @@
     el.railSub.textContent =
       phases.length === 0 ? 'nessuna fase' : pad2(phases.length) + ' fasi';
 
-    // ora / esito
+    // ora / esito / cancelli
+    paintGates(state, closed);
     if (closed) {
       el.now.hidden = true;
+      hideNow();
       el.verdict.hidden = false;
       el.verdict.className = 'verdict is-' + verdict;
       el.verdictMark.textContent = OUTCOME_MARK[verdict] || '–';
@@ -2418,18 +2866,7 @@
     } else {
       el.verdict.hidden = true;
       el.now.hidden = false;
-      const active = phases.find((p) => p.key === state.current);
-      if (state.current) {
-        el.nowText.textContent = active
-          ? String(active.label)
-          : 'Fase «' + state.current + '» in corso: la descrizione non è arrivata.';
-      } else {
-        el.nowText.textContent =
-          'In attesa: il lavoro non ha ancora dichiarato la fase in corso.';
-      }
-      const note = String(state.note || '').trim();
-      el.nowNote.textContent = note;
-      el.nowNote.hidden = !note;
+      paintNow(state, closed);
     }
 
     // fotogrammi e approvazione
@@ -2473,6 +2910,7 @@
       el.stateWord.textContent = 'Senza collegamento';
       el.verdict.hidden = true;
       el.now.hidden = false;
+      hideNow();
       el.nowText.textContent =
         'Non riesco a leggere lo stato del lavoro: il server locale non risponde.';
       el.nowNote.hidden = true;
