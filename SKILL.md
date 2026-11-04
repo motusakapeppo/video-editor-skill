@@ -37,16 +37,15 @@ preset. Il sorgente non viene mai toccato.
 ## Setup
 
 1. Virtualenv Python 3.10+ con `opencv-python-headless mediapipe moviepy librosa soundfile scipy pydub faster-whisper pyyaml imageio-ffmpeg`; ffmpeg 8.x con libass, vidstab, loudnorm, silencedetect (es. gyan.dev essentials).
-3. `vx.config.json` accanto a `SKILL.md` (gitignored) oppure `VX_WORK`, `VX_VENV`, `VX_FFMPEG`, `VX_FFPROBE`, `VX_WHISPER_CACHE`, `VX_CONFIG`. Template: `vx.config.example.json`.
-4. GPU opzionale: `accel.py` prova CUDA a ogni corsa; Whisper ricade su CPU int8 se il test non passa.
-5. `python scripts/vx.py doctor --json` deve dire `"verdict": "ready"` prima di ogni lavoro. Ogni soglia è sovrascrivibile con `--override`/`--settings`; il valore effettivo finisce nel report.
+2. `vx.config.json` accanto a `SKILL.md` (gitignored) oppure `VX_WORK`, `VX_VENV`, `VX_FFMPEG`, `VX_FFPROBE`, `VX_WHISPER_CACHE`, `VX_CONFIG`. Template: `vx.config.example.json`. GPU opzionale: `accel.py` prova CUDA a ogni corsa, Whisper ricade su CPU int8.
+3. `python scripts/vx.py doctor --json` deve dire `"verdict": "ready"` prima di ogni lavoro. Ogni soglia è sovrascrivibile con `--override`/`--settings`; il valore effettivo finisce nel report.
 
 ## Ruolo
 
 Sei un Senior Video Editor con testa da Social Media Strategist: ritmo, hook,
-safe zone, loudness, sottotitoli. Ogni video ha il suo approccio: un'intervista a
-due camere non si monta come un talking head. Vietato l'effetto a pioggia: si
-applica solo ciò che i dati giustificano. Nessun finding, nessun trattamento.
+safe zone, loudness, sottotitoli. Ogni video ha il suo approccio (un'intervista a
+due camere non si monta come un talking head), e l'effetto a pioggia e' vietato:
+si applica solo cio' che i dati giustificano.
 
 ## Protocollo
 
@@ -64,12 +63,10 @@ $VX   = "<SKILL_DIR>\scripts\vx.py"
 & $PY $VX doctor --json
 ```
 
-**1-bis. Se l'utente ha chiesto di vedere cosa accade**, `--watch` va aggiunto a
-`auto` e l'indirizzo stampato va aperto subito nel pannello di anteprima:
-`vx auto ... --watch` scrive `Lo guardi qui: http://127.0.0.1:<porta>/` prima del
-render, e il server resta vivo dopo la fine, cosi' il pulsante del risultato
-funziona anche a lavoro concluso. Senza `--watch` non si apre niente, e non si
-promette una vista che non c'e'.
+**1-bis. La vista.** `vx up` accende un daemon che **resta acceso** (URL su
+stdout; `vx down` lo ferma), `--watch` lo riusa invece di aprire un secondo
+server. Il comando OpenCode `/reel` lo fa per costruzione: la vista si apre
+prima di ogni altra cosa. Una vista promessa e non aperta e' un difetto.
 
 **2. Ingest.** Probe, proxy 640 px, pre-analisi, parlato, anteprime, triage.
 
@@ -115,27 +112,28 @@ una corsa manuale restano `subs`, `render --precision proxy|full`, `qc`, `delive
 renderizza (exit 2 col campo che sbaglia); `render --plan FILE --out M` scrive
 `progress.json` e `report.json` e accetta `--watch`. Schema `vx.edl3/1.2`, ref 26.
 
+**Ricette.** Una composizione e' un file JSON (`vx.recipe/1`) in `recipes/` o
+`~/.vx/recipes/`: `settings` (layer validato), `brief`, `params` (`beat_grid`,
+`shot_max`, `effects_per_shot`, `font`, `font_size`, `hook_at`, `cta`, `loudness`),
+`extends`. `vx recipe list|show|validate|init` la ispeziona; `vx auto --recipe
+beat-cut` la applica. Se e' rotta si scarta e il report dice `recipe.applied=false`.
+
 ### Exit codes
 
-| Codice | Significato | Azione |
-|--------|-------------|--------|
-| 0 | ok | prosegui |
-| 2 | usage error | correggi i flag |
-| 3 | needs input | mostra il briefing e fermati |
-| 4 | missing dependency | vedi `references/01-ambiente.md` |
-| 5 | QC failed | leggi i codici in `references/08-qc-e-consegna.md` |
-| 6 | render failed | leggi il tail di ffmpeg, non ritentare a caso |
-
-`1` non e' un codice di `vx`: se compare, la shell ha unito `stderr` (`2>&1`); il progresso va su stdout, gli errori su stderr.
+`0` ok · `2` usage error · `3` needs input (briefing e fermati) · `4` dipendenza
+mancante (`references/01-ambiente.md`) · `5` QC failed
+(`references/08-qc-e-consegna.md`) · `6` render failed (tail di ffmpeg, non
+ritentare a caso). `1` non e' di `vx`: la shell ha unito `stderr` (`2>&1`);
+il progresso va su stdout, gli errori su stderr.
 
 ## Legge fondamentale
 
 1. Nessun finding, nessun trattamento. Ogni trattamento attivo porta `evidence`,
    una lista non vuota di testimoni `{finding_id,t0,t1}`: `evidence[0].finding_id`
-   è il `reason.finding_id`, ogni testimone copia lo span sorgente del finding, e
-   per `cut_silence` ogni intervallo rimosso cade dentro l'unione dei testimoni.
-   La legge è imposta da `plan`/`run` (exit 2), `pre_render` (exit 5) e `render`
-   (exit 6): un finding stantio o uno span che non combacia ferma il render.
+   è il `reason.finding_id`, ogni testimone copia lo span sorgente, e per
+   `cut_silence` ogni intervallo rimosso cade dentro l'unione dei testimoni.
+   Imposta da `plan`/`run` (exit 2), `pre_render` (exit 5), `render` (exit 6):
+   un finding stantio o uno span che non combacia ferma il render.
 2. Massimo 3 trattamenti creativi (`autoframe`, `zoom`, `hook_overlay`, `fit`).
    Un solo passaggio di stabilizzazione.
 3. Il brief dell'utente vince sempre sulla rilevazione automatica. Se l'utente
@@ -146,53 +144,55 @@ renderizza (exit 2 col campo che sbaglia); `render --plan FILE --out M` scrive
 `decide` sceglie l'iniziativa: 7 parametri, soglia 0.7. Sotto è **autonomo**
 (deduce formato, palette, ritmo, tipografia, motiva in `creative_rationale`, i
 fallback sono dichiarati); sopra è **strict** e si ferma sul non quantificato.
-`rd_search_required` lo segnala il Python, `conducted` lo mette l'agente con le
-fonti. Ref 16.
+`rd_search_required` lo segnala il Python, `conducted` lo mette l'agente. Ref 16.
 
 ## Cosa misura
 
-Jitter (optical flow DIS), esposizione (luma, clipping), cast colore
-(gray-world), freeze, scene cut, noise floor e SNR, dead air, LUFS e true peak,
-music ratio, volti/track/speaker (YuNet + IoU + MAR), WPM. Le soglie vivono in
-`scripts/vx/contract.py`; la tabella è read-only e `settings` è l'unico scrittore.
-
-## Trattamenti
-
-Ogni trattamento e' nel codice, le soglie in `scripts/vx/contract.py`; cosa fa
-ciascuno (sottotitoli, font, fade, compress, loudness, hook) sta in `references/30-trattamenti.md`.
+Jitter (optical flow DIS), esposizione (luma, clipping), cast colore (gray-world),
+freeze, scene cut, noise floor e SNR, dead air, LUFS e true peak, music ratio,
+volti/track/speaker (YuNet + IoU + MAR), WPM. Soglie in
+`scripts/vx/contract.py`: tabella read-only, `settings` unico scrittore.
+Trattamenti (sottotitoli, font, fade, compress, loudness, hook):
+`references/30-trattamenti.md`.
 
 ## Deliverable
 
 Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
 `out/master.mp4` sempre; `out/subtitles.srt` solo se esiste parlato;
-`out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. L'export multi-aspect non è
-implementato: non esistono varianti per piattaforma. Gate di regressione visiva: `python tests/test_edl3_golden.py` confronta un frame per ogni effetto con `tests/fixtures/edl3_golden/`; `python tests/test_motion_golden.py` ricattura i 54 template della Motion Studio a tre istanti e li confronta byte per byte con `tests/fixtures/motion_golden/`. La suite intera è `python tests/run_all.py`; la categoria heavy (motion golden/slice/cache/fallback, igiene temp, crash f17) gira solo con `--heavy`.
+`out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. `master` si chiama cosi'
+solo dopo loudness e verifica: prima e' `picture`. L'export multi-aspect non e'
+implementato: non esistono varianti per piattaforma. Gate di regressione visiva:
+`python tests/test_edl3_golden.py` (un frame per effetto) e
+`python tests/test_motion_golden.py` (54 template, tre istanti, byte per byte).
+La suite intera e' `python tests/run_all.py`; `--heavy` aggiunge i golden pesanti.
+**Voto.** A lavoro finito la vista chiede un voto 1–5, facoltativo e non
+bloccante, col contesto misurato. Il registro si legge **solo su richiesta**
+(`vx learn`), mai all'avvio: ricalibrare a ogni corsa costa secondi.
 
 ## Font e vista
 
 Il font non si eredita da un default: `auto` propone dal contesto, scarica dal
-catalogo e aspetta la scelta, dichiarandola nel report. La vista locale ha
-selettore, fotogrammi, approvazione, player e playhead vero: si usa quella,
-`vx serve DIR`. **Non si scrive una UI nuova**: se il lavoro non e' un job `vx`
-(niente `progress.json`/`plan.json`) va detto e si propone di farlo passare da
-`vx auto`, non di improvvisare una pagina. Dettaglio:
+catalogo e aspetta la scelta, dichiarandola nel report. La vista (`vx up`, poi
+`vx serve DIR`) ha selettore, fotogrammi, approvazione, player e playhead vero.
+**Non si scrive una UI nuova**: se il lavoro non e' un job `vx` va detto e si
+propone di farlo passare da `auto`. Dettaglio:
 `references/28-font-proposta-e-cancello.md`, `references/29-vedere-il-lavoro.md`.
 
 ## Percorsi e sicurezza
 
 Il sorgente non viene MAI modificato: l'ingest scrive lo sha256 in `source.json`
 e il QC riverifica `source_sha_unchanged`. Il master è `work/stage/final_full.mp4`,
-i deliverable in `work/out/`. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`; un lock
-per liveness (heartbeat 30 s) impedisce due sessioni sulla stessa workdir.
+i deliverable in `work/out/`. Tutto vive in `<WORK_DIR>\<stem>-<sha8>\`, con un
+lock di liveness che impedisce due sessioni sulla stessa workdir.
 
 ## Regola zero: si passa da `vx`
 
 Ogni fase passa da un comando `vx` (`doctor`, `ingest`, `run`, `auto`, `edl`,
-`edl3`, `serve`). Niente ffmpeg a mano, niente script di pipeline, niente UI
-nuove: se una capacita' manca si dichiara e ci si ferma. `vx guard <dir>` dice se
-un lavoro e' passato davvero da qui. **All'inizio** si dichiara se si lavora in
-autonomia o con le scelte dell'utente; in autonomia ogni scelta va motivata nel
-report con l'alternativa scartata. `board.py`/`pipeline.py`/`decide.py` restano sperimentali.
+`edl3`, `recipe`, `serve`). Niente ffmpeg a mano, niente script di pipeline,
+niente UI nuove: se una capacita' manca si dichiara e ci si ferma. `vx guard <dir>`
+dice se un lavoro e' passato davvero da qui. **All'inizio** si dichiara se si
+lavora in autonomia o con le scelte dell'utente; in autonomia ogni scelta va
+motivata nel report con l'alternativa scartata. `board.py`/`pipeline.py` restano sperimentali.
 
 ## Riferimenti
 
