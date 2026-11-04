@@ -27,6 +27,7 @@ cade sul primo — la pagina non si rompe.
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import re
@@ -109,6 +110,61 @@ RENDER_FRESH_SEC = 30.0
 
 #: ``thumb_00_002.500.jpg``: l'istante campionato sta nel nome.
 THUMB_NAME = re.compile(r"^thumb_.*_(\d+(?:\.\d+)?)\.jpg$", re.IGNORECASE)
+
+#: Quanto vive in memoria una scansione costosa. La pagina polla ogni secondo:
+#: un secondo di cache basta a non rifare lo stesso lavoro due volte di fila.
+#: La scadenza e' solo una rete di sicurezza: la verita' e' l'mtime della
+#: cartella, cosi' un lavoro che scrive invalida subito la sua voce.
+CACHE_TTL_SEC = 1.0
+
+#: Le scansioni costose (``discover``, ``keyframes/``, ``live/``, report, font).
+_scan_cache: Dict[str, tuple] = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_clear() -> None:
+    """Svuota la cache delle scansioni (il benchmark la usa fra una misura e l'altra)."""
+    with _cache_lock:
+        _scan_cache.clear()
+
+
+def _cached_scan(key: str, build, stamp) -> Any:
+    """Il valore di ``build()``, riusato finche' lo ``stamp`` non cambia.
+
+    ``stamp(value)`` e' il confronto economico: gli mtime delle cartelle e dei
+    file da cui il valore dipende. Se lo stamp e' lo stesso e la voce non ha
+    superato :data:`CACHE_TTL_SEC` si restituisce il valore gia' calcolato; un
+    errore di I/O sullo stamp non e' una scusa per fidarsi, si ricalcola.
+    """
+    now = time.monotonic()
+    with _cache_lock:
+        entry = _scan_cache.get(key)
+    if entry is not None:
+        expires, old_stamp, value = entry
+        if expires > now:
+            try:
+                if stamp(value) == old_stamp:
+                    return value
+            except OSError:
+                pass
+    value = build()
+    try:
+        fresh = stamp(value)
+    except OSError:
+        fresh = None
+    with _cache_lock:
+        if len(_scan_cache) > 1024:
+            _scan_cache.clear()
+        _scan_cache[key] = (now + CACHE_TTL_SEC, fresh, value)
+    return value
+
+
+def _mtime_ns(path: Path) -> int:
+    """L'mtime in nanosecondi, ``0`` se il file non c'e': uno stamp compatto."""
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
 
 
 def _read_json(path: Path) -> Dict[str, Any]:
@@ -372,8 +428,23 @@ def _report_workdirs(
     ``workdir`` (e ``chunks.workdir``) proprio perche' la vista non deve
     indovinare. Il campo e' esplicito e vince sulla cartella accanto al master.
     """
-    folders: List[Path] = []
     base = _data_dir(directory) if data_dir is None else Path(data_dir)
+    return _cached_scan(
+        f"reportdirs:{directory}:{base}",
+        lambda: _report_workdirs_uncached(directory, base),
+        lambda _value: (
+            _mtime_ns(base / "report.json"),
+            _mtime_ns(base / "auto_report.json"),
+            _mtime_ns(directory / "report.json"),
+            _mtime_ns(directory / "auto_report.json"),
+            _mtime_ns(directory / "work" / "report.json"),
+            _mtime_ns(directory / "work" / "auto_report.json"),
+        ),
+    )
+
+
+def _report_workdirs_uncached(directory: Path, base: Path) -> List[Path]:
+    folders: List[Path] = []
     for folder in (base, directory, directory / "work"):
         if folder in folders:
             continue
@@ -495,6 +566,34 @@ def _font_state(directory: Path) -> Dict[str, Any]:
         "chosen": str(choice.get("family") or ""),
         "candidates": candidates,
     }
+
+
+def _font_pending(directory: Path) -> bool:
+    """Vero se il cancello dei font e' aperto: proposta con candidati, nessuna scelta.
+
+    E' la stessa domanda di :func:`_font_state` ma senza costruire i campioni:
+    l'elenco dei lavori la usa per ogni voce, e non deve pagare i PNG. La
+    risposta resta in cache finche' la proposta o la scelta non cambiano.
+    """
+    return _cached_scan(
+        f"font:{directory}",
+        lambda: _compute_font_pending(directory),
+        lambda _value: (
+            _mtime_ns(directory / FONT_PROPOSAL_NAME),
+            _mtime_ns(directory / FONT_CHOICE_NAME),
+        ),
+    )
+
+
+def _compute_font_pending(directory: Path) -> bool:
+    if (directory / FONT_CHOICE_NAME).is_file():
+        return False
+    proposal = _read_json(directory / FONT_PROPOSAL_NAME)
+    if not proposal:
+        return False
+    raw = proposal.get("candidates")
+    items = raw if isinstance(raw, list) else []
+    return any(isinstance(item, Mapping) for item in items)
 
 
 def timeline(plan: Mapping[str, Any]) -> List[Dict[str, Any]]:
@@ -973,6 +1072,30 @@ def live_state(
     }
 
 
+def _live_state_cached(directory: Path, data_dir: Path) -> Dict[str, Any]:
+    """``live_state`` con la scansione in cache: un manifest che non cambia non si rilegge.
+
+    Lo stamp sono i ``live/`` veri, i manifest e i report che dichiarano la
+    workdir del render: se uno di loro si muove, la voce scade subito.
+    """
+    return _cached_scan(
+        f"live:{directory}:{data_dir}",
+        lambda: live_state(directory, data_dir),
+        lambda _value: (
+            _mtime_ns(data_dir / LIVE_DIR),
+            _mtime_ns(directory / LIVE_DIR),
+            _mtime_ns(directory / "work" / LIVE_DIR),
+            _mtime_ns(data_dir / LIVE_DIR / LIVE_MANIFEST),
+            _mtime_ns(directory / LIVE_DIR / LIVE_MANIFEST),
+            _mtime_ns(directory / "work" / LIVE_DIR / LIVE_MANIFEST),
+            _mtime_ns(data_dir / "report.json"),
+            _mtime_ns(data_dir / "auto_report.json"),
+            _mtime_ns(directory / "report.json"),
+            _mtime_ns(directory / "auto_report.json"),
+        ),
+    )
+
+
 def render_state(directory: Path, plan: Mapping[str, Any]) -> Dict[str, Any]:
     """Dove e' arrivato ffmpeg, letto dal suo file di progresso.
 
@@ -1025,31 +1148,66 @@ def discover(root: Path) -> List[Path]:
     piu' recente prima; per un lavoro dedotto vale il segno piu' recente. Non e'
     pero' la scelta della vista: ``state`` parte dal lavoro **attivo**, non dal
     file toccato per ultimo (vedi :func:`_default_index`).
+
+    La scansione e' in cache per un secondo, ma lo stamp la invalida subito
+    appena la radice cambia (una cartella creata o tolta) o un lavoro tocca il
+    suo stato: la pagina non deve vedere un elenco vecchio.
     """
     root = Path(root)
+    return _cached_scan(
+        f"discover:{root}",
+        lambda: _discover_uncached(root),
+        lambda jobs: _discover_stamp(root, jobs),
+    )
+
+
+def _discover_stamp(root: Path, jobs: List[Path]) -> tuple:
+    """Lo stamp che invalida la cache di :func:`discover`, senza rileggere tutto."""
+    stamps: List[Any] = [root.stat().st_mtime_ns]
+    try:
+        for child in root.iterdir():
+            try:
+                stamps.append((child.name, child.stat().st_mtime_ns))
+            except OSError:
+                continue
+    except OSError:
+        return tuple(stamps)
+    for job in jobs:
+        stamps.append((str(job), _state_mtime(job)))
+    return tuple(stamps)
+
+
+def _subdirs(directory: Path) -> List[Path]:
+    """Le sottocartelle dirette, in una sola scansione (niente ``glob`` profondo)."""
+    try:
+        with os.scandir(directory) as entries:
+            return [Path(entry.path) for entry in entries if entry.is_dir()]
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return []
+
+
+def _discover_uncached(root: Path) -> List[Path]:
     found: List[Path] = []
     if _looks_like_job(root, allow_live=True):
         found.append(root)
     known = [path.resolve() for path in found]
+    level_dirs = _subdirs(root)
     for level in range(1, MAX_DEPTH + 1):
-        try:
-            level_items = list(root.glob("/".join(["*"] * level)))
-        except OSError as exc:
-            degrade.note("serve", exc)
-            break
-        for candidate in level_items:
-            if not candidate.is_dir() or not _looks_like_job(candidate):
+        next_level: List[Path] = []
+        for candidate in level_dirs:
+            # Dentro un lavoro gia' riconosciuto conta solo un ``progress.json``
+            # esplicito: si evita di scandire le sue stage, i proxy, gli shot.
+            parent_known = any(parent in known for parent in candidate.parents)
+            if parent_known and not (candidate / "progress.json").is_file():
                 continue
-            resolved = candidate.resolve()
-            # I file interni di un lavoro (es. ``work/plan.json``) non sono un
-            # altro lavoro: si scende solo fuori dai lavori gia' riconosciuti.
-            # Un ``progress.json`` esplicito invece vale sempre.
-            if not (candidate / "progress.json").is_file() and any(
-                parent in known for parent in resolved.parents
-            ):
-                continue
-            found.append(candidate)
-            known.append(resolved)
+            is_job = _looks_like_job(candidate)
+            if is_job:
+                found.append(candidate)
+                known.append(candidate.resolve())
+            if level < MAX_DEPTH and (is_job or not parent_known):
+                next_level.extend(_subdirs(candidate))
+        level_dirs = next_level
     # Una cartella che contiene un lavoro pubblicato (progress.json) non e' un
     # lavoro a sua volta: la figlia vince sul padre, altrimenti servendo la
     # radice si vede lo stato dedotto vuoto invece del lavoro vero.
@@ -1414,21 +1572,159 @@ def _derived_outcome(
     return "stopped"
 
 
-def _job_state(directory: Path) -> Dict[str, Any]:
+def _frames_listing(data_dir: Path) -> List[Dict[str, Any]]:
+    """I PNG di ``keyframes/`` con la loro dimensione, in cache finche' non cambiano."""
+    frames_dir = data_dir / "keyframes"
+
+    def build() -> List[Dict[str, Any]]:
+        try:
+            return [
+                {"name": item.name, "bytes": _size_of(item)}
+                for item in sorted(frames_dir.glob("*.png"))
+            ]
+        except OSError as exc:
+            degrade.note("serve", exc)
+            return []
+
+    return _cached_scan(
+        f"frames:{data_dir}",
+        build,
+        lambda _value: _mtime_ns(frames_dir),
+    )
+
+
+def _job_brief(directory: Path) -> Dict[str, Any]:
+    """Il minimo che serve all'elenco dei lavori, calcolato **una volta** per lavoro.
+
+    L'elenco ``jobs[]`` non ha bisogno degli shot, dei fotogrammi, del live, del
+    journal: chiedergli lo stato completo di ogni lavoro era il costo vero di
+    ``/api/state``. Qui si legge il panel, il report e il master, si deduce
+    l'esito e ci si ferma. :func:`_job_state` riusa questo dizionario per il
+    lavoro scelto, cosi' nessun file viene letto due volte.
+
+    La risposta resta in cache per un secondo, con lo stamp sui due file che
+    raccontano il lavoro (``progress.json`` e il report): finche' non cambiano,
+    l'elenco non rilegge niente. La guardia non si esegue qui (un audit puo'
+    avere un costo vero): vale il ``guard`` gia' dichiarato nel report, e per un
+    lavoro dedotto senza report si assume pulito. Lo stato completo del lavoro
+    scelto rifa' l'audit come prima.
+    """
+    directory = Path(directory)
+    return _cached_scan(
+        f"brief:{directory}",
+        lambda: _job_brief_uncached(directory),
+        lambda value: (
+            (
+                _mtime_ns(directory / "progress.json"),
+                _mtime_ns(directory / "report.json"),
+                _mtime_ns(directory / "out"),
+                _mtime_ns(Path(str(value["data_dir"])) / "keyframes"),
+            )
+            if value.get("published")
+            else (_state_mtime(directory),)
+        ),
+    )
+
+
+def _job_brief_uncached(directory: Path) -> Dict[str, Any]:
+    published = (directory / "progress.json").is_file()
+    derived = not published
+    progress = _read_json(directory / "progress.json") if published else {}
+    data_dir = _data_dir(directory)
+    activity = _activity(directory, data_dir=data_dir)
+    report = _report_of(directory, data_dir)
+    master = _master_path(directory, progress)
+    ready = _ready_file(master)
+    # Un master illeggibile conta solo per un lavoro dedotto: per uno pubblicato
+    # l'esito lo dicono il panel e la guardia.
+    artifact_ready = _valid_media(master) if derived else ready
+    if derived and artifact_ready and not activity["locked"]:
+        # Il master c'e' e si legge: il lavoro e' finito. Un mtime fresco sul
+        # file appena scritto non e' "qualcuno ci sta lavorando".
+        activity = {**activity, "active": False, "state": "finished"}
+    font_pending = False if derived else _font_pending(directory)
+    waiting = (data_dir / "keyframes" / KEYFRAMES_WAITING_NAME).is_file()
+    declared = report.get("guard") if isinstance(report, Mapping) else None
+    guard: Dict[str, Any]
+    if isinstance(declared, Mapping):
+        guard = dict(declared)
+        guard.setdefault("ok", not (guard.get("violations") or []))
+        guard.setdefault("skipped", False)
+        guard.setdefault("why", "")
+        guard.setdefault("violations", [])
+        guard.setdefault("warnings", [])
+    else:
+        guard = _empty_guard()
+    note = progress.get("note") or (
+        "lavoro vx senza progresso pubblicato" if derived else ""
+    )
+    percent = progress.get("percent") or 0.0
+    current = progress.get("current")
+    if derived:
+        # Senza panel lo stato viene dagli artefatti, non dall'assenza del panel.
+        outcome = _derived_outcome(artifact_ready, activity, guard)
+        if artifact_ready:
+            note = "master presente: lavoro concluso (senza progresso pubblicato)"
+        elif master is not None and not artifact_ready:
+            note = "master illeggibile: non e' ancora un lavoro consegnato"
+    else:
+        outcome = _outcome(
+            percent=percent,
+            current=current,
+            note=note,
+            ready=ready,
+            waiting=bool(waiting) or bool(font_pending),
+            active=bool(activity["active"]),
+        )
+        # Un master scritto non e' un lavoro consegnato: la guardia ha l'ultima
+        # parola sull'esito, e ``done`` non e' un esito possibile con violazioni.
+        if outcome == "done" and guard.get("ok") is False:
+            outcome = "failed"
+    return {
+        "job": directory.name,
+        "path": str(directory),
+        "prompt": progress.get("prompt") or "",
+        "percent": percent,
+        "current": current,
+        "active": activity["active"],
+        "locked": activity["locked"],
+        "updated_sec": activity["updated_sec"],
+        "updated_at": activity["updated_at"],
+        "state": activity["state"],
+        "outcome": outcome,
+        "note": note,
+        "published": published,
+        "derived": derived,
+        "progress": progress,
+        "data_dir": data_dir,
+        "activity": activity,
+        "report": report,
+        "master": master,
+        "ready": ready,
+        "artifact_ready": artifact_ready,
+    }
+
+
+def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Lo stato del lavoro: pubblicato se c'e' il panel, altrimenti dedotto.
 
     Un lavoro senza ``progress.json`` non finge una percentuale: ``percent`` e'
     zero, ``current`` e' nullo, la ``note`` dice che manca il progresso, le fasi
     sono quelle che i file presenti raccontano e il master vale solo se il file
     d'uscita esiste davvero. ``progress_source`` dichiara quale dei due casi e'.
+
+    Con un ``brief`` gia' calcolato da :func:`_job_brief` (il caso di ``state``)
+    si riusa la lettura di panel, report, master e attivita': il lavoro scelto
+    paga una volta quello che l'elenco ha gia' pagato per tutti.
     """
-    published = (directory / "progress.json").is_file()
-    derived = not published
-    progress = _read_json(directory / "progress.json") if published else {}
-    data_dir = _data_dir(directory)
-    activity = _activity(directory, data_dir=data_dir)
+    brief = _job_brief(directory) if brief is None else brief
+    directory = Path(directory)
+    derived = bool(brief["derived"])
+    progress = brief["progress"]
+    data_dir = brief["data_dir"]
+    activity = brief["activity"]
+    report = brief["report"]
     plan = _read_json(data_dir / "plan.json")
-    report = _report_of(directory, data_dir)
     estimate = report.get("estimate") if isinstance(report.get("estimate"), Mapping) else {}
     plan_choice = report.get("plan_choice") if isinstance(report.get("plan_choice"), Mapping) else {}
     raw_decisions = report.get("decisions")
@@ -1442,29 +1738,15 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     if not plan_choice and isinstance(progress.get("plan_choice"), Mapping):
         plan_choice = progress.get("plan_choice")
     frames_dir = data_dir / "keyframes"
-    frames: List[Dict[str, Any]] = []
-    if frames_dir.is_dir():
-        try:
-            frames = [
-                {"name": item.name, "bytes": _size_of(item)}
-                for item in sorted(frames_dir.glob("*.png"))
-            ]
-        except OSError as exc:
-            degrade.note("serve", exc)
+    frames = _frames_listing(data_dir)
     pending = _read_json(frames_dir / "pending.json")
     approval = _approval_state(data_dir, pending)
     font = _empty_font() if derived else _font_state(directory)
-    master = _master_path(directory, progress)
-    ready = _ready_file(master)
-    artifact_ready = _valid_media(master)
-    if derived and artifact_ready and not activity["locked"]:
-        # Il master c'e' e si legge: il lavoro e' finito. Un mtime fresco sul
-        # file appena scritto non e' "qualcuno ci sta lavorando".
-        activity = {**activity, "active": False, "state": "finished"}
-    note = progress.get("note") or (
-        "lavoro vx senza progresso pubblicato" if derived else ""
-    )
-    percent = progress.get("percent") or 0.0
+    master = brief["master"]
+    ready = bool(brief["ready"])
+    artifact_ready = bool(brief["artifact_ready"])
+    note = brief["note"]
+    percent = brief["percent"]
     guard_section = _guard_state(data_dir, report, ready=ready)
     if derived:
         # Senza panel lo stato viene dagli artefatti, non dall'assenza del panel.
@@ -1516,7 +1798,7 @@ def _job_state(directory: Path) -> Dict[str, Any]:
         "render": _empty_render() if derived else render_state(data_dir, plan),
         "timeline": [] if derived else timeline(plan),
         "shots": shots(directory, plan, data_dir=data_dir),
-        "live": live_state(directory, data_dir),
+        "live": _live_state_cached(directory, data_dir),
         "font": font,
         "questions": _questions_state(directory, data_dir),
         "feedback": _feedback_state(directory),
@@ -1869,7 +2151,16 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "selected": 0,
             "selector": False,
         }
-    items = [_safe_job_state(path) for path in jobs]
+    # Un brief leggero per ogni lavoro: l'elenco non ha bisogno del live, degli
+    # shot o del journal di chi non e' scelto. Un lavoro che non si legge non
+    # ferma gli altri: al suo posto resta una voce vuota, con il motivo.
+    items: List[Dict[str, Any]] = []
+    for path in jobs:
+        try:
+            items.append(_job_brief(path))
+        except Exception as exc:  # noqa: BLE001 - la vista non e' il lavoro
+            degrade.note("serve", exc)
+            items.append(_failed_brief(path, exc))
     chosen = (
         _default_index(jobs, items)
         if index is None
@@ -1882,23 +2173,56 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "prompt": item["prompt"],
             "percent": item["percent"],
             "current": item["current"],
-            "progress_source": item["progress_source"],
             "active": item["active"],
-            "locked": item["locked"],
+            "outcome": item["outcome"],
             "updated_sec": item["updated_sec"],
             "updated_at": item["updated_at"],
-            "state": item["state"],
-            "outcome": item["outcome"],
-            "master_ready": item["master_ready"],
         }
         for position, item in enumerate(items)
     ]
-    payload = dict(items[chosen])
+    # Lo stato completo si costruisce **solo** per il lavoro scelto, riusando il
+    # brief che l'elenco ha gia' calcolato: niente file letti due volte.
+    try:
+        payload = _job_state(jobs[chosen], brief=items[chosen])
+    except Exception as exc:  # noqa: BLE001 - la vista non e' il lavoro
+        degrade.note("serve", exc)
+        payload = _empty_job_payload(
+            jobs[chosen], f"stato non leggibile: {type(exc).__name__}: {exc}"
+        )
+        payload["degraded"] = True
     payload["jobs"] = entries
     payload["selected"] = chosen
     payload["selector"] = len(entries) > 1
     payload["showing"] = _showing(items, chosen)
     return payload
+
+
+def _failed_brief(directory: Path, exc: BaseException) -> Dict[str, Any]:
+    """Il brief di un lavoro che non si legge: zeri, il motivo, nessun crash."""
+    return {
+        "job": Path(str(directory)).name,
+        "path": str(directory),
+        "prompt": "",
+        "percent": 0.0,
+        "current": None,
+        "active": False,
+        "locked": False,
+        "updated_sec": None,
+        "updated_at": "",
+        "state": "",
+        "outcome": "idle",
+        "note": f"stato non leggibile: {type(exc).__name__}: {exc}",
+        "published": False,
+        "derived": True,
+        "progress": {},
+        "data_dir": Path(str(directory)),
+        "activity": {"active": False, "locked": False, "updated_sec": None,
+                      "updated_at": "", "state": ""},
+        "report": {},
+        "master": None,
+        "ready": False,
+        "artifact_ready": False,
+    }
 
 
 def reveal_native(path: Path) -> None:
@@ -2073,6 +2397,21 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_json(self, payload: Any, status: int = 200) -> None:
+            """Il JSON, compresso quando il client dichiara ``Accept-Encoding: gzip``.
+
+            Con 40 lavori lo stato sfiora i 100 KB e la pagina lo chiede ogni
+            secondo: gzip lo porta a una frazione. Un client che non lo chiede
+            (o un corpo gia' minuscolo) riceve byte identici a prima.
+            """
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            headers = {"Vary": "Accept-Encoding"}
+            accepted = str(self.headers.get("Accept-Encoding") or "").lower()
+            if "gzip" in accepted and len(body) > 512:
+                body = gzip.compress(body, compresslevel=6)
+                headers["Content-Encoding"] = "gzip"
+            self._send(body, "application/json; charset=utf-8", status=status, extra=headers)
+
         def do_GET(self):  # noqa: D102
             """Ogni lettura risponde 200 o 404: un errore non diventa un 500 muto."""
             try:
@@ -2122,8 +2461,7 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
                         else _empty_job_payload(self._root(), f"stato non leggibile: {type(exc).__name__}: {exc}")
                     )
                     payload["degraded"] = True
-                self._send(json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                           "application/json; charset=utf-8")
+                self._send_json(payload)
                 return
             if path in ("/result", "/result.mp4"):
                 self._result(index)
