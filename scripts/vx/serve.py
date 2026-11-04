@@ -1786,6 +1786,25 @@ def _job_brief_uncached(directory: Path) -> Dict[str, Any]:
     }
 
 
+def _render_section(
+    directory: Path, data_dir: Path, plan: Mapping[str, Any], derived: bool
+) -> Dict[str, Any]:
+    """Dove e' arrivato ffmpeg, se c'e' qualcosa di vero da leggere.
+
+    Un lavoro pubblicato ha il suo panel e lo si legge sempre. Un lavoro dedotto
+    (``auto`` senza ``progress.json``) non ha percentuale **di piano**, ma mentre
+    renderizza scrive lo stesso ``ffmpeg-progress.txt``: se quel file e' fresco
+    (:data:`RENDER_FRESH_SEC`) la testina dell'encode e' un dato misurato, non
+    una posizione inventata. Un progresso vecchio resta fuori: direbbe 70% di un
+    render finito dieci minuti fa.
+    """
+    if not derived:
+        return render_state(data_dir, plan)
+    if not _render_active(directory, data_dir):
+        return _empty_render()
+    return render_state(data_dir, plan)
+
+
 def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Lo stato del lavoro: pubblicato se c'e' il panel, altrimenti dedotto.
 
@@ -1876,7 +1895,7 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         "master": master.name if ready and master is not None else "",
         "master_ready": ready,
         "master_bytes": _size_of(master) if ready else 0,
-        "render": _empty_render() if derived else render_state(data_dir, plan),
+        "render": _render_section(directory, data_dir, plan, derived),
         "timeline": [] if derived else timeline(plan),
         "shots": shots(directory, plan, data_dir=data_dir),
         "live": _live_state_cached(directory, data_dir),
@@ -1888,12 +1907,164 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
     }
 
 
+#: Lo stato completo dei lavori chiesti da una sessione: ``percorso -> (stamp,
+#: stato)``. Lo stamp sono gli mtime della cartella: se non cambiano, lo stato
+#: non e' invecchiato e la pagina lo riceve in millisecondi.
+_job_state_cache: Dict[str, tuple] = {}
+
+
+def _job_state_stamp(directory: Path) -> tuple:
+    """Gli mtime da cui dipende :func:`_job_state`: cambiano solo se cambia.
+
+    Sono i file che il lavoro riscrive (panel, report, piano, progresso di
+    ffmpeg) e le cartelle in cui deposita gli artefatti (uscita, fotogrammi,
+    miniature, live). Basta uno solo che si muove per ricalcolare lo stato.
+    """
+    data_dir = _data_dir(directory)
+    names = (
+        "progress.json",
+        "report.json",
+        "auto_report.json",
+        "plan.json",
+        "render/ffmpeg-progress.txt",
+        "keyframes",
+        "analysis",
+        "out",
+        "shots",
+        LIVE_DIR,
+    )
+    stamps: List[Any] = [_mtime_ns(directory / name) for name in names]
+    if data_dir != directory:
+        stamps.extend(_mtime_ns(data_dir / name) for name in names)
+    return tuple(stamps)
+
+
+def _job_state_cached(directory: Path) -> Dict[str, Any]:
+    """Lo stato completo di un lavoro, riusato finche' la cartella non cambia.
+
+    Servendo una sessione la pagina chiede lo stato ogni secondo: senza cache
+    ogni giro rileggerebbe panel, report, piano, fotogrammi e registro delle
+    sessioni (centinaia di ``stat``) per lo stesso lavoro. La verita' e' lo
+    stamp: appena il lavoro scrive qualcosa la voce scade, e finche' non scrive
+    la risposta e' quella gia' calcolata.
+    """
+    directory = Path(directory)
+    key = str(directory)
+    stamp = _job_state_stamp(directory)
+    with _cache_lock:
+        entry = _job_state_cache.get(key)
+    if entry is not None and entry[0] == stamp:
+        return entry[1]
+    value = _job_state(directory)
+    # Se la cartella si e' mossa mentre leggevamo, non si mette in cache: lo
+    # stamp di prima descriverebbe uno stato che non e' piu' quello.
+    if _job_state_stamp(directory) == stamp:
+        with _cache_lock:
+            if len(_job_state_cache) > 64:
+                _job_state_cache.clear()
+            _job_state_cache[key] = (stamp, value)
+    return value
+
+
+def _session_job_view(
+    snapshot: Mapping[str, Any], job: Optional[Path]
+) -> Dict[str, Any]:
+    """Lo stato di lavoro della sessione, nella forma che la pagina sa disegnare.
+
+    La sessione racconta **cosa e' stato eseguito**, il lavoro **cosa ne e'
+    uscito**: la pagina conosce solo la seconda lingua e finora, aprendo ``/``
+    sul daemon, restava sul guscio vuoto. Qui lo stato del lavoro si risolve con
+    le stesse funzioni di ``?job=`` (:func:`_job_state`) e viene messo sotto
+    ``job``, con ``jobs`` di una voce sola per la barra laterale.
+
+    Una cartella cancellata non diventa uno stato vuoto: ``job`` e' ``None`` e
+    ``reason`` dice quale percorso non c'e' piu', cosi' la pagina lo scrive
+    invece di tacere.
+    """
+    raw = str(snapshot.get("job_path") or "") or (str(job) if job is not None else "")
+    if not raw:
+        return {
+            "job": None,
+            "jobs": [],
+            "reason": "la sessione non dichiara una cartella di lavoro: niente da rileggere",
+        }
+    directory = Path(raw)
+    try:
+        exists = directory.is_dir()
+    except OSError:
+        exists = False
+    if not exists:
+        return {
+            "job": None,
+            "jobs": [],
+            "reason": f"la cartella del lavoro non esiste piu': {directory}",
+        }
+    try:
+        payload = _job_state_cached(directory)
+    except Exception as exc:  # noqa: BLE001 - la vista della sessione non muore
+        degrade.note("serve", exc)
+        return {
+            "job": None,
+            "jobs": [],
+            "reason": f"lo stato del lavoro non si legge: {type(exc).__name__}: {exc}",
+        }
+    entry = {
+        "index": 0,
+        "job": payload["job"],
+        "prompt": payload["prompt"],
+        "percent": payload["percent"],
+        "current": payload["current"],
+        "active": payload["active"],
+        "outcome": payload["outcome"],
+        "updated_sec": payload["updated_sec"],
+        "updated_at": payload["updated_at"],
+    }
+    return {"job": payload, "jobs": [entry], "reason": ""}
+
+
 def _session_value(session_id: Optional[str] = None) -> Optional[session_store.Session]:
     """Rilegge la sessione scelta (o l'ultima), senza mai scrivere."""
     try:
+        if session_id is None or str(session_id) == "":
+            latest = _latest_session_id()
+            if not latest:
+                return None
+            return session_store.load(latest)
         return session_store.load(session_id)
     except Exception:  # noqa: BLE001 - un registro rotto non ferma la vista
         return None
+
+
+#: Per quanti secondi si ricorda qual e' l'ultima sessione. ``list_sessions``
+#: scandisce ogni cartella del registro (due ``stat`` per sessione, e su Windows
+#: costano): la pagina chiede lo stato ogni secondo, il registro cambia solo
+#: quando un comando parte o finisce. Cinque secondi sono un ritardo che non si
+#: vede, e tolgono dalla risposta una scansione che cresce col numero di sessioni.
+LATEST_TTL_SEC = 5.0
+
+_latest_cache: Dict[str, tuple] = {}
+
+
+def _latest_session_id() -> str:
+    """L'id della sessione piu' recente, senza riscandire il registro ogni volta."""
+    try:
+        base = str(session_store.default_root())
+    except Exception:  # noqa: BLE001 - senza radice si torna al comportamento di prima
+        return ""
+    now = time.monotonic()
+    with _cache_lock:
+        entry = _latest_cache.get(base)
+    if entry is not None and entry[0] > now:
+        return entry[1]
+    try:
+        value = session_store.latest() or ""
+    except Exception:  # noqa: BLE001 - un registro rotto non ferma la vista
+        value = ""
+    with _cache_lock:
+        if len(_latest_cache) > 16:
+            _latest_cache.clear()
+        _latest_cache[base] = (now + LATEST_TTL_SEC, value)
+    return value
 
 
 def _empty_session_state(
@@ -1915,15 +2086,23 @@ def _empty_session_state(
         "questions": [],
         "live": {"ready": 0, "total": 0, "chunks": []},
         "journal": [],
+        "job": None,
+        "jobs": [],
+        "reason": reason,
     }
 
 
 def session_state(session_id: Optional[str] = None) -> Dict[str, Any]:
-    """Lo stato della sessione: eventi, file, cancelli, live e journal.
+    """Lo stato della sessione: eventi, file, cancelli, live, journal **e lavoro**.
 
     La forma e' quella promessa alla pagina: ``session`` e' lo snapshot
     riassunto, ``events`` la storia completa. Tutto viene dal registro, non da
     una cartella di lavoro: un ``vx doctor`` senza ``progress.json`` si vede.
+
+    In piu' c'e' ``job``: lo stato del lavoro che la sessione ha prodotto,
+    risolto con la stessa funzione della modalita' ``?job=`` quando la sua
+    cartella esiste ancora. Senza questo la pagina, che parla solo la lingua del
+    lavoro, restava sul guscio vuoto. Nessun campo di prima e' stato tolto.
     """
     session = _session_value(session_id)
     if session is None:
@@ -1964,8 +2143,8 @@ def session_state(session_id: Optional[str] = None) -> Dict[str, Any]:
         live_chunks.append(entry)
     live = {**{key: value for key, value in live.items() if key != "chunks"},
             "chunks": live_chunks}
-    job = _session_job(session_id)
-    return {
+    job = _session_job(session_id, session=session)
+    payload = {
         "session": summary,
         "events": [dict(row) for row in session.events],
         "artifacts": list(snapshot.get("artifacts") or []),
@@ -1974,17 +2153,23 @@ def session_state(session_id: Optional[str] = None) -> Dict[str, Any]:
         "live": live,
         "journal": list(snapshot.get("journal") or []),
     }
+    payload.update(_session_job_view(snapshot, job))
+    return payload
 
 
-def _session_job(session_id: Optional[str] = None) -> Optional[Path]:
+def _session_job(
+    session_id: Optional[str] = None,
+    session: Optional[session_store.Session] = None,
+) -> Optional[Path]:
     """La workdir dell'evento piu' recente che ne dichiara una.
 
     Il registro puo' contenere piu' percorsi (report, proxy, chunk): si guarda
     dal fondo, perche' l'ultimo evento e' quello che il lavoro sta vivendo. Se
     il percorso dichiarato non esiste si prova un file prodotto, risalendo
-    alla cartella che sembra un lavoro.
+    alla cartella che sembra un lavoro. Con una ``session`` gia' letta non si
+    riapre il registro: chi chiama ce l'ha in mano.
     """
-    session = _session_value(session_id)
+    session = session if session is not None else _session_value(session_id)
     if session is None:
         return None
     seen: List[Path] = []

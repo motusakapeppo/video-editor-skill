@@ -163,6 +163,80 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Sopra il titolo non c'è un altro titolo: c'è *cosa* si sta guardando. */
+.job-head {
+  min-width: 0;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.session-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.session-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .03);
+  font: 600 9.5px/1 var(--mono);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.session-chip::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.session-line.is-live .session-chip {
+  border-color: rgba(78, 161, 255, .45);
+  background: rgba(78, 161, 255, .1);
+  color: var(--accent-2);
+}
+
+.session-line.is-live .session-chip::before {
+  background: var(--accent);
+  box-shadow: 0 0 9px rgba(78, 161, 255, .9);
+  animation: pulse 2.2s var(--ease-soft) infinite;
+}
+
+.session-line.is-done .session-chip::before { background: var(--ok); }
+
+.session-line.is-missing .session-chip {
+  border-color: rgba(255, 196, 107, .4);
+  color: var(--warn);
+}
+
+.session-line.is-missing .session-chip::before { background: var(--warn); }
+
+.session-say {
+  min-width: 0;
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .job-clock {
   margin: 0;
   font-size: 13px;
@@ -502,6 +576,19 @@ body.is-offline .eyebrow { color: var(--warn); }
 
 body.is-done .hero-num { color: #f0fff7; text-shadow: 0 0 60px rgba(111, 224, 164, .2); }
 body.is-done .hero-unit { color: var(--ok); }
+
+/* Fine senza percentuale: nessun lavoro pubblica uno 0% quando è finito. Al
+   posto del numero il segno dell'esito, che è quello che il server dichiara. */
+.hero.is-closed .hero-num {
+  min-width: 1.05ch;
+  letter-spacing: 0;
+  color: var(--ink-2);
+  text-shadow: none;
+}
+
+body.is-done .hero.is-closed .hero-num { color: var(--ok); text-shadow: 0 0 50px rgba(111, 224, 164, .22); }
+body.is-stopped .hero.is-closed .hero-num { color: var(--warn); }
+body.is-failed .hero.is-closed .hero-num { color: #ff9d9d; }
 
 .hero-side {
   min-width: 150px;

@@ -19,7 +19,13 @@
         <span class="brand-sep" aria-hidden="true">/</span>
         <span class="brand-role">banco di montaggio</span>
       </p>
-      <h1 class="job-title" id="jobTitle">Lavoro in corso</h1>
+      <div class="job-head">
+        <h1 class="job-title" id="jobTitle">Lavoro in corso</h1>
+        <p class="session-line" id="sessionLine" hidden>
+          <span class="session-chip" id="sessionChip">ultima sessione</span>
+          <span class="session-say num" id="sessionSay"></span>
+        </p>
+      </div>
       <p class="job-clock num" id="jobClock" aria-label="Tempo di lavoro">0:00</p>
     </header>
 
@@ -48,10 +54,10 @@
             <p class="gate-stop-msg num" id="gateStopMsg" role="status"></p>
           </div>
 
-          <div class="hero">
+          <div class="hero" id="hero">
             <div class="hero-figure">
               <span class="hero-num num" id="percent" aria-hidden="true">0</span>
-              <span class="hero-unit num" aria-hidden="true">%</span>
+              <span class="hero-unit num" id="heroUnit" aria-hidden="true">%</span>
             </div>
             <div class="hero-side">
               <p class="hero-label" id="heroLabel">avanzamento</p>

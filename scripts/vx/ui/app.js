@@ -13,9 +13,14 @@
     jobsCount: $('jobsCount'),
     jobTitle: $('jobTitle'),
     jobClock: $('jobClock'),
+    sessionLine: $('sessionLine'),
+    sessionChip: $('sessionChip'),
+    sessionSay: $('sessionSay'),
     stateWord: $('stateWord'),
     clipChip: $('clipChip'),
+    hero: $('hero'),
     percent: $('percent'),
+    heroUnit: $('heroUnit'),
     heroLabel: $('heroLabel'),
     heroSub: $('heroSub'),
     bar: $('bar'),
@@ -154,10 +159,17 @@
 
   let jobIndex = readJobParam();
 
-  const scoped = (url) =>
-    jobIndex === null
-      ? url
-      : url + (url.indexOf('?') === -1 ? '?' : '&') + 'job=' + jobIndex;
+  // `?session=<id>` sceglie quale sessione guardare; senza, il server serve
+  // l'ultima. Va tenuto su ogni richiesta, come l'indice del lavoro.
+  const sessionParam = new URLSearchParams(window.location.search).get('session');
+
+  const scoped = (url) => {
+    let out = url;
+    const glue = () => (out.indexOf('?') === -1 ? '?' : '&');
+    if (jobIndex !== null) out += glue() + 'job=' + jobIndex;
+    if (sessionParam) out += glue() + 'session=' + encodeURIComponent(sessionParam);
+    return out;
+  };
 
   const pad2 = (n) => String(n).padStart(2, '0');
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -536,7 +548,8 @@
       const line = document.createElement('p');
       line.className = 'result-empty';
       line.textContent = closed
-        ? 'Il master non è stato prodotto: non c’è nessun file da guardare.'
+        ? String(state.result_note || '').trim() ||
+          'Il master non è stato prodotto: non c’è nessun file da guardare.'
         : "Il risultato non c'è ancora: il master non è stato scritto.";
       el.resultBody.append(line);
       return;
@@ -738,6 +751,9 @@
 
   // L'icona viene dal tipo di operazione, non da un'icona generica ripetuta.
   function journalKind(entry) {
+    // Una riga costruita da una sessione porta gia' il suo tipo: si rispetta.
+    const declared = String(entry.kind || '').toLowerCase();
+    if (JOURNAL_ICONS[declared]) return declared;
     const phase = String(entry.phase || '').toLowerCase();
     const line = String(entry.line || '').toLowerCase();
     // Prima il tipo dichiarato dalla riga, poi la fase: "sottotitoli" resta testo
@@ -1176,8 +1192,12 @@
     shotCount = shots.length;
   }
 
-  function setLookImage(shot) {
-    const url = shot.thumb_ready && shot.thumb ? scoped(String(shot.thumb)) : '';
+  function setLookImage(shot, closed) {
+    // A lavoro finito il fotogramma si chiede anche quando la cache del lavoro
+    // non c'è ancora: `/shots/<i>` lo estrae dal sorgente al primo accesso, e il
+    // file resta nella workdir. Mentre il render gira non si chiede niente che
+    // non sia già pronto: l'encoder sta lavorando, non la vista.
+    const url = shot.thumb && (shot.thumb_ready || closed) ? scoped(String(shot.thumb)) : '';
     el.lookEmpty.textContent = '';
     el.lookEmpty.classList.toggle('is-fallback', !url);
 
@@ -1318,7 +1338,7 @@
       }
       el.regiaLine.textContent = closed
         ? 'Encode concluso: la testina non è più in movimento.'
-        : 'Piano pronto, encode non iniziato.';
+        : 'Nessun encode in corso: la testina è ferma.';
     }
 
     if (active >= 0) {
@@ -1344,7 +1364,7 @@
       el.lookTime.textContent = timecode(shot.t_in);
       el.lookSource.textContent = shot.source || 'sorgente non dichiarata';
       el.lookFrame.style.aspectRatio = lookAspect;
-      setLookImage(shot);
+      setLookImage(shot, closed);
       paintMods(shot);
       el.shotSpecs.hidden = false;
       el.specDur.textContent = num(Number(shot.dur) || 0, 1) + ' s';
@@ -2750,6 +2770,416 @@
     resetForJob();
     tick();
   });
+
+  /* ---------------------------------------------------------------- sessione */
+
+  // Aprendo `/` sul daemon il server manda una sessione: `session, events,
+  // artifacts, gates, questions, live, journal` e — quando la cartella del
+  // lavoro esiste ancora — anche `job`, lo stesso stato che darebbe `?job=`.
+  // La pagina sa disegnare un lavoro: qui la sessione prende quella forma, e
+  // quello che manca lo dice invece di restare sul guscio vuoto con lo 0%.
+
+  const SESSION_STATUS_WORD = {
+    running: 'in corso',
+    done: 'finita',
+    stopped: 'fermata',
+    failed: 'non riuscita',
+    incomplete: 'senza esito',
+    absent: 'assente',
+  };
+
+  const SESSION_OUTCOME = {
+    done: 'done',
+    stopped: 'stopped',
+    failed: 'failed',
+    incomplete: 'incomplete',
+    running: 'running',
+  };
+
+  // La riga di chiusura del racconto: il lavoro, non la sessione.
+  const END_WORD = {
+    done: 'lavoro concluso',
+    stopped: 'lavoro fermato',
+    failed: 'lavoro non riuscito',
+    incomplete: 'lavoro senza master',
+  };
+
+  // I nomi dei passaggi, in italiano: la sessione li scrive in inglese.
+  const STAGE_LABEL = {
+    triage: 'scelta del materiale',
+    ingest: 'acquisizione',
+    bridge: 'montaggio',
+    render: 'render',
+    render_done: 'render concluso',
+    qc: 'controllo',
+    deliverables: 'consegna',
+    questions: 'domande',
+    probe: 'sonda dei file',
+    hash: 'impronta dei file',
+    proxy: 'proxy',
+    audio: 'audio',
+    analysis: 'analisi',
+    faces: 'volti',
+    speech: 'parlato',
+    measure_wall: 'misure',
+    plan: 'piano',
+    coherence: 'coerenza',
+    plan_choice: 'versione del lavoro',
+    creative: 'scelta creativa',
+    font: 'carattere',
+    typography: 'tipografia',
+    keyframes: 'fotogrammi chiave',
+    recipe: 'ricetta',
+    effects: 'effetti',
+    guard: 'guardia',
+    verify: 'verifica',
+    unaccounted: 'tempo non contato',
+  };
+
+  const GATE_LABEL = { font: 'carattere', keyframes: 'fotogrammi', plan: 'piano' };
+
+  const DECISION_QUESTION = {
+    font: 'Quale carattere',
+    typography: 'Come comporre il testo',
+    subtitles: 'Sottotitoli',
+    transition_kinds: 'Transizioni',
+    plan_choice: 'Versione del lavoro',
+    keyframes: 'Fotogrammi chiave',
+    music: 'Musica',
+  };
+
+  const stageLabel = (key) => {
+    const name = String(key || '');
+    return STAGE_LABEL[name] || name.replace(/_/g, ' ');
+  };
+
+  function basename(path) {
+    const text = String(path || '').trim();
+    if (!text) return '';
+    const parts = text.split(/[\\/]/);
+    return parts[parts.length - 1] || text;
+  }
+
+  // Il titolo del lavoro è il prompt del comando, se il comando ne aveva uno.
+  function promptOfArgv(argv) {
+    const list = Array.isArray(argv) ? argv.map(String) : [];
+    const at = list.indexOf('--prompt');
+    if (at >= 0 && list[at + 1]) return list[at + 1].trim();
+    const out = list.indexOf('--out');
+    if (out >= 0 && list[out + 1]) return basename(list[out + 1]);
+    return '';
+  }
+
+  function stageRows(session) {
+    const rows = Array.isArray(session && session.stages) ? session.stages : [];
+    return rows.filter((row) => row && String(row.stage || ''));
+  }
+
+  function lastStageName(session) {
+    const rows = stageRows(session);
+    return rows.length ? String(rows[rows.length - 1].stage) : '';
+  }
+
+  // L'ultima percentuale che la sessione ha dichiarato: è lei la verità quando
+  // il lavoro non pubblica un panel suo.
+  function lastPercent(session) {
+    const rows = stageRows(session);
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const value = rows[i].percent;
+      if (value === null || value === undefined) continue;
+      const number = Number(value);
+      if (Number.isFinite(number)) return clamp(number, 0, 100);
+    }
+    return null;
+  }
+
+  // La sequenza: i passaggi che hanno dichiarato un avanzamento, nell'ordine in
+  // cui sono arrivati. Le righe di solo tempo (probe, hash, audio…) sono il
+  // conto delle misure, non fasi: restano fuori dalla spina.
+  function sessionPhases(session, running) {
+    const phases = [];
+    const seen = new Set();
+    stageRows(session).forEach((row) => {
+      const key = String(row.stage);
+      const percent = row.percent;
+      // `null` non è zero: uno stadio senza percentuale non è una fase.
+      if (seen.has(key) || percent === null || percent === undefined) return;
+      if (!Number.isFinite(Number(percent))) return;
+      seen.add(key);
+      phases.push({ key, label: stageLabel(key) });
+    });
+    if (running) {
+      const key = lastStageName(session);
+      if (key && !seen.has(key)) phases.push({ key, label: stageLabel(key) });
+    }
+    return phases;
+  }
+
+  function eventsToJournal(events) {
+    const rows = [];
+    const stages = new Set();
+    const keys = new Set();
+    (Array.isArray(events) ? events : []).forEach((event) => {
+      const type = String(event.type || '');
+      const t = Number(event.t) || 0;
+      const phase = String(event.stage || '');
+      let line = '';
+      let kind = 'altro';
+
+      if (type === 'start') {
+        const prompt = promptOfArgv(event.argv);
+        const what = String(event.kind || 'lavoro');
+        line = 'Inizio: ' + what + (prompt ? ' — ' + prompt : '');
+        kind = 'misura';
+      } else if (type === 'stage') {
+        const stage = String(event.stage || '');
+        const detail = String(event.detail || '').trim();
+        const percent = Number(event.percent);
+        const timing = /^[\d.,]+\s*s$/.test(detail);
+        if (detail && !timing) {
+          line = stageLabel(stage) + ': ' + detail;
+        } else if (detail) {
+          line = stageLabel(stage) + ' in ' + detail.replace('.', ',');
+        } else if (!stages.has(stage)) {
+          line = 'Fase «' + stageLabel(stage) + '»' +
+            (Number.isFinite(percent) ? ' al ' + Math.round(percent) + '%' : '');
+        }
+        stages.add(stage);
+        kind = /deliver|qc/.test(stage) ? 'consegna'
+          : /render/.test(stage) ? 'render'
+            : /bridge/.test(stage) ? 'taglio'
+              : /audio/.test(stage) ? 'audio'
+                : 'misura';
+      } else if (type === 'decision') {
+        const id = String(event.id || '');
+        const question = DECISION_QUESTION[id] || ('Scelta «' + id.replace(/_/g, ' ') + '»');
+        line = question + ': ' + (String(event.choice || '') || 'nessuna scelta') +
+          (String(event.by || '') === 'user' ? ' (tua)' : '');
+        kind = /font|text|subtitle/.test(id) ? 'testo' : 'taglio';
+      } else if (type === 'gate') {
+        const gate = GATE_LABEL[String(event.gate || '')] || String(event.gate || '');
+        if (event.open === true) {
+          line = 'Cancello ' + gate + ' aperto' +
+            (String(event.detail || '').trim() ? ': ' + String(event.detail).trim() : '');
+          kind = 'altro';
+        } else {
+          line = 'Cancello ' + gate + ' chiuso' +
+            (String(event.chosen || '').trim() ? ' · ' + String(event.chosen).trim() : '') +
+            (String(event.by || '').trim() ? ' da ' + String(event.by).trim() : '');
+          kind = 'consegna';
+        }
+      } else if (type === 'artifact') {
+        const name = basename(event.path) || String(event.kind || 'file');
+        const bytes = Number(event.bytes) || 0;
+        line = 'Scritto ' + name + (bytes > 0 ? ' · ' + sizeLabel(bytes) : '');
+        kind = 'consegna';
+      } else if (type === 'end') {
+        line = 'Fine: ' +
+          (END_WORD[String(event.status || '')] || 'sessione chiusa');
+        kind = 'consegna';
+      } else if (type === 'error') {
+        line = 'Errore: ' + (String(event.message || '').trim() || 'non dichiarato');
+        kind = 'altro';
+      }
+
+      const text = line.trim();
+      if (!text) return;
+      const key = t + '|' + text;
+      if (keys.has(key)) return;
+      keys.add(key);
+      rows.push({ t, phase, kind, line: text });
+    });
+    return rows;
+  }
+
+  // Il battito: l'ultimo heartbeat della sessione, con il suo stadio e il tempo
+  // che dichiara. Senza heartbeat vale l'ultimo stadio scritto.
+  function eventsToBeat(session, events) {
+    const rows = Array.isArray(events) ? events : [];
+    for (let i = rows.length - 1; i >= 0; i -= 1) {
+      const row = rows[i];
+      if (String(row.type || '') !== 'heartbeat') continue;
+      return {
+        stage: stageLabel(row.stage),
+        detail: String(row.detail || ''),
+        elapsed_sec: Number(row.elapsed_sec) || 0,
+        eta_sec: Number(row.eta_sec) || 0,
+        percent: Number(row.percent),
+        at_sec: Number(row.t) || 0,
+      };
+    }
+    const stage = lastStageName(session);
+    if (!stage) return {};
+    const written = stageRows(session);
+    const last = written[written.length - 1] || {};
+    return {
+      stage: stageLabel(stage),
+      detail: String(last.detail || ''),
+      elapsed_sec: Number(session.t) || 0,
+      eta_sec: 0,
+      percent: Number(last.percent),
+      at_sec: Number(last.t) || 0,
+    };
+  }
+
+  function emptyJobView() {
+    return {
+      job: '',
+      path: '',
+      active: false,
+      locked: false,
+      updated_sec: null,
+      updated_at: '',
+      state: '',
+      prompt: '',
+      clips: 0,
+      percent: 0,
+      elapsed_sec: 0,
+      current: null,
+      note: '',
+      estimate: {},
+      plan_choice: {},
+      decisions: [],
+      outcome: 'idle',
+      guard: { ok: true, skipped: true, why: '', violations: [], warnings: [] },
+      phases: [],
+      journal: [],
+      frames: [],
+      approved: false,
+      approval: { required: false, approved: false, waiting: false, reason: 'nessun piano di fotogrammi' },
+      master: '',
+      master_ready: false,
+      master_bytes: 0,
+      render: { out_time_sec: 0, duration_sec: 0, percent: 0, speed: '' },
+      timeline: [],
+      shots: [],
+      live: { ready: 0, total: 0, chunks: [] },
+      font: { pending: false, sample: '', requirement: '', pool: '', chosen: '', candidates: [] },
+      questions: [],
+      feedback: { asked: false, given: false, rating: null, summary: {} },
+      beat: {},
+      progress_source: '',
+    };
+  }
+
+  function sessionView(payload) {
+    const session = payload.session;
+    const job = payload.job && typeof payload.job === 'object' ? payload.job : null;
+    const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+    const view = Object.assign(emptyJobView(), job || {});
+
+    const status = String(session.status || '');
+    const running = status === 'running';
+    const elapsed = Number(session.t) || 0;
+
+    view.session = session;
+    view.jobs = [];
+    view.sessionMissing = !job;
+
+    // Il master è un fatto della sessione: se il file è stato scritto, la zona
+    // «Risultato» si apre anche quando il lavoro non pubblica un panel suo.
+    const masters = artifacts.filter(
+      (item) => item && String(item.kind) === 'master' && Number(item.bytes) > 0
+    );
+    const master = masters.length ? masters[masters.length - 1] : null;
+    if (master && view.master_ready !== true) {
+      view.master_ready = true;
+      view.master = basename(master.path) || 'master.mp4';
+      view.master_bytes = Number(master.bytes) || 0;
+    }
+
+    // Il racconto è la storia della sessione, non un log: solo i fatti.
+    const events = Array.isArray(payload.events) ? payload.events : [];
+    const journal = eventsToJournal(events);
+    if (journal.length) view.journal = journal;
+    view.beat = eventsToBeat(payload.session, events);
+
+    if (!String(view.prompt || '').trim()) view.prompt = promptOfArgv(session.argv);
+    if (!Number(view.elapsed_sec)) view.elapsed_sec = elapsed;
+    if (!Number(view.clips) && Array.isArray(view.shots)) view.clips = view.shots.length;
+
+    // In corso: la testina sta sull'ultimo stadio. Finita: nessuna testina.
+    const phases = sessionPhases(session, running);
+    if (phases.length) view.phases = phases;
+    view.current = running ? (view.current || lastStageName(session)) : null;
+
+    const fromSession = lastPercent(session);
+    if ((Number(view.percent) || 0) <= 0 && fromSession !== null) view.percent = fromSession;
+
+    // In corso la percentuale è quella che la sessione dichiara: dirlo evita
+    // che un 25% fermo per due minuti sembri un lavoro impuntato. Se invece il
+    // lavoro ha un panel suo, la percentuale è la sua e la nota resta la sua.
+    if (running && job && (Number(job.percent) || 0) <= 0) {
+      view.note = 'La percentuale è quella delle fasi della sessione: ' +
+        'questo lavoro non ne pubblica una sua.';
+    }
+
+    if (!job) {
+      // La cartella del lavoro non c'è più: la sessione resta leggibile, il
+      // lavoro no, e la pagina lo scrive invece di mostrare uno stato vuoto.
+      view.outcome = SESSION_OUTCOME[status] || (running ? 'running' : 'idle');
+      view.note = String(payload.reason || '').trim() ||
+        'La sessione non ha lasciato una cartella di lavoro da rileggere.';
+      view.result_note =
+        "La cartella del lavoro non è più sul disco: qui non c'è un master da aprire.";
+      view.master_ready = false;
+      view.master = '';
+      view.master_bytes = 0;
+    } else if (view.outcome === 'done' && view.master_ready) {
+      view.note =
+        'sessione ' + (String(session.kind || 'vx')) + ' finita in ' + mmss(elapsed) +
+        ' · ' + view.master + ' (' + sizeLabel(view.master_bytes) + ')';
+    }
+
+    return view;
+  }
+
+  // Cos'è la sessione che si sta guardando, in testa: non un lavoro appena
+  // partito, ma l'ultima cosa che il daemon ha eseguito.
+  function paintSession(view) {
+    const session = view && view.session;
+    if (!session) {
+      el.sessionLine.hidden = true;
+      return;
+    }
+    const status = String(session.status || '');
+    const running = status === 'running';
+    const kind = String(session.kind || '').trim();
+
+    // Nessuna sessione nel registro: la riga non sparisce, dice cosa manca.
+    if (!String(session.id || '').trim()) {
+      el.sessionLine.hidden = false;
+      el.sessionLine.classList.remove('is-live', 'is-done');
+      el.sessionLine.classList.add('is-missing');
+      el.sessionChip.textContent = 'nessuna sessione';
+      el.sessionSay.textContent = String(session.reason || '').trim() ||
+        'nessun comando vx è stato eseguito su questa macchina';
+      el.sessionLine.title = el.sessionSay.textContent;
+      return;
+    }
+
+    const bits = [];
+    if (kind) bits.push('vx ' + kind);
+    bits.push(SESSION_STATUS_WORD[status] || status || 'senza stato');
+    if (Number(session.t) > 0) bits.push(mmss(session.t));
+    const phases = Array.isArray(view.phases) ? view.phases.length : 0;
+    if (phases) bits.push(phases + (phases === 1 ? ' fase' : ' fasi'));
+    const decisions = Array.isArray(view.decisions) ? view.decisions.length : 0;
+    if (decisions) bits.push(decisions + (decisions === 1 ? ' decisione' : ' decisioni'));
+    const shots = Array.isArray(view.shots) ? view.shots.length : 0;
+    if (shots) bits.push(shots + ' shot');
+
+    el.sessionLine.hidden = false;
+    el.sessionLine.classList.toggle('is-live', running);
+    el.sessionLine.classList.toggle('is-done', status === 'done');
+    el.sessionLine.classList.toggle('is-missing', view.sessionMissing === true);
+    el.sessionChip.textContent = sessionParam ? 'sessione richiesta' : 'ultima sessione';
+    el.sessionSay.textContent = bits.join(' · ');
+    el.sessionLine.title =
+      'sessione ' + (session.id || 'senza id') +
+      (session.job_path ? ' · ' + session.job_path : ' · nessuna cartella dichiarata');
+  }
+
   /* ------------------------------------------------------------------ stato */
 
   function render(state) {
@@ -2773,6 +3203,7 @@
     // Il server dice quale lavoro ha davvero servito: la pagina lo segue.
     if (Number.isFinite(Number(state.selected))) jobIndex = Number(state.selected);
     paintJobs(state);
+    paintSession(state);
     lastState = state;
     paintJournal(state);
     paintDecisions(state);
@@ -2814,23 +3245,38 @@
     const clips = Number(state.clips) || 0;
     el.clipChip.textContent = clips === 1 ? '1 clip' : clips > 1 ? clips + ' clip' : 'clip non dichiarate';
 
-    setPercent(percent);
-    el.bar.setAttribute('aria-valuenow', String(Math.round(percent)));
-    el.fill.style.setProperty('--p', String(clamp(percent, 0, 100) / 100));
+    // A lavoro chiuso senza percentuale pubblicata (nessun panel) non c'è uno
+    // 0%: al posto del numero il segno dell'esito. La barra è piena solo quando
+    // il lavoro è davvero arrivato in fondo.
+    const mark = closed && percent < 1 ? OUTCOME_MARK[verdict] || '–' : '';
+    el.hero.classList.toggle('is-closed', Boolean(mark));
+    el.heroUnit.hidden = Boolean(mark);
+    if (mark) {
+      shownPercent = null;
+      el.percent.textContent = mark;
+    } else {
+      setPercent(percent);
+    }
+
+    const barPercent = verdict === 'done' && percent < 1 ? 100 : percent;
+    el.bar.setAttribute('aria-valuenow', String(Math.round(barPercent)));
+    el.fill.style.setProperty('--p', String(clamp(barPercent, 0, 100) / 100));
     const barWidth = el.barTrack ? el.barTrack.clientWidth : 0;
     const barInner = Math.max(0, barWidth - 8);
     el.barHead.style.setProperty(
       '--x',
-      (3 + (clamp(percent, 0, 100) / 100) * barInner).toFixed(1) + 'px'
+      (3 + (clamp(barPercent, 0, 100) / 100) * barInner).toFixed(1) + 'px'
     );
-    el.barHead.classList.toggle('is-on', percent > 0);
+    el.barHead.classList.toggle('is-on', barPercent > 0);
 
     const activeIndex = phases.findIndex((p) => p.key === state.current);
-    el.heroLabel.textContent = 'avanzamento';
-    if (finished) {
+    el.heroLabel.textContent = mark ? 'esito' : 'avanzamento';
+    if (finished || verdict === 'done') {
       el.heroSub.textContent = pad2(phases.length) + ' fasi su ' + pad2(phases.length);
     } else if (activeIndex >= 0) {
       el.heroSub.textContent = 'fase ' + pad2(activeIndex + 1) + ' di ' + pad2(phases.length);
+    } else if (closed) {
+      el.heroSub.textContent = 'lavoro chiuso';
     } else {
       el.heroSub.textContent = 'in attesa del lavoro';
     }
@@ -2841,7 +3287,7 @@
       el.phases.dataset.signature = phaseSignature;
       buildPhases(phases);
     }
-    paintPhases(phases, activeIndex, finished);
+    paintPhases(phases, activeIndex, finished || verdict === 'done');
     el.phasesEmpty.hidden = phases.length > 0;
     el.railSub.textContent =
       phases.length === 0 ? 'nessuna fase' : pad2(phases.length) + ' fasi';
@@ -2856,9 +3302,14 @@
       el.verdictMark.textContent = OUTCOME_MARK[verdict] || '–';
       el.verdictTitle.textContent = OUTCOME_TITLE[verdict] || 'Lavoro concluso';
       el.verdictText.textContent = verdictSentence(verdict, state.note);
+      // Il conteggio accanto all'esito è quello che si è visto: i fotogrammi se
+      // ci sono, altrimenti gli shot del montaggio (zero fotogrammi non è un dato).
+      const shots = Array.isArray(state.shots) ? state.shots.length : 0;
+      const counted = frames.length
+        ? frames.length + (frames.length === 1 ? ' fotogramma' : ' fotogrammi')
+        : shots + ' shot';
       el.verdictMeta.textContent =
-        frames.length +
-        (frames.length === 1 ? ' fotogramma' : ' fotogrammi') +
+        counted +
         ' · ' +
         mmss(state.elapsed_sec) +
         ' di lavoro' +
@@ -2904,7 +3355,10 @@
     try {
       const response = await fetch(scoped('/api/state'), { cache: 'no-store' });
       if (!response.ok) throw new Error('stato ' + response.status);
-      render(await response.json());
+      const payload = await response.json();
+      // Con `session` il server manda anche `job`: la pagina disegna quello, e
+      // prende da `events` il racconto e il battito che il registro contiene.
+      render(payload && payload.session ? sessionView(payload) : payload);
     } catch (error) {
       body.classList.add('is-offline');
       el.stateWord.textContent = 'Senza collegamento';
