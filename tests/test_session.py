@@ -33,6 +33,13 @@ PASS = 0
 FAIL = 0
 TEMP = Path(tempfile.mkdtemp(prefix="vx-session-"))
 
+#: The keys ``/api/state`` promises in session mode. A key added to the view is
+#: added here once, and the check below asks for *all* of them: a legitimately
+#: new key no longer turns the test red just because a literal list changed.
+STATE_KEYS = frozenset(
+    {"session", "events", "artifacts", "gates", "live", "journal", "questions"}
+)
+
 
 def check(label: str, ok: bool, detail: object = "") -> None:
     global PASS, FAIL
@@ -283,9 +290,9 @@ def check_view_and_actions() -> None:
     server = serve.Server(port=0, session=True).start()
     try:
         data = json.loads(get(server.url + "api/state").decode("utf-8"))
-        check("S14 /api/state ha le sei chiavi promesse",
-              set(data) == {"session", "events", "artifacts", "gates", "live", "journal"},
-              sorted(data))
+        check("S14 /api/state ha tutte le chiavi promesse",
+              STATE_KEYS <= set(data),
+              sorted(STATE_KEYS - set(data)) or sorted(data))
         check("S14 la sessione racconta start, stage e end",
               data["session"]["id"] == sess.id and data["session"]["status"] == "done"
               and [row["type"] for row in data["events"]][:1] == ["start"]

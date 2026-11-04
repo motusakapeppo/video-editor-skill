@@ -32,6 +32,9 @@ def check(label: str, ok: bool, detail: object = "") -> None:
 class FakeTimeline:
     def __init__(self, duration: float) -> None:
         self.duration = duration
+        #: ``Timeline3.audio`` is the audio bus list and defaults to empty; the
+        #: chunk path reads it for the loudness audit, so the fake carries it.
+        self.audio: list = []
 
 
 def main() -> int:
