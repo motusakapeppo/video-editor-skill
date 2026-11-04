@@ -37,10 +37,34 @@
     <main class="board">
       <div class="col-work">
         <section class="stage" aria-label="Stato del lavoro">
-          <div class="stage-head">
+          <div class="stage-head" id="stageHead">
             <p class="eyebrow" id="stateWord">In corso</p>
-            <p class="chips">
+            <p class="chips" id="chipWrap">
               <span class="chip" id="clipChip">clip non dichiarate</span>
+            </p>
+          </div>
+
+          <!-- Nessuna sessione e nessun lavoro: non è uno 0%, è un'assenza. -->
+          <div class="empty-work" id="emptyWork" hidden>
+            <p class="empty-title">Nessun lavoro da mostrare</p>
+            <p class="empty-say" id="emptyReason"></p>
+            <p class="empty-do-label">Per cominciare</p>
+            <ul class="empty-do">
+              <li class="empty-step">
+                <code class="empty-cmd">/reel</code>
+                <span class="empty-note">
+                  Da OpenCode: apre questa vista e monta un reel dai file che scegli.
+                </span>
+              </li>
+              <li class="empty-step">
+                <code class="empty-cmd">vx auto --prompt "…" --assets &lt;cartella&gt; --out &lt;file&gt; --watch</code>
+                <span class="empty-note">
+                  Da terminale: monta da solo e tiene questa pagina aggiornata mentre lavora.
+                </span>
+              </li>
+            </ul>
+            <p class="empty-foot">
+              Appena un comando <span class="num">vx</span> scrive il suo registro, la pagina si riempie da sola.
             </p>
           </div>
 

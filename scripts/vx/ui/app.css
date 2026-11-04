@@ -540,6 +540,117 @@ body.is-offline .eyebrow { color: var(--warn); }
   white-space: nowrap;
 }
 
+/* ------------------------------------------------------------- stato vuoto */
+
+/* Nessuna sessione, nessun lavoro: la scheda non finge un avanzamento. Dice
+   che non c'è niente, perché, e da dove cominciare. */
+.empty-work {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 820px;
+  padding: 14px 0 6px;
+  animation: rise 420ms var(--ease-out) 40ms backwards;
+}
+
+.empty-work::before {
+  content: "";
+  width: 46px;
+  height: 56px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, .045) 0 5px, transparent 5px 10px);
+}
+
+.empty-title {
+  margin: 0;
+  font: 600 clamp(22px, 2.4vw, 28px)/1.15 var(--display);
+  letter-spacing: -.01em;
+  color: #eef4fb;
+}
+
+.empty-say {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.empty-do-label {
+  margin: 6px 0 0;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.empty-do {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.empty-step {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, .02);
+}
+
+.empty-cmd {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid rgba(78, 161, 255, .3);
+  border-radius: var(--r-sm);
+  background: rgba(78, 161, 255, .08);
+  font: 600 12px/1.4 var(--mono);
+  color: var(--accent-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.empty-note {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+.empty-foot {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+/* Nello stato vuoto il resto della pagina non esiste: non c'è un lavoro a cui
+   chiedere un voto, un esito, una regia. */
+body.is-empty .jobs,
+body.is-empty .col-work > .vote-card,
+body.is-empty .col-work > .live,
+body.is-empty .col-work > .journal,
+body.is-empty .col-work > .decisions,
+body.is-empty .col-work > .regia,
+body.is-empty .col-work > .result,
+body.is-empty .col-work > .deck-wrap {
+  display: none !important;
+}
+
+body.is-empty .col-rail { display: none; }
+
+body.is-empty .board { grid-template-columns: minmax(0, 1fr); }
+
+body.is-empty .col-work { max-width: 900px; }
+
 /* ---------------------------------------------------------------------- hero */
 
 .hero {
@@ -3780,7 +3891,12 @@ html.has-view body { overflow: hidden; }
   .top { grid-template-columns: 1fr auto; row-gap: 6px; }
   .brand-role,
   .brand-sep { display: none; }
-  .job-title { grid-column: 1 / -1; grid-row: 2; text-align: left; white-space: normal; }
+  /* Il titolo e la riga di sessione stanno nella stessa cella: senza questo
+     finivano in colonna e la riga allargava la pagina oltre lo schermo. */
+  .job-head { grid-column: 1 / -1; grid-row: 2; align-items: flex-start; text-align: left; }
+  .job-title { grid-column: auto; grid-row: auto; text-align: left; white-space: normal; }
+  .session-line { flex-wrap: wrap; justify-content: flex-start; }
+  .session-say { white-space: normal; text-align: left; }
   .job-clock { grid-column: 2; grid-row: 1; }
   .stage { padding: 18px 16px 20px; }
   .hero { flex-direction: column; align-items: flex-start; gap: 14px; }

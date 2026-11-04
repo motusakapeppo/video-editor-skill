@@ -18,6 +18,10 @@
     sessionSay: $('sessionSay'),
     stateWord: $('stateWord'),
     clipChip: $('clipChip'),
+    chipWrap: $('chipWrap'),
+    stageHead: $('stageHead'),
+    emptyWork: $('emptyWork'),
+    emptyReason: $('emptyReason'),
     hero: $('hero'),
     percent: $('percent'),
     heroUnit: $('heroUnit'),
@@ -3279,11 +3283,27 @@
     const session = payload.session;
     const job = payload.job && typeof payload.job === 'object' ? payload.job : null;
     const artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+    const events = Array.isArray(payload.events) ? payload.events : [];
+    const found = Array.isArray(payload.jobs) ? payload.jobs.length : 0;
     const view = Object.assign(emptyJobView(), job || {});
 
     const status = String(session.status || '');
     const running = status === 'running';
     const elapsed = Number(session.t) || 0;
+
+    // Niente sessione, niente lavoro, niente eventi: non c'è nulla da
+    // raccontare. Non è uno stato «idle» con lo 0%: è un'assenza, e la pagina
+    // la mostra come tale invece di promettere un'attesa che non esiste.
+    if (!String(session.id || '').trim() && !job && !found && !events.length) {
+      view.session = session;
+      view.jobs = [];
+      view.empty = {
+        reason:
+          String(payload.reason || session.reason || '').trim() ||
+          'nessun lavoro è stato ancora eseguito su questa macchina',
+      };
+      return view;
+    }
 
     view.session = session;
     view.jobs = [];
@@ -3302,7 +3322,6 @@
     }
 
     // Il racconto è la storia della sessione, non un log: solo i fatti.
-    const events = Array.isArray(payload.events) ? payload.events : [];
     const journal = eventsToJournal(events);
     if (journal.length) view.journal = journal;
     view.beat = eventsToBeat(payload.session, events);
@@ -3365,7 +3384,7 @@
       el.sessionLine.classList.remove('is-live', 'is-done');
       el.sessionLine.classList.add('is-missing');
       el.sessionChip.textContent = 'nessuna sessione';
-      el.sessionSay.textContent = String(session.reason || '').trim() ||
+      el.sessionSay.textContent = tidyReason(session.reason) ||
         'nessun comando vx è stato eseguito su questa macchina';
       el.sessionLine.title = el.sessionSay.textContent;
       return;
@@ -3393,10 +3412,95 @@
       (session.job_path ? ' · ' + session.job_path : ' · nessuna cartella dichiarata');
   }
 
+  /* ----------------------------------------------------------- stato vuoto */
+
+  // La pagina può non avere niente da mostrare: nessuna sessione nel registro,
+  // nessun lavoro nella cartella. Non è un lavoro allo 0% in attesa: è
+  // un'assenza, e va scritta come tale — con il motivo vero e con cosa fare per
+  // uscirne. Niente voto, niente esito, niente regia: non c'è un lavoro a cui
+  // chiederli.
+
+  // Il server scrive i motivi senza accenti: qui tornano leggibili. L'ordine
+  // conta: «perche'» prima di «e'», o diventerebbe «perchè».
+  const REASON_FIXES = [
+    [/\bpiu'(?![a-zà-ù])/gi, 'più'],
+    [/\bcosi'(?![a-zà-ù])/gi, 'così'],
+    [/\bperche'(?![a-zà-ù])/gi, 'perché'],
+    [/\bgia'(?![a-zà-ù])/gi, 'già'],
+    [/\bpuo'(?![a-zà-ù])/gi, 'può'],
+    [/\be'(?![a-zà-ù])/g, 'è'],
+    [/\bE'(?![a-zà-ù])/g, 'È'],
+  ];
+
+  function tidyReason(text) {
+    let out = String(text || '').trim();
+    REASON_FIXES.forEach(([pattern, word]) => {
+      out = out.replace(pattern, word);
+    });
+    return out.replace(/\s+/g, ' ');
+  }
+
+  function paintEmpty(state) {
+    const empty = (state && state.empty) || {};
+    const reason = tidyReason(empty.reason) || 'nessun lavoro è stato ancora eseguito';
+
+    // Una classe sola decide cosa si vede: il resto della pagina non esiste.
+    body.classList.add('is-empty');
+    body.classList.remove('is-done', 'is-stopped', 'is-failed', 'is-incomplete');
+    body.classList.remove('has-master', 'is-offline');
+    body.classList.add('is-idle');
+
+    if (el.fontGate.open) closeGate();
+    if (el.planGate.open) closePlanGate();
+    if (!el.frameView.hidden) closeFrame({ immediate: true });
+    stopLive();
+    hideNow();
+    lastState = state;
+    lastClosed = false;
+
+    // La riga in testa dice lo stato vero: nessuna sessione, e perché.
+    paintSession(state);
+
+    el.emptyWork.hidden = false;
+    el.emptyReason.textContent = upperFirst(reason) + (/[.!?]$/.test(reason) ? '' : '.');
+
+    el.stateWord.textContent = 'Nessuna sessione';
+    el.stageHead.hidden = true;
+    el.chipWrap.hidden = true;
+    el.hero.hidden = true;
+    el.bar.hidden = true;
+    el.bar.setAttribute('aria-hidden', 'true');
+    el.now.hidden = true;
+    el.verdict.hidden = true;
+    el.gateStop.hidden = true;
+    el.jobClock.hidden = true;
+    el.jobClock.textContent = '';
+
+    el.jobTitle.textContent = 'Nessun lavoro da mostrare';
+    document.title = 'vx — nessun lavoro';
+  }
+
+  // Il contrario: c'è un lavoro, la pagina torna a essere una pagina di lavoro.
+  function clearEmpty() {
+    body.classList.remove('is-empty');
+    el.emptyWork.hidden = true;
+    el.stageHead.hidden = false;
+    el.chipWrap.hidden = false;
+    el.hero.hidden = false;
+    el.bar.hidden = false;
+    el.bar.removeAttribute('aria-hidden');
+    el.jobClock.hidden = false;
+  }
+
   /* ------------------------------------------------------------------ stato */
 
   function render(state) {
     if (approving) return;
+    if (state && state.empty) {
+      paintEmpty(state);
+      return;
+    }
+    clearEmpty();
     const phases = Array.isArray(state.phases) ? state.phases : [];
     const frames = Array.isArray(state.frames) ? state.frames : [];
     // La fonte di verita' e' `progress.value`: `state.percent` resta il ripiego
@@ -3586,6 +3690,27 @@
     paintRegia(lastState, lastClosed);
   });
 
+  // La forma che il resto del file sa disegnare. Una lettura senza sessione e
+  // senza nessun lavoro è uno stato vuoto anche quando non viene dal registro
+  // (`vx serve DIR` su una cartella che non contiene ancora un lavoro): non c'è
+  // niente da aspettare, e la pagina non deve inventare uno 0%.
+  function payloadView(payload) {
+    if (payload && payload.session) return sessionView(payload);
+    if (!payload || typeof payload !== 'object') return payload;
+    const named = String(payload.job || '').trim();
+    const found = Array.isArray(payload.jobs) ? payload.jobs.length : 0;
+    const events = Array.isArray(payload.events) ? payload.events.length : 0;
+    if (named || found || events) return payload;
+    const where = String(payload.path || '').trim();
+    return Object.assign({}, payload, {
+      empty: {
+        reason: where
+          ? 'nella cartella servita non c’è nessun lavoro: ' + where
+          : 'non c’è nessun lavoro da mostrare',
+      },
+    });
+  }
+
   async function tick() {
     if (inflight) return;
     inflight = true;
@@ -3595,7 +3720,7 @@
       const payload = await response.json();
       // Con `session` il server manda anche `job`: la pagina disegna quello, e
       // prende da `events` il racconto e il battito che il registro contiene.
-      render(payload && payload.session ? sessionView(payload) : payload);
+      render(payloadView(payload));
     } catch (error) {
       body.classList.add('is-offline');
       el.stateWord.textContent = 'Senza collegamento';
