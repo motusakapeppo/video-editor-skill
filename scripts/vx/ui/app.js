@@ -546,7 +546,7 @@
     });
   }
 
-  function paintFrames(frames, finished) {
+  function paintFrames(frames, finished, reason) {
     // Il lavoro fa parte dell'impronta: due lavori possono avere gli stessi nomi
     // di fotogrammi e la griglia deve comunque essere rifatta.
     const signature = jobIndex + '|' + frames.map((f) => f.name + ':' + f.bytes).join('|');
@@ -559,9 +559,12 @@
     }
     el.frameCount.textContent = pad2(frames.length);
     el.framesEmpty.hidden = frames.length > 0;
-    el.framesEmpty.textContent = finished
-      ? 'Il lavoro è finito senza fotogrammi chiave.'
-      : 'Nessun fotogramma: il lavoro non ne ha ancora scritti.';
+    const why = String(reason || '').trim();
+    el.framesEmpty.textContent = frames.length
+      ? ''
+      : finished
+        ? 'Il lavoro è finito senza fotogrammi chiave.'
+        : why || 'Nessun fotogramma: il lavoro non ne ha ancora scritti.';
   }
 
   /* --------------------------------------------------- fotogramma ingrandito */
@@ -854,7 +857,7 @@
   // Il pulsante esiste solo se c'è un piano e un'attesa **di un lavoro in corso**:
   // `required` accende il blocco, `waiting` lo rende cliccabile, `approved` lo
   // chiude. Mai per ipotesi, e mai su un lavoro che non sta più aspettando.
-  function paintApproval(state) {
+  function paintApproval(state, frameCount) {
     const approval = state.approval && typeof state.approval === 'object' ? state.approval : null;
     const required = !!(approval && approval.required === true) && jobRunning(state);
 
@@ -868,6 +871,23 @@
 
     const approved = approval.approved === true;
     const waiting = approval.waiting === true;
+    const frames = Number.isFinite(frameCount) ? frameCount : 0;
+
+    // Con zero immagini non c'e' niente da approvare: niente pulsante, solo il
+    // motivo. La riga sta dove stava il pulsante, cosi' il silenzio non si
+    // confonde con un'attesa.
+    if (!approved && frames === 0) {
+      window.clearTimeout(el.approveFlash._timer);
+      el.approveFlash.textContent = '';
+      el.approve.hidden = true;
+      el.approveDone.hidden = true;
+      el.approve.classList.remove('is-waiting');
+      el.approveNote.className = 'action-note';
+      el.approveNote.textContent =
+        String(approval.reason || '').trim() ||
+        'Nessun fotogramma da approvare: l\'estrazione non ha prodotto immagini.';
+      return;
+    }
 
     el.approve.hidden = approved;
     el.approveDone.hidden = !approved;
@@ -3662,11 +3682,15 @@
     }
 
     // fotogrammi e approvazione
-    paintFrames(frames, finished);
+    const approvalReason =
+      state.approval && typeof state.approval === 'object'
+        ? String(state.approval.reason || '')
+        : '';
+    paintFrames(frames, finished, approvalReason);
     paintResult(state, closed);
     paintFontGate(state);
     paintPlanChoice(state);
-    paintApproval(state);
+    paintApproval(state, frames.length);
   }
 
   /* ------------------------------------------------------------------ rete */

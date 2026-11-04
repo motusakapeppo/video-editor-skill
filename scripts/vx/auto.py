@@ -1238,7 +1238,7 @@ def apply_opening(
     section = opening_section(selected, assets_by_id, threshold=threshold)
     if not section:
         return selected, None
-    reordered = section.pop("reordered")
+    reordered = section.pop("reordered", [])
     if not section.get("moved"):
         return selected, section
     queue = list(reordered)
@@ -4344,32 +4344,46 @@ def _frame_choices(plan: Any) -> List[Dict[str, Any]]:
     return choices
 
 
-def _extract_keyframe(source: str, at: float, png: Path) -> str:
-    """Un PNG a un istante del sorgente, e il suo sha256; ``""`` se non riesce.
+def _extract_keyframe(source: str, at: float, png: Path) -> Tuple[str, str]:
+    """Un PNG a un istante del sorgente: ``(sha256, "")`` o ``("", motivo)``.
 
-    Un fotogramma che non si estrae non ferma il montaggio: il piano resta
-    valido con l'impronta vuota, e il report non finge un pixel che non c'e'.
+    Il temporaneo finisce in ``.tmp.png``, non in ``.png.tmp``: ffmpeg sceglie
+    il formato dall'**ultima** estensione, e ``.tmp`` non e' un formato (senza
+    questo, ogni estrazione falliva in silenzio). ``-f image2`` lo dice anche a
+    chi legge il comando. Il motivo dell'errore torna al chiamante, cosi' il
+    report non restituisce un'impronta vuota senza dire perche'.
     """
     png = Path(png)
     png.parent.mkdir(parents=True, exist_ok=True)
-    temporary = png.with_name(png.name + ".tmp")
+    temporary = png.with_name(f"{png.stem}.tmp{png.suffix}")
     try:
         proc = subprocess.run(
             [
                 ff.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
                 "-ss", f"{float(at):.3f}", "-i", str(source),
-                "-frames:v", "1", "-update", "1", str(temporary),
+                "-frames:v", "1", "-update", "1", "-f", "image2", str(temporary),
             ],
             capture_output=True,
         )
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        return "", f"ffmpeg non eseguibile: {exc}"
+    stderr = (proc.stderr or b"").decode("utf-8", "replace").strip()
+    try:
+        written = temporary.is_file() and temporary.stat().st_size > 0
     except OSError:
+        written = False
+    if proc.returncode != 0 or not written:
         temporary.unlink(missing_ok=True)
-        return ""
-    if proc.returncode != 0 or not temporary.is_file():
+        lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+        why = lines[-1] if lines else f"ffmpeg uscito con codice {proc.returncode}"
+        return "", f"estrazione fallita a {float(at):.3f}s: {why}"
+    try:
+        temporary.replace(png)
+    except OSError as exc:
         temporary.unlink(missing_ok=True)
-        return ""
-    temporary.replace(png)
-    return hashlib.sha256(png.read_bytes()).hexdigest()
+        return "", f"PNG non scritto: {exc}"
+    return hashlib.sha256(png.read_bytes()).hexdigest(), ""
 
 
 def _timeline_fingerprint(plan: Any) -> str:
@@ -4416,7 +4430,14 @@ def propose_keyframes(workdir: Any, plan: Any) -> Dict[str, Any]:
     for position, choice in enumerate(choices):
         png = root / KEYFRAMES_DIR / f"kf{position}.png"
         source = sources.get(choice["source_id"], "")
-        sha = _extract_keyframe(source, choice["at"], png) if source else ""
+        # Un PNG di un giro precedente non deve passare per questo piano.
+        png.unlink(missing_ok=True)
+        if source:
+            sha, error = _extract_keyframe(source, choice["at"], png)
+        else:
+            sha, error = "", (
+                f"sorgente non nota per {choice['source_id'] or '(senza id)'}"
+            )
         frames.append(
             {
                 "clip": choice["clip"],
@@ -4424,10 +4445,13 @@ def propose_keyframes(workdir: Any, plan: Any) -> Dict[str, Any]:
                 "at": choice["at"],
                 "sha256": sha,
                 "path": str(png),
+                "error": error,
             }
         )
-    timeline_sha = _timeline_fingerprint(plan)
-    fingerprint = [
+    # Il digest copre solo i fotogrammi che un'immagine ce l'hanno davvero:
+    # un frame vuoto non e' una prova da approvare. La timeline resta nel
+    # digest, quindi due piani diversi non possono avere lo stesso digest.
+    valid = [
         {
             "clip": item["clip"],
             "index": item["index"],
@@ -4435,13 +4459,15 @@ def propose_keyframes(workdir: Any, plan: Any) -> Dict[str, Any]:
             "sha256": item["sha256"],
         }
         for item in frames
+        if str(item.get("sha256") or "").strip()
     ]
+    timeline_sha = _timeline_fingerprint(plan)
     digest = hashlib.sha256(
         json.dumps(
             {
                 "schema": KEYFRAMES_PLAN_SCHEMA,
                 "timeline": timeline_sha,
-                "frames": fingerprint,
+                "frames": valid,
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -4452,6 +4478,7 @@ def propose_keyframes(workdir: Any, plan: Any) -> Dict[str, Any]:
         "timeline_digest": timeline_sha,
         "digest": digest,
         "count": len(frames),
+        "with_images": len(valid),
         "frames": frames,
     }
 
@@ -4519,15 +4546,73 @@ def keyframe_gate(
         else:
             proposal = {}
     digest = str(proposal.get("digest") or "")
-    count = int(proposal.get("count") or 0)
-    if not digest or count <= 0:
-        section["reason"] = str(
-            section.get("error") or "nessun piano di fotogrammi"
+    raw_frames = [
+        dict(item) for item in (proposal.get("frames") or []) if isinstance(item, Mapping)
+    ]
+    # Un fotogramma senza sha256 non ha un'immagine: non si approva il nulla.
+    frames = [item for item in raw_frames if str(item.get("sha256") or "").strip()]
+    count = len(frames)
+    if count <= 0:
+        # Nessun cancello senza niente da mostrare: la policy di oggi e' "tre
+        # fotogrammi, render senza approvazione", e un'attesa sul vuoto e' 81 s
+        # buttati. Il report tiene gli errori di ogni tentativo.
+        reason = (
+            "nessun fotogramma estraibile"
+            if raw_frames
+            else str(section.get("error") or "nessun piano di fotogrammi")
         )
+        waiting_path = root / KEYFRAMES_DIR / KEYFRAMES_WAITING_NAME
+        waiting_path.unlink(missing_ok=True)
+        # Il pending resta come testimone del tentativo (count 0, nessun digest):
+        # la vista legge il perche' invece di dire "nessun piano", e il POST di
+        # approvazione lo rifiuta perche' non c'e' un'immagine da approvare.
+        pending_path = root / KEYFRAMES_DIR / KEYFRAMES_PENDING_NAME
+        if raw_frames:
+            _write_json_atomic(
+                pending_path,
+                {
+                    "schema": KEYFRAMES_PLAN_SCHEMA,
+                    "digest": "",
+                    "timeline_digest": str(proposal.get("timeline_digest") or ""),
+                    "count": 0,
+                    "frames": raw_frames,
+                },
+            )
+        else:
+            pending_path.unlink(missing_ok=True)
+        section.update(
+            {
+                "required": False,
+                "approved": False,
+                "waiting": False,
+                "selected_by": "auto",
+                "count": 0,
+                "digest": "",
+                "frames": raw_frames,
+                "reason": reason,
+                "asked": False,
+                "answered_by": "auto",
+                "by": "auto",
+                "expired": False,
+                "choice": "auto",
+            }
+        )
+        _record_gate(
+            root,
+            "keyframes",
+            open=False,
+            asked=False,
+            wait_sec=0.0,
+            choice="auto",
+            answered_by="auto",
+        )
+        say(f"Fotogrammi: {reason}, il render prosegue.")
+        return section
+    if not digest:
+        section["reason"] = str(section.get("error") or "nessun piano di fotogrammi")
         say(f"Fotogrammi: {section['reason']}")
         return section
 
-    frames = [dict(item) for item in (proposal.get("frames") or []) if isinstance(item, Mapping)]
     _write_json_atomic(
         root / KEYFRAMES_DIR / KEYFRAMES_PENDING_NAME,
         {

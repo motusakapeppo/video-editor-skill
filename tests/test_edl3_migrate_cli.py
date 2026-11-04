@@ -42,9 +42,6 @@ PASS = 0
 FAIL = 0
 SKIP = 0
 
-#: The ``plan.json`` of a real ``vx auto`` run, when this box still has one.
-AUTO_PLAN = Path(r"D:\video_work\out8\master-auto\plan.json")
-
 
 def check(label: str, ok: object, detail: object = "") -> None:
     global PASS, FAIL
@@ -254,41 +251,51 @@ def run_checks(work: Path) -> None:
     )
     check("c. a faithful migration declares no loss", payload["loss"] == [], payload["loss"])
 
-    print("\n(b) a real `vx auto` plan migrates and validates")
-    if AUTO_PLAN.exists():
-        auto_out = work / "auto.edl3.json"
-        code, text, err = run(
-            ["edl3", "migrate", "--plan", str(AUTO_PLAN), "--out", str(auto_out)]
+    print("\n(b) a multi-clip plan shaped like a `vx auto` one migrates and validates")
+    auto_source = edl2()
+    auto_clips = [
+        clip(
+            f"c{index}",
+            src_in=float(index),
+            src_out=float(index + 1),
+            dst_in=float(index),
+            dst_out=float(index + 1),
         )
-        check("b. the auto plan migrates", code == 0, (code, text, err))
-        code, text, err = run(["edl3", "validate", str(auto_out)])
-        check("b. `edl3 validate` accepts the result", code == 0, (code, text, err))
-        source = json.loads(AUTO_PLAN.read_text(encoding="utf-8"))
-        code, text, _ = run(
-            [
-                "edl3",
-                "migrate",
-                "--plan",
-                str(AUTO_PLAN),
-                "--out",
-                str(auto_out),
-                "--json",
-            ]
+        for index in range(8)
+    ]
+    auto_source["tracks"]["video"][0]["clips"] = auto_clips
+    auto_source["timeline"]["duration_sec"] = 8.0
+    auto_plan = write(work / "auto_like.json", auto_source)
+    auto_out = work / "auto.edl3.json"
+    code, text, err = run(
+        ["edl3", "migrate", "--plan", str(auto_plan), "--out", str(auto_out)]
+    )
+    check("b. the multi-clip plan migrates", code == 0, (code, text, err))
+    code, text, err = run(["edl3", "validate", str(auto_out)])
+    check("b. `edl3 validate` accepts the result", code == 0, (code, text, err))
+    source = json.loads(auto_plan.read_text(encoding="utf-8"))
+    code, text, _ = run(
+        [
+            "edl3",
+            "migrate",
+            "--plan",
+            str(auto_plan),
+            "--out",
+            str(auto_out),
+            "--json",
+        ]
+    )
+    payload = json.loads(text)
+    check(
+        "b. clip count and duration match the 2.2 plan",
+        payload["clips"] == len(source["tracks"]["video"][0]["clips"])
+        and payload["duration_sec"]["from"] == source["timeline"]["duration_sec"]
+        and abs(
+            payload["duration_sec"]["to"] - source["timeline"]["duration_sec"]
         )
-        payload = json.loads(text)
-        check(
-            "b. clip count and duration match the 2.2 plan",
-            payload["clips"]
-            == len(source["tracks"]["video"][0]["clips"])
-            and payload["duration_sec"]["from"] == source["timeline"]["duration_sec"]
-            and abs(
-                payload["duration_sec"]["to"] - source["timeline"]["duration_sec"]
-            )
-            <= 1e-3,
-            payload["duration_sec"],
-        )
-    else:
-        skip("b. a real auto plan", f"{AUTO_PLAN} not on this box")
+        <= 1e-3,
+        payload["duration_sec"],
+    )
 
     print("\n(d) a fractional rate is carried verbatim, never rounded")
     for rate in (29.97, 29.645583):

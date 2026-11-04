@@ -1316,7 +1316,11 @@ def _empty_approval(reason: str = "nessun piano di fotogrammi") -> Dict[str, Any
     return {"required": False, "approved": False, "waiting": False, "reason": reason}
 
 
-def _approval_state(directory: Path, pending: Mapping[str, Any]) -> Dict[str, Any]:
+def _approval_state(
+    directory: Path,
+    pending: Mapping[str, Any],
+    key_section: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     """La verita' sul cancello dei fotogrammi, in quattro chiavi.
 
     ``required`` e' vero solo se c'e' un'attesa in corso (``waiting.json``) o un
@@ -1326,8 +1330,14 @@ def _approval_state(directory: Path, pending: Mapping[str, Any]) -> Dict[str, An
     parla italiano solo quando il cancello non e' applicabile.
     """
     frames_dir = directory / "keyframes"
-    waiting = (frames_dir / KEYFRAMES_WAITING_NAME).is_file()
-    plan_digest = str(pending.get("digest") or "")
+    pending_frames = [
+        dict(item) for item in (pending.get("frames") or []) if isinstance(item, Mapping)
+    ]
+    # Un frame senza sha256 non ha un'immagine da approvare: un pending.json
+    # vecchio (o un'estrazione fallita) non deve accendere il pulsante.
+    shown = [item for item in pending_frames if str(item.get("sha256") or "").strip()]
+    plan_digest = str(pending.get("digest") or "") if shown else ""
+    waiting = bool((frames_dir / KEYFRAMES_WAITING_NAME).is_file() and shown)
     record = keygate.read(directory / keygate.RECORD_NAME)
     coherent = bool(
         plan_digest
@@ -1338,8 +1348,18 @@ def _approval_state(directory: Path, pending: Mapping[str, Any]) -> Dict[str, An
     required = bool(waiting or coherent)
     reason = ""
     if not required:
-        if plan_digest:
+        if pending_frames and not shown:
+            reason = "nessun fotogramma estraibile"
+        elif plan_digest:
             reason = "il render non sta aspettando l'approvazione"
+        elif (
+            isinstance(key_section, Mapping)
+            and int(key_section.get("count") or 0) == 0
+            and str(key_section.get("reason") or "").strip()
+        ):
+            # Il report dell'ultimo giro dice perche' non c'e' niente da
+            # mostrare: la vista lo ripete invece di tacere.
+            reason = str(key_section.get("reason"))
         else:
             reason = "nessun piano di fotogrammi"
     return {
@@ -1888,13 +1908,15 @@ def _frames_listing(data_dir: Path) -> List[Dict[str, Any]]:
 
     def build() -> List[Dict[str, Any]]:
         try:
-            return [
+            entries = [
                 {"name": item.name, "bytes": _size_of(item)}
                 for item in sorted(frames_dir.glob("*.png"))
             ]
         except OSError as exc:
             degrade.note("serve", exc)
             return []
+        # Un PNG da zero byte non e' un'immagine: la griglia non lo mostra.
+        return [item for item in entries if item["bytes"] > 0]
 
     return _cached_scan(
         f"frames:{data_dir}",
@@ -2069,7 +2091,14 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
     frames_dir = data_dir / "keyframes"
     frames = _frames_listing(data_dir)
     pending = _read_json(frames_dir / "pending.json")
-    approval = _approval_state(data_dir, pending)
+    key_section = (
+        report.get("keyframes_gate") if isinstance(report, Mapping) else None
+    )
+    approval = _approval_state(
+        data_dir,
+        pending,
+        key_section if isinstance(key_section, Mapping) else None,
+    )
     font = _empty_font() if derived else _font_state(directory)
     master = brief["master"]
     ready = bool(brief["ready"])
@@ -2858,16 +2887,29 @@ def approve(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     # ``auto`` aspetta li', non nella cartella del pannello.
     data_dir = _data_dir(directory)
     pending = _read_json(data_dir / "keyframes" / "pending.json")
-    digest = str(pending.get("digest") or "")
-    if not digest:
-        return {"ok": False, "reason": "nessun piano di fotogrammi da approvare"}
+    frames = [
+        dict(item)
+        for item in (pending.get("frames") or [])
+        if isinstance(item, Mapping)
+    ]
+    # Nessuna approvazione da registrare se non c'e' un'immagine: il digest di
+    # frame vuoti non e' una prova, e ``approved: true`` qui sarebbe una bugia.
+    frames = [item for item in frames if str(item.get("sha256") or "").strip()]
+    digest = str(pending.get("digest") or "") if frames else ""
+    if not digest or not frames:
+        return {
+            "ok": False,
+            "approved": False,
+            "count": 0,
+            "reason": "nessun fotogramma da approvare",
+        }
     payload = {
         "version": keygate.GATE_VERSION,
         "approved": True,
         "digest": digest,
         "timeline_digest": str(pending.get("timeline_digest") or ""),
-        "count": int(pending.get("count") or 0),
-        "frames": list(pending.get("frames") or []),
+        "count": len(frames),
+        "frames": frames,
     }
     try:
         (data_dir / keygate.RECORD_NAME).write_text(
@@ -3105,7 +3147,13 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
             name = Path(urllib.parse.unquote(raw)).name
             candidate = _data_dir(jobs[chosen]) / "keyframes" / name
-            if not candidate.is_file():
+            # Un PNG vuoto non e' un fotogramma: si risponde 404, non un'immagine
+            # che il browser mostra come riquadro rotto.
+            try:
+                served = candidate.is_file() and candidate.stat().st_size > 0
+            except OSError:
+                served = False
+            if not served:
                 self._send(b"not found", "text/plain", status=404)
                 return
             self._send(candidate.read_bytes(), "image/png")
@@ -3142,8 +3190,9 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             nearest = _nearest_thumb(_thumb_files(directory, data_dir), record["t_in"])
             if nearest is not None:
                 try:
-                    self._send(nearest.read_bytes(), "image/jpeg")
-                    return
+                    if nearest.stat().st_size > 0:
+                        self._send(nearest.read_bytes(), "image/jpeg")
+                        return
                 except OSError:
                     pass
 

@@ -404,45 +404,51 @@ def test_flags() -> None:
     print("\n-- _run_key_gate legge i flag prima di decidere")
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
-        args = argparse.Namespace(key_gate=False, key_wait=30.0)
-        section = auto._run_key_gate(args, workdir, Plan(), view_active=True)
-        check(
-            "il flag vince sulla vista: nessuna attesa",
-            section["selected_by"] == "auto" and not waiting_path(workdir).exists(),
-            section["selected_by"],
-        )
-        check(
-            "il flag chiuso e' dichiarato",
-            "no-key-gate" in section["reason"],
-            section["reason"],
-        )
-        args = argparse.Namespace(key_gate=None, key_wait=0.2)
-        started = time.monotonic()
-        section = auto._run_key_gate(args, workdir, Plan(), view_active=True)
-        elapsed = time.monotonic() - started
-        check(
-            "senza flag e con la vista il cancello aspetta",
-            section["selected_by"] == "timeout" and elapsed >= 0.15,
-            f"{section['selected_by']} {elapsed:.3f}s",
-        )
-        args = argparse.Namespace(key_gate=None, key_wait=None)
-        started = time.monotonic()
-        section = auto._run_key_gate(args, workdir, Plan(), view_active=False)
-        elapsed = time.monotonic() - started
-        check(
-            "senza vista non si aspetta nessuno",
-            section["selected_by"] == "auto" and elapsed < 0.5,
-            f"{section['selected_by']} {elapsed:.3f}s",
-        )
-        args = argparse.Namespace(key_gate=None, key_wait=0.2)
-        started = time.monotonic()
-        section = auto._run_key_gate(args, workdir, Plan(), view_active=False)
-        elapsed = time.monotonic() - started
-        check(
-            "un --key-wait esplicito vince anche senza vista",
-            section["selected_by"] == "timeout" and elapsed >= 0.15,
-            f"{section['selected_by']} {elapsed:.3f}s",
-        )
+        # Un piano finto con tre impronte: qui si provano i flag, non ffmpeg.
+        original = auto.propose_keyframes
+        auto.propose_keyframes = fake_propose
+        try:
+            args = argparse.Namespace(key_gate=False, key_wait=30.0)
+            section = auto._run_key_gate(args, workdir, Plan(), view_active=True)
+            check(
+                "il flag vince sulla vista: nessuna attesa",
+                section["selected_by"] == "auto" and not waiting_path(workdir).exists(),
+                section["selected_by"],
+            )
+            check(
+                "il flag chiuso e' dichiarato",
+                "no-key-gate" in section["reason"],
+                section["reason"],
+            )
+            args = argparse.Namespace(key_gate=None, key_wait=0.2)
+            started = time.monotonic()
+            section = auto._run_key_gate(args, workdir, Plan(), view_active=True)
+            elapsed = time.monotonic() - started
+            check(
+                "senza flag e con la vista il cancello aspetta",
+                section["selected_by"] == "timeout" and elapsed >= 0.15,
+                f"{section['selected_by']} {elapsed:.3f}s",
+            )
+            args = argparse.Namespace(key_gate=None, key_wait=None)
+            started = time.monotonic()
+            section = auto._run_key_gate(args, workdir, Plan(), view_active=False)
+            elapsed = time.monotonic() - started
+            check(
+                "senza vista non si aspetta nessuno",
+                section["selected_by"] == "auto" and elapsed < 0.5,
+                f"{section['selected_by']} {elapsed:.3f}s",
+            )
+            args = argparse.Namespace(key_gate=None, key_wait=0.2)
+            started = time.monotonic()
+            section = auto._run_key_gate(args, workdir, Plan(), view_active=False)
+            elapsed = time.monotonic() - started
+            check(
+                "un --key-wait esplicito vince anche senza vista",
+                section["selected_by"] == "timeout" and elapsed >= 0.15,
+                f"{section['selected_by']} {elapsed:.3f}s",
+            )
+        finally:
+            auto.propose_keyframes = original
 
 
 def test_plan_budget_flags() -> None:
