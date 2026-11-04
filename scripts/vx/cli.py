@@ -3268,7 +3268,10 @@ def cmd_up(args: argparse.Namespace) -> int:
     if not record:
         _log("[up] il daemon non e' partito: la vista resta chiusa")
         return EXIT_USAGE
-    if getattr(args, "open", False):
+    # Il browser si apre **solo** quando il daemon nasce adesso: su un daemon
+    # gia' acceso la vista e' gia' davanti all'utente, e ogni `--open`
+    # lascerebbe una scheda identica in piu' (succedeva a ogni /reel).
+    if getattr(args, "open", False) and not record.get("reused"):
         try:
             import webbrowser
 

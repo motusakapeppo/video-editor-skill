@@ -230,6 +230,26 @@ def check_daemon() -> None:
           and again.get("started_utc") == record.get("started_utc"),
           (record.get("pid"), again.get("pid")))
 
+    # U6b: `--open` su un daemon gia' acceso non deve aprire un'altra scheda.
+    # Prima ogni /reel ne lasciava una identica in piu'.
+    import webbrowser
+
+    opened: list = []
+    real_open = webbrowser.open
+    old_dir = os.environ.get("VX_SESSION_DIR")
+    webbrowser.open = lambda url, *a, **k: opened.append(url) or True
+    os.environ["VX_SESSION_DIR"] = str(SESSIONS)
+    try:
+        code = cli.cmd_up(type("A", (), {"port": 8100, "open": True})())
+    finally:
+        webbrowser.open = real_open
+        if old_dir is None:
+            os.environ.pop("VX_SESSION_DIR", None)
+        else:
+            os.environ["VX_SESSION_DIR"] = old_dir
+    check("U6b `up --open` su daemon acceso non apre una seconda scheda",
+          code == 0 and opened == [], opened)
+
     try:
         state = get_state(record["port"])
     except Exception as exc:  # noqa: BLE001
