@@ -74,6 +74,7 @@ The allowlist below is the layout a run actually produces, read off disk:
     <workdir>/auto_report.json               the final report
     <workdir>/bridge_report.json             bridge analysis (not with --no-bridge)
     <workdir>/feedback_request.json          the optional vote request written at the end
+    <workdir>/gate_wait.json                the gates' state (waited, by, expired)
     <workdir>/font_proposal.json             the proposed font (chosen by a human)
     <workdir>/timing_history.jsonl           measured timings for the next estimate
     <workdir>/render_history.jsonl           one line per render
@@ -165,6 +166,7 @@ ALLOWED_TOP_FILES = {
     "stage_cache_report.json",
     "feedback_request.json",
     "font_proposal.json",
+    "gate_wait.json",
     "timing_history.jsonl",
 }
 ALLOWED_TOP_DIRS = {
