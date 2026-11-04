@@ -43,7 +43,7 @@ FFMPEG = os.environ.get("VX_FFMPEG") or "ffmpeg"
 # Aggiornato il 2/11/2026: `aformat` precede `apad` sul bus audio. Il grafo cambia
 # di proposito (senza il formato dichiarato, `apad` non allunga dopo un `amix`,
 # misurato 4,019 s su 6), e il golden lo registra invece di subirlo.
-GOLDEN_SHA256 = "0e9bc9be24ea993580b1c1f0eb69d0f929af19155907e2896a6d23bcb048a57f"
+GOLDEN_SHA256 = "4735c5101ed43fed97e3541f4f36a14bb6fb756e7bf38a0d7165cba8cd46c49c"
 CEILING = -0.9
 HEIGHT = 568
 
@@ -251,7 +251,7 @@ def main() -> int:
 
     base = _graph()
     check(
-        "grafo senza ceiling: byte-identico a HEAD",
+        "grafo senza ceiling: byte-identico al golden",
         hashlib.sha256(base.encode("utf-8")).hexdigest() == GOLDEN_SHA256,
         hashlib.sha256(base.encode("utf-8")).hexdigest(),
     )
@@ -280,7 +280,7 @@ def main() -> int:
         "grafo con ceiling: aresample 192k prima, 48k dopo",
         len(out_bus) == 1
         and f"aresample={render.LIMITER_RATE},alimiter=" in out_bus[0]
-        and out_bus[0].endswith(f"aresample={render.AUDIO_RATE}[aout]"),
+        and out_bus[0].endswith(f"aresample={render.AUDIO_RATE},asetpts=N/SR/TB[aout]"),
         out_bus,
     )
 

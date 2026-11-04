@@ -82,6 +82,7 @@ The allowlist below is the layout a run actually produces, read off disk:
     <workdir>/render/04_loudness.txt         loudnorm measurement
     <workdir>/render/edl_graph.txt           filtergraph text
     <workdir>/render/edl_render.json         render metadata
+    <workdir>/render/render_effects.json     the effects block the graph was built from
     <workdir>/render/ffmpeg-progress.txt     render progress counter
     <workdir>/render/final_pre_loudness.mp4  pre-master render
     <workdir>/render/stage_cache/<key>.json  content-addressed cache entries
@@ -183,6 +184,7 @@ ALLOWED_RENDER_FILES = {
     "04_loudness.txt",
     "edl_graph.txt",
     "edl_render.json",
+    "render_effects.json",
     "final_pre_loudness.mp4",
     "stage_cache_report.json",
     "ffmpeg-progress.txt",
