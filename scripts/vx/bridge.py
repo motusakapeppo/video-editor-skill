@@ -347,12 +347,36 @@ def _apply_min_fragment(
     report: BridgeReport,
     clip: Any,
 ) -> Tuple[List[Dict[str, Any]], List[Tuple[float, float]]]:
-    """A keep shorter than ``min_fragment`` merges back and is declared."""
+    """A keep shorter than ``min_fragment`` merges back and is declared.
+
+    When there is nothing left to keep - a silence removal that covers the whole
+    window, or a single keep thinner than ``min_fragment`` - every removal of
+    that clip is dropped and the window stays whole. Cutting everything would
+    leave a clip with no frames, and the bridge would then stop the job on a
+    plan the planner already accepted; the honest outcome is a declared
+    ``not_applied``, not an abort. The span comes back as it was, so the audio
+    and the captions keep their real time.
+    """
     remaining = list(removals)
     while True:
         keeps = _keeps(src_in, src_out, remaining)
         if len(keeps) <= 1:
-            return remaining, keeps
+            if keeps and keeps[0][1] - keeps[0][0] >= min_fragment - _EPS:
+                return remaining, keeps
+            for removal in remaining:
+                report.not_applied.append(
+                    {
+                        "anchor_id": removal["anchor_id"],
+                        "reason": (
+                            "window_has_no_keep" if not keeps else "fragment_below_min"
+                        ),
+                        "clip_id": clip.clip_id,
+                        "t0": round(float(src_in), 3),
+                        "t1": round(float(src_out), 3),
+                        "min_fragment_sec": round(min_fragment, 3),
+                    }
+                )
+            return [], [(float(src_in), float(src_out))]
         short = next(
             (
                 (index, span)

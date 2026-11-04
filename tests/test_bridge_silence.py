@@ -314,6 +314,133 @@ def main() -> int:
         edge_report.not_applied,
     )
 
+    # Una finestra interamente silenziosa: il taglio non deve lasciare zero
+    # frame (il job si fermava con "lost every frame"), ne' un frammento da
+    # 0,7 ms. La finestra torna intera e ogni rinuncia e' dichiarata.
+    import dataclasses
+
+    base = plan()
+    length = 0.521739
+    whole = dataclasses.replace(
+        base,
+        duration_sec=length,
+        video_tracks=(
+            edl_plan.Track(
+                0,
+                (
+                    dataclasses.replace(
+                        base.video_tracks[0].clips[0],
+                        src_out=length,
+                        dst_out=length,
+                    ),
+                ),
+                "a_roll",
+            ),
+        ),
+        audio_tracks=(
+            edl_plan.Track(
+                0,
+                (
+                    dataclasses.replace(
+                        base.audio_tracks[0].clips[0],
+                        src_out=length,
+                        dst_out=length,
+                    ),
+                ),
+                "dialogue",
+            ),
+            edl_plan.Track(
+                1,
+                (
+                    dataclasses.replace(
+                        base.audio_tracks[1].clips[0],
+                        src_out=length,
+                        dst_out=length,
+                    ),
+                ),
+                "music",
+            ),
+        ),
+    )
+    silent = {
+        "speech_regions": [],
+        "dead_air": [{"start": 0.0, "end": 0.521, "duration": 0.521}],
+    }
+    try:
+        whole_plan, whole_report = bridge.build(
+            whole, {"c01": silent}, target_lufs=-14.0, loudness_spans=stub_loudness
+        )
+    except contract.VxError as exc:
+        check("finestra tutta silenziosa: nessun abort", False, str(exc)[:80])
+        whole_plan, whole_report = None, None
+    else:
+        check("finestra tutta silenziosa: nessun abort", True)
+    if whole_plan is not None:
+        kept = list(whole_plan.video_tracks[0].clips)
+        shortest = min(
+            float(c.src_out) - float(c.src_in) for c in kept
+        ) if kept else 0.0
+        check(
+            "finestra tutta silenziosa: la finestra torna intera",
+            len(kept) == 1
+            and abs(kept[0].src_in - 0.0) <= 1e-6
+            and abs(kept[0].src_out - 0.521739) <= 1e-6
+            and abs(whole_plan.duration_sec - 0.521739) <= 1e-6,
+            [(c.src_in, c.src_out) for c in kept],
+        )
+        check(
+            "finestra tutta silenziosa: nessun frammento sotto il minimo",
+            shortest >= 0.05,
+            shortest,
+        )
+        check(
+            "finestra tutta silenziosa: dichiarata in not_applied",
+            any(
+                item.get("reason") in ("window_has_no_keep", "fragment_below_min")
+                for item in whole_report.not_applied
+            ),
+            whole_report.not_applied,
+        )
+        check(
+            "finestra tutta silenziosa: nessun taglio vantato",
+            whole_report.cuts == [],
+            whole_report.cuts,
+        )
+        check(
+            "finestra tutta silenziosa: piano ancora valido",
+            whole_plan.validate() == [],
+            whole_plan.validate(),
+        )
+
+    # Copertura esatta: il silenzio arriva a fine finestra, non resta **nessun**
+    # keep. E' il caso che abortiva il job ("lost every frame").
+    covering = dict(silent)
+    covering["dead_air"] = [{"start": 0.0, "end": 0.521739, "duration": 0.521739}]
+    try:
+        cover_plan, cover_report = bridge.build(
+            whole, {"c01": covering}, target_lufs=-14.0, loudness_spans=stub_loudness
+        )
+    except contract.VxError as exc:
+        check("silenzio che copre tutto: nessun abort", False, str(exc)[:80])
+        cover_plan = None
+    else:
+        check("silenzio che copre tutto: nessun abort", True)
+    if cover_plan is not None:
+        kept = list(cover_plan.video_tracks[0].clips)
+        check(
+            "silenzio che copre tutto: la finestra torna intera",
+            len(kept) == 1 and abs(kept[0].src_out - 0.521739) <= 1e-6,
+            [(c.src_in, c.src_out) for c in kept],
+        )
+        check(
+            "silenzio che copre tutto: dichiarato in not_applied",
+            any(
+                item.get("reason") in ("window_has_no_keep", "fragment_below_min")
+                for item in cover_report.not_applied
+            ),
+            cover_report.not_applied,
+        )
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 
