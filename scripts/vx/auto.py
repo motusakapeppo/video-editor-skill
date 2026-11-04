@@ -539,6 +539,140 @@ def duration_shortfall(requested: Any, delivered: Any) -> Optional[Dict[str, Any
     }
 
 
+def snap_to_frames(seconds: Any, fps: Any) -> float:
+    """``N`` seconds on the frame grid: ``round(N * fps) / fps``.
+
+    Una durata chiesta e' un numero di fotogrammi, non un numero decimale: 15 s a
+    25 fps sono 375 frame e a 30 fps sono 450. Il piano usa questo valore, cosi'
+    la fine della timeline cade su un frame intero invece che su un istante che
+    l'encoder deve arrotondare per conto suo.
+    """
+    try:
+        value = float(seconds)
+        rate = float(fps)
+    except (TypeError, ValueError):
+        return 0.0
+    if value <= 0 or rate <= 0:
+        return 0.0
+    return round(value * rate) / rate
+
+
+def frame_count(seconds: Any, fps: Any) -> int:
+    """Quanti frame interi copre ``seconds`` a ``fps`` (0 se non misurabile)."""
+    try:
+        value = float(seconds)
+        rate = float(fps)
+    except (TypeError, ValueError):
+        return 0
+    if value <= 0 or rate <= 0:
+        return 0
+    return int(round(value * rate))
+
+
+def duration_tail(
+    requested: Any,
+    actual: Any,
+    fps: Any,
+    *,
+    material_sec: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Il taglio della coda: chiesto, consegnato, frame, e perche'.
+
+    La coda e' l'unico segmento che si puo' accorciare (o allungare) per chiudere
+    la timeline su un frame intero: la griglia di battuta resta quella, cambia
+    solo l'ultima battuta. Quando il materiale non arriva alla richiesta il
+    ``note`` lo dice con il massimo raggiungibile, invece di far finta che la
+    timeline sia quella chiesta.
+    """
+    try:
+        want = float(requested)
+        got = float(actual)
+        rate = float(fps)
+    except (TypeError, ValueError):
+        return None
+    if want <= 0 or got <= 0 or rate <= 0:
+        return None
+    want_frames = frame_count(want, rate)
+    got_frames = frame_count(got, rate)
+    target = snap_to_frames(want, rate)
+    reachable = abs(got - target) <= (0.5 / rate) + 1e-6
+    note = ""
+    if not reachable:
+        note = (
+            "materiale insufficiente: massimo raggiungibile {got:.3f}s "
+            "({frames} frame), richiesti {want:g}s"
+        ).format(got=got, frames=got_frames, want=want)
+    elif got_frames > want_frames:
+        note = (
+            "ultima battuta allungata di {delta:.3f}s per chiudere a {frames} "
+            "frame"
+        ).format(delta=got - want, frames=got_frames)
+    elif got_frames < want_frames:
+        note = (
+            "ultima battuta accorciata di {delta:.3f}s per chiudere a {frames} "
+            "frame"
+        ).format(delta=want - got, frames=got_frames)
+    else:
+        note = "ultima battuta sulla griglia: {frames} frame esatti".format(
+            frames=got_frames
+        )
+    if material_sec is not None:
+        try:
+            note += f"; materiale utile {float(material_sec):.3f}s"
+        except (TypeError, ValueError):
+            pass
+    return {
+        "requested": round(want, 6),
+        "actual": round(got, 6),
+        "frames": got_frames,
+        "reachable": reachable,
+        "note": note,
+    }
+
+
+def timeline_declaration(
+    requested: Any,
+    actual: Any,
+    fps: Any,
+    *,
+    material_sec: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Il blocco ``timeline`` del report, con la coda dichiarata.
+
+    ``{"tail": {requested, actual, frames, reachable, note}, "frame_target_sec": N}``
+    e' la forma che il report scrive: la coda e' l'ultima battuta, non un numero
+    nascosto dentro il piano.
+    """
+    tail = duration_tail(requested, actual, fps, material_sec=material_sec)
+    if tail is None:
+        return None
+    return {
+        "tail": tail,
+        "frame_target_sec": round(snap_to_frames(requested, fps), 6),
+    }
+
+
+def final_outcome(report: Any) -> str:
+    """L'esito del lavoro, sempre valorizzato.
+
+    ``delivered`` quando master e verifiche passano; ``failed`` quando la
+    consegna e' fermata (guardia, verifica, oppure ``ok: false``); ``incomplete``
+    quando il lavoro si e' interrotto prima di decidere. Nessun caso in cui un
+    controllo fallisce e il file risulta consegnato senza una spiegazione.
+    """
+    data = report if isinstance(report, Mapping) else {}
+    if data.get("ok") is False:
+        return "failed"
+    if data.get("delivered") is False:
+        return "failed"
+    verification = data.get("verification")
+    if isinstance(verification, Mapping) and verification.get("ok") is False:
+        return "failed"
+    if data.get("delivered") is True:
+        return "delivered"
+    return "incomplete"
+
+
 def _notify(
     progress: Optional[Callable[[float, str], None]],
     percent: float,
@@ -582,6 +716,116 @@ def _inside(child: Path, parent: Path) -> bool:
         return True
     except (ValueError, OSError):
         return False
+
+
+def _stream_durations(master: Any) -> Dict[str, float]:
+    """Durata misurata per tipo di stream (prima occorrenza di ogni tipo)."""
+    proc = ff.run_fp(
+        [
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,duration",
+            "-of",
+            "json",
+            str(master),
+        ]
+    )
+    if not proc.ok:
+        return {}
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    out: Dict[str, float] = {}
+    for item in data.get("streams") or ():
+        if not isinstance(item, Mapping):
+            continue
+        kind = str(item.get("codec_type") or "")
+        try:
+            value = float(item.get("duration"))
+        except (TypeError, ValueError):
+            continue
+        if kind and value > 0 and kind not in out:
+            out[kind] = value
+    return out
+
+
+def _container_duration(master: Any) -> Optional[float]:
+    proc = ff.run_fp(
+        ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(master)]
+    )
+    if not proc.ok or not proc.stdout:
+        return None
+    try:
+        return float(proc.stdout.strip().splitlines()[0])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def conform_master_duration(master: Any, duration: Any, fps: Any) -> Dict[str, Any]:
+    """Chiude il master sul frame della timeline, senza ricodificare il video.
+
+    L'audio in AAC puo' superare l'ultimo frame (padding dell'encoder): il file
+    risulterebbe lungo 15.1 s su una timeline da 15.0 e la verifica lo
+    boccierebbe per un difetto del contenitore. Qui il taglio e' sul contenitore:
+    stream copy, nessuna perdita, e il risultato viene rimisurato. Se il video e'
+    gia' intero bastano ``-t`` + ``-shortest``; altrimenti ``-t`` basta. Non
+    inventa durata: se il file resta fuori tolleranza lo dichiara.
+    """
+    answer: Dict[str, Any] = {"applied": False, "why": ""}
+    try:
+        want = float(duration)
+        rate = float(fps)
+    except (TypeError, ValueError):
+        return answer
+    if want <= 0 or rate <= 0:
+        return answer
+    before = _container_duration(master)
+    if before is None:
+        answer["why"] = "durata del contenitore non misurabile"
+        return answer
+    tolerance = 0.5 / rate
+    answer["container_before_sec"] = round(before, 3)
+    if abs(before - want) <= tolerance + 1e-6:
+        answer["container_after_sec"] = round(before, 3)
+        answer["why"] = "già sul frame: nessun taglio"
+        return answer
+    streams = _stream_durations(master)
+    video_end = streams.get("video")
+    temporary = Path(str(master)).with_name(Path(str(master)).stem + ".conform.mp4")
+    args: List[Any] = [
+        "-i",
+        str(master),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-c",
+        "copy",
+        "-t",
+        f"{want:.6f}",
+    ]
+    if video_end is not None and video_end >= want - tolerance:
+        # Il video e' gia' intero: -shortest taglia il padding audio sul suo
+        # ultimo frame invece di lasciare il contenitore piu' lungo.
+        args += ["-shortest"]
+    args += ["-movflags", "+faststart", str(temporary)]
+    proc = ff.run_ff(args, loglevel="error")
+    if not proc.ok or not temporary.is_file() or temporary.stat().st_size == 0:
+        temporary.unlink(missing_ok=True)
+        answer["why"] = f"taglio coda non eseguito: {proc.tail(3)}"
+        return answer
+    os.replace(temporary, master)
+    after = _container_duration(master)
+    answer["container_after_sec"] = round(after, 3) if after is not None else None
+    answer["applied"] = True
+    answer["why"] = (
+        f"coda audio tagliata a {want:.3f}s (era {before:.3f}s)"
+        if after is not None and abs(after - want) <= tolerance + 1e-6
+        else f"coda tagliata a {want:.3f}s, il contenitore misura {after}"
+    )
+    return answer
 
 
 def fill_upscale(src_size: Sequence[int], target_size: Sequence[int]) -> float:
@@ -717,6 +961,7 @@ def apply_guard(
     report["guard"] = dict(section)
     delivered = bool(section.get("skipped") or section.get("ok"))
     report["delivered"] = delivered
+    report["outcome"] = "delivered" if delivered else "failed"
     if delivered:
         report["outcome_suggested"] = "done"
         return report
@@ -1980,39 +2225,95 @@ def _timeline_clip_at(plan: Any, at_s: float) -> Optional[Any]:
     return _opening_clip(plan)
 
 
+#: I check che possono solo consigliare, mai fermare la consegna. Oggi nessun
+#: check di ``verification`` e' consultivo: si tiene la lista esplicita perche'
+#: un giudizio ``weak_open`` (coerenza dell'apertura) non e' una prova sul file e
+#: vive fuori da ``verification``. Un check marcato ``advisory`` nel verdetto non
+#: blocca, e il report lo dice.
+ADVISORY_CHECKS: Tuple[str, ...] = ()
+
+
+def verification_failures(verification: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    """I check falliti che bloccano la consegna (gli advisory restano fuori)."""
+    failed: List[Mapping[str, Any]] = []
+    for item in verification.get("checks") or ():
+        if not isinstance(item, Mapping) or item.get("passed"):
+            continue
+        check_id = str(item.get("id") or "")
+        if item.get("advisory") or check_id in ADVISORY_CHECKS:
+            continue
+        failed.append(item)
+    return failed
+
+
+def _tolerance_line(item: Mapping[str, Any]) -> str:
+    """La tolleranza usata da un check, in chiaro, quando il check la dichiara."""
+    expected = item.get("expected")
+    if not isinstance(expected, Mapping):
+        return ""
+    frames = expected.get("tolerance_frames")
+    fps = expected.get("fps")
+    if frames is not None and fps:
+        try:
+            return " (tolleranza {frames:g} frame = {sec:.4f}s @{fps:g}fps)".format(
+                frames=float(frames),
+                sec=float(frames) / float(fps),
+                fps=float(fps),
+            )
+        except (TypeError, ValueError):
+            return ""
+    seconds = expected.get("tolerance_sec")
+    if seconds is not None:
+        try:
+            return f" (tolleranza {float(seconds):.4f}s)"
+        except (TypeError, ValueError):
+            return ""
+    return ""
+
+
 def apply_verification(
     report: Dict[str, Any], verification: Mapping[str, Any]
 ) -> Dict[str, Any]:
-    """Scrive il verdetto e toglie la consegna se il titolo e' illeggibile.
+    """Scrive il verdetto e ferma la consegna se un controllo fallisce.
 
-    ``delivered`` risponde alla domanda "questo lavoro si consegna?". Un
-    contrasto WCAG sotto 4.5 e' la prova che il titolo non si legge: il master
-    resta sul disco e la vista lo mostra come NON RIUSCITO, ma nessun report lo
-    dichiara consegnato. Il motivo viaggia in chiaro in ``failures``.
+    ``delivered`` risponde alla domanda "questo lavoro si consegna?". Un solo
+    check bloccante fallito e' la prova che il lavoro non e' consegnabile: il
+    master resta sul disco (la vista lo mostra come NON RIUSCITO) ma nessun
+    report lo dichiara consegnato. Il motivo viaggia in chiaro in ``failures``
+    con l'id del check e la tolleranza usata. Un check ``advisory`` non ferma la
+    consegna e il report lo dichiara; se il verdetto dichiara ``ok: false`` per
+    colpa loro, ``verification.ok`` viene riallineato ai soli bloccanti.
     """
-    report["verification"] = dict(verification) if isinstance(verification, Mapping) else {}
-    contrast = next(
-        (
-            item
-            for item in report["verification"].get("checks") or ()
-            if isinstance(item, Mapping) and str(item.get("id")) == "contrast"
-        ),
-        None,
-    )
-    if contrast is None or contrast.get("passed"):
+    section = dict(verification) if isinstance(verification, Mapping) else {}
+    report["verification"] = section
+    failed = verification_failures(section)
+    advisory_failed = [
+        item
+        for item in section.get("checks") or ()
+        if isinstance(item, Mapping)
+        and not item.get("passed")
+        and (item.get("advisory") or str(item.get("id")) in ADVISORY_CHECKS)
+    ]
+    if advisory_failed:
+        section["advisory"] = [
+            str(item.get("id")) for item in advisory_failed
+        ]
+    if not failed:
+        # Nessun bloccante: il verdetto e' verde anche se un advisory ha ceduto.
+        if advisory_failed and section.get("ok") is False:
+            section["ok"] = True
         return report
+    section["ok"] = False
+    section["blocking"] = [str(item.get("id")) for item in failed]
     report["delivered"] = False
     report["outcome_suggested"] = "failed"
     report["outcome"] = "failed"
-    measured = contrast.get("measured")
-    ratio = measured.get("ratio") if isinstance(measured, Mapping) else None
-    reason = (
-        "verification: contrasto del titolo "
-        + (f"{float(ratio):.2f}" if isinstance(ratio, (int, float)) else "sotto soglia")
-        + " < 4.5: titolo illeggibile, non consegnato"
-    )
-    if reason not in (report.get("failures") or []):
-        report.setdefault("failures", []).append(reason)
+    for item in failed:
+        check_id = str(item.get("id") or "check")
+        why = str(item.get("why") or "controllo fallito")
+        reason = f"verification: {check_id} — {why}{_tolerance_line(item)}"
+        if reason not in (report.get("failures") or []):
+            report.setdefault("failures", []).append(reason)
     return report
 
 
@@ -6668,6 +6969,24 @@ def _run_locked(
     estimate.finish(render_estimate)
     _notify(progress, 92.0, "render_done", log=log, detail="master scritto")
 
+    # Il master nasce dal render, ma il contenitore puo' portare un padding audio
+    # oltre l'ultimo frame. La timeline e' quella del piano: se il file la supera
+    # di oltre mezzo frame si chiude la coda (stream copy) e si rimisura. Il
+    # master resta sul disco in ogni caso; il report dichiara cosa e' successo.
+    with clock.time("duration_conform"):
+        duration_conform = conform_master_duration(out, plan.duration_sec, fps)
+    if duration_conform.get("applied"):
+        _log(
+            "[auto] coda del master: "
+            + str(duration_conform.get("why") or "chiusa sul frame")
+        )
+    _emit(
+        log,
+        "duration_conform",
+        "done" if duration_conform.get("applied") else "skip",
+        str(duration_conform.get("why") or ""),
+    )
+
     with clock.time("qc"):
         qc_result = qc.audit_master(out, target_lufs=target_lufs, target_tp=target_tp)
     _notify(progress, 96.0, "qc", log=log)
@@ -6870,6 +7189,7 @@ def _run_locked(
         "camera_exemptions": exemptions,
         "gate1": gate1.to_dict(),
         "qc": qc_result,
+        "duration_conform": duration_conform,
         "deliverables": produced,
         "master": str(out.resolve()),
         "workdir": str(workdir.resolve()),
@@ -6886,6 +7206,25 @@ def _run_locked(
             "duration_shortfall: chiesti {requested_sec:g} s, consegnati "
             "{delivered_sec:g} s".format(**shortfall)
         )
+    if requested_sec is not None:
+        try:
+            report["duration_requested_sec"] = round(float(requested_sec), 6)
+        except (TypeError, ValueError):
+            pass
+    timeline_block = timeline_declaration(
+        requested_sec,
+        plan.duration_sec,
+        fps,
+        material_sec=timeline_est,
+    )
+    if timeline_block is not None:
+        # La coda della timeline: e' l'ultima battuta, quella che si accorcia o
+        # si allunga per chiudere sul frame. Il report la dichiara sempre.
+        report["timeline"] = timeline_block
+        if not timeline_block["tail"].get("reachable", True):
+            report.setdefault("warnings", []).append(
+                "timeline: " + str(timeline_block["tail"]["note"])
+            )
     if isinstance(opening, dict):
         opening["in_point"] = opening_in_point(
             in_points, (opening.get("chosen") or {}).get("asset_id")
@@ -6972,6 +7311,10 @@ def _run_locked(
     # il master e' tracciato (G2), quindi si scrive prima di interrogare
     # l'audit; quello finale lo riscrive con l'esito dentro.
     auto_report = workdir / "auto_report.json"
+    # Finche' la guardia e la verifica non hanno parlato, l'esito e' "interrotto":
+    # se il processo muore qui il report provvisorio non promette una consegna che
+    # nessuno ha ancora deciso. La scrittura finale lo sostituisce.
+    report["outcome"] = "incomplete"
     _write_json_atomic(auto_report, report)
     with clock.time("guard"):
         guard_section = run_guard(args, workdir)
@@ -7061,6 +7404,13 @@ def _run_locked(
     degrade.merge_into(report)
     if report.get("degraded"):
         _say("Accessori degradati: " + degrade.text(report) + " - il lavoro e' proseguito.")
+    # L'esito e' sempre valorizzato, e viene dai fatti: master + verifiche verdi
+    # -> ``delivered``; consegna fermata -> ``failed``; lavoro interrotto prima
+    # della decisione -> ``incomplete``. Nessun report esce senza questa riga.
+    report["outcome"] = final_outcome(report)
+    report["outcome_suggested"] = (
+        "done" if report["outcome"] == "delivered" else "failed"
+    )
     _write_json_atomic(auto_report, report)
     # Il giudizio umano viene **dopo** il report scritto: il segnale deve
     # leggere l'ultimo report, non uno provvisorio. Se il segnale non si scrive

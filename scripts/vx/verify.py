@@ -384,16 +384,21 @@ def check_duration(master: Any, report: Mapping[str, Any]) -> Dict[str, Any]:
             {"requested_sec": expected, "tolerance_frames": DURATION_TOLERANCE_FRAMES},
             "frame rate non dichiarato ne' misurabile",
         )
+    tolerance = DURATION_TOLERANCE_FRAMES / float(fps)
     actual = _duration_of(master)
     if actual is None or actual <= 0:
         return _result(
             "duration",
             False,
             None,
-            {"requested_sec": expected, "tolerance_frames": DURATION_TOLERANCE_FRAMES},
+            {
+                "requested_sec": expected,
+                "tolerance_frames": DURATION_TOLERANCE_FRAMES,
+                "tolerance_sec": round(tolerance, 4),
+                "fps": round(float(fps), 3),
+            },
             "durata del master non misurabile",
         )
-    tolerance = DURATION_TOLERANCE_FRAMES / float(fps)
     delta = abs(actual - expected)
     return _result(
         "duration",
@@ -406,6 +411,7 @@ def check_duration(master: Any, report: Mapping[str, Any]) -> Dict[str, Any]:
         {
             "requested_sec": round(expected, 3),
             "tolerance_frames": DURATION_TOLERANCE_FRAMES,
+            "tolerance_sec": round(tolerance, 4),
             "fps": round(float(fps), 3),
         },
         (

@@ -1160,6 +1160,7 @@ def payload_to_edl_plan(
     starts: List[float] = []
     ends: List[float] = []
     points: List[float] = []
+    totals: List[float] = []
     remaining = requested
     for index, entry in enumerate(a_entries):
         asset_id = entry.get("asset_id")
@@ -1177,11 +1178,63 @@ def payload_to_edl_plan(
         starts.append(start)
         ends.append(end)
         points.append(point)
+        totals.append(_media_duration(asset_id))
         if requested > 0.0:
             remaining -= length
     if not lengths:
         raise VxError("a_roll total duration is zero")
     plain_total = sum(lengths)
+
+    # -- the timeline lands on a whole frame -------------------------------- #
+    # A request of N seconds is N seconds only if it is a whole number of frames:
+    # N at 25 fps is 375 frames, N at 30 fps is 450. The material is extended or
+    # trimmed at the tail so the timeline ends exactly on that frame, on the same
+    # beat grid: the last shot is allowed to be shorter (or longer) than its
+    # neighbour, and the caller declares the difference. When the material cannot
+    # reach the frame, the budget stops at the last whole frame the material can
+    # fill: the maximum reachable is declared, never invented.
+    if requested > 0.0 and float(fps) > 0:
+        rate = float(fps)
+        frame_target = int(round(requested * rate)) / rate
+        capacity = sum(max(0.0, totals[i]) for i in range(len(lengths)))
+        if capacity + 1e-9 < frame_target:
+            reachable_frames = int(math.floor(capacity * rate + 1e-9))
+            frame_target = reachable_frames / rate if reachable_frames > 0 else frame_target
+        deficit = frame_target - plain_total
+        if deficit > 1e-9:
+            # Grow from the tail, on the source (the quality window is a
+            # preference for the take point, not a wall: the extra second the
+            # prompt asks for comes from the same clip, even outside it).
+            for index in range(len(lengths) - 1, -1, -1):
+                room = max(0.0, totals[index] - lengths[index])
+                add = min(room, deficit)
+                if add > 0.0:
+                    lengths[index] += add
+                    deficit -= add
+                if deficit <= 1e-9:
+                    break
+            for index in range(len(lengths)):
+                if lengths[index] > (ends[index] - starts[index]) + 1e-9:
+                    starts[index] = 0.0
+                    ends[index] = max(lengths[index], min(totals[index], ends[index]))
+                if points[index] + lengths[index] > ends[index] + 1e-9:
+                    points[index] = max(starts[index], ends[index] - lengths[index])
+            plain_total = sum(lengths)
+        elif deficit < -1e-9:
+            # The tail is shortened from the last clip backwards; each clip keeps
+            # at least one frame. It is the last beat that gets trimmed, and the
+            # report's `timeline.tail` declares the difference.
+            to_cut = -deficit
+            floor = 1.0 / rate
+            for index in range(len(lengths) - 1, -1, -1):
+                room = max(0.0, lengths[index] - floor)
+                take = min(room, to_cut)
+                if take > 0.0:
+                    lengths[index] -= take
+                    to_cut -= take
+                if to_cut <= 1e-9:
+                    break
+            plain_total = sum(lengths)
 
     # -- beat grid ---------------------------------------------------------- #
     # The BPM used to sit in the brief while the planner declared it could not
