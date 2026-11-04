@@ -2347,6 +2347,203 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# commands — recipes
+# --------------------------------------------------------------------------- #
+
+
+def _recipe_explicit_params(loaded: Dict[str, Any]) -> set:
+    """Which ``params`` keys the chain actually wrote, not the inherited defaults."""
+    explicit = set()
+    for source in loaded.get("sources") or []:
+        try:
+            data = json.loads(Path(str(source)).read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        params = data.get("params") if isinstance(data, dict) else None
+        if isinstance(params, dict):
+            explicit.update(str(key) for key in params)
+    return explicit
+
+
+def _looks_like_recipe_file(value: str) -> bool:
+    path = Path(value).expanduser()
+    if path.is_file():
+        return True
+    return path.suffix.lower() == ".json" or "/" in value or "\\" in value
+
+
+def _recipe_file_problems(path: Path) -> List[str]:
+    from . import recipe
+
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        return [f"cannot read {path}: {exc}"]
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return [f"{path}: not valid JSON ({exc})"]
+    return recipe.validate(data)
+
+
+def _recipe_name_problems(name: str) -> List[str]:
+    from . import recipe
+
+    _loaded, problems = recipe.load_safe(name)
+    return list(problems)
+
+
+def _print_recipe_check(label: str, problems: List[str]) -> bool:
+    if not problems:
+        print(f"OK    {label}")
+        return True
+    print(f"FAIL  {label}")
+    for problem in problems:
+        print(f"      {problem}")
+    return False
+
+
+def cmd_recipe_list(args: argparse.Namespace) -> int:
+    from . import recipe
+
+    rows = recipe.list_all()
+    if args.json:
+        _out(rows)
+        return EXIT_OK
+
+    print(f"{'NAME':<22} {'ORIGIN':<18} {'DESCRIPTION'}")
+    for row in rows:
+        origin = str(row.get("source") or "")
+        if row.get("shadowed"):
+            origin += " shadowed"
+        description = str(row.get("description") or "")
+        if not row.get("valid"):
+            problems = row.get("problems") or ["invalid recipe"]
+            line = f"INVALIDA: {problems[0]}"
+            description = f"{line} — {description}" if description else line
+        print(f"{str(row.get('name') or ''):<22} {origin:<18} {description}")
+    return EXIT_OK
+
+
+def cmd_recipe_show(args: argparse.Namespace) -> int:
+    from . import recipe
+
+    loaded, problems = recipe.load_safe(args.name)
+    if loaded is None:
+        raise VxError(problems[0] if problems else f"recipe '{args.name}' not found")
+
+    explicit = _recipe_explicit_params(loaded)
+    defaults = sorted(str(key) for key in loaded["params"] if key not in explicit)
+
+    if args.json:
+        payload = dict(loaded)
+        payload["defaults"] = defaults
+        _out(payload)
+        return EXIT_OK
+
+    print(f"nome:        {loaded['name']}")
+    print(f"descrizione: {loaded['description']}")
+    print("file:")
+    for source in loaded["sources"]:
+        print(f"  {source}")
+    for section in ("settings", "brief"):
+        print(f"{section}:")
+        text = json.dumps(loaded[section], ensure_ascii=False, indent=2)
+        for line in text.splitlines():
+            print(f"  {line}")
+    print("params:")
+    for key in sorted(loaded["params"]):
+        suffix = "  (default)" if key in defaults else ""
+        value = json.dumps(loaded["params"][key], ensure_ascii=False)
+        print(f"  {key} = {value}{suffix}")
+    return EXIT_OK
+
+
+def cmd_recipe_validate(args: argparse.Namespace) -> int:
+    from . import recipe
+
+    targets = list(args.targets or [])
+    ok = True
+    if not targets:
+        for row in recipe.list_all():
+            name = str(row.get("name") or "")
+            ok = _print_recipe_check(name, _recipe_name_problems(name)) and ok
+        return EXIT_OK if ok else EXIT_USAGE
+
+    for target in targets:
+        value = str(target)
+        if _looks_like_recipe_file(value):
+            label = str(Path(value).expanduser())
+            problems = _recipe_file_problems(Path(value).expanduser())
+        else:
+            label = value
+            problems = _recipe_name_problems(value)
+        ok = _print_recipe_check(label, problems) and ok
+    return EXIT_OK if ok else EXIT_USAGE
+
+
+def cmd_recipe_init(args: argparse.Namespace) -> int:
+    from . import recipe
+
+    name = str(args.name or "").strip()
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise VxError(f"invalid recipe name {name!r}: use a file stem, not a path")
+
+    base = str(args.extends).strip() if args.extends else None
+    inherited: Optional[Dict[str, Any]] = None
+    if base:
+        inherited, problems = recipe.load_safe(base)
+        if inherited is None:
+            raise VxError(
+                f"base recipe '{base}' is not usable: "
+                + "; ".join(problems or ["unknown error"])
+            )
+
+    # Two explicit values are enough to start editing; everything else comes from
+    # the declared defaults. When extending, keep the inherited value so ``init``
+    # cannot silently change what the base recipe already decided.
+    params: Dict[str, Any] = {}
+    for key in ("shot_max", "loudness"):
+        if inherited is not None:
+            params[key] = inherited["params"][key]
+        else:
+            params[key] = recipe.PARAMS[key]["default"]
+
+    doc: Dict[str, Any] = {
+        "schema": recipe.SCHEMA,
+        "name": name,
+        "description": (
+            f"Ricetta {name}: estende {base}, modifica i parametri qui sotto."
+            if base
+            else f"Ricetta {name}: base minima, modifica i parametri qui sotto."
+        ),
+    }
+    if base:
+        doc["extends"] = base
+    doc["params"] = params
+
+    problems = recipe.validate(doc)
+    if problems:
+        raise VxError("invalid recipe: " + "; ".join(problems))
+
+    target = (
+        Path(args.out).expanduser()
+        if args.out
+        else recipe.paths()["user"] / f"{name}.json"
+    )
+    if target.exists() and not args.force:
+        raise VxError(
+            f"recipe already exists: {target}; use --force to overwrite"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    print(str(target))
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
 
@@ -3569,6 +3766,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", default=None, help="project_id del brief")
     p.set_defaults(func=cmd_visual)
 
+    p = add("recipe", "ricette vx.recipe/1: elenca, mostra, valida, crea")
+    recipe_sub = p.add_subparsers(dest="recipe_cmd", required=True)
+    r = recipe_sub.add_parser("list", help="elenco breve: nome, origine, descrizione")
+    r.add_argument("--json", action="store_true")
+    r.set_defaults(func=cmd_recipe_list)
+    s = recipe_sub.add_parser("show", help="una ricetta risolta, con i default in chiaro")
+    s.add_argument("name", help="nome della ricetta")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_recipe_show)
+    v = recipe_sub.add_parser(
+        "validate", help="valida tutte le ricette scoperte, o un nome/percorso"
+    )
+    v.add_argument(
+        "targets",
+        nargs="*",
+        metavar="NAME|FILE",
+        help="nomi o file; senza argomenti valida tutte quelle scoperte",
+    )
+    v.set_defaults(func=cmd_recipe_validate)
+    i = recipe_sub.add_parser("init", help="crea una ricetta utente minima e valida")
+    i.add_argument("name", help="nome della ricetta (file stem)")
+    i.add_argument("--extends", default=None, metavar="BASE", help="ricetta da estendere")
+    i.add_argument(
+        "--out", default=None, metavar="PATH", help="percorso del file (default: cartella utente)"
+    )
+    i.add_argument(
+        "--force",
+        action="store_true",
+        help="sovrascrive il file se esiste gia'",
+    )
+    i.set_defaults(func=cmd_recipe_init)
+
     p = add(
         "auto",
         "pipeline completa da prompt+cartella: triage->EDL->render->QC->consegna",
@@ -3735,6 +3964,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="salta l'audit di consegna (`vx guard`) sulla workdir: il report lo "
         "dichiara saltato e il lavoro si considera consegnato",
+    )
+    p.add_argument(
+        "--recipe",
+        default=None,
+        metavar="NAME",
+        help="ricetta vx.recipe/1 da applicare (il flag popola args.recipe)",
     )
     p.add_argument("--crf", type=int, default=None)
     p.add_argument("--preset", default=None)
