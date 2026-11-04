@@ -196,6 +196,17 @@ def _parse_summary(text: str) -> Dict[str, int]:
 def run_one(path: Path, timeout: float, verbose: bool) -> Dict[str, Any]:
     started = time.time()
     timed_out = False
+    # Ogni test e' un processo di console: lanciato da un padre senza console
+    # (agente, servizio, finestra staccata) se ne fa allocare una nuova, e sulla
+    # macchina dell'utente compare una finestra nera per ogni file. Le prove non
+    # devono farsi vedere.
+    hidden = 0
+    startupinfo = None
+    if os.name == "nt":
+        hidden = 0x08000000  # CREATE_NO_WINDOW
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
     try:
         proc = subprocess.run(
             [sys.executable, str(path)],
@@ -204,6 +215,8 @@ def run_one(path: Path, timeout: float, verbose: bool) -> Dict[str, Any]:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=(timeout if timeout and timeout > 0 else None),
+            creationflags=hidden,
+            startupinfo=startupinfo,
         )
         raw = proc.stdout or b""
         code = int(proc.returncode)
