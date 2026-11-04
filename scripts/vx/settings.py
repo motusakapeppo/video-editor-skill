@@ -144,6 +144,12 @@ DEFAULTS: Dict[str, Any] = {
         # value is vx.edl3.EFFECT_DENSITY_LIMIT; this key is the declared copy
         # `vx edl3 render --effect-budget` falls back to.
         "effect_budget": 3,
+        # Ceiling on the *cost* of one effect spec (`vx.effects.compose.cost`,
+        # 0..10) when a plan's effects are generated rather than declared. It is
+        # deliberately not `effect_budget`: that one counts how many looks may
+        # start in a 10 s window, and using one number for both made a knob that
+        # looked active and clipped nothing (every palette entry costs 0.5-1.7).
+        "effect_cost_budget": 1.8,
     },
     "lock": {
         "heartbeat_seconds": 30,

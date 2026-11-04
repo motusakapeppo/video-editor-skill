@@ -157,7 +157,14 @@ def main() -> int:
     )
     check(
         "amix finale a due ingressi",
-        "amix=inputs=2:dropout_transition=0:normalize=0[aout]" in graph,
+        "amix=inputs=2:dropout_transition=0:normalize=0,asetpts=N/SR/TB[aout]"
+        in graph,
+    )
+    check(
+        "il bus audio e' ri-timbrato prima di [aout]",
+        graph.count(",asetpts=N/SR/TB[aout]") == 1
+        and graph.count("[aout]") == 1,
+        "un solo [aout], sempre dopo asetpts",
     )
     check(
         "musica senza fade", "afade" not in graph.split("[mum1]")[0].rsplit(";", 1)[-1]
@@ -175,19 +182,19 @@ def main() -> int:
     plain_graph = render.build_edl_filtergraph(plain, mapping)
     check(
         "senza ducking: amix a due bus",
-        "[dialog][music]amix=inputs=2:dropout_transition=0:normalize=0[aout]"
+        "[dialog][music]amix=inputs=2:dropout_transition=0:normalize=0,asetpts=N/SR/TB[aout]"
         in plain_graph,
     )
     check("senza ducking: niente sidechain", "sidechaincompress" not in plain_graph)
 
     dialogue_only = _plan(audio_tracks=_dialogue(), ducking=None)
     dialogue_graph = render.build_edl_filtergraph(dialogue_only, mapping)
-    check("solo dialogo: anull[aout]", "[dialog]anull[aout]" in dialogue_graph)
+    check("solo dialogo: anull + asetpts", "[dialog]anull,asetpts=N/SR/TB[aout]" in dialogue_graph)
     check("solo dialogo: niente bus musica", "[music]" not in dialogue_graph)
 
     music_only = _plan(audio_tracks=_music(), ducking=None)
     music_graph = render.build_edl_filtergraph(music_only, mapping)
-    check("solo musica: anull[aout]", "[music]anull[aout]" in music_graph)
+    check("solo musica: anull + asetpts", "[music]anull,asetpts=N/SR/TB[aout]" in music_graph)
     check("solo musica: niente bus dialogo", "[dialog]" not in music_graph)
 
     with tempfile.TemporaryDirectory(prefix="vx-buses-") as raw:

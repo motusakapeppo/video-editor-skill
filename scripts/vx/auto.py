@@ -57,6 +57,7 @@ from . import (
     degrade,
     deliverables,
     edl_plan,
+    efx,
     estimate,
     feedback,
     ffmpeg as ff,
@@ -70,6 +71,7 @@ from . import (
     profile_master,
     profiles,
     qc,
+    recipe,
     render,
     resources,
     settings,
@@ -80,6 +82,12 @@ from . import (
 # The delivery spec the renderer is asked to hit and the QC gate re-measures.
 TARGET_LUFS = -14.0
 TARGET_TP = -1.0
+
+#: La ricetta: il layer dei suoi settings si scrive qui, dove
+#: ``settings.build(settings_file=...)`` lo legge; ``combined`` e' il file che
+#: somma il ``--settings`` dell'utente (sotto) e la ricetta (sopra).
+RECIPE_SETTINGS_NAME = "recipe_settings.json"
+RECIPE_SETTINGS_COMBINED_NAME = "recipe_settings_combined.json"
 
 #: Il cancello dei font: la proposta che ``fontproposal`` scrive, la scelta che
 #: la vista deposita e quanto si aspetta una persona prima di decidere da soli.
@@ -2799,6 +2807,66 @@ def _hook_fallback_text(bridge_report: Any) -> str:
     return ""
 
 
+def _merged_brief(
+    prompt: Any, recipe_brief: Optional[Mapping[str, Any]] = None
+) -> tuple[Any, Dict[str, str]]:
+    """Il brief del prompt, con la ricetta a riempire solo i vuoti.
+
+    Il prompt vince quando dichiara la stessa cosa: un ``font`` scritto nel
+    prompt non viene sovrascritto, un ``hook at 2.5s`` resta 2.5. La ricetta
+    aggiunge cio' che il prompt tace. ``sources`` dice, campo per campo, chi ha
+    deciso (``prompt`` o ``recipe``) e finisce nel report: niente default
+    travestiti da scelta.
+    """
+    brief = textbrief.parse_brief_text(prompt)
+    layer = dict(recipe_brief or {})
+    if not layer:
+        return brief, {}
+
+    from dataclasses import replace  # noqa: PLC0415 - solo per questo merge
+
+    sources: Dict[str, str] = {}
+    updates: Dict[str, Any] = {}
+
+    font = str(layer.get("font") or "").strip()
+    if brief.font:
+        sources["font"] = "prompt"
+    elif font:
+        updates["font"] = font
+        sources["font"] = "recipe"
+
+    if brief.size is not None:
+        sources["size"] = "prompt"
+    elif layer.get("size") is not None:
+        updates["size"] = int(layer["size"])
+        sources["size"] = "recipe"
+
+    # ``textbrief`` riempie ``hook_at`` col default 0.10 quando il prompt tace:
+    # un prompt che dichiara esattamente 0.10 e' indistinguibile dal silenzio,
+    # ma i due valori coincidono, quindi la scelta non cambia il pixel.
+    if brief.hook_at != textbrief.DEFAULT_HOOK_AT:
+        sources["hook_at"] = "prompt"
+    elif layer.get("hook_at") is not None:
+        updates["hook_at"] = max(0.0, float(layer["hook_at"]))
+        sources["hook_at"] = "recipe"
+
+    if layer.get("cta") is True and not brief.asks_cta:
+        updates["asks_cta"] = True
+        sources["cta"] = "recipe"
+    elif brief.asks_cta:
+        sources["cta"] = "prompt"
+
+    # Una ricetta che chiede un hook (``hook_at`` scritto) lo chiede davvero:
+    # senza frase resta un "missing" dichiarato, come per il prompt.
+    if "hook_at" in layer and not brief.asks_hook:
+        updates["asks_hook"] = True
+
+    merged = replace(brief, **updates) if updates else brief
+    if merged.asks_text and not merged.hook_text and not merged.cta_text:
+        merged = replace(merged, reason="")
+    return merged, sources
+
+
 def _run_typography(
     workdir: Path,
     plan: Any,
@@ -2806,23 +2874,27 @@ def _run_typography(
     caption_font: Mapping[str, Any],
     captions_ass: Optional[str],
     bridge_report: Any = None,
+    recipe_brief: Optional[Mapping[str, Any]] = None,
 ) -> tuple[Dict[str, Any], Optional[str]]:
     """Piano -> ASS -> render: il ponte che mancava.
 
     Legge solo cio' che il brief dichiara (``hook:``/``cta:``, il secondo, la
-    famiglia, il corpo, lo stile). Scrive ``hook.ass`` e ``subs.ass`` con i
-    writer di :mod:`vx.subs`; ``overlays.ass``/``text.ass`` e' il livello unico
-    che ``render_edl`` brucia, perche' il suo filtro ``subtitles=`` ne accetta
-    uno solo. Senza testo nel brief non scrive niente e lo dichiara: il
-    percorso delle caption esistenti resta esattamente quello di prima.
+    famiglia, il corpo, lo stile). ``recipe_brief`` e' il frammento di una
+    ricetta: riempie i campi che il prompt tace, non li sovrascrive. Scrive
+    ``hook.ass`` e ``subs.ass`` con i writer di :mod:`vx.subs`;
+    ``overlays.ass``/``text.ass`` e' il livello unico che ``render_edl`` brucia,
+    perche' il suo filtro ``subtitles=`` ne accetta uno solo. Senza testo nel
+    brief non scrive niente e lo dichiara: il percorso delle caption esistenti
+    resta esattamente quello di prima.
     """
-    brief = textbrief.parse_brief_text(prompt)
+    brief, sources = _merged_brief(prompt, recipe_brief)
     if not brief.asks_text:
         return (
             {
                 "applied": False,
                 "reason": brief.reason,
                 "brief": brief.to_dict(),
+                "sources": sources,
             },
             captions_ass,
         )
@@ -2913,6 +2985,7 @@ def _run_typography(
                 ),
                 "brief": brief.to_dict(),
                 "font": font,
+                "sources": sources,
             },
             captions_ass,
         )
@@ -2944,6 +3017,7 @@ def _run_typography(
             "files": files,
             "texts": texts,
             "missing": missing,
+            "sources": sources,
             "render": {
                 "filter": "subtitles",
                 "note": (
@@ -3055,6 +3129,496 @@ def _resource_report(clock: _Clock) -> Dict[str, Any]:
         },
         "reasons": list(budget.get("reasons") or []),
     }
+
+
+# --------------------------------------------------------------------------- #
+# recipe: il file dichiara, il montaggio esegue
+# --------------------------------------------------------------------------- #
+
+
+def _recipe_explicit_params(loaded: Mapping[str, Any]) -> set:
+    """Quali ``params`` la catena ha davvero scritto, non i default ereditati.
+
+    ``recipe.load`` riempie ogni parametro col default dichiarato in
+    ``recipe.PARAMS``, quindi la sola mappa risolta non distingue "la ricetta
+    chiede 1.0" da "nessuno l'ha chiesto". Le sorgenti invece lo dicono: si
+    rileggono (sono i file gia' validati da ``load_safe``) e si tiene l'unione
+    delle chiavi scritte.
+    """
+    explicit: set = set()
+    for source in loaded.get("sources") or ():
+        try:
+            data = json.loads(Path(str(source)).read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        params = data.get("params") if isinstance(data, dict) else None
+        if isinstance(params, dict):
+            explicit.update(str(key) for key in params)
+    return explicit
+
+
+def _merge_layers(base: Mapping[str, Any], extra: Mapping[str, Any]) -> Dict[str, Any]:
+    """Deep merge, ``extra`` on top: the same rule ``vx.settings`` applies."""
+    out: Dict[str, Any] = dict(base)
+    for key, value in extra.items():
+        current = out.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            out[key] = _merge_layers(current, value)
+        else:
+            out[key] = value
+    return out
+
+
+def _recipe_settings_file(recipe_obj: Mapping[str, Any], workdir: Path, args: Any) -> tuple[Path, str]:
+    """Scrive il layer della ricetta; se c'e' ``--settings`` lo tiene sotto.
+
+    ``write_layer`` scrive il layer puro (provenienza, ``recipe_settings.json``).
+    Il file che il cascade legge e' quello combinato: ``--settings`` e' una
+    scelta per-job piu' stretta di una ricetta, quindi vince lui; ``--override``
+    resta il gradino piu' alto perche' ``settings.build`` lo riapplica dopo.
+    """
+    layer_path = recipe.write_layer(recipe_obj, Path(workdir) / RECIPE_SETTINGS_NAME)
+    layer = json.loads(Path(layer_path).read_text(encoding="utf-8"))
+    source = getattr(args, "settings", None)
+    if not source:
+        return layer_path, ""
+    try:
+        raw = json.loads(Path(str(source)).expanduser().read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return layer_path, (
+            f"--settings {source} non leggibile ({type(exc).__name__}: {exc}): "
+            "il cascade usa il solo layer della ricetta"
+        )
+    if not isinstance(raw, dict):
+        return layer_path, (
+            f"--settings {source} non e' un oggetto JSON: "
+            "il cascade usa il solo layer della ricetta"
+        )
+    user = {k: v for k, v in raw.items() if k != "settings"} if "thresholds" in raw else raw
+    combined = _merge_layers(layer, user)
+    path = Path(workdir) / RECIPE_SETTINGS_COMBINED_NAME
+    path.write_text(
+        json.dumps(combined, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return path, ""
+
+
+def _apply_recipe_settings(
+    recipe_obj: Mapping[str, Any], workdir: Path, args: Any
+) -> Dict[str, Any]:
+    """I settings della ricetta entrano nel cascade come farebbe ``--settings``.
+
+    Il posto giusto sarebbe ``cli._apply_settings`` (gira prima di ogni comando,
+    quando la ricetta e' gia' nota) ma quel file non e' modificabile da qui:
+    quindi il layer si riapplica all'ingresso di ``_run_locked``, prima che i
+    moduli leggano i valori. Cio' che manca e' dichiarato nel report: i valori
+    di ``--settings``/``--override`` sono ricostruiti da ``args``, e un loro
+    errore non ferma il lavoro (il cascade resta quello di prima).
+    """
+    from . import features
+
+    section: Dict[str, Any] = {
+        "applied": False,
+        "path": None,
+        "fingerprint": None,
+        "precedence": "ricetta sopra il profilo di sito/config, sotto --settings e --override",
+        "problems": [],
+    }
+    try:
+        path, note = _recipe_settings_file(recipe_obj, workdir, args)
+        if note:
+            section["note"] = note
+        effective = settings.build(
+            settings_file=str(path),
+            overrides=list(getattr(args, "override", None) or []),
+        )
+        features.validate_table(effective)
+        features.apply_disables(effective, list(getattr(args, "no_feature", None) or []))
+        applied = settings.apply(effective)
+        section.update(
+            {
+                "applied": True,
+                "path": str(path),
+                "fingerprint": str(
+                    applied.get("_fingerprint") or settings.fingerprint(effective)
+                ),
+                "effect_budget": settings.get("render.effect_budget"),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - un layer rotto non ferma il montaggio
+        degrade.note("recipe.settings", exc)
+        section["problems"].append(
+            f"settings non applicati: {type(exc).__name__}: {exc}"
+        )
+    return section
+
+
+def load_recipe(args: Any, workdir: Path) -> Dict[str, Any]:
+    """La sezione ``report["recipe"]``: caricamento, settings e dichiarazioni.
+
+    Un nome inesistente o un file rotto non fermano il lavoro: il report porta
+    ``applied: False`` e i problemi, il degrado e' annotato, e la pipeline segue
+    coi suoi default. Una ricetta valida porta le sorgenti risolte, i parametri
+    (con la lista di quelli *scritti*, non ereditati) e i settings applicati.
+    """
+    requested = getattr(args, "recipe", None)
+    section: Dict[str, Any] = {
+        "requested": requested,
+        "applied": False,
+        "sources": [],
+        "params": {},
+        "settings": {},
+        "brief": {},
+        "explicit": [],
+        "applied_params": [],
+        "ignored_params": [],
+    }
+    if not requested:
+        return section
+    loaded, problems = recipe.load_safe(str(requested))
+    if loaded is None:
+        why = "; ".join(problems) or f"ricetta {requested!r} non caricata"
+        degrade.note("recipe", why)
+        section["problems"] = list(problems) or [why]
+        return section
+
+    explicit = _recipe_explicit_params(loaded)
+    section.update(
+        {
+            "applied": True,
+            "name": loaded.get("name"),
+            "sources": [str(item) for item in loaded.get("sources") or ()],
+            "params": dict(loaded.get("params") or {}),
+            "settings": dict(loaded.get("settings") or {}),
+            "brief": dict(loaded.get("brief") or {}),
+            "explicit": sorted(explicit),
+        }
+    )
+    section["settings_apply"] = _apply_recipe_settings(loaded, workdir, args)
+    if section["settings_apply"].get("problems"):
+        section["problems"] = list(section["settings_apply"]["problems"])
+    return section
+
+
+def _recipe_explicit(section: Mapping[str, Any]) -> set:
+    return set(section.get("explicit") or ())
+
+
+def _recipe_param(section: Mapping[str, Any], name: str, default: Any = None) -> Any:
+    """Valore di un parametro **solo** se la ricetta l'ha scritto e e' caricata."""
+    if not section.get("applied") or name not in _recipe_explicit(section):
+        return default
+    return (section.get("params") or {}).get(name, default)
+
+
+def _declare_param(section: Dict[str, Any], name: str, where: str, detail: str = "") -> None:
+    row: Dict[str, Any] = {"name": name, "where": where}
+    if detail:
+        row["detail"] = detail
+    section.setdefault("applied_params", []).append(row)
+
+
+def _ignore_param(section: Dict[str, Any], name: str, reason: str) -> None:
+    section.setdefault("ignored_params", []).append({"name": name, "reason": reason})
+
+
+def _recipe_beat_args(section: Mapping[str, Any]) -> tuple[Optional[str], Optional[float]]:
+    """``(beat_grid, bpm)`` per ``decide.parse_and_decide``.
+
+    La ricetta dichiara solo la griglia (``on``/``off``); il BPM viene dal
+    prompt o dal pacing del payload, che ``decide`` sa gia' leggere. Passare
+    ``bpm`` qui sarebbe inventare un numero che la ricetta non ha.
+    """
+    grid = _recipe_param(section, "beat_grid")
+    if grid not in ("on", "off"):
+        return None, None
+    return str(grid), None
+
+
+def _decide_payload(
+    args: Any,
+    assets: Sequence[Any],
+    section: Mapping[str, Any],
+    montage_mode: bool,
+) -> tuple[Dict[str, Any], str]:
+    """``parse_and_decide`` coi parametri della ricetta; degrada se serve un BPM.
+
+    ``beat_grid: on`` senza BPM e' un ``VxError`` onesto di ``decide`` ("passa
+    --bpm o scrivilo nel prompt"), ma qui non c'e' nessun flag da passare: il
+    lavoro riparte senza griglia e il report dichiara il parametro ignorato,
+    invece di morire su una ricetta che chiedeva piu' di quanto il prompt dia.
+    """
+    grid, bpm = _recipe_beat_args(section)
+    common = {
+        "asset_pool": assets,
+        "force_mode": "autonomous" if getattr(args, "autonomous", False) else None,
+        "montage": bool(montage_mode),
+    }
+    try:
+        payload = decide.parse_and_decide(args.prompt, beat_grid=grid, bpm=bpm, **common)
+        return payload, ""
+    except contract.VxError as exc:
+        if grid == "on" and "BPM" in str(exc):
+            degrade.note("recipe.beat_grid", exc)
+            payload = decide.parse_and_decide(args.prompt, beat_grid=None, bpm=None, **common)
+            return payload, str(exc)
+        raise
+
+
+def _declare_beat_grid(
+    section: Dict[str, Any], payload: Mapping[str, Any], degraded_reason: str
+) -> None:
+    if "beat_grid" not in _recipe_explicit(section) or not section.get("applied"):
+        return
+    if degraded_reason:
+        _ignore_param(section, "beat_grid", degraded_reason)
+        return
+    block = payload.get("beat_grid") if isinstance(payload, Mapping) else None
+    block = block if isinstance(block, Mapping) else {}
+    if block.get("mode") == "on" and block.get("enabled", True):
+        _declare_param(
+            section,
+            "beat_grid",
+            "decide.parse_and_decide",
+            f"bpm={block.get('bpm')} source={block.get('source')}",
+        )
+        return
+    _ignore_param(
+        section,
+        "beat_grid",
+        "la griglia non e' entrata nel payload: "
+        f"mode={block.get('mode')!r}, bpm={block.get('bpm')!r}, "
+        f"source={block.get('source')!r}",
+    )
+
+
+def _recipe_loudness(
+    section: Dict[str, Any], old_lufs: float, true_peak: float
+) -> Dict[str, Any]:
+    """Target LUFS effettivo: il profilo resta il pavimento, la ricetta lo sposta.
+
+    Il true peak non si tocca: e' il ceiling che il limiter e il QC usano gia',
+    e un target piu' forte non e' il permesso di sfondarlo.
+    """
+    row: Dict[str, Any] = {
+        "old_lufs": float(old_lufs),
+        "new_lufs": float(old_lufs),
+        "true_peak_db": float(true_peak),
+        "source": "profilo/default",
+    }
+    value = _recipe_param(section, "loudness")
+    if value is None:
+        return row
+    new = float(value)
+    row.update({"new_lufs": new, "source": "recipe"})
+    _declare_param(
+        section,
+        "loudness",
+        "render.render_edl + qc.audit_master",
+        f"{float(old_lufs):g} -> {new:g} LUFS, true peak {float(true_peak):g} dBTP invariato",
+    )
+    return row
+
+
+def _recipe_text_brief(section: Mapping[str, Any]) -> Dict[str, Any]:
+    """Il frammento di brief tipografico che la ricetta dichiara davvero.
+
+    Solo i parametri scritti: ``hook_at`` (default ``0.0``) non deve chiedere un
+    hook che nessuno ha voluto.
+    """
+    layer: Dict[str, Any] = {}
+    font = _recipe_param(section, "font")
+    if isinstance(font, str) and font.strip():
+        layer["font"] = font.strip()
+    size = _recipe_param(section, "font_size")
+    if isinstance(size, (int, float)) and not isinstance(size, bool):
+        layer["size"] = int(size)
+    if "hook_at" in _recipe_explicit(section) and section.get("applied"):
+        try:
+            layer["hook_at"] = float((section.get("params") or {}).get("hook_at", 0.0))
+        except (TypeError, ValueError):
+            pass
+    if "cta" in _recipe_explicit(section) and section.get("applied"):
+        layer["cta"] = bool((section.get("params") or {}).get("cta", False))
+    return layer
+
+
+def _declare_text_params(
+    section: Dict[str, Any], typography: Mapping[str, Any], plan: Any
+) -> None:
+    """Dichiara i parametri di testo: applicati dove sono arrivati al pixel."""
+    if not section.get("applied"):
+        return
+    explicit = _recipe_explicit(section)
+    sources = typography.get("sources") or {}
+    texts = {str(item.get("kind")) for item in typography.get("texts") or ()}
+    missing = [str(item) for item in typography.get("missing") or ()]
+    reason = str(typography.get("reason") or "tipografia non applicata")
+    written = bool(typography.get("applied"))
+
+    for name in ("font", "font_size"):
+        if name not in explicit:
+            continue
+        key = "font" if name == "font" else "size"
+        if not written:
+            _ignore_param(section, name, reason)
+        elif sources.get(key) == "prompt":
+            _ignore_param(section, name, "il prompt dichiara gia' questo valore: vince lui")
+        else:
+            _declare_param(section, name, "typography (ASS)", f"fonte: {sources.get(key) or 'ricetta'}")
+
+    if "hook_at" in explicit:
+        detail = next((item for item in missing if item.startswith("hook")), "")
+        if "hook" in texts:
+            at = next(
+                (item.get("at") for item in typography.get("texts") or () if item.get("kind") == "hook"),
+                None,
+            )
+            _declare_param(section, "hook_at", "typography hook.ass", f"hook a {at}s")
+        elif sources.get("hook_at") == "prompt":
+            _ignore_param(section, "hook_at", "il prompt dichiara il suo secondo: vince lui")
+        else:
+            _ignore_param(section, "hook_at", detail or reason)
+
+    if "cta" in explicit:
+        wanted = bool((section.get("params") or {}).get("cta", False))
+        detail = next((item for item in missing if item.startswith("cta")), "")
+        if not wanted:
+            _ignore_param(section, "cta", "cta: false nella ricetta: nessuna CTA scritta")
+        elif "cta" in texts:
+            at = next(
+                (item.get("at") for item in typography.get("texts") or () if item.get("kind") == "cta"),
+                None,
+            )
+            _declare_param(section, "cta", "typography subs.ass", f"CTA a {at}s")
+        else:
+            _ignore_param(
+                section,
+                "cta",
+                detail
+                or "nessuna frase CTA nel brief: la ricetta non inventa una frase",
+            )
+
+    if "shot_max" in explicit:
+        _ignore_param(section, "shot_max", _shot_max_reason(section, plan))
+
+
+def _shot_max_reason(section: Mapping[str, Any], plan: Any) -> str:
+    """Perche' ``shot_max`` non si applica, con i numeri veri del piano."""
+    try:
+        limit = float((section.get("params") or {}).get("shot_max"))
+    except (TypeError, ValueError):
+        limit = 0.0
+    durations: List[float] = []
+    for track in getattr(plan, "video_tracks", ()) or ():
+        for clip in getattr(track, "clips", ()) or ():
+            try:
+                durations.append(float(clip.dst_out) - float(clip.dst_in))
+            except (TypeError, ValueError):
+                continue
+    if not durations:
+        measured = "nessun segmento video nel piano"
+    else:
+        longest = max(durations)
+        mean = sum(durations) / len(durations)
+        measured = f"misurato: shot piu' lungo {longest:.2f}s, medio {mean:.2f}s"
+        if limit and longest <= limit:
+            measured += f" (sotto il tetto {limit:g}s richiesto)"
+    return (
+        "il piano EDL non espone un tetto di durata per segmento: i tagli "
+        "nascono dalla griglia di battuta e spezzarli dopo il ponte audio "
+        f"disallineerebbe le caption; {measured}"
+    )
+
+
+def _recipe_effects(
+    section: Dict[str, Any], plan: Any, workdir: Path
+) -> tuple[Dict[str, Any], Any]:
+    """Genera le spec ``vx.effects`` per clip e le attacca al piano.
+
+    Zero e' un valore: nessuna spec, nessuna tabella sul piano, grafo identico.
+    Un nome non valido e' un errore (:class:`vx.efx.EffectError`), non un
+    effetto inventato: qui si degrada e si dichiara, senza scrivere nulla.
+    """
+    per_shot = _recipe_param(section, "effects_per_shot")
+    if per_shot is None:
+        return (
+            {
+                "applied": False,
+                "per_shot": None,
+                "clips": 0,
+                "specs": 0,
+                "reason": "la ricetta non dichiara effects_per_shot",
+            },
+            plan,
+        )
+    try:
+        density = float(per_shot)
+    except (TypeError, ValueError):
+        _ignore_param(section, "effects_per_shot", f"valore non numerico: {per_shot!r}")
+        return (
+            {"applied": False, "per_shot": per_shot, "clips": 0, "specs": 0,
+             "reason": f"effects_per_shot non numerico: {per_shot!r}"},
+            plan,
+        )
+    if density <= 0:
+        return (
+            {
+                "applied": True,
+                "per_shot": 0.0,
+                "clips": 0,
+                "specs": 0,
+                "reason": "effects_per_shot 0: nessuna spec, il grafo resta quello di prima",
+            },
+            plan,
+        )
+    try:
+        result = efx.generate(
+            plan, density, salt=str(section.get("name") or "")
+        )
+    except Exception as exc:  # noqa: BLE001 - un effetto rotto non e' il montaggio
+        degrade.note("recipe.effects", exc)
+        _ignore_param(
+            section,
+            "effects_per_shot",
+            f"generazione fallita: {type(exc).__name__}: {exc}",
+        )
+        return (
+            {"applied": False, "per_shot": density, "clips": 0, "specs": 0,
+             "reason": f"generazione fallita: {type(exc).__name__}: {exc}"},
+            plan,
+        )
+
+    table = result.get("table") or {}
+    if table:
+        object.__setattr__(plan, "effects", table)
+    summary = efx.summary(result)
+    path = Path(workdir) / "effects.json"
+    try:
+        path.write_text(
+            json.dumps({"table": table, "summary": summary}, ensure_ascii=False, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        degrade.note("effects.file", exc)
+        path = None  # type: ignore[assignment]
+    _declare_param(
+        section,
+        "effects_per_shot",
+        "plan.effects -> render.render_edl",
+        f"{summary['specs']} spec su {summary['clips']} clip, costo {summary['cost']:g}"
+        f"/{summary['budget']:g}",
+    )
+    return (
+        {
+            "applied": True,
+            "per_shot": density,
+            **summary,
+            "path": str(path) if path else None,
+        },
+        plan,
+    )
 
 
 def collect_triage_questions(
@@ -3191,6 +3755,19 @@ def _run_locked(
     clock.facts["gpu"] = resources.gpu()
     _emit(log, "run", "start", Path(args.out).name)
 
+    # La ricetta si carica prima di tutto il resto: i suoi settings devono
+    # essere gia' nel cascade quando i moduli leggono i valori, e i suoi
+    # parametri decidono taglio, testo, loudness ed effetti. Se non c'e' o e'
+    # rotta, il lavoro prosegue coi default e il report lo dichiara.
+    with clock.time("recipe"):
+        recipe_section = load_recipe(args, workdir)
+    _emit(
+        log,
+        "recipe",
+        "done" if recipe_section.get("applied") else "skip",
+        str(recipe_section.get("name") or recipe_section.get("requested") or "nessuna"),
+    )
+
     # Le domande del triage: prima andavano in chat, ora vanno nella vista.
     # Con una vista si aspettano le tre risposte (in parallelo, una sola
     # scadenza); senza vista si usano i default e il report lo dichiara.
@@ -3233,11 +3810,8 @@ def _run_locked(
         montage_mode = bool(montage)
 
         try:
-            payload = decide.parse_and_decide(
-                args.prompt,
-                asset_pool=assets,
-                force_mode="autonomous" if getattr(args, "autonomous", False) else None,
-                montage=montage_mode,
+            payload, recipe_decide_note = _decide_payload(
+                args, assets, recipe_section, montage_mode
             )
         except decide.AmbiguousContractError as exc:
             raise contract.VxError(f"prompt ambiguo in STRICT: {exc}") from exc
@@ -3247,7 +3821,11 @@ def _run_locked(
         raise contract.VxError("payload senza asset_triage: triage non eseguito")
     selected = list(block.get("selected_assets") or [])
     rejected = list(block.get("rejected_assets") or [])
-    target_lufs, target_tp = loudness_target(payload)
+    _declare_beat_grid(recipe_section, payload, recipe_decide_note)
+    old_lufs, target_tp = loudness_target(payload)
+    loudness_row = _recipe_loudness(recipe_section, old_lufs, target_tp)
+    recipe_section["loudness"] = loudness_row
+    target_lufs = float(loudness_row["new_lufs"])
     _notify(progress, 5.0, "triage", log=log)
 
     with clock.time("probe"):
@@ -3438,6 +4016,24 @@ def _run_locked(
         except Exception:  # noqa: BLE001 - il referto resta la fonte della scelta
             pass
 
+    # Gli effetti della ricetta: dopo che il piano definitivo e' stato scelto
+    # (creative puo' sostituirlo) e prima del render, che li legge da
+    # ``plan.effects``. zero e' un valore: nessuna tabella, grafo identico.
+    with clock.time("effects"):
+        effects_section, plan = _recipe_effects(recipe_section, plan, workdir)
+    recipe_section["effects"] = effects_section
+    _emit(
+        log,
+        "effects",
+        "done" if effects_section.get("applied") else "skip",
+        (
+            f"{effects_section.get('specs', 0)} spec su "
+            f"{effects_section.get('clips', 0)} clip"
+            if effects_section.get("applied")
+            else str(effects_section.get("reason") or "")
+        ),
+    )
+
     # Il piano esiste: ora si propongono i font e si aspetta la scelta, prima del
     # render. Il cancello e' aperto solo se c'e' una vista e non l'hanno spento:
     # in autonomia senza pannello si prende il ``chosen`` e lo si dichiara.
@@ -3491,6 +4087,7 @@ def _run_locked(
                 caption_font,
                 captions_ass,
                 bridge_report,
+                recipe_brief=_recipe_text_brief(recipe_section),
             )
     except Exception as exc:  # noqa: BLE001 - la scrittura del testo non e' il render
         degrade.note("typography", exc)
@@ -3513,6 +4110,7 @@ def _run_locked(
     typography_fonts_dir = str(
         (typography_section.get("font") or {}).get("fonts_dir") or ""
     )
+    _declare_text_params(recipe_section, typography_section, plan)
 
     exemptions = grammar.camera_exemptions(plan)
     try:
@@ -3557,6 +4155,7 @@ def _run_locked(
     _notify(progress, 25.0, "render", log=log, status="start")
     ceiling_dbtp = qc.true_peak_ceiling(target_tp) if bridge_gains_applied else None
     render_cache: Dict[str, Any] = {}
+    effects_report: Dict[str, Any] = {}
     if progress_file:
         # Un file lasciato da un render precedente direbbe il falso: si riparte da zero.
         Path(progress_file).unlink(missing_ok=True)
@@ -3591,6 +4190,7 @@ def _run_locked(
                     or caption_font["fonts_dir"]
                     or None,
                     cache_report=render_cache,
+                    effects_report=effects_report,
                 )
         finally:
             if previous_priority is None:
@@ -3670,6 +4270,8 @@ def _run_locked(
             "a_roll_count": len(a_roll_indices),
         },
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
+        "recipe": recipe_section,
+        "effects": {**effects_section, "render": effects_report},
         "font": font_section,
         "typography": typography_section,
         "keyframes_gate": key_section,

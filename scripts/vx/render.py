@@ -1951,7 +1951,13 @@ def build_edl_filtergraph(
             )
         if ceiling_dbtp is not None:
             bus += "," + _true_peak_limiter(ceiling_dbtp)
-        parts.append(f"{bus}[aout]")
+        # ``adelay`` (Lavc 62.28) emits its first frame with NOPTS; ``amix`` of
+        # such frames keeps NOPTS, and the AAC/mux then writes 1024 samples that
+        # it declares as one sample long: the master plays 0.035 s of audio over
+        # 14 s of video even though every packet is there. Re-timestamping the
+        # bus from the sample count is what makes the stream as long as the
+        # picture; the samples themselves are untouched.
+        parts.append(f"{bus},asetpts=N/SR/TB[aout]")
 
     if len(video_clips) == 1:
         base = "[v0]"
