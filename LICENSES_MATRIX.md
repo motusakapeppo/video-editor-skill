@@ -3,7 +3,7 @@
 Regola: nessun modello, libreria o binario nuovo entra senza una riga qui.
 Ogni riga dichiara versione, licenza, data di verifica e tipo d'uso. "Verificata"
 significa letta dai metadati del pacchetto installato o dal binario stesso, non
-ricordata a memoria. Data della verifica: 03/11/2026.
+ricordata a memoria. Data della verifica: 04/11/2026.
 
 Tipi d'uso ammessi: **libreria** (importata nel processo), **processo esterno**
 (lanciata come eseguibile, mai distribuita), **opzionale** (non necessaria al
@@ -50,13 +50,16 @@ percorso normale).
 | bungee | Bungee-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/bungee) | c4f5361ce120af3e… | 03/11/2026 |
 | butcherman | Butcherman-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/butcherman) | b8cee5e2cdc71f44… | 03/11/2026 |
 | creepster | Creepster-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/creepster) | 402aeb734586c74a… | 03/11/2026 |
+| dmsans | DMSans-Italic[opsz,wght].ttf<br>DMSans[opsz,wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/dmsans) | 22259c0cc8237221… | 04/11/2026 |
 | fjallaone | FjallaOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/fjallaone) | ce3b299625abe3c7… | 03/11/2026 |
 | lobster | Lobster-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/lobster) | d6568e697fd50ced… | 03/11/2026 |
+| manrope | Manrope[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/manrope) | 3ae11c49db0455a3… | 04/11/2026 |
 | nosifer | Nosifer-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/nosifer) | 09c5ac35e34dc7a3… | 03/11/2026 |
 | oswald | Oswald[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/oswald) | 5b38c246e255a12f… | 03/11/2026 |
 | rubikglitch | RubikGlitch-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/rubikglitch) | 260245012483d569… | 03/11/2026 |
 | squadaone | SquadaOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/squadaone) | 5b34a1633dbc48db… | 03/11/2026 |
 | staatliches | Staatliches-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/staatliches) | 8395212aa4c6c353… | 03/11/2026 |
+| worksans | WorkSans-Italic[wght].ttf<br>WorkSans[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/worksans) | 0a9f935ea490d347… | 04/11/2026 |
 
 ## Da verificare prima dell'integrazione
 

@@ -101,10 +101,11 @@ ONLY = tuple(
     item.strip() for item in os.environ.get("VX_PROFILE_MINUTE_ONLY", "").split(",") if item.strip()
 )
 
-#: The audio bed the chunk path cannot carry (``edl3_slice`` refuses an audio
-#: bus, D-12's slicing rule) and that the join pass therefore lays down: a 440 Hz
-#: tone with a slow envelope, so loudnorm measures a *varying* signal and the
-#: two-pass result is a real measurement, not a constant.
+#: The audio bed this measurement lays down on the join pass: a 440 Hz tone with
+#: a slow envelope, so loudnorm measures a *varying* signal and the two-pass
+#: result is a real measurement, not a constant. (``edl3_slice`` can now slice an
+#: audio bus; these documents are still not chunked because ``profile_ref`` is
+#: measured on the whole edit and is refused on a fragment.)
 AUDIO_BED = f"sine=frequency=440:sample_rate=48000:duration={SECONDS:g}"
 AUDIO_ENVELOPE = "volume='0.2+0.12*sin(2*PI*t/4)':eval=frame"
 
@@ -265,9 +266,10 @@ def expected_structure_codes(row: profiles.Profile) -> set:
       (a 120 s videoclip, a 4800 s film). The minute is what was asked for, and
       the report carries both numbers;
     * ``STRUCTURE_INTERVIEW`` — a documentary's grammar wants dialogue material,
-      and the only carriers of it are an audio bus or a nested sequence, both of
-      which ``edl3_slice.plan_windows`` refuses to slice. The chunk path and that
-      piece of the grammar are therefore mutually exclusive, and this says so
+      and this measurement's documents declare a ``profile_ref``: the structure
+      is judged against the whole edit, so ``edl3_slice.plan_windows`` refuses
+      them as fragments before any chunk is cut. The chunk path and that piece
+      of the grammar are therefore mutually exclusive *here*, and this says so
       instead of hiding it.
 
     A ``STRUCTURE_HOOK`` is *not* expected: ``clips_per_window`` keeps the clip

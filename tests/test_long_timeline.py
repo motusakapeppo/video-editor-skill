@@ -357,12 +357,31 @@ def section_checkpoint(work: Path, sources: List[str]) -> None:
             {"source": sources[0], "src_in": 0.0, "src_out": 1.0,
              "dst_in": 0.0, "dst_out": 1.0}]}],
     }
-    try:
-        edl3_slice.plan_windows(edl3.Timeline3.from_dict(audio_doc), 3)
-        check("an audio bus is refused, never sliced", False)
-    except edl3_render.CompileError as exc:
-        check("an audio bus is refused, never sliced", exc.code == "CHUNK_UNSUPPORTED",
-              exc.code)
+    audio_timeline = edl3.Timeline3.from_dict(audio_doc)
+    audio_windows = edl3_slice.plan_windows(audio_timeline, 3)
+    sliced = [
+        edl3_slice.document(audio_timeline, window).get("audio") or []
+        for window in audio_windows
+    ]
+    pieces = [
+        clip
+        for track in sliced
+        for entry in track
+        for clip in entry["clips"]
+    ]
+    check(
+        "an audio bus is sliced at every chunk boundary, never dropped",
+        len(audio_windows) == 3 and len(pieces) == 1,
+        sliced,
+    )
+    check(
+        "the piece that holds the bus keeps it re-based to zero",
+        bool(pieces)
+        and abs(float(pieces[0]["dst_in"])) < 1e-9
+        and abs(float(pieces[0]["dst_out"]) - 1.0) < 1e-9
+        and abs(float(pieces[0]["src_out"]) - 1.0) < 1e-9,
+        pieces,
+    )
 
     MEASURED.update(
         {
