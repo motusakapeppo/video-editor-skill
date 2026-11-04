@@ -108,7 +108,7 @@ una corsa manuale restano `subs`, `render --precision proxy|full`, `qc`, `delive
 & $PY $VX deliverables --plan "<WORK_DIR>\clip-a1b2c3d4\plan.json"
 ```
 
-**Auto.** `vx auto --prompt ... --assets ... --out ...` esegue triage, piano, render e QC in un colpo; `--montage` monta ogni video che passa i gate come `a_roll` in ordine, `--fill crop|fit|blur` sceglie il riempimento (`fit` predefinito, upscale per clip in `auto_report.json`); scrive `plan.json`, `auto_report.json` e `<workdir>/out`; exit 0/2/5/6.
+**Auto.** `vx auto --prompt ... --assets ... --out ...` esegue triage, piano, render e QC in un colpo; `--montage` monta ogni video che passa i gate come `a_roll` in ordine, `--fill crop|fit|blur` sceglie il riempimento (`fit` predefinito, upscale per clip in `auto_report.json`); `--music FILE` monta sul brano (BPM **misurato dalla traccia**; `--bpm N` vince, `bpm_source` dichiarata; se non e' misurabile la griglia si spegne e lo dice); `--recipe NAME` applica una ricetta; scrive `plan.json`, `auto_report.json` e `<workdir>/out`; exit 0/2/5/6.
 
 **EDL3.** Effetti, transizioni e testo passano da `vx edl3`: `validate FILE` non
 renderizza (exit 2 col campo che sbaglia); `render --plan FILE --out M` scrive
