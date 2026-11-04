@@ -152,14 +152,19 @@ def _empty_render() -> Dict[str, Any]:
     return {"out_time_sec": 0.0, "duration_sec": 0.0, "percent": 0.0, "speed": ""}
 
 
-def _looks_like_job(directory: Path) -> bool:
+def _looks_like_job(directory: Path, *, allow_live: bool = False) -> bool:
     """Una cartella e' un lavoro se ha il panel o i segni veri della skill.
 
     Il riconoscimento e' stretto di proposito: uno solo tra ``stage_00/``,
     ``proxy/``, ``out/``, ``source.json``, ``report.json``, ``plan.json``. Un
-    video sciolto in una cartella resta fuori.
+    video sciolto in una cartella resta fuori. ``allow_live`` accetta anche una
+    workdir di render (``live/manifest.json``): vale per la radice che si serve
+    esplicitamente, non per una sottocartella, che altrimenti comparirebbe come
+    un secondo lavoro accanto a quello che l'ha prodotta.
     """
     if (directory / "progress.json").is_file():
+        return True
+    if allow_live and (directory / LIVE_DIR / LIVE_MANIFEST).is_file():
         return True
     if any((directory / name).is_dir() for name in JOB_MARKER_DIRS):
         return True
@@ -178,8 +183,9 @@ def _state_mtime(directory: Path) -> float:
 
     Per un lavoro pubblicato e' ``progress.json``: e' l'ultimo fatto che il
     lavoro ha raccontato. Per un lavoro dedotto sono i segni che lo rendono
-    riconoscibile, presi dal piu' recente. Non e' "quando e' finito": e' solo
-    "quanto tempo fa si e' fatto sentire".
+    riconoscibile, presi dal piu' recente, piu' gli artefatti veri: il master in
+    ``out/`` e il manifest live. Un lavoro il cui master e' stato scritto adesso
+    e' il piu' recente anche senza un panel.
     """
     panel = directory / "progress.json"
     try:
@@ -188,7 +194,10 @@ def _state_mtime(directory: Path) -> float:
     except OSError:
         pass
     stamps: List[float] = []
-    for name in JOB_MARKER_DIRS + JOB_MARKER_FILES:
+    for name in JOB_MARKER_DIRS + JOB_MARKER_FILES + (
+        "out/master.mp4",
+        f"{LIVE_DIR}/{LIVE_MANIFEST}",
+    ):
         try:
             stamps.append((directory / name).stat().st_mtime)
         except OSError:
@@ -343,7 +352,95 @@ def _data_dir(directory: Path) -> Path:
     for candidate in candidates:
         if (candidate / "render").is_dir():
             return candidate
+    # Una workdir di render a chunk non ha ``plan.json``: la riconoscono i suoi
+    # artefatti (``chunks/`` o il manifest live), cosi' la vista trova il report
+    # che il render ha scritto li' e non accanto al master.
+    for candidate in candidates:
+        if (candidate / "chunks").is_dir() or (
+            candidate / LIVE_DIR / LIVE_MANIFEST
+        ).is_file():
+            return candidate
     return directory
+
+
+def _report_workdirs(
+    directory: Path, data_dir: Optional[Path] = None
+) -> List[Path]:
+    """Le workdir che il report dichiara, nell'ordine in cui vanno provate.
+
+    ``--workdir X`` puo' stare ovunque: il report del render a chunk scrive
+    ``workdir`` (e ``chunks.workdir``) proprio perche' la vista non deve
+    indovinare. Il campo e' esplicito e vince sulla cartella accanto al master.
+    """
+    folders: List[Path] = []
+    base = _data_dir(directory) if data_dir is None else Path(data_dir)
+    for folder in (base, directory, directory / "work"):
+        if folder in folders:
+            continue
+        folders.append(folder)
+    found: List[Path] = []
+    for folder in folders:
+        for name in ("report.json", "auto_report.json"):
+            report = _read_json(folder / name)
+            if not report:
+                continue
+            chunks = report.get("chunks")
+            candidates: List[Any] = []
+            if isinstance(chunks, Mapping):
+                candidates.append(chunks.get("workdir"))
+            candidates.append(report.get("workdir"))
+            live = report.get("live")
+            if isinstance(live, Mapping) and live.get("directory"):
+                candidates.append(Path(str(live["directory"])).parent)
+            for raw in candidates:
+                if not raw:
+                    continue
+                path = Path(str(raw))
+                try:
+                    if path.is_dir():
+                        resolved = path.resolve()
+                        if resolved not in found:
+                            found.append(resolved)
+                except OSError:
+                    continue
+    return found
+
+
+def _workdir_candidates(directory: Path) -> List[Path]:
+    """Ogni cartella in cui il lavoro puo' aver scritto domande e live."""
+    folders: List[Path] = []
+    for folder in [
+        directory,
+        _data_dir(directory),
+        directory / "work",
+        *_report_workdirs(directory),
+    ]:
+        try:
+            resolved = folder.resolve()
+        except OSError:
+            continue
+        if resolved not in folders:
+            folders.append(resolved)
+    return folders
+
+
+def _live_folders(directory: Path, data_dir: Optional[Path] = None) -> List[Path]:
+    """Dove cercare ``live/manifest.json``, prima la workdir dichiarata.
+
+    Restituisce le cartelle ``live/`` vere, non le workdir: il chiamante apre
+    ``<folder>/manifest.json`` e ``<folder>/chunk_NNN.mp4``.
+    """
+    folders: List[Path] = []
+    base = _data_dir(directory) if data_dir is None else Path(data_dir)
+    for workdir in [*_report_workdirs(directory, base), base, directory, directory / "work"]:
+        folder = workdir / LIVE_DIR
+        try:
+            resolved = folder.resolve()
+        except OSError:
+            continue
+        if resolved not in folders:
+            folders.append(resolved)
+    return folders
 
 
 def _empty_font() -> Dict[str, Any]:
@@ -812,16 +909,22 @@ def live_state(
 ) -> Dict[str, Any]:
     """Lo stato live pubblicato dal render: pezzi pronti, totali e URL.
 
-    La fonte e' il manifest ``vx.live/1`` nella cartella ``live/`` della workdir.
-    Un manifest assente e' uno stato vuoto, mai un errore: il player non deve
-    distinguere "nessun render live" da "render live appena partito".
+    La fonte e' il manifest ``vx.live/1`` nella cartella ``live/`` della workdir
+    **vera** del render: quella che il report dichiara (``workdir``), non quella
+    accanto al master. Se le due non coincidono lo stato lo dice (``workdir``,
+    ``manifest``, ``mismatch``) invece di servire una pagina ferma. Un manifest
+    assente e' uno stato vuoto, mai un errore: il player non deve distinguere
+    "nessun render live" da "render live appena partito".
     """
     data_dir = _data_dir(directory) if data_dir is None else data_dir
-    folders = [data_dir / LIVE_DIR, directory / LIVE_DIR, directory / "work" / LIVE_DIR]
+    declared = _report_workdirs(directory, data_dir)
+    folders = _live_folders(directory, data_dir)
     manifest: Dict[str, Any] = {}
+    found: Optional[Path] = None
     for folder in folders:
         manifest = _read_json(folder / LIVE_MANIFEST)
         if manifest:
+            found = folder
             break
     raw = manifest.get("chunks")
     entries: List[Dict[str, Any]] = []
@@ -845,10 +948,28 @@ def live_state(
     if not entries:
         return {"ready": 0, "total": 0, "chunks": []}
     total = _number(manifest.get("total"))
+    local = {
+        Path(str(path)).resolve()
+        for path in (
+            data_dir / LIVE_DIR,
+            directory / LIVE_DIR,
+            directory / "work" / LIVE_DIR,
+        )
+    }
+    workdir = found.parent if found is not None else None
     return {
         "ready": sum(1 for entry in entries if entry["ready"]),
         "total": int(total) if total is not None else len(entries),
         "chunks": entries,
+        "directory": str(found.resolve()) if found is not None else "",
+        "workdir": str(workdir.resolve()) if workdir is not None else "",
+        "manifest": str((found / LIVE_MANIFEST).resolve()) if found is not None else "",
+        "declared": bool(
+            found is not None
+            and any(found == (path / LIVE_DIR).resolve() for path in declared)
+        ),
+        "mismatch": bool(found is not None and found.resolve() not in local),
+        "job_dir": str(data_dir.resolve()),
     }
 
 
@@ -907,7 +1028,7 @@ def discover(root: Path) -> List[Path]:
     """
     root = Path(root)
     found: List[Path] = []
-    if _looks_like_job(root):
+    if _looks_like_job(root, allow_live=True):
         found.append(root)
     known = [path.resolve() for path in found]
     for level in range(1, MAX_DEPTH + 1):
@@ -1161,6 +1282,7 @@ def _outcome(
     note: str,
     ready: bool,
     waiting: bool,
+    active: bool = True,
 ) -> str:
     """L'esito del lavoro, non solo la percentuale.
 
@@ -1169,12 +1291,16 @@ def _outcome(
     master annunciato ma assente non e' un lavoro concluso: al massimo e'
     ``incomplete``, e se la nota dice che il lavoro si e' fermato e' ``stopped``.
     ``ready`` arriva da ``master_ready``: il file e' la verita', la nota no.
+    ``active`` e' il lock/mtime: una fase dichiarata da un processo che non c'e'
+    piu' e' un lavoro fermo, non un lavoro in corso.
     """
     lowered = str(note or "").lower()
     if "fermato" in lowered:
         return "stopped"
     if any(word in lowered for word in ("errore", "fallit", "eccezione")):
         return "failed"
+    if current is not None and not active and not waiting:
+        return "stopped"
     if current is not None or waiting:
         return "running"
     if ready:
@@ -1206,14 +1332,15 @@ def _size_of(path: Optional[Path]) -> int:
 def _questions_state(directory: Path, data_dir: Path) -> List[Dict[str, Any]]:
     """Le domande aperte da ``vx.ask`` in questo lavoro, una voce per id.
 
-    ``ask`` scrive ``<workdir>/questions/``; la workdir e' quella che contiene
-    il piano, ma per un lavoro dedotto puo' essere la cartella stessa. Si
-    guardano tutte e due, senza far sparire l'una per l'altra, e la prima voce
-    di un id vince: la vista non disegna due volte la stessa domanda.
+    ``ask`` scrive ``<workdir>/questions/``; la workdir vera e' quella che il
+    report dichiara (una ``--workdir`` esplicita puo' stare ovunque), poi quella
+    del piano e infine la cartella del lavoro. Si guardano tutte, senza far
+    sparire l'una per l'altra, e la prima voce di un id vince: la vista non
+    disegna due volte la stessa domanda.
     """
     entries: List[Dict[str, Any]] = []
     seen: set = set()
-    for folder in (data_dir, directory):
+    for folder in _workdir_candidates(directory):
         for item in ask.pending(folder):
             key = str(item.get("id") or "")
             if not key or key in seen:
@@ -1221,6 +1348,70 @@ def _questions_state(directory: Path, data_dir: Path) -> List[Dict[str, Any]]:
             seen.add(key)
             entries.append(item)
     return entries
+
+
+def _answer_workdir(directory: Path, data_dir: Path, qid: str) -> Path:
+    """La cartella che contiene *quella* domanda: si risponde dove e' scritta."""
+    for folder in _workdir_candidates(directory):
+        try:
+            if ask.question_path(folder, qid).is_file():
+                return folder
+        except OSError:
+            continue
+    return data_dir
+
+
+def _valid_media(path: Optional[Path]) -> bool:
+    """Un master che si puo' aprire: byte dentro e l'atomo ``ftyp`` in testa.
+
+    La dimensione da sola non basta — un file troncato o un segnaposto di testo
+    hanno byte ma non sono video. Per un contenitore MP4/MOV ``ftyp`` sta nei
+    primi byte; per qualunque altro tipo resta la dimensione.
+    """
+    if not _ready_file(path):
+        return False
+    assert path is not None
+    if path.suffix.lower() not in (".mp4", ".m4v", ".mov"):
+        return True
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(4096)
+    except OSError as exc:
+        degrade.note("serve", exc)
+        return False
+    return b"ftyp" in head
+
+
+def _derived_outcome(
+    ready: bool, activity: Mapping[str, Any], guard_section: Mapping[str, Any]
+) -> str:
+    """L'esito di un lavoro senza ``progress.json``: lo dicono gli artefatti.
+
+    Un master esistente e leggibile e' un lavoro **completato**, anche senza un
+    panel che lo racconti. Senza master lo stato e' ``running`` se un lock vivo o
+    un mtime fresco dicono che qualcuno ci sta lavorando, altrimenti ``stopped``.
+    La guardia ha l'ultima parola solo per una violazione vera (un master
+    prodotto fuori dalla pipeline, G2, da solo non e' un fallimento: e' un
+    lavoro condotto a mano).
+    """
+    ok = guard_section.get("ok")
+    violations = guard_section.get("violations") or []
+    codes = {
+        str(item.get("code") or "")
+        for item in violations
+        if isinstance(item, Mapping)
+    }
+    if ready:
+        if ok is False and (codes - {"G2"}):
+            return "failed"
+        return "done"
+    if ok is False and violations:
+        return "failed"
+    if activity.get("locked") or activity.get("active"):
+        return "running"
+    if activity.get("updated_sec") is None:
+        return "idle"
+    return "stopped"
 
 
 def _job_state(directory: Path) -> Dict[str, Any]:
@@ -1265,22 +1456,36 @@ def _job_state(directory: Path) -> Dict[str, Any]:
     font = _empty_font() if derived else _font_state(directory)
     master = _master_path(directory, progress)
     ready = _ready_file(master)
+    artifact_ready = _valid_media(master)
+    if derived and artifact_ready and not activity["locked"]:
+        # Il master c'e' e si legge: il lavoro e' finito. Un mtime fresco sul
+        # file appena scritto non e' "qualcuno ci sta lavorando".
+        activity = {**activity, "active": False, "state": "finished"}
     note = progress.get("note") or (
         "lavoro vx senza progresso pubblicato" if derived else ""
     )
     percent = progress.get("percent") or 0.0
     guard_section = _guard_state(data_dir, report, ready=ready)
-    outcome = _outcome(
-        percent=percent,
-        current=progress.get("current"),
-        note=note,
-        ready=ready,
-        waiting=bool(approval["waiting"]) or bool(font.get("pending")),
-    )
-    # Un master scritto non e' un lavoro consegnato: la guardia ha l'ultima
-    # parola sull'esito, e ``done`` non e' un esito possibile con violazioni.
-    if outcome == "done" and guard_section.get("ok") is False:
-        outcome = "failed"
+    if derived:
+        # Senza panel lo stato viene dagli artefatti, non dall'assenza del panel.
+        outcome = _derived_outcome(artifact_ready, activity, guard_section)
+        if artifact_ready:
+            note = "master presente: lavoro concluso (senza progresso pubblicato)"
+        elif master is not None and not artifact_ready:
+            note = "master illeggibile: non e' ancora un lavoro consegnato"
+    else:
+        outcome = _outcome(
+            percent=percent,
+            current=progress.get("current"),
+            note=note,
+            ready=ready,
+            waiting=bool(approval["waiting"]) or bool(font.get("pending")),
+            active=bool(activity["active"]),
+        )
+        # Un master scritto non e' un lavoro consegnato: la guardia ha l'ultima
+        # parola sull'esito, e ``done`` non e' un esito possibile con violazioni.
+        if outcome == "done" and guard_section.get("ok") is False:
+            outcome = "failed"
     return {
         "job": directory.name,
         "path": str(directory),
@@ -1598,6 +1803,7 @@ def _empty_job_payload(directory: Any, why: str = "") -> Dict[str, Any]:
         "progress_source": "",
         "jobs": [],
         "selected": 0,
+        "selector": False,
     }
 
 
@@ -1661,6 +1867,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "progress_source": "",
             "jobs": [],
             "selected": 0,
+            "selector": False,
         }
     items = [_safe_job_state(path) for path in jobs]
     chosen = (
@@ -1681,12 +1888,15 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
             "updated_sec": item["updated_sec"],
             "updated_at": item["updated_at"],
             "state": item["state"],
+            "outcome": item["outcome"],
+            "master_ready": item["master_ready"],
         }
         for position, item in enumerate(items)
     ]
     payload = dict(items[chosen])
     payload["jobs"] = entries
     payload["selected"] = chosen
+    payload["selector"] = len(entries) > 1
     payload["showing"] = _showing(items, chosen)
     return payload
 
@@ -2053,20 +2263,20 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
             directory = jobs[chosen]
             data_dir = _data_dir(directory)
-            folder = data_dir / LIVE_DIR
-            if not (folder / LIVE_MANIFEST).is_file():
-                folder = directory / LIVE_DIR
-            try:
-                base = folder.resolve()
-                candidate = (folder / name).resolve()
-                inside = candidate == base or base in candidate.parents
-                exists = inside and candidate.is_file()
-            except OSError:
-                inside, exists = False, False
-            if not inside or not exists:
-                self._send(b"not found", "text/plain", status=404)
-                return
-            self._serve_video(candidate)
+            for folder in _live_folders(directory, data_dir):
+                if not (folder / LIVE_MANIFEST).is_file():
+                    continue
+                try:
+                    base = folder.resolve()
+                    candidate = (folder / name).resolve()
+                    inside = candidate == base or base in candidate.parents
+                    exists = inside and candidate.is_file()
+                except OSError:
+                    inside, exists = False, False
+                if inside and exists:
+                    self._serve_video(candidate)
+                    return
+            self._send(b"not found", "text/plain", status=404)
 
         def _serve_video(self, path: Path) -> None:
             """Il file video, con Range: il browser deve poter scorrere."""
@@ -2214,7 +2424,8 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
                 if job is None:
                     answer = {"ok": False, "id": qid, "reason": "nessun lavoro"}
                 else:
-                    answer = ask.answer(_data_dir(job), qid, value)
+                    folder = _answer_workdir(job, _data_dir(job), qid)
+                    answer = ask.answer(folder, qid, value)
                     answer["job"] = job.name
                 self._send(json.dumps(answer, ensure_ascii=False).encode("utf-8"),
                            "application/json; charset=utf-8")

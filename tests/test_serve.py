@@ -870,6 +870,180 @@ def check_activity() -> None:
         )
 
 
+def check_artifact_verdict() -> None:
+    """D15/D16 - l'esito viene dagli artefatti, e con piu' lavori c'e' il selettore.
+
+    Il caso vero: un job con ``out/master.mp4`` ma senza ``progress.json``
+    appariva "Non riuscito" perche' lo stato si deduceva dalla *presenza del
+    panel*. Qui il master esiste e si legge: il lavoro e' concluso. La vista
+    iniziale resta il lavoro con l'attivita' piu' recente, e il selettore lo dice.
+    """
+    with tempfile.TemporaryDirectory(prefix="vx-artifacts-") as raw:
+        base = Path(raw)
+        now = time.time()
+
+        completed = base / "con_master"
+        (completed / "out").mkdir(parents=True)
+        master = completed / "out" / "master.mp4"
+        master.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"m" * 4096)
+        os.utime(master, (now, now))
+
+        stale = base / "in_corso"
+        stale.mkdir()
+        panel = stale / "progress.json"
+        panel.write_text(
+            json.dumps(
+                {
+                    "prompt": "render fermo",
+                    "percent": 10.0,
+                    "current": "render",
+                    "note": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+        os.utime(panel, (now - 600, now - 600))
+
+        view = serve.state(base)
+        check(
+            "D15 un master che esiste e si legge e' un lavoro completato",
+            view["outcome"] == "done"
+            and view["master_ready"] is True
+            and view["progress_source"] == "derived",
+            {key: view[key] for key in ("outcome", "master_ready", "progress_source")},
+        )
+        check(
+            "D15 la nota dice che il master c'e', non che il panel manca",
+            "master presente" in view["note"] and "senza progresso" in view["note"],
+            view["note"],
+        )
+        by_name = {item["job"]: item for item in view["jobs"]}
+        check(
+            "D16 due lavori: il selettore e' acceso e sceglie l'attivita' piu' recente",
+            view["selector"] is True
+            and view["selected"] == by_name["con_master"]["index"]
+            and view["job"] == "con_master",
+            (view["job"], view["selected"], view["selector"]),
+        )
+        check(
+            "D16 ogni voce del selettore dichiara il suo esito",
+            by_name["con_master"]["outcome"] == "done"
+            and by_name["in_corso"]["outcome"] == "stopped",
+            {name: item["outcome"] for name, item in by_name.items()},
+        )
+        check(
+            "D15 un lavoro scelto a mano mostra il suo esito, non quello del primo",
+            serve.state(base, by_name["in_corso"]["index"])["outcome"] == "stopped",
+            serve.state(base, by_name["in_corso"]["index"])["outcome"],
+        )
+
+        bogus = base / "segnaposto"
+        (bogus / "out").mkdir(parents=True)
+        (bogus / "out" / "master.mp4").write_bytes(b"non e' un video\n")
+        check(
+            "D15 un master illeggibile non viene venduto come completato",
+            serve.state(bogus)["outcome"] != "done",
+            serve.state(bogus)["outcome"],
+        )
+
+
+def check_render_workdir() -> None:
+    """D12/D25 - live, domande e decisioni vivono nella workdir del report."""
+    with tempfile.TemporaryDirectory(prefix="vx-render-wd-") as raw:
+        base = Path(raw)
+        job = base / "job"
+        (job / "out").mkdir(parents=True)
+        (job / "out" / "master.mp4").write_bytes(
+            b"\x00\x00\x00\x18ftypmp42" + b"m" * 1024
+        )
+        render_dir = base / "altrove" / "render"
+        live = render_dir / "live"
+        (render_dir / "questions").mkdir(parents=True)
+        live.mkdir(parents=True)
+        (live / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": "vx.live/1",
+                    "chunks": [
+                        {"index": 0, "file": "chunk_000.mp4", "t_in": 0.0,
+                         "t_out": 2.0, "bytes": 5, "sha256": "-", "ready": True}
+                    ],
+                    "total": 1,
+                    "ready": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (live / "chunk_000.mp4").write_bytes(b"piece")
+        (render_dir / "questions" / "subtitles.json").write_text(
+            json.dumps(
+                {
+                    "id": "subtitles",
+                    "question": "Vuoi i sottotitoli nel master?",
+                    "options": [
+                        {"value": "no", "label": "No", "detail": ""},
+                        {"value": "yes", "label": "Si'", "detail": ""},
+                    ],
+                    "default": "no",
+                }
+            ),
+            encoding="utf-8",
+        )
+        decisions = [
+            {"id": "subtitles", "question": "sottotitoli?", "chosen": "no"},
+            {"id": "transition_kinds", "question": "transizioni?", "chosen": "crossfade"},
+        ]
+        (job / "report.json").write_text(
+            json.dumps(
+                {
+                    "workdir": str(render_dir),
+                    "chunks": {"workdir": str(render_dir)},
+                    "decisions": decisions,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        state = serve.state(job)
+        check(
+            "D12 lo stato live arriva dalla workdir dichiarata dal report",
+            state["live"]["ready"] == 1
+            and state["live"]["workdir"] == str(render_dir.resolve())
+            and state["live"]["mismatch"] is True,
+            {key: state["live"].get(key) for key in ("ready", "workdir", "mismatch")},
+        )
+        check(
+            "D25 le decisioni del report arrivano alla vista",
+            [item["id"] for item in state["decisions"]]
+            == ["subtitles", "transition_kinds"],
+            state["decisions"],
+        )
+        check(
+            "D25 la domanda scritta nella workdir del render e' in pagina",
+            [item["id"] for item in state["questions"]] == ["subtitles"],
+            state["questions"],
+        )
+
+        server = serve.Server(job).start()
+        try:
+            status, body = get_status(server.url + "live/chunk_000.mp4")
+            check(
+                "D12 il chunk si serve dalla workdir del report, non da accanto al master",
+                status == 200 and body == b"piece",
+                (status, body),
+            )
+            answer = post(server.url + "api/answer?job=0&id=subtitles&value=yes")
+            check(
+                "D25 la risposta e' scritta dove la domanda esiste",
+                answer.get("ok") is True
+                and (render_dir / "questions" / "subtitles.answer.json").is_file()
+                and not (render_dir / "questions" / "subtitles.json").exists(),
+                answer,
+            )
+        finally:
+            server.stop()
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx-serve-") as raw:
         job = Path(raw) / "lavoro"
@@ -1286,6 +1460,8 @@ def main() -> int:
     check_outcome()
     check_shots()
     check_activity()
+    check_artifact_verdict()
+    check_render_workdir()
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

@@ -29,7 +29,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from vx import edl3, edl3_chunks, edl3_render, ffmpeg, probe, serve  # noqa: E402
+from vx import edl3, edl3_chunks, edl3_render, edl3_slice, ffmpeg, probe, serve  # noqa: E402
 
 PASS = 0
 FAIL = 0
@@ -122,16 +122,43 @@ def _fake_render(timeline, output, **kwargs):
     return report, calls
 
 
-def _video(path: Path, pattern: str) -> None:
+def _video(path: Path, pattern: str, seconds: float = 1.0) -> None:
     subprocess.run(
         [
             ffmpeg.ffmpeg(), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
-            "-i", f"{pattern}=s=160x120:r=12:d=1", "-c:v", "libx264",
+            "-i", f"{pattern}=s=160x120:r=12:d={seconds}", "-c:v", "libx264",
             "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", "-an",
             "-y", str(path),
         ],
         check=True,
     )
+
+
+def _dissolve(seconds: float = 0.3) -> "edl3.Transition":
+    return edl3.Transition(kind="crossfade", duration=seconds, style="fade")
+
+
+def _sources(raw: Path, count: int, seconds: float) -> list:
+    patterns = ["testsrc2", "smptebars", "testsrc", "rgbtestsrc"]
+    paths = []
+    for index in range(count):
+        path = raw / f"cf{index}.mp4"
+        _video(path, patterns[index % len(patterns)], seconds)
+        paths.append(path)
+    return paths
+
+
+def _join_spans(document) -> list:
+    """Each dissolve as the time span it occupies in the master."""
+    times = edl3_slice.placements(document)
+    return [
+        (times[position][0], times[position - 1][1])
+        for position, _seconds in document.crossfade_joins()
+    ]
+
+
+def _inside(moment: float, spans: list) -> bool:
+    return any(start - 1e-9 < moment < end + 1e-9 for start, end in spans)
 
 
 def _audio(path: Path, seconds: float) -> None:
@@ -268,6 +295,370 @@ def live_audio_case(raw: Path) -> None:
         "l'audio non e' stato rifiutato ne' scartato",
         report["audio_policy"] == "mix" and joined.stat().st_size > 0,
         report["audio_policy"],
+    )
+
+
+def crossfade_live_case(raw: Path) -> None:
+    """D10: ``--live`` with dissolves publishes chunks between the joins.
+
+    Six 1.5 s clips, a dissolve on the first three joins. The even split would
+    fall on a join, so the boundary is moved: no chunk edge is inside a
+    dissolve and the joined master keeps the document's duration.
+    """
+    print("\n-- D10: --live con dissolvenze, i confini si spostano")
+    try:
+        ffmpeg.ffmpeg()
+    except Exception as exc:  # noqa: BLE001 - the geometry cases still run
+        print(f"    [SKIP] no ffmpeg: {type(exc).__name__}")
+        return
+    work = raw / "dissolve_job"
+    work.mkdir()
+    sources = _sources(work, 6, 1.5)
+    document = edl3.Timeline3(
+        fps=12,
+        size=(160, 120),
+        clips=[
+            edl3.Clip3(
+                id=f"c{index}",
+                source=str(source),
+                src_in=0.0,
+                src_out=1.5,
+                transition_in=_dissolve() if index in (1, 2, 3) else None,
+            )
+            for index, source in enumerate(sources)
+        ],
+    )
+    check(
+        "D10 il documento dichiara 3 dissolvenze sequenziali",
+        len(document.crossfade_joins()) == 3
+        and document.validate() == [],
+        document.crossfade_joins(),
+    )
+    spans = _join_spans(document)
+    windows = edl3_chunks.plan_windows(document, 2)
+    boundaries = [float(window["t0"]) for window in windows[1:]]
+    check(
+        "D10 il confine e' stato spostato fuori da ogni dissolvenza",
+        len(windows) == 2
+        and all(not _inside(moment, spans) for moment in boundaries)
+        and all(float(window["overlap_in"]) == 0.0 for window in windows),
+        [(round(start, 3), round(end, 3)) for start, end in spans] + boundaries,
+    )
+    check(
+        "D10 ogni dissolvenza sta intera in un solo chunk",
+        all(
+            sum(
+                1
+                for window in windows
+                if start >= float(window["t0"]) - 1e-9
+                and end <= float(window["t1"]) + 1e-9
+            )
+            == 1
+            for start, end in spans
+        ),
+        [(round(start, 3), round(end, 3)) for start, end in spans],
+    )
+
+    master = work / "master.mp4"
+    report = edl3_chunks.render_chunked(
+        document, master, workdir=work / "wd", chunks=2, live=True
+    )
+    manifest = _manifest(work / "wd" / "live")
+    published = [float(item["t_in"]) for item in manifest["chunks"][1:]]
+    transitions = report["chunks"]["transitions"]
+    check(
+        "D10 --live pubblica i due chunk",
+        report["live"]["ready"] == 2
+        and manifest["ready"] == 2
+        and all(item["ready"] for item in manifest["chunks"]),
+        report["live"],
+    )
+    check(
+        "D10 i confini pubblicati non tagliano un join",
+        transitions["strategy"] == "shifted"
+        and not transitions["replayed"]
+        and all(not _inside(moment, spans) for moment in published),
+        transitions,
+    )
+    check(
+        "D10 il master unito dura come il documento",
+        abs(probe.probe(str(master)).duration - document.duration) <= 0.12,
+        f"{probe.probe(str(master)).duration:.3f} vs {document.duration:.3f}",
+    )
+    check(
+        "D10 il report dichiara la workdir vera del render",
+        report.get("workdir") == str((work / "wd").resolve())
+        and report["chunks"].get("workdir") == str((work / "wd").resolve()),
+        report.get("workdir"),
+    )
+
+    # Every layer-0 edge is a dissolve: no clean boundary exists, so the split
+    # lands on a join and the overlap is replayed. That is allowed only because
+    # it is declared.
+    dense = edl3.Timeline3(
+        fps=12,
+        size=(160, 120),
+        clips=[
+            edl3.Clip3(
+                id=f"d{index}",
+                source=str(sources[index]),
+                src_in=0.0,
+                src_out=1.5,
+                transition_in=_dissolve() if index else None,
+            )
+            for index in range(4)
+        ],
+    )
+    fallback = edl3_chunks.plan_windows(dense, 2)
+    check(
+        "D10 senza bordi puliti il confine cade sul join, dichiarato",
+        any(float(window["overlap_in"]) > 0.0 for window in fallback),
+        [(window["index"], window["overlap_in"]) for window in fallback],
+    )
+    dense_master = work / "dense.mp4"
+    dense_report = edl3_chunks.render_chunked(
+        dense, dense_master, workdir=work / "dense_wd", chunks=2, live=True
+    )
+    check(
+        "D10 la dissolvenza ripetuta e' scritta nel report e nei warning",
+        dense_report["chunks"]["transitions"]["strategy"] == "duplicated"
+        and dense_report["chunks"]["transitions"]["seconds_replayed"] > 0.0
+        and any("ripetut" in text for text in dense_report["warnings"])
+        and dense_report["live"]["ready"] == 2,
+        dense_report["chunks"]["transitions"],
+    )
+    check(
+        "D10 il master dichiara i secondi ripetuti, non li nasconde",
+        abs(
+            probe.probe(str(dense_master)).duration
+            - (dense.duration + dense_report["chunks"]["transitions"]["seconds_replayed"])
+        )
+        <= 0.12,
+        f"{probe.probe(str(dense_master)).duration:.3f} vs {dense.duration:.3f}",
+    )
+
+    # Due clip, una dissolvenza, un overlay: ripetere l'overlap sposterebbe i
+    # keyframe dell'overlay, quindi si rifiuta — dicendo quale join e come.
+    overlay_doc = edl3.Timeline3(
+        fps=12,
+        size=(160, 120),
+        clips=[
+            edl3.Clip3(id="a", source=str(sources[0]), src_in=0.0, src_out=1.0),
+            edl3.Clip3(
+                id="b", source=str(sources[1]), src_in=0.0, src_out=1.0,
+                transition_in=_dissolve(),
+            ),
+            edl3.Clip3(
+                id="overlay", source=str(sources[2]), src_in=0.0, src_out=0.5,
+                dst_in=0.0, dst_out=0.5, layer=1,
+            ),
+        ],
+    )
+    refusal = ""
+    try:
+        edl3_chunks.plan_windows(overlay_doc, 2)
+    except edl3_render.CompileError as exc:
+        refusal = f"{exc} {getattr(exc, 'detail', '')}"
+    check(
+        "D10 se il confine non si puo' spostare, l'errore nomina il join",
+        "'a'" in refusal
+        and "'b'" in refusal
+        and "Move the join" in refusal
+        and "dissolve" in refusal,
+        refusal,
+    )
+    return dense_report
+
+
+def sequential_chunks_case(raw: Path) -> None:
+    """D13: a sequential document without dst is chunked, times derived."""
+    print("\n-- D13: documento sequenziale senza dst")
+    document = edl3.Timeline3(
+        fps=12,
+        size=(160, 120),
+        clips=[
+            edl3.Clip3(id=f"s{index}", source=f"missing{index}.mp4",
+                       src_in=0.0, src_out=1.0)
+            for index in range(3)
+        ],
+    )
+    times = edl3_slice.placements(document)
+    check(
+        "D13 i tempi vengono dal cursore, non da dst_in/dst_out",
+        [times[index] for index in range(3)] == [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)],
+        times,
+    )
+    windows = edl3_chunks.plan_windows(document, 3)
+    check(
+        "D13 i chunk si derivano senza chiedere placement all'autore",
+        [(window["t0"], window["t1"]) for window in windows]
+        == [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)],
+        [(window["t0"], window["t1"]) for window in windows],
+    )
+    piece = edl3_slice.document(document, windows[1])
+    check(
+        "D13 il pezzo resta sequenziale: il dst lo deriva il compilatore",
+        [clip["id"] for clip in piece["clips"]] == ["s1"]
+        and piece["clips"][0]["dst_in"] is None
+        and piece["clips"][0]["dst_out"] is None,
+        piece["clips"],
+    )
+
+    try:
+        ffmpeg.ffmpeg()
+    except Exception as exc:  # noqa: BLE001 - geometry already proved above
+        print(f"    [SKIP] no ffmpeg: {type(exc).__name__}")
+        return
+    work = raw / "sequential_job"
+    work.mkdir()
+    sources = _sources(work, 3, 1.0)
+    real = edl3.Timeline3(
+        fps=12,
+        size=(160, 120),
+        clips=[
+            edl3.Clip3(id=f"r{index}", source=str(source),
+                       src_in=0.0, src_out=1.0)
+            for index, source in enumerate(sources)
+        ],
+    )
+    report = edl3_chunks.render_chunked(
+        real, work / "out.mp4", workdir=work / "wd", chunks=3
+    )
+    check(
+        "D13 i chunk sono prodotti davvero, senza dst dichiarati",
+        report["chunks"]["count"] == 3
+        and len(report["chunks"]["records"]) == 3
+        and all(
+            Path(str(record["artifact"])).is_file()
+            for record in report["chunks"]["records"]
+        ),
+        report["chunks"]["count"],
+    )
+
+
+def workdir_live_case(raw: Path) -> Path:
+    """D12: the view reads the manifest from the report's real workdir."""
+    print("\n-- D12: la vista legge il live dal workdir del report")
+    job = raw / "d12_job"
+    (job / "out").mkdir(parents=True)
+    (job / "out" / "master.mp4").write_bytes(
+        b"\x00\x00\x00\x18ftypmp42" + b"m" * 512
+    )
+    render_dir = raw / "d12_render"
+    live = render_dir / "live"
+    live.mkdir(parents=True)
+    payload = {
+        "schema": "vx.live/1",
+        "chunks": [
+            {"index": 0, "file": "chunk_000.mp4", "t_in": 0.0, "t_out": 2.0,
+             "bytes": 11, "sha256": "-", "ready": True},
+            {"index": 1, "file": "chunk_001.mp4", "t_in": 2.0, "t_out": 4.0,
+             "bytes": 0, "sha256": "", "ready": False},
+        ],
+        "total": 2,
+        "ready": 1,
+        "t0": "2026-11-03T10:00:00+00:00",
+        "updated": "2026-11-03T10:00:04+00:00",
+    }
+    (live / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+    (live / "chunk_000.mp4").write_bytes(b"chunk-bytes")
+    (job / "report.json").write_text(
+        json.dumps({"workdir": str(render_dir), "chunks": {"workdir": str(render_dir)}}),
+        encoding="utf-8",
+    )
+    state = serve.live_state(job)
+    check(
+        "D12 il manifest viene dal workdir dichiarato, non da accanto al master",
+        state.get("ready") == 1
+        and state.get("workdir") == str(render_dir.resolve())
+        and state.get("directory") == str(live.resolve()),
+        {key: state.get(key) for key in ("ready", "workdir", "directory")},
+    )
+    check(
+        "D12 la differenza col lavoro e' mostrata, non ignorata",
+        state.get("declared") is True and state.get("mismatch") is True,
+        {key: state.get(key) for key in ("declared", "mismatch", "job_dir")},
+    )
+    check(
+        "D12 la vista sul workdir vero vede i chunk",
+        serve.state(render_dir)["live"]["ready"] == 1,
+        serve.state(render_dir).get("live"),
+    )
+    server = serve.Server(job).start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=10)
+        connection.request("GET", "/live/chunk_000.mp4")
+        response = connection.getresponse()
+        body = response.read()
+        check(
+            "D12 il chunk si serve dal workdir del report",
+            response.status == 200 and body == b"chunk-bytes",
+            f"{response.status} {body!r}",
+        )
+        connection.request("GET", "/api/state")
+        data = json.loads(connection.getresponse().read().decode("utf-8"))
+        check(
+            "D12 /api/state espone la workdir del manifest",
+            data["live"]["workdir"] == str(render_dir.resolve()),
+            data["live"].get("workdir"),
+        )
+    finally:
+        server.stop()
+    return render_dir
+
+
+def questions_and_decisions_case(raw: Path, render_dir: Path) -> None:
+    """D25: the edl3 render writes the subtitle question and its decisions."""
+    print("\n-- D25: domande e decisioni del render edl3 nella vista")
+    if not (render_dir / "report.json").is_file():
+        print("    [SKIP] nessun render reale: il caso D10 e' saltato")
+        return
+    report = json.loads((render_dir / "report.json").read_text(encoding="utf-8"))
+    check(
+        "D25 il report scrive le due decisioni con la prova",
+        [item["id"] for item in report.get("decisions") or []]
+        == ["subtitles", "transition_kinds"]
+        and all(item.get("evidence") for item in report["decisions"])
+        and all(item.get("falsified_if") for item in report["decisions"]),
+        [(item["id"], item["chosen"]) for item in report.get("decisions") or []],
+    )
+    check(
+        "D25 la domanda sui sottotitoli e' aperta nella workdir del render",
+        [item["id"] for item in report.get("questions") or []] == ["subtitles"],
+        report.get("questions"),
+    )
+    state = serve.state(render_dir)
+    check(
+        "D25 la vista mostra le decisioni invece di 'nessuna'",
+        [item["id"] for item in state.get("decisions") or []]
+        == ["subtitles", "transition_kinds"],
+        state.get("decisions"),
+    )
+    check(
+        "D25 la vista mostra la domanda da rispondere",
+        [item["id"] for item in state.get("questions") or []] == ["subtitles"],
+        state.get("questions"),
+    )
+    server = serve.Server(render_dir).start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.port, timeout=10)
+        connection.request("POST", "/api/answer?job=0&id=subtitles&value=yes")
+        answer = json.loads(connection.getresponse().read().decode("utf-8"))
+        question = render_dir / "questions" / "subtitles.json"
+        replied = render_dir / "questions" / "subtitles.answer.json"
+        check(
+            "D25 la risposta arriva nella workdir dove la domanda e' scritta",
+            answer.get("ok") is True
+            and replied.is_file()
+            and not question.exists(),
+            answer,
+        )
+    finally:
+        server.stop()
+    check(
+        "D25 la risposta scritta diventa la scelta letta dal render",
+        edl3_chunks._subtitle_choice(render_dir) == ("yes", "user"),
+        edl3_chunks._subtitle_choice(render_dir),
     )
 
 
@@ -438,6 +829,12 @@ def main() -> int:
         finally:
             server.stop()
 
+        crossfade_live_case(Path(raw))
+        sequential_chunks_case(Path(raw))
+        workdir_live_case(Path(raw))
+        questions_and_decisions_case(
+            Path(raw), Path(raw) / "dissolve_job" / "dense_wd"
+        )
         live_audio_case(Path(raw))
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")

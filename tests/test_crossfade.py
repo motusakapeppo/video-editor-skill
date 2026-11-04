@@ -285,19 +285,36 @@ def main() -> int:
             [problem["code"] for problem in wrong.validate()],
         )
 
-        chunked = None
+        chunked_report = None
+        chunked_error = ""
         try:
             from vx import edl3_chunks as chunks_mod
 
-            chunks_mod.render_chunked(
-                doc, work / "chunked.mp4", workdir=work / "chunks", chunks=2
+            chunked_report = chunks_mod.render_chunked(
+                doc,
+                work / "chunked.mp4",
+                workdir=work / "chunks",
+                chunks=2,
+                audio="mix",
             )
-        except Exception as exc:  # noqa: BLE001 - the refusal is the point
-            chunked = getattr(exc, "code", type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - a crash is a failure, not a skip
+            chunked_error = f"{type(exc).__name__}: {exc}"
+        transitions = (
+            chunked_report["chunks"]["transitions"] if chunked_report else {}
+        )
         check(
-            "a chunked render refuses to cut the dissolve",
-            chunked == "CHUNK_UNSUPPORTED",
-            chunked,
+            "a chunked render keeps the dissolve instead of refusing it",
+            chunked_report is not None
+            and chunked_report["chunks"]["count"] == 2
+            and transitions.get("strategy") in ("shifted", "duplicated")
+            and (work / "chunked.mp4").is_file(),
+            transitions or chunked_error,
+        )
+        check(
+            "the split on the only join declares the overlap it replays",
+            transitions.get("strategy") == "duplicated"
+            and abs(float(transitions.get("seconds_replayed") or 0.0) - DISSOLVE) < 1e-9,
+            transitions,
         )
 
     print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP")

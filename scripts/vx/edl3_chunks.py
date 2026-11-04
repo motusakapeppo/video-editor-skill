@@ -36,9 +36,9 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from . import ffmpeg, stagecache
+from . import ask, decisions, ffmpeg, stagecache
 from .edl3 import Timeline3
 from .edl3_render import AUDIO_BITRATE, AUDIO_RATE
 from .edl3_slice import canonical, document, plan_windows, sha256, source_hashes
@@ -52,6 +52,7 @@ CHUNK_VERSION = "1"
 CHUNK_DIR = "chunks"
 CHUNK_PREFIX = "chunk_"
 CONCAT_LIST = "concat.txt"
+REPORT_NAME = "report.json"
 
 #: Where ``--live`` publishes the pieces a player can already watch.
 LIVE_DIR = "live"
@@ -83,6 +84,170 @@ def live_chunks(duration: float, *, clips: Optional[int] = None) -> int:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+#: Il canale domande/decisioni del percorso a chunk. Una domanda sola, quella
+#: che cambia il master (i sottotitoli); la scelta dei kind di transizione e'
+#: una decisione presa dal documento, ma va scritta nel report con la prova.
+SUBTITLE_ID = "subtitles"
+SUBTITLE_QUESTION = "Vuoi i sottotitoli nel master?"
+SUBTITLE_OPTIONS: List[Dict[str, str]] = [
+    {"value": "no", "label": "No, senza sottotitoli"},
+    {"value": "yes", "label": "Si', aggiungi i sottotitoli"},
+]
+SUBTITLE_DEFAULT = "no"
+
+
+def _read_record(path: Path) -> Dict[str, Any]:
+    """Un oggetto JSON, o ``{}``: troncato, assente e illeggibile sono uguali."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_record(path: Path, payload: Mapping[str, Any]) -> None:
+    """Scrittura atomica, come ``ask``: la vista vede il file intero o niente."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    os.replace(temporary, path)
+
+
+def _open_subtitles(root: Path, timeline: Timeline3, windows: List[Mapping[str, Any]]) -> None:
+    """Apre la domanda sui sottotitoli nella workdir, senza fermare il render.
+
+    ``ask.ask`` blocca; qui la domanda deve essere visibile *mentre* si lavora,
+    quindi si scrive il file e si va avanti. Se una risposta c'e' gia' (un run
+    precedente, o l'operatore ha risposto prima del render) non si riapre nulla.
+    Fail-soft: una cartella non scrivibile lascia solo il default nel report.
+    """
+    if _read_record(ask.answer_path(root, SUBTITLE_ID)):
+        return
+    if ask.question_path(root, SUBTITLE_ID).is_file():
+        return
+    try:
+        _write_record(
+            ask.question_path(root, SUBTITLE_ID),
+            {
+                "id": SUBTITLE_ID,
+                "question": SUBTITLE_QUESTION,
+                "options": ask.normalize_options(SUBTITLE_OPTIONS),
+                "default": SUBTITLE_DEFAULT,
+                "created_utc": _utc_now(),
+                "context": {
+                    "job": "edl3 render",
+                    "duration": round(float(timeline.duration), 3),
+                    "chunks": len(windows),
+                    "fps": float(timeline.fps),
+                },
+            },
+        )
+    except OSError:
+        return
+
+
+def _subtitle_choice(root: Path) -> tuple:
+    """``(value, by)`` per la decisione: risposta dell'operatore o default."""
+    record = _read_record(ask.answer_path(root, SUBTITLE_ID))
+    value = str(record.get("value") or "")
+    allowed = {item["value"] for item in SUBTITLE_OPTIONS}
+    if value in allowed:
+        return value, "user"
+    return SUBTITLE_DEFAULT, "auto"
+
+
+def _transition_kinds(timeline: Timeline3) -> Dict[str, int]:
+    """Ogni kind dichiarato e quante volte compare nel documento."""
+    found: Dict[str, int] = {}
+    for clip in timeline.clips:
+        for transition in (clip.transition_in, clip.transition_out):
+            if transition is None:
+                continue
+            kind = str(transition.kind)
+            if kind == "crossfade":
+                kind = f"crossfade:{transition.style}"
+            found[kind] = found.get(kind, 0) + 1
+    return found
+
+
+def _decisions_for(
+    timeline: Timeline3,
+    root: Path,
+    windows: Sequence[Mapping[str, Any]],
+    *,
+    subtitle: str,
+    by: str,
+) -> List[Dict[str, Any]]:
+    """Le due voci scritte nel report: sottotitoli e kind di transizione.
+
+    ``decisions.record`` rifiuta una voce senza prova: l'evidenza porta i numeri
+    veri (risposte, join, secondi) e ``falsified_if`` dice cosa la smentirebbe.
+    """
+    joins = (
+        list(timeline.crossfade_joins())
+        if hasattr(timeline, "crossfade_joins")
+        else []
+    )
+    replayed = sum(float(window.get("overlap_in") or 0.0) for window in windows)
+    base_count = sum(1 for clip in timeline.clips if int(clip.layer) == 0)
+    answers = 1 if by == "user" else 0
+    subtitle_evidence = [
+        f"risposta dell'operatore nella vista: {subtitle!r}" if by == "user"
+        else f"nessuna risposta: vale il default {SUBTITLE_DEFAULT!r}",
+        f"{answers} risposta(e) su 1 domanda aperta in {root.name!r}",
+    ]
+    kinds = _transition_kinds(timeline)
+    listed = ", ".join(f"{kind} x{count}" for kind, count in sorted(kinds.items()))
+    transition_evidence = [
+        f"{len(joins)} dissolvenza/e, {len(kinds)} kind dichiarati"
+        + (f": {listed}" if listed else " (nessuna transizione)"),
+        f"{base_count} clip di base, {len(windows)} chunk, "
+        f"{replayed:.3f} s di dissolvenza ripetuti",
+    ]
+    entries: List[Dict[str, Any]] = []
+    entries.append(
+        decisions.record(
+            id=SUBTITLE_ID,
+            question=SUBTITLE_QUESTION,
+            chosen=subtitle,
+            evidence=subtitle_evidence,
+            falsified_if="il master mostra sottotitoli non richiesti, o ne manca uno approvato",
+            by=by,
+            alternatives=[
+                {
+                    "option": "yes" if subtitle == "no" else "no",
+                    "why_not": "la scelta scritta nella vista prevale sull'alternativa",
+                }
+            ],
+        )
+    )
+    entries.append(
+        decisions.record(
+            id="transition_kinds",
+            question="Quali kind di transizione rende il documento?",
+            chosen=listed or "nessuna transizione",
+            evidence=transition_evidence,
+            falsified_if="un kind dichiarato non compare nel grafo, o ne compare uno non dichiarato",
+            by="auto",
+            alternatives=[
+                {
+                    "option": "nessuna transizione",
+                    "why_not": (
+                        f"{len(joins)} join dichiarati: toglierle cambierebbe la richiesta"
+                        if joins
+                        else "il documento non ne dichiara nessuna"
+                    ),
+                }
+            ],
+        )
+    )
+    return entries
 
 
 class LivePublisher:
@@ -468,6 +633,12 @@ def render_chunked(
     ready, plus an atomically replaced ``manifest.json`` (``vx.live/1``), so a
     player can watch what has actually been encoded while the render continues.
     Without it the module writes exactly the files it wrote before.
+
+    Dissolves are a supported document feature, not a refusal: the boundaries
+    are moved off every join (:func:`vx.edl3_slice.plan_windows`). When the
+    document leaves no clean edge the split lands on a join and the overlap is
+    replayed at that boundary: the manifest and the report declare which join
+    and how many seconds, so a longer master is a stated cost, never a surprise.
     """
     from . import edl3_render  # noqa: PLC0415 - render-only, avoids the cycle
 
@@ -476,15 +647,26 @@ def render_chunked(
     root = Path(workdir)
     chunk_dir = root / CHUNK_DIR
     chunk_dir.mkdir(parents=True, exist_ok=True)
-    joins = timeline.crossfade_joins() if hasattr(timeline, "crossfade_joins") else []
-    if joins:
-        raise edl3_render.CompileError(
-            "CHUNK_UNSUPPORTED",
-            "the document declares a crossfade, and a chunk boundary would cut it in "
-            "half: render it whole, or remove the dissolves",
-            "chunks",
-        )
+    requested = int(chunks)
     windows = plan_windows(timeline, chunks)
+    replayed = [
+        (int(window["index"]), float(window["overlap_in"]))
+        for window in windows
+        if float(window.get("overlap_in") or 0.0) > 0.0
+    ]
+    notes: List[str] = []
+    if requested != len(windows):
+        notes.append(
+            f"dissolvenze: {len(windows)} chunk invece di {requested} per non "
+            "tagliare a meta' un join"
+        )
+    for index, seconds in replayed:
+        notes.append(
+            f"dissolvenze: il confine del chunk {index:03d} cade su un join, "
+            f"{seconds:.3f}s ripetuti ai bordi (dichiarato nel report)"
+        )
+    _open_subtitles(root, timeline, windows)
+    subtitle, subtitle_by = _subtitle_choice(root)
     run = Run(
         timeline=timeline,
         destination=destination,
@@ -521,7 +703,7 @@ def render_chunked(
 
     clips: List[Dict[str, Any]] = []
     backends: List[Dict[str, Any]] = []
-    warnings: List[str] = []
+    warnings: List[str] = list(notes)
     scripts: List[str] = []
     commands: List[List[str]] = []
     chromium: Dict[str, Any] = {
@@ -549,6 +731,15 @@ def render_chunked(
         )
         if "command" in record:
             commands.append(record["command"])
+    joins = (
+        list(timeline.crossfade_joins())
+        if hasattr(timeline, "crossfade_joins")
+        else []
+    )
+    strategy = "duplicated" if replayed else ("shifted" if joins else "none")
+    decisions_log = _decisions_for(
+        timeline, root, windows, subtitle=subtitle, by=subtitle_by
+    )
 
     report = {
         "version": timeline.version,
@@ -561,10 +752,30 @@ def render_chunked(
         "size": [timeline.width, timeline.height],
         "color": edl3_render.delivery_colour(timeline.profile_ref),
         "chunked": True,
+        #: La workdir vera del render: la vista deve leggere ``live/`` da qui,
+        #: non da una cartella indovinata accanto al master.
+        "workdir": str(root.resolve()),
+        "subtitles": subtitle,
+        "decisions": decisions_log,
+        "questions": ask.pending(root),
         "chunks": {
             "stage": CHUNK_STAGE,
             "version": CHUNK_VERSION,
             "count": len(windows),
+            "requested": requested,
+            "workdir": str(root.resolve()),
+            "transitions": {
+                "strategy": strategy,
+                "joins": [
+                    {"position": int(position), "seconds": float(seconds)}
+                    for position, seconds in joins
+                ],
+                "replayed": [
+                    {"chunk": index, "seconds": seconds} for index, seconds in replayed
+                ],
+                "boundaries": [float(window["t0"]) for window in windows],
+                "seconds_replayed": round(sum(seconds for _, seconds in replayed), 6),
+            },
             "rendered": [r["chunk"] for r in records if r["state"] == "rendered"],
             "reused": [r["chunk"] for r in records if r["state"] == "reused"],
             "records": [{k: v for k, v in r.items() if k != "plan"} for r in records],
@@ -591,4 +802,10 @@ def render_chunked(
     }
     if publisher is not None:
         report["live"] = publisher.summary()
+    # Il report sul disco e' il canale della vista: senza, ``vx serve`` non ha
+    # dove leggere le decisioni di questo render ne' la workdir vera del live.
+    try:
+        _write_record(root / REPORT_NAME, report)
+    except (OSError, TypeError, ValueError):
+        pass
     return report
