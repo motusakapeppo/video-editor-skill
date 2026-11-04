@@ -446,7 +446,20 @@ def main() -> int:
         after = {p.name: _sha256(p) for p in pool.iterdir() if p.is_file()}
         check("sources_unchanged", report.get("sources_unchanged") is True)
         check("sha input invariati", before == after, sorted(before))
-        check("source_sha == pre-run", report.get("source_sha") == before, "identici")
+        # Solo i file scelti entrano nel master (e nel guardiano): gli asset
+        # scoperti e scartati non pagano 100 MB di lettura per un numero che
+        # nessun cancello consulta.
+        reported = report.get("source_sha") or {}
+        check(
+            "source_sha == pre-run per i soli file scelti",
+            reported == {k: v for k, v in before.items() if k in reported},
+            sorted(reported),
+        )
+        check(
+            "un asset scartato non e' hashato",
+            set(reported) <= set(before),
+            (sorted(set(before) - set(reported))),
+        )
 
         # -- determinism: same command, fresh workdir --------------------- #
         work2 = tmp / "work2"

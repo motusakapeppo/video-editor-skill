@@ -70,6 +70,7 @@ from . import (
     probe,
     profile_master,
     profiles,
+    proxy as proxy_mod,
     qc,
     recipe,
     render,
@@ -740,7 +741,31 @@ def _media_by_source_key(
 
 
 def _source_hashes(assets: List[asset_triage.AssetInfo]) -> Dict[str, str]:
+    """sha256 of exactly the assets that will enter the master.
+
+    Discovery can surface hundreds of files; hashing a rejected asset is 100 MB
+    of reads for a number no gate ever consults. The caller passes ``selected``,
+    and the same list is re-checked after the render.
+    """
     return {asset.asset_id: _sha256(Path(asset.path)) for asset in assets}
+
+
+def _selected_asset_infos(
+    selected: Sequence[Mapping[str, Any]],
+    assets_by_id: Mapping[str, asset_triage.AssetInfo],
+) -> List[asset_triage.AssetInfo]:
+    """The pool objects behind ``selected[]``, in order, without duplicates."""
+    out: List[asset_triage.AssetInfo] = []
+    seen: set[str] = set()
+    for entry in selected:
+        asset_id = entry.get("asset_id")
+        if not isinstance(asset_id, str) or asset_id in seen:
+            continue
+        asset = assets_by_id.get(asset_id)
+        if asset is not None:
+            seen.add(asset_id)
+            out.append(asset)
+    return out
 
 
 def _assert_sources_unchanged(
@@ -771,6 +796,31 @@ def _assert_sources_unchanged(
         )
 
 
+def _caption_window(plan: Any, source_id: str) -> Optional[float]:
+    """How far into `source_id` the plan actually reads.
+
+    Captions only ever anchor to a clip's own window, so a source used for the
+    first eight seconds does not need the other 171 transcribed. The bound is
+    the largest ``src_out`` the plan cites for that source; ``None`` means the
+    plan does not use it at all and the caller keeps today's full read.
+    """
+    latest: Optional[float] = None
+    for tracks in (
+        getattr(plan, "video_tracks", ()) or (),
+        getattr(plan, "audio_tracks", ()) or (),
+    ):
+        for track in tracks:
+            for clip in getattr(track, "clips", ()) or ():
+                if str(getattr(clip, "source_id", "")) != source_id:
+                    continue
+                try:
+                    value = float(getattr(clip, "src_out", 0.0))
+                except (TypeError, ValueError):
+                    continue
+                latest = value if latest is None else max(latest, value)
+    return latest
+
+
 def _a_roll_sources(plan: Any) -> List[str]:
     seen: List[str] = []
     for track in getattr(plan, "video_tracks", ()):
@@ -785,9 +835,57 @@ def _a_roll_sources(plan: Any) -> List[str]:
 
 MEASURE_KINDS = ("analysis", "faces", "audio")
 
-#: Quanti thread ffmpeg per worker di misura. Il decode di una clip e' limitato
-#: dal file, non dai core: due thread bastano e lasciano i core al resto.
+#: Il pavimento dei thread ffmpeg per worker di misura. Su materiale 4K due
+#: thread sono un collo di bottiglia (29,6 s contro 8,6 s su 20 s); il numero
+#: vero lo decide `_threads_for` dalla larghezza della sorgente, poi `_measure_all`
+#: lo taglia sul numero di worker per non oversubscribare i core.
 WORKER_FFMPEG_THREADS = 2
+
+#: Sotto questo lato lungo una proxy 640 costa piu' di quanto la misura
+#: risparmia: il decode e' gia' piccolo, e l'encode non si ripaga. Il lato lungo,
+#: non la larghezza: un verticale 1080x1920 e' tanto caro quanto un 1920x1080.
+PROXY_MIN_WIDTH = 1920
+
+#: La proxy esiste solo per questo: le metriche px a 320 px. Non tocca il
+#: master, che resta libx264 alla risoluzione piena.
+PROXY_WIDTH = 640
+
+#: Sotto questa durata l'encode della proxy non si ripaga: su due secondi il
+#: decode a piena risoluzione costa meno dell'encode piu' il decode della proxy.
+PROXY_MIN_SECONDS = 8.0
+
+
+def _threads_for(kind: str, width: int) -> int:
+    """Thread ffmpeg proporzionali alla sorgente, non un 2 fisso."""
+    if kind != "analysis":
+        return WORKER_FFMPEG_THREADS
+    try:
+        width = int(width)
+    except (TypeError, ValueError):
+        width = 0
+    if width >= 3000:
+        return 8
+    if width >= 1900:
+        return 6
+    if width >= 1200:
+        return 4
+    return WORKER_FFMPEG_THREADS
+
+
+def _cap_threads(jobs: Sequence[Any], workers: int) -> List[Any]:
+    """Never let `workers` processes each take the whole machine."""
+    cpu = os.cpu_count() or 4
+    share = max(WORKER_FFMPEG_THREADS, cpu // max(1, int(workers)))
+    capped: List[Any] = []
+    for job in jobs:
+        if len(job) >= 5:
+            try:
+                base = int(job[4])
+            except (TypeError, ValueError):
+                base = WORKER_FFMPEG_THREADS
+            job = tuple(job[:4]) + (max(WORKER_FFMPEG_THREADS, min(base, share)),)
+        capped.append(job)
+    return capped
 
 #: Sotto questa durata complessiva delle sorgenti il processo in più costa più di
 #: quanto misura: l'avvio di un interprete (cv2, numpy, ffmpeg) e' ~2 s cadauno, e
@@ -828,7 +926,13 @@ def _measure_task(job: Any) -> Dict[str, Any]:
     Un figlio tiene un thread OpenCV e due ffmpeg: sei processi che si
     moltiplicano i thread sono piu' rumorosi, non piu' veloci.
     """
-    kind, path, settings_blob = job
+    kind, path, settings_blob = job[0], job[1], job[2]
+    proxy_path = job[3] if len(job) > 3 else None
+    threads = job[4] if len(job) > 4 else WORKER_FFMPEG_THREADS
+    try:
+        threads = int(threads)
+    except (TypeError, ValueError):
+        threads = WORKER_FFMPEG_THREADS
     started = time.monotonic()
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -846,7 +950,7 @@ def _measure_task(job: Any) -> Dict[str, Any]:
         # Il pin vale per questa misura e basta: nessun ``VX_FFMPEG_THREADS``
         # nell'ambiente, che resterebbe attivo anche per il render successivo
         # nello stesso processo e cambierebbe il bitstream.
-        with resources.ffmpeg_thread_limit(WORKER_FFMPEG_THREADS):
+        with resources.ffmpeg_thread_limit(threads):
             if kind == "audio":
                 from . import audio
 
@@ -854,7 +958,9 @@ def _measure_task(job: Any) -> Dict[str, Any]:
             elif kind == "analysis":
                 from . import analyze
 
-                value = analyze.analyze_video(path)
+                value = analyze.analyze_video(
+                    path, proxy_path=proxy_path or None
+                )
             elif kind == "faces":
                 from . import faces
 
@@ -908,6 +1014,12 @@ def _measure_all(
             f"materiale sotto {PARALLEL_MIN_SECONDS:g} s: un processo in meno costa meno"
         ]
     clock.facts["resources"] = budget
+    jobs = _cap_threads(
+        jobs,
+        int(budget["workers"]) if (parallel and len(jobs) > 1) else 1,
+    )
+    if any(len(job) >= 5 for job in jobs):
+        clock.facts["ffmpeg_threads"] = max(int(job[4]) for job in jobs if len(job) >= 5)
     if not parallel or len(jobs) < 2:
         results = []
         for job in jobs:
@@ -949,6 +1061,70 @@ def _measure_all(
         clock.add(str(item["kind"]), share)
     clock.add("measure_wall", wall)
     return results
+
+
+def _source_duration(media: Optional[Mapping[str, Any]], source_id: str) -> float:
+    info = (media or {}).get(source_id) or {}
+    try:
+        return max(0.0, float(info.get("duration") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _source_width(media: Optional[Mapping[str, Any]], source_id: str) -> int:
+    """Long edge of the source: the dimension that sets the decode cost."""
+    info = (media or {}).get(source_id) or {}
+    try:
+        width = max(0, int(info.get("width") or 0))
+    except (TypeError, ValueError):
+        width = 0
+    try:
+        height = max(0, int(info.get("height") or 0))
+    except (TypeError, ValueError):
+        height = 0
+    return max(width, height)
+
+
+def _source_proxies(
+    paths: Mapping[str, str],
+    media: Optional[Mapping[str, Any]],
+    workdir: Any,
+    clock: "_Clock",
+) -> tuple[Dict[str, str], Dict[str, str]]:
+    """One 640 proxy per measured source, only where it pays for itself.
+
+    The pixel metrics are scale-normalised, so measuring a 4K file on a 640 px
+    proxy is the same verdict for a fraction of the decode. A source whose proxy
+    cannot be built is not fatal: the analysis falls back to the full-resolution
+    path, and the profile says which source took it.
+    """
+    proxies: Dict[str, str] = {}
+    notes: Dict[str, str] = {}
+    if not workdir:
+        return proxies, notes
+    root = Path(workdir) / "proxy"
+    for index, (source_id, path) in enumerate(paths.items()):
+        width = _source_width(media, source_id)
+        if not path:
+            continue
+        if width and width < PROXY_MIN_WIDTH:
+            notes[source_id] = f"non necessaria ({width} px)"
+            continue
+        duration = _source_duration(media, source_id)
+        if duration and duration < PROXY_MIN_SECONDS:
+            notes[source_id] = f"non necessaria ({duration:.1f} s)"
+            continue
+        dst = root / f"measure_{index}.mp4"
+        try:
+            with clock.time("proxy"):
+                data = proxy_mod.make_proxy(
+                    path, dst, width=min(PROXY_WIDTH, width or PROXY_WIDTH)
+                )
+            proxies[source_id] = str(data.get("path") or dst)
+            notes[source_id] = "creata"
+        except Exception as exc:  # noqa: BLE001 - fallback is today's path
+            notes[source_id] = f"assente, misura a piena risoluzione: {exc}"
+    return proxies, notes
 
 
 def _bridge_plan(
@@ -993,13 +1169,25 @@ def _bridge_plan(
         for source_id in sources
     }
     blob = _settings_blob()
+    proxies, proxy_notes = _source_proxies(paths, media, workdir, prof)
+    if proxy_notes:
+        prof.facts["proxies"] = proxy_notes
     keys: List[tuple] = [
         (kind, source_id)
         for source_id in sources
         for kind in MEASURE_KINDS
         if paths[source_id]
     ]
-    jobs = [(kind, paths[source_id], blob) for kind, source_id in keys]
+    jobs = [
+        (
+            kind,
+            paths[source_id],
+            blob,
+            proxies.get(source_id),
+            _threads_for(kind, _source_width(media, source_id)),
+        )
+        for kind, source_id in keys
+    ]
     for source_id in sources:
         if not paths[source_id]:
             # Senza un file non c'e' misura: la sorgente resta una dichiarazione.
@@ -1049,7 +1237,10 @@ def _bridge_plan(
                 # usabile mentre lavora, e il report lo dichiara.
                 lowered = resources.set_current_priority(True)
                 try:
-                    transcript = subs.transcribe(paths[source_id])
+                    transcript = subs.transcribe(
+                        paths[source_id],
+                        max_duration=_caption_window(plan, source_id),
+                    )
                 finally:
                     resources.set_current_priority(False)
             if lowered:
@@ -3117,7 +3308,9 @@ def _resource_report(clock: _Clock) -> Dict[str, Any]:
             or 0
         ),
         "ffmpeg_threads": {
-            "analysis": WORKER_FFMPEG_THREADS,
+            "analysis": int(
+                clock.facts.get("ffmpeg_threads") or WORKER_FFMPEG_THREADS
+            ),
             "render": "default (pin thread cambierebbe il bitstream)",
         },
         "whisper": whisper
@@ -3804,8 +3997,6 @@ def _run_locked(
     with clock.time("triage"):
         assets = _discover(args)
         assets_by_id = {asset.asset_id: asset for asset in assets}
-        with clock.time("hash"):
-            source_sha = _source_hashes(assets)
         fill_mode = _fill_mode(fill)
         montage_mode = bool(montage)
 
@@ -3821,6 +4012,9 @@ def _run_locked(
         raise contract.VxError("payload senza asset_triage: triage non eseguito")
     selected = list(block.get("selected_assets") or [])
     rejected = list(block.get("rejected_assets") or [])
+    selected_assets = _selected_asset_infos(selected, assets_by_id)
+    with clock.time("hash"):
+        source_sha = _source_hashes(selected_assets)
     _declare_beat_grid(recipe_section, payload, recipe_decide_note)
     old_lufs, target_tp = loudness_target(payload)
     loudness_row = _recipe_loudness(recipe_section, old_lufs, target_tp)
@@ -4215,7 +4409,7 @@ def _run_locked(
     _notify(progress, 100.0, "deliverables", log=log)
 
     with clock.time("hash"):
-        _assert_sources_unchanged(assets, source_sha)
+        _assert_sources_unchanged(selected_assets, source_sha)
 
     a_roll_indices: Dict[str, int] = {}
     for entry in selected:

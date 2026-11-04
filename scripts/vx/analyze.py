@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -125,6 +126,16 @@ def _parse_scene_log(text: str) -> List[float]:
     return cuts
 
 
+def _parse_scdet(text: str) -> List[float]:
+    """The `lavfi.scd.*` lines of a single log, in order."""
+    times: List[float] = []
+    for line in text.splitlines():
+        m = _RE_SCD.search(line)
+        if m:
+            times.append(float(m.group(2)))
+    return times
+
+
 def _scdet_times(path: str | Path, threshold: float) -> List[float]:
     """High-confidence cross-check channel. scdet scores live on a 0..100 scale
     that is not identical to `scene`, so the filter threshold is the scene
@@ -136,12 +147,7 @@ def _scdet_times(path: str | Path, threshold: float) -> List[float]:
         ["-i", str(path), "-an", "-sn", "-vf", vf, "-f", "null", "-"],
         loglevel="info",
     )
-    times: List[float] = []
-    for line in _log(proc).splitlines():
-        m = _RE_SCD.search(line)
-        if m:
-            times.append(float(m.group(2)))
-    return times
+    return _parse_scdet(_log(proc))
 
 
 def detect_scene_cuts(
@@ -190,10 +196,15 @@ def detect_freezes(
         ["-i", src, "-an", "-sn", "-vf", vf, "-f", "null", "-"], loglevel="info"
     )
 
+    return _parse_freezes(_log(proc), _duration(src))
+
+
+def _parse_freezes(text: str, duration: float) -> List[Dict[str, float]]:
+    """Freeze spans from a log, closing an open freeze at `duration`."""
     spans: List[Dict[str, float]] = []
     start: Optional[float] = None
     last_dur: Optional[float] = None
-    for line in _log(proc).splitlines():
+    for line in text.splitlines():
         m_start = _RE_FREEZE_START.search(line)
         if m_start:
             start = float(m_start.group(1))
@@ -211,7 +222,7 @@ def detect_freezes(
             last_dur = None
 
     if start is not None:
-        end = start + last_dur if last_dur is not None else _duration(src)
+        end = start + last_dur if last_dur is not None else float(duration)
         if end > start:
             spans.append(_freeze(start, end))
     return spans
@@ -223,6 +234,51 @@ def _freeze(start: float, end: float) -> Dict[str, float]:
         "end": fmt(end),
         "duration": fmt(max(0.0, end - start)),
     }
+
+
+def _scan_cuts_freezes(
+    path: str | Path, *, threshold: Optional[float] = None
+) -> Tuple[List[float], List[Dict[str, float]]]:
+    """Cuts and freezes from one ffmpeg invocation.
+
+    One decode feeds three branches through ``split``: the primary scene
+    detector, the scdet cross-check and freezedetect. The parsers stay separate
+    (each owns its own line pattern), so the counts are the same as the three
+    separate passes; only the decode happens once. Interleaved log lines are
+    harmless because every pattern is unique to its filter.
+    """
+    th = float(THRESHOLDS["scene_cut"] if threshold is None else threshold)
+    src = str(path)
+    ff.require("freezedetect")
+    has_scdet = bool(ff.capabilities().get("scdet"))
+    freeze_db = -50.0
+    freeze_min = float(THRESHOLDS["freeze_min"])
+
+    labels = ["sc", "sd", "fz"] if has_scdet else ["sc", "fz"]
+    graph = f"[0:v]split={len(labels)}" + "".join(f"[{name}]" for name in labels)
+    parts = [f"[sc]select='gt(scene,{th:.4f})',metadata=print[scm]"]
+    maps = ["[scm]"]
+    if has_scdet:
+        parts.append(f"[sd]scdet=threshold={th * 100.0:g}[sdo]")
+        maps.append("[sdo]")
+    parts.append(f"[fz]freezedetect=n={freeze_db:g}dB:d={freeze_min:g}[fzo]")
+    maps.append("[fzo]")
+    graph += ";" + ";".join(parts)
+
+    args: List[str] = ["-i", src, "-an", "-sn", "-filter_complex", graph]
+    for label in maps:
+        args += ["-map", label, "-f", "null", "-"]
+    proc = ff.run_ff(args, loglevel="info")
+    text = _log(proc)
+
+    primary = _parse_scene_log(text)
+    extra: List[float] = []
+    for t in _parse_scdet(text):
+        if not primary or all(abs(t - p) > 0.5 for p in primary):
+            extra.append(t)
+    cuts = _dedupe(primary + extra)
+    freezes = _parse_freezes(text, _duration(src))
+    return cuts, freezes
 
 
 # --------------------------------------------------------------------------- #
@@ -349,117 +405,92 @@ def _static_run_max(per_second: Sequence[float]) -> float:
     return float(best)
 
 
-def _pixel_metrics(
-    path: str | Path, sample_fps: float, *, max_seconds: Optional[float] = None
-) -> Dict[str, Dict[str, Any]]:
-    """Single decode pass at `sample_fps`, downscaled to 320 px wide.
+class _PixelAccumulator:
+    """The per-frame arithmetic shared by both decoders.
 
-    Produces the jitter, exposure, colour and motion blocks together so that
-    `analyze_video` never decodes the same file four times. When `max_seconds`
-    is set, the pass stops at the first sampled frame past that time instead of
-    reading the whole file.
+    The decoder only has to hand over `(t, bgr_frame)`; everything that ends up
+    in the jitter/exposure/colour/motion blocks is computed here, so a proxy
+    decode and a full-resolution decode can never drift apart in the formulas.
     """
-    if not _CV_OK:
-        return _degraded(_CV_WHY)
 
-    rate = float(sample_fps) if sample_fps and sample_fps > 0 else SAMPLE_FPS_VIDEO
-    cap = cv2.VideoCapture(str(path))
-    if not cap.isOpened():
-        cap.release()
-        return _degraded(f"OpenCV cannot open {Path(path).name}")
+    def __init__(self) -> None:
+        self.prev_gray: Any = None
+        self.dxs: List[float] = []
+        self.dys: List[float] = []
+        self.diffs: List[Tuple[float, float]] = []
+        self.headrooms: List[float] = []
+        self.luma_sum = 0.0
+        self.clip_hi = 0
+        self.clip_lo = 0
+        self.px_total = 0
+        self.r_sum = self.g_sum = self.b_sum = 0.0
+        self.sat_sum = 0.0
+        self.frames = 0
+        self.last_t = 0.0
 
-    try:
-        src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
-        src_w = float(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0.0)
-        src_frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
-        step = max(1, int(round(src_fps / rate))) if src_fps > 0 else 1
+    def add(self, t: float, frame: Any) -> None:
+        height, width = frame.shape[:2]
+        if width <= 0 or height <= 0:
+            return
+        small_h = max(2, int(round(height * (_WORK_WIDTH / float(width)))))
+        small = cv2.resize(
+            frame, (_WORK_WIDTH, small_h), interpolation=cv2.INTER_AREA
+        )
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
-        prev_gray: Any = None
-        dxs: List[float] = []
-        dys: List[float] = []
-        diffs: List[Tuple[float, float]] = []
-        headrooms: List[float] = []
+        b = small[:, :, 0].astype(np.float32)
+        g = small[:, :, 1].astype(np.float32)
+        r = small[:, :, 2].astype(np.float32)
+        luma = 0.114 * b + 0.587 * g + 0.299 * r
 
-        luma_sum = 0.0
-        clip_hi = 0
-        clip_lo = 0
-        px_total = 0
-        r_sum = g_sum = b_sum = 0.0
-        sat_sum = 0.0
-        frames = 0
-        last_t = 0.0
+        self.luma_sum += float(luma.mean())
+        self.clip_hi += int(np.count_nonzero(luma >= 250.0))
+        self.clip_lo += int(np.count_nonzero(luma <= 5.0))
+        self.px_total += int(luma.size)
 
-        idx = 0
-        limit = None if max_seconds is None else max(0.0, float(max_seconds))
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if idx % step:
-                idx += 1
-                continue
-            t = (idx / src_fps) if src_fps > 0 else float(frames)
-            idx += 1
-            if limit is not None and t > limit:
-                break
+        self.r_sum += float(r.mean())
+        self.g_sum += float(g.mean())
+        self.b_sum += float(b.mean())
 
-            height, width = frame.shape[:2]
-            if width <= 0 or height <= 0:
-                continue
-            small_h = max(2, int(round(height * (_WORK_WIDTH / float(width)))))
-            small = cv2.resize(
-                frame, (_WORK_WIDTH, small_h), interpolation=cv2.INTER_AREA
-            )
-            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        mx = small.max(axis=2).astype(np.float32)
+        mn = small.min(axis=2).astype(np.float32)
+        sat = np.where(mx > 0.0, (mx - mn) / np.maximum(mx, 1.0), 0.0)
+        self.sat_sum += float(sat.mean()) * 100.0
 
-            b = small[:, :, 0].astype(np.float32)
-            g = small[:, :, 1].astype(np.float32)
-            r = small[:, :, 2].astype(np.float32)
-            luma = 0.114 * b + 0.587 * g + 0.299 * r
-
-            luma_sum += float(luma.mean())
-            clip_hi += int(np.count_nonzero(luma >= 250.0))
-            clip_lo += int(np.count_nonzero(luma <= 5.0))
-            px_total += int(luma.size)
-
-            r_sum += float(r.mean())
-            g_sum += float(g.mean())
-            b_sum += float(b.mean())
-
-            mx = small.max(axis=2).astype(np.float32)
-            mn = small.min(axis=2).astype(np.float32)
-            sat = np.where(mx > 0.0, (mx - mn) / np.maximum(mx, 1.0), 0.0)
-            sat_sum += float(sat.mean()) * 100.0
-
-            if prev_gray is not None:
-                diff = float(
-                    np.mean(
-                        np.abs(gray.astype(np.float32) - prev_gray.astype(np.float32))
-                    )
+        if self.prev_gray is not None:
+            diff = float(
+                np.mean(
+                    np.abs(gray.astype(np.float32) - self.prev_gray.astype(np.float32))
                 )
-                diffs.append((t, diff))
+            )
+            self.diffs.append((t, diff))
 
-                flow = _dense_flow(prev_gray, gray)
-                dxs.append(float(np.median(flow[:, :, 0])))
-                dys.append(float(np.median(flow[:, :, 1])))
+            flow = _dense_flow(self.prev_gray, gray)
+            self.dxs.append(float(np.median(flow[:, :, 0])))
+            self.dys.append(float(np.median(flow[:, :, 1])))
 
-                mag = np.sqrt(flow[:, :, 0] ** 2 + flow[:, :, 1] ** 2)
-                if float(mag.max()) > 0.5:
-                    thr = max(1.0, 2.0 * float(np.median(mag)))
-                    cols = np.flatnonzero((mag > thr).any(axis=0))
-                    if cols.size:
-                        box_w = float(cols[-1] - cols[0] + 1)
-                        # A box covering the whole frame means the motion is
-                        # global (pan/shake), not a subject: no estimate.
-                        if box_w < 0.95 * _WORK_WIDTH:
-                            headrooms.append((1.0 - box_w / _WORK_WIDTH) * 100.0)
+            mag = np.sqrt(flow[:, :, 0] ** 2 + flow[:, :, 1] ** 2)
+            if float(mag.max()) > 0.5:
+                thr = max(1.0, 2.0 * float(np.median(mag)))
+                cols = np.flatnonzero((mag > thr).any(axis=0))
+                if cols.size:
+                    box_w = float(cols[-1] - cols[0] + 1)
+                    # A box covering the whole frame means the motion is
+                    # global (pan/shake), not a subject: no estimate.
+                    if box_w < 0.95 * _WORK_WIDTH:
+                        self.headrooms.append((1.0 - box_w / _WORK_WIDTH) * 100.0)
 
-            prev_gray = gray
-            frames += 1
-            last_t = t
+        self.prev_gray = gray
+        self.frames += 1
+        self.last_t = t
 
-        if frames == 0:
-            return _degraded(f"no decodable frames in {Path(path).name}")
+    def result(
+        self, *, rate: float, source_width: float, duration: float
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        if self.frames == 0:
+            return None
+        frames = self.frames
+        dxs, dys = self.dxs, self.dys
 
         # ---- jitter ------------------------------------------------------- #
         if len(dxs) >= 3:
@@ -470,15 +501,17 @@ def _pixel_metrics(
             res_y = path_y - _moving_average(path_y, window)
             residual = np.sqrt(res_x**2 + res_y**2)
             mean_res_small = float(residual.mean())
-            scale = (src_w / float(_WORK_WIDTH)) if src_w > 0 else 1.0
+            scale = (source_width / float(_WORK_WIDTH)) if source_width > 0 else 1.0
             mean_res_px = mean_res_small * scale
-            frame_w = src_w if src_w > 0 else float(_WORK_WIDTH)
+            frame_w = source_width if source_width > 0 else float(_WORK_WIDTH)
             score = (mean_res_px / frame_w) * 100.0
             jitter = {
                 "score": fmt(score),
                 "verdict": _jitter_verdict(score),
                 "mean_residual_px": fmt(mean_res_px),
-                "headroom_pct": fmt(float(np.median(headrooms)) if headrooms else 12.0),
+                "headroom_pct": fmt(
+                    float(np.median(self.headrooms)) if self.headrooms else 12.0
+                ),
                 "samples": len(dxs),
             }
         else:
@@ -491,9 +524,9 @@ def _pixel_metrics(
             }
 
         # ---- exposure ----------------------------------------------------- #
-        mean_luma = luma_sum / frames
-        clip_high_pct = (clip_hi / px_total * 100.0) if px_total else 0.0
-        clip_low_pct = (clip_lo / px_total * 100.0) if px_total else 0.0
+        mean_luma = self.luma_sum / frames
+        clip_high_pct = (self.clip_hi / self.px_total * 100.0) if self.px_total else 0.0
+        clip_low_pct = (self.clip_lo / self.px_total * 100.0) if self.px_total else 0.0
         exposure = {
             "mean_luma": fmt(mean_luma),
             "clip_high_pct": fmt(clip_high_pct),
@@ -502,9 +535,9 @@ def _pixel_metrics(
         }
 
         # ---- colour ------------------------------------------------------- #
-        mean_r = r_sum / frames
-        mean_g = g_sum / frames
-        mean_b = b_sum / frames
+        mean_r = self.r_sum / frames
+        mean_g = self.g_sum / frames
+        mean_b = self.b_sum / frames
         mean_y = 0.299 * mean_r + 0.587 * mean_g + 0.114 * mean_b
         cast_rg = mean_r - mean_g
         cast_by = mean_b - mean_y
@@ -512,16 +545,13 @@ def _pixel_metrics(
             "cast_rg": fmt(cast_rg),
             "cast_by": fmt(cast_by),
             "verdict": _color_verdict(cast_rg, cast_by),
-            "saturation": fmt(sat_sum / frames),
+            "saturation": fmt(self.sat_sum / frames),
         }
 
         # ---- motion ------------------------------------------------------- #
-        duration = (
-            (src_frames / src_fps) if (src_fps > 0 and src_frames > 0) else last_t
-        )
         n_sec = max(1, int(math.ceil(duration))) if duration > 0 else 1
         buckets: List[List[float]] = [[] for _ in range(n_sec)]
-        for t, diff in diffs:
+        for t, diff in self.diffs:
             buckets[min(n_sec - 1, max(0, int(t)))].append(diff)
         per_second = [fmt(float(np.mean(b))) if b else 0.0 for b in buckets]
         motion = {
@@ -537,8 +567,177 @@ def _pixel_metrics(
             "color": color,
             "motion": motion,
         }
+
+
+def _cv2_frames(
+    path: str | Path,
+    rate: float,
+    max_seconds: Optional[float],
+    meta: Dict[str, Any],
+):
+    """Today's decode path: OpenCV at full resolution, then a 320 px resize."""
+    cap = cv2.VideoCapture(str(path))
+    meta["opened"] = bool(cap.isOpened())
+    if not cap.isOpened():
+        cap.release()
+        return
+    try:
+        src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        src_w = float(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0.0)
+        src_frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+        meta["width"] = src_w
+        meta["duration"] = (
+            (src_frames / src_fps) if (src_fps > 0 and src_frames > 0) else 0.0
+        )
+        step = max(1, int(round(src_fps / rate))) if src_fps > 0 else 1
+        idx = 0
+        limit = None if max_seconds is None else max(0.0, float(max_seconds))
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if idx % step:
+                idx += 1
+                continue
+            t = (idx / src_fps) if src_fps > 0 else float(idx)
+            idx += 1
+            if limit is not None and t > limit:
+                break
+            yield t, frame
     finally:
         cap.release()
+
+
+def _ffmpeg_frames(
+    path: str | Path,
+    rate: float,
+    width: int,
+    max_seconds: Optional[float],
+    meta: Dict[str, Any],
+):
+    """Decode with ffmpeg already at `width`: the 4K frames are never materialised.
+
+    The proxy is 640 px wide; asking ffmpeg to scale to 320 while decoding means
+    the pixel metrics only ever see 320 px frames, which is the whole point of
+    the proxy path.
+    """
+    from . import resources
+
+    try:
+        info = probe(str(path))
+        src_w = float(info.width or 0.0)
+        src_h = float(info.height or 0.0)
+    except Exception as exc:  # noqa: BLE001 - the caller degrades with a reason
+        meta["opened"] = False
+        meta["error"] = f"probe failed: {exc}"
+        return
+    if src_w <= 0 or src_h <= 0:
+        meta["opened"] = False
+        meta["error"] = f"no frame size for {Path(path).name}"
+        return
+    out_w = int(width)
+    out_h = max(2, int(round(src_h * out_w / src_w)))
+    if out_h % 2:
+        out_h += 1
+    meta["opened"] = True
+    meta["width"] = src_w
+    meta["height"] = out_h
+    meta["duration"] = float(info.duration or 0.0)
+    meta["decode_width"] = out_w
+    meta["decode_height"] = out_h
+
+    argv = [ff.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error"]
+    threads = resources.ffmpeg_threads()
+    if threads:
+        argv += ["-threads", str(threads)]
+    argv += [
+        "-i",
+        str(path),
+        "-an",
+        "-sn",
+        "-vf",
+        f"scale={out_w}:{out_h}",
+        "-pix_fmt",
+        "bgr24",
+    ]
+    if max_seconds is not None:
+        argv += ["-t", f"{max(0.0, float(max_seconds)):.3f}"]
+    argv += ["-r", f"{float(rate):g}", "-f", "rawvideo", "pipe:1"]
+
+    frame_size = out_w * out_h * 3
+    proc = subprocess.Popen(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        creationflags=resources.child_creation_flags(),
+    )
+    count = 0
+    try:
+        while True:
+            raw = proc.stdout.read(frame_size) if proc.stdout is not None else b""
+            if not raw or len(raw) < frame_size:
+                break
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape(out_h, out_w, 3)
+            yield (count / rate), frame
+            count += 1
+    finally:
+        if proc.stdout is not None:
+            proc.stdout.close()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:  # pragma: no cover - a stuck decoder
+            proc.kill()
+            proc.wait()
+        if count == 0 and proc.returncode:
+            meta["error"] = f"ffmpeg decode failed (rc={proc.returncode})"
+
+
+def _pixel_metrics(
+    path: str | Path,
+    sample_fps: float,
+    *,
+    max_seconds: Optional[float] = None,
+    source_width: Optional[float] = None,
+    decode_width: Optional[int] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Single decode pass at `sample_fps`, everything measured at 320 px wide.
+
+    With `decode_width` set (the proxy path) ffmpeg decodes already scaled to
+    that width, so 4K frames are never read into memory. Without it the
+    historical OpenCV path is kept byte-for-byte: full decode, then a 320 px
+    resize. `source_width` is the original frame width, used only to report
+    jitter in source pixels when the decode came from a smaller proxy.
+    """
+    if not _CV_OK:
+        return _degraded(_CV_WHY)
+
+    rate = float(sample_fps) if sample_fps and sample_fps > 0 else SAMPLE_FPS_VIDEO
+    acc = _PixelAccumulator()
+    meta: Dict[str, Any] = {}
+
+    if decode_width:
+        frames = _ffmpeg_frames(
+            path, rate, int(decode_width), max_seconds, meta
+        )
+    else:
+        frames = _cv2_frames(path, rate, max_seconds, meta)
+
+    for t, frame in frames:
+        acc.add(t, frame)
+
+    if not meta.get("opened"):
+        return _degraded(
+            meta.get("error") or f"cannot open {Path(path).name}"
+        )
+    duration = float(meta.get("duration") or 0.0) or acc.last_t
+    width = float(source_width if source_width is not None else meta.get("width") or 0.0)
+    result = acc.result(rate=rate, source_width=width, duration=duration)
+    if result is None:
+        return _degraded(
+            meta.get("error") or f"no decodable frames in {Path(path).name}"
+        )
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -720,12 +919,18 @@ def analyze_video(
     """
     src = str(path)
     info = probe(src)
+    if proxy_path and not Path(str(proxy_path)).is_file():
+        proxy_path = None
     pixel = str(proxy_path) if proxy_path else src
 
-    cuts = detect_scene_cuts(src)
-    freezes = detect_freezes(src)
+    cuts, freezes = _scan_cuts_freezes(src)
 
-    metrics = _pixel_metrics(pixel, sample_fps)
+    metrics = _pixel_metrics(
+        pixel,
+        sample_fps,
+        source_width=float(info.width or 0.0),
+        decode_width=_WORK_WIDTH if proxy_path else None,
+    )
     motion = dict(metrics["motion"])
     if info.duration > 0:
         motion["cuts_per_10s"] = fmt(len(cuts) / info.duration * 10.0)

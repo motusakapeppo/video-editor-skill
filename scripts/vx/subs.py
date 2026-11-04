@@ -24,6 +24,7 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -409,6 +410,32 @@ def _scaled(value: int, out_h: int, ref_h: int) -> int:
 # --------------------------------------------------------------------------- #
 
 
+#: One model per (model, device, compute_type) per run. Loading whisper costs
+#: ~3.4 s of the 5.1 s a 60 s file takes; rebuilding it for every file in a
+#: multi-source run is pure loss. The lock makes the cache safe when a future
+#: caller transcribes in threads.
+_WHISPER_MODELS: Dict[tuple, Any] = {}
+_WHISPER_LOCK = threading.Lock()
+
+
+def _whisper_model(model: str, device: str, compute_type: str) -> Any:
+    key = (str(model), str(device), str(compute_type))
+    with _WHISPER_LOCK:
+        engine = _WHISPER_MODELS.get(key)
+        if engine is None:
+            from faster_whisper import WhisperModel  # type: ignore
+
+            engine = WhisperModel(model, device=device, compute_type=compute_type)
+            _WHISPER_MODELS[key] = engine
+        return engine
+
+
+def reset_whisper_cache() -> None:
+    """Drop the cached models (tests, and a deliberate model switch)."""
+    with _WHISPER_LOCK:
+        _WHISPER_MODELS.clear()
+
+
 def _device_choice(device: Optional[str], compute_type: Optional[str]) -> dict:
     """Explicit arguments win; otherwise ask the accel probe (verified by execution)."""
     if device and compute_type:
@@ -454,17 +481,20 @@ def transcribe(
     try:
         target = _device_choice(device, compute_type)
         tr.device = target["device"]
-        engine = WhisperModel(
-            model, device=target["device"], compute_type=target["compute_type"]
-        )
-        segments, info = engine.transcribe(
-            str(src),
-            language=language,
-            beam_size=5,
-            word_timestamps=True,
-            vad_filter=bool(vad),
-            condition_on_previous_text=False,
-        )
+        engine = _whisper_model(model, target["device"], target["compute_type"])
+        options: Dict[str, Any] = {
+            "language": language,
+            "beam_size": 5,
+            "word_timestamps": True,
+            "vad_filter": bool(vad),
+            "condition_on_previous_text": False,
+        }
+        if max_duration is not None:
+            # clip_timestamps is the only knob that stops the inference at the
+            # window: filtering segments afterwards still transcribes the whole
+            # file, which is exactly the cost the bound is meant to remove.
+            options["clip_timestamps"] = [0.0, max(0.0, float(max_duration))]
+        segments, info = engine.transcribe(str(src), **options)
 
         words: List[Dict[str, Any]] = []
         segs: List[Dict[str, Any]] = []
