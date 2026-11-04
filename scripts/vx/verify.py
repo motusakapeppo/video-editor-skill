@@ -286,6 +286,16 @@ def check_contrast(master: Any, report: Mapping[str, Any]) -> Dict[str, Any]:
     titolo che non c'e'.
     """
     region = report.get("contrast_region")
+    if not _text_required(report):
+        # Senza titolo non c'e' un contrasto da garantire: misurare il fondo e
+        # bocciare un master che non porta testo sarebbe un falso negativo.
+        return _result(
+            "contrast",
+            True,
+            {"applicable": False},
+            {"min_ratio": CONTRAST_MIN},
+            "nessun titolo richiesto: contrasto non applicabile",
+        )
     if not (
         isinstance(region, (list, tuple)) and len(region) == 4
     ):

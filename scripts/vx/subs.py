@@ -23,12 +23,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from . import ffmpeg as ff
 from . import fonts as fonts_mod
@@ -62,6 +63,14 @@ __all__ = [
     "SUBTITLE_STYLES",
     "DEFAULT_PRESET",
     "style_for",
+    "choose_hook_legibility",
+    "hook_placement",
+    "cta_placement",
+    "band_contrast",
+    "text_band",
+    "sample_frame",
+    "LEGIBILITY_MIN",
+    "SAFE_BOTTOM_RATIO",
     "main",
 ]
 
@@ -1048,51 +1057,242 @@ def write_ass(
 # 3b. hook card — one event, no karaoke
 # --------------------------------------------------------------------------- #
 
+#: Soglia WCAG AA del titolo, la stessa di `vx.verify.CONTRAST_MIN`: la scelta
+#: dello stile si fa sul numero che il cancello andra' poi a misurare.
+LEGIBILITY_MIN = 4.5
+#: Lato del campione usato da `vx.verify`: la banda qui si legge sulla stessa
+#: griglia, altrimenti il numero dichiarato non sarebbe quello del gate.
+LEGIBILITY_SIDE = 160
+#: La UI bassa di un 9:16 copre ~il 13% dell'altezza: sotto quel margine un hook
+#: non e' leggibile nemmeno con contrasto perfetto.
+SAFE_BOTTOM_RATIO = 0.13
+#: Un contorno e' largo in pixel, non in proporzione al glifo: su un titolo
+#: enorme un anello di 6 px (tela 1080) e' troppo sottile per garantire la
+#: lettura, e il passaggio alla placca e' dovuto. La soglia e' il rapporto
+#: minimo contorno/corpo per cui il contorno conta davvero.
+LEGIBILITY_MIN_OUTLINE_RATIO = 0.04
 
-def write_hook_ass(
-    path,
-    text,
-    *,
-    out_w,
-    out_h,
-    start_s=0.0,
-    duration_s=3.0,
-    style="hook",
-    font=None,
-    size=None,
-    margin_v=None,
-    alignment=2,
-) -> Path:
-    """One ASS event for the hook card: uppercase, no karaoke, one Dialogue line.
 
-    ``size`` overrides the computed body in pixels (the brief can name a real
-    number, e.g. 106 px); ``margin_v``/``alignment`` place the card without
-    changing the default top-bottom geometry every existing caller relies on.
+def _wcag_ratio(light: float, dark: float) -> float:
+    """Rapporto di contrasto WCAG fra due luma 0..255 (stessa formula di verify)."""
+    def linear(value: float) -> float:
+        c = max(0.0, min(255.0, float(value))) / 255.0
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    a, b = linear(light), linear(dark)
+    hi, lo = (a, b) if a >= b else (b, a)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _percentile(values: Sequence[int], percent: float) -> float:
+    if not values:
+        raise ValueError("nessun pixel nella regione")
+    ordered = sorted(values)
+    index = int(round((len(ordered) - 1) * max(0.0, min(100.0, percent)) / 100.0))
+    return float(ordered[index])
+
+
+def _band_values(raw: bytes, side: int, region: Sequence[float]) -> List[int]:
+    """I pixel luma della banda normalizzata, sulla stessa geometria di verify."""
+    if len(raw) < side * side:
+        raise ValueError("fotogramma incompleto")
+    x, y, w, h = (float(item) for item in region)
+    x0 = max(0, min(side - 1, int(round(x * side))))
+    y0 = max(0, min(side - 1, int(round(y * side))))
+    x1 = max(x0 + 1, min(side, int(round((x + w) * side))))
+    y1 = max(y0 + 1, min(side, int(round((y + h) * side))))
+    return [
+        raw[row * side + col]
+        for row in range(y0, y1)
+        for col in range(x0, x1)
+    ]
+
+
+def band_contrast(
+    raw: bytes, region: Sequence[float], *, side: int = LEGIBILITY_SIDE
+) -> Dict[str, Any]:
+    """Contrasto WCAG 5%/95% della banda, piu' la luminanza media.
+
+    E' la stessa misura di `verify.check_contrast` (stessi percentili, stesso
+    lato del campione): se qui il numero supera 4.5, il gate legge lo stesso.
     """
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    values = _band_values(raw, side, region)
+    dark = _percentile(values, 5)
+    light = _percentile(values, 95)
+    return {
+        "ratio": round(_wcag_ratio(light, dark), 2),
+        "dark": round(dark, 1),
+        "light": round(light, 1),
+        "mean": round(sum(values) / float(len(values)), 1),
+    }
 
+
+def _run_bytes(args: Sequence[Any], *, timeout: int = 120) -> bytes:
+    """ffmpeg -> stdout binario (rawvideo), senza decodifica testuale."""
+    argv = [ff.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error"]
+    argv += [str(item) for item in args]
+    proc = subprocess.run(
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        raise RuntimeError(f"ffmpeg: {(tail[-1] if tail else 'errore')[:240]}")
+    return proc.stdout or b""
+
+
+def band_contrast_file(
+    image: Any, region: Sequence[float], *, side: int = LEGIBILITY_SIDE
+) -> Dict[str, Any]:
+    """`band_contrast` su un file immagine, campionato come fa il gate."""
+    raw = _run_bytes(
+        [
+            "-i",
+            str(image),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={side}:{side}",
+            "-an",
+            "-sn",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gray",
+            "-",
+        ]
+    )
+    return band_contrast(raw, region, side=side)
+
+
+def sample_frame(video: Any, at_s: float, *, out_w: int, out_h: int, dst: Any) -> Optional[Path]:
+    """Un fotogramma del piano, portato sulla tela di uscita (fill + crop)."""
+    target = Path(dst)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    proc = ff.run_ff(
+        [
+            "-ss",
+            f"{max(0.0, float(at_s)):.3f}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-vf",
+            (
+                f"scale={int(out_w)}:{int(out_h)}:force_original_aspect_ratio=increase,"
+                f"crop={int(out_w)}:{int(out_h)}"
+            ),
+            "-y",
+            str(target),
+        ],
+        loglevel="error",
+    )
+    return target if proc.rc == 0 and target.is_file() else None
+
+
+def _hook_metrics(
+    text: Any, *, out_w: int, out_h: int, font: Any, size: Any, margin_lr: int = 60
+) -> Dict[str, Any]:
+    """Corpo e larghezza stimata del hook, con la stessa formula del writer."""
     body = " ".join(str(text).split()).upper()
     family = font or DEFAULT_FONT
-    margin_lr = 60
-    margin_v = 40 if margin_v is None else max(0, int(margin_v))
-    base = int(round(0.045 * out_h))
-    avail = max(64, int(out_w) - 2 * margin_lr)
+    advance = _advance_for(str(family), uppercase=True)
+    avail = max(64, int(out_w) - 2 * int(margin_lr))
     if size is not None:
-        size = max(1, int(size))
+        px = max(1, int(size))
     else:
-        size = max(
-            24,
-            min(
-                base,
-                int(
-                    avail
-                    / (max(1, len(body)) * _advance_for(str(family), uppercase=True))
-                ),
-            ),
+        base = int(round(0.045 * out_h))
+        px = max(24, min(base, int(avail / (max(1, len(body)) * advance))))
+    width = min(avail, int(round(len(body) * px * advance)))
+    return {
+        "body": body,
+        "size": px,
+        "advance": advance,
+        "width": max(1, width),
+        "margin_lr": int(margin_lr),
+    }
+
+
+def text_band(
+    metrics: Mapping[str, Any],
+    *,
+    out_w: int,
+    out_h: int,
+    margin_v: int,
+    alignment: int,
+    outline: int = 0,
+) -> List[float]:
+    """La banda normalizzata in cui cade il testo, come la leggera' verify.
+
+    E' volutamente stretta intorno al blocco: i percentili 5/95 devono vedere
+    l'inchiostro del titolo, non mezza scena.
+    """
+    size = int(metrics["size"])
+    block = max(1, int(round(size * 1.2 + 2 * int(outline))))
+    width = min(int(out_w), max(1, int(metrics["width"]) + 2 * int(outline)))
+    x0 = max(0.0, (int(out_w) - width) / 2.0) / float(out_w)
+    w = max(0.02, width / float(out_w))
+    if int(alignment) in (7, 8, 9):
+        y0 = float(margin_v)
+    elif int(alignment) in (4, 5, 6):
+        y0 = (int(out_h) - block) / 2.0
+    else:
+        y0 = float(out_h) - float(margin_v) - block
+    y0 = max(0.0, min(float(out_h - block), y0)) / float(out_h)
+    h = max(0.02, block / float(out_h))
+    return [
+        round(x0, 4),
+        round(y0, 4),
+        round(min(w, 1.0 - x0), 4),
+        round(min(h, 1.0 - y0), 4),
+    ]
+
+
+def _hook_document(
+    text: Any,
+    *,
+    out_w: int,
+    out_h: int,
+    start_s: float,
+    duration_s: float,
+    style: str,
+    font: Any,
+    size: Any,
+    margin_v: Any,
+    alignment: int,
+    outline: Optional[int] = None,
+    shadow: Optional[int] = None,
+    border_style: Optional[int] = None,
+    outline_colour: Optional[str] = None,
+    back_colour: Optional[str] = None,
+    primary: Optional[str] = None,
+) -> str:
+    """Il documento ASS di una card: usato dal writer e dalla prova di lettura."""
+    metrics = _hook_metrics(text, out_w=out_w, out_h=out_h, font=font, size=size)
+    body = metrics["body"]
+    family = font or DEFAULT_FONT
+    margin_lr = metrics["margin_lr"]
+    mv = 40 if margin_v is None else max(0, int(margin_v))
+    px = metrics["size"]
+    border = int(border_style) if border_style is not None else BORDER_STYLE_VERTICAL
+    if border == 3:
+        # BorderStyle 3: Outline e' l'imbottitura della placca, non un contorno.
+        outline_px = _scaled(13, out_h, 1080) if outline is None else int(outline)
+        shadow_px = 0 if shadow is None else int(shadow)
+    else:
+        outline_px = (
+            _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
+            if outline is None
+            else int(outline)
         )
-    outline = _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
-    shadow = _scaled(SHADOW_HORIZONTAL, out_h, 1080)
+        shadow_px = (
+            _scaled(SHADOW_HORIZONTAL, out_h, 1080)
+            if shadow is None
+            else int(shadow)
+        )
 
     header = (
         "[Script Info]\n"
@@ -1107,9 +1307,10 @@ def write_hook_ass(
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: {style},{family},{size},&H00FFFFFF,&H0000D7FF,&H00000000,"
-        f"{BACK_COLOUR},-1,0,0,0,100,100,0,0,{BORDER_STYLE_VERTICAL},"
-        f"{outline},{shadow},{int(alignment)},{margin_lr},{margin_lr},{margin_v},1\n"
+        f"Style: {style},{family},{px},{primary or '&H00FFFFFF'},&H0000D7FF,"
+        f"{outline_colour or '&H00000000'},{back_colour or BACK_COLOUR},"
+        f"-1,0,0,0,100,100,0,0,{border},"
+        f"{outline_px},{shadow_px},{int(alignment)},{margin_lr},{margin_lr},{mv},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
@@ -1121,8 +1322,369 @@ def write_hook_ass(
         f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},{style},,0,0,0,,"
         f"{_ass_escape(body)}\n"
     )
-    target.write_text(header + event, encoding="utf-8", newline="\n")
+    return header + event
+
+
+def write_hook_ass(
+    path,
+    text,
+    *,
+    out_w,
+    out_h,
+    start_s=0.0,
+    duration_s=3.0,
+    style="hook",
+    font=None,
+    size=None,
+    margin_v=None,
+    alignment=2,
+    outline=None,
+    shadow=None,
+    border_style=None,
+    outline_colour=None,
+    back_colour=None,
+    primary=None,
+) -> Path:
+    """One ASS event for the hook card: uppercase, no karaoke, one Dialogue line.
+
+    ``size`` overrides the computed body in pixels (the brief can name a real
+    number, e.g. 106 px); ``margin_v``/``alignment`` place the card without
+    changing the default top-bottom geometry every existing caller relies on.
+    ``outline``/``shadow``/``border_style``/``outline_colour``/``primary`` sono
+    la mitigazione di leggibilita' scelta da :func:`choose_hook_legibility`; i
+    loro default lasciano il documento di oggi byte per byte identico.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    document = _hook_document(
+        text,
+        out_w=int(out_w),
+        out_h=int(out_h),
+        start_s=start_s,
+        duration_s=duration_s,
+        style=style,
+        font=font,
+        size=size,
+        margin_v=margin_v,
+        alignment=alignment,
+        outline=outline,
+        shadow=shadow,
+        border_style=border_style,
+        outline_colour=outline_colour,
+        back_colour=back_colour,
+        primary=primary,
+    )
+    target.write_text(document, encoding="utf-8", newline="\n")
     return target.resolve()
+
+
+def _compose_probe(
+    background: Any, ass_path: Any, dst: Any, *, fonts_dir: Any = None
+) -> bool:
+    """Brucia la card di prova sul fotogramma campionato, un frame."""
+    target = Path(dst)
+    try:
+        proc = ff.run_ff(
+            [
+                "-loop",
+                "1",
+                "-i",
+                str(background),
+                "-vf",
+                burn_filter(ass_path, fontsdir=fonts_dir),
+                "-frames:v",
+                "1",
+                "-y",
+                str(target),
+            ],
+            loglevel="error",
+        )
+    except Exception:  # noqa: BLE001 - una prova fallita non inventa un numero
+        return False
+    return proc.rc == 0 and target.is_file()
+
+
+def _legibility_ladder(out_h: int) -> List[Dict[str, Any]]:
+    """Le mitigazioni in ordine di invasivita', dalla meno visibile.
+
+    Il primo gradino e' lo stile di oggi (nessun ritocco): si prova solo quando
+    il fondo lo giustifica, cosi' un testo gia' leggibile non guadagna contorni
+    gratis. Poi il contorno cresce (5 e 6 px alla tela 1080, sopra i 4 di oggi),
+    poi l'ombra, poi la placca semitrasparente, infine testo scuro su placca
+    chiara.
+    """
+    base_outline = _scaled(OUTLINE_HORIZONTAL, out_h, 1080)
+    base_shadow = _scaled(SHADOW_HORIZONTAL, out_h, 1080)
+
+    def entry(
+        name: str,
+        outline: int,
+        shadow: int,
+        border: int = BORDER_STYLE_VERTICAL,
+        outline_colour: str = "&H00000000",
+        primary: str = "&H00FFFFFF",
+    ) -> Dict[str, Any]:
+        return {
+            "chosen": name,
+            "outline": int(outline),
+            "shadow": int(shadow),
+            "border_style": int(border),
+            "outline_colour": outline_colour,
+            "primary": primary,
+        }
+
+    return [
+        entry("nessun ritocco", base_outline, base_shadow),
+        entry("outline 5px", _scaled(5, out_h, 1080), base_shadow),
+        entry("outline 6px", _scaled(6, out_h, 1080), base_shadow),
+        entry("outline 6px + ombra", _scaled(6, out_h, 1080), _scaled(4, out_h, 1080)),
+        entry("placca 65%", _scaled(13, out_h, 1080), 0, 3, "&H59000000"),
+        entry(
+            "placca chiara + testo scuro",
+            _scaled(13, out_h, 1080),
+            0,
+            3,
+            "&H59FFFFFF",
+            "&H00000000",
+        ),
+    ]
+
+
+def choose_hook_legibility(
+    background: Any,
+    text: Any,
+    *,
+    out_w: int,
+    out_h: int,
+    style: str = "hook",
+    font: Any = None,
+    size: Any = None,
+    margin_v: Any = None,
+    alignment: int = 2,
+    fonts_dir: Any = None,
+    workdir: Any = None,
+) -> Dict[str, Any]:
+    """Misura il fondo sotto il testo e sceglie la prima mitigazione che passa.
+
+    ``background`` e' il fotogramma (gia' sulla tela di uscita) all'istante in
+    cui il hook entra. Si legge la luminanza media della banda, si stima il
+    contrasto del bianco e, se e' sotto 4.5, si prova la scala di
+    :func:`_legibility_ladder` **bruciando la card vera sul fondo vero** e
+    misurando i percentili 5/95 con la geometria di `vx.verify`. La prima
+    combinazione che supera la soglia e' quella scritta; il numero misurato
+    resta nel report, non nella speranza.
+    """
+    family = font or DEFAULT_FONT
+    metrics = _hook_metrics(text, out_w=out_w, out_h=out_h, font=family, size=size)
+    ladder = _legibility_ladder(out_h)
+    mv = 40 if margin_v is None else max(0, int(margin_v))
+    work = Path(workdir) if workdir else Path(background if background else ".").parent
+    work.mkdir(parents=True, exist_ok=True)
+
+    if background is None:
+        chosen = dict(ladder[4])
+        return {
+            "measured": None,
+            "expected": LEGIBILITY_MIN,
+            "band_luma": None,
+            "chosen": chosen["chosen"],
+            "probe_ratio": None,
+            "resolved": False,
+            "region": text_band(
+                metrics,
+                out_w=out_w,
+                out_h=out_h,
+                margin_v=mv,
+                alignment=alignment,
+                outline=chosen["outline"],
+            ),
+            "why": (
+                "fondo non campionabile: placca al 65% scelta per prudenza, "
+                "nessun numero dichiarato"
+            ),
+            "params": chosen,
+            "probes": [],
+        }
+
+    base_region = text_band(
+        metrics,
+        out_w=out_w,
+        out_h=out_h,
+        margin_v=mv,
+        alignment=alignment,
+        outline=ladder[0]["outline"],
+    )
+    base = band_contrast_file(background, base_region)
+    band = float(base["mean"])
+    measured = round(_wcag_ratio(255.0, band), 2)
+    result: Dict[str, Any] = {
+        "measured": measured,
+        "expected": LEGIBILITY_MIN,
+        "band_luma": round(band, 1),
+        "chosen": ladder[-1]["chosen"],
+        "probe_ratio": None,
+        "resolved": False,
+        "region": base_region,
+        "why": "",
+        "params": dict(ladder[-1]),
+        "probes": [],
+    }
+
+    chosen: Optional[Dict[str, Any]] = None
+    chosen_ratio: Optional[float] = None
+    chosen_region = base_region
+    for index, step in enumerate(ladder):
+        # Con il fondo gia' leggibile il primo gradino e' lo stile di oggi; con
+        # il fondo sotto soglia non lo si prova nemmeno: serve aggiungere.
+        if index == 0 and measured < LEGIBILITY_MIN:
+            continue
+        if (
+            step["border_style"] == BORDER_STYLE_VERTICAL
+            and step["chosen"] != "nessun ritocco"
+            and int(step["outline"]) / float(max(1, metrics["size"]))
+            < LEGIBILITY_MIN_OUTLINE_RATIO
+        ):
+            # Contorno proporzionalmente troppo sottile per questo corpo:
+            # non e' la mitigazione che serve, si passa alla placca.
+            continue
+        region = text_band(
+            metrics,
+            out_w=out_w,
+            out_h=out_h,
+            margin_v=mv,
+            alignment=alignment,
+            outline=step["outline"],
+        )
+        ass_path = work / f"probe_{index}.ass"
+        ass_path.write_text(
+            _hook_document(
+                text,
+                out_w=out_w,
+                out_h=out_h,
+                start_s=0.0,
+                duration_s=1.0,
+                style=style,
+                font=family,
+                size=size,
+                margin_v=mv,
+                alignment=alignment,
+                outline=step["outline"],
+                shadow=step["shadow"],
+                border_style=step["border_style"],
+                outline_colour=step["outline_colour"],
+                primary=step["primary"],
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+        png = work / f"probe_{index}.png"
+        if not _compose_probe(background, ass_path, png, fonts_dir=fonts_dir):
+            continue
+        verdict = band_contrast_file(png, region)
+        result["probes"].append(
+            {"chosen": step["chosen"], "ratio": verdict["ratio"]}
+        )
+        if verdict["ratio"] >= LEGIBILITY_MIN:
+            chosen = step
+            chosen_ratio = verdict["ratio"]
+            chosen_region = region
+            break
+
+    if chosen is None:
+        # Nessuna combinazione basta: si scrive la piu' invasiva e lo si dice.
+        # Il gate, se misura ancora sotto soglia, fermera' la consegna.
+        result["why"] = (
+            f"fondo medio {band:.0f}/255: bianco sul fondo = {measured:.2f} "
+            f"< {LEGIBILITY_MIN}; nessuna mitigazione basta "
+            f"({result['probes'][-1]['ratio'] if result['probes'] else 'non misurata'})"
+        )
+        return result
+
+    result["chosen"] = chosen["chosen"]
+    result["params"] = dict(chosen)
+    result["probe_ratio"] = chosen_ratio
+    result["region"] = chosen_region
+    result["resolved"] = True
+    if chosen["chosen"] == "nessun ritocco":
+        result["why"] = (
+            f"fondo medio {band:.0f}/255: bianco sul fondo = {measured:.2f} "
+            f">= {LEGIBILITY_MIN}; stile di oggi invariato"
+        )
+    else:
+        result["why"] = (
+            f"fondo medio {band:.0f}/255: bianco sul fondo = {measured:.2f} "
+            f"< {LEGIBILITY_MIN}; {chosen['chosen']} misurato "
+            f"{chosen_ratio:.2f} >= {LEGIBILITY_MIN}"
+        )
+    return result
+
+
+def hook_placement(
+    aspect: str, out_w: int, out_h: int, platform: str = "tiktok"
+) -> Dict[str, Any]:
+    """Dove va il hook: terzo alto sul verticale, bordo sicuro sull'orizzontale.
+
+    La UI bassa di TikTok/Reels copre ~0.13 H: un hook a ``MarginV 40`` ci sta
+    dentro, e nessun contrasto lo salva. Sul verticale si sceglie il terzo alto,
+    sotto l'inset superiore della piattaforma; sull'orizzontale resta in basso
+    ma sopra la linea sicura.
+    """
+    vertical = str(aspect) not in ("16:9", "4:3")
+    if vertical:
+        top_inset = (
+            PLATFORM_INSETS.get(str(platform), (240, 660, 120, 120))[0]
+            * float(out_h)
+            / 1920.0
+        )
+        margin = max(int(round(0.14 * out_h)), int(round(top_inset)))
+        return {
+            "placement": "top_third",
+            "alignment": 8,
+            "margin_v": margin,
+            "why": (
+                f"hook nel terzo alto a {margin}px: il margine inferiore minimo "
+                f"e' 0.13H={int(round(SAFE_BOTTOM_RATIO * out_h))}px e sotto "
+                "quella linea c'e' la UI della piattaforma"
+            ),
+        }
+    margin = max(40, int(round(0.037 * out_h)))
+    return {
+        "placement": "bottom_safe",
+        "alignment": 2,
+        "margin_v": margin,
+        "why": f"didascalia orizzontale a {margin}px dal bordo, dentro la linea sicura",
+    }
+
+
+def cta_placement(
+    aspect: str, out_w: int, out_h: int, platform: str = "tiktok"
+) -> Dict[str, Any]:
+    """La CTA resta in basso, ma sopra la UI: se lo spazio non c'e', lo dice."""
+    vertical = str(aspect) not in ("16:9", "4:3")
+    if vertical:
+        bottom_inset = (
+            PLATFORM_INSETS.get(str(platform), (240, 660, 120, 120))[1]
+            * float(out_h)
+            / 1920.0
+        )
+        minimum = int(round(SAFE_BOTTOM_RATIO * out_h))
+        margin = max(minimum, int(round(bottom_inset)))
+        return {
+            "placement": "lower_safe",
+            "alignment": 2,
+            "margin_v": margin,
+            "why": (
+                f"CTA a {margin}px dal basso: sopra la UI bassa "
+                f"(inset {int(round(bottom_inset))}px, minimo {minimum}px)"
+            ),
+        }
+    margin = max(40, int(round(0.037 * out_h)))
+    return {
+        "placement": "bottom_safe",
+        "alignment": 2,
+        "margin_v": margin,
+        "why": f"CTA orizzontale a {margin}px dal bordo, dentro la linea sicura",
+    }
 
 
 def merge_ass(paths: Sequence[Any], dst: Any) -> str:

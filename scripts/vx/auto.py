@@ -1546,6 +1546,87 @@ def _opening_clip(plan: Any) -> Optional[Any]:
     return best
 
 
+def _timeline_clip_at(plan: Any, at_s: float) -> Optional[Any]:
+    """Il clip layer-0 che copre ``at_s`` sulla timeline (o l'apertura)."""
+    for track in getattr(plan, "video_tracks", ()) or ():
+        for clip in getattr(track, "clips", ()) or ():
+            if int(getattr(clip, "layer", 0) or 0) != 0:
+                continue
+            start = float(getattr(clip, "dst_in", 0.0) or 0.0)
+            end = float(getattr(clip, "dst_out", 0.0) or 0.0)
+            if start <= float(at_s) < end:
+                return clip
+    return _opening_clip(plan)
+
+
+def apply_verification(
+    report: Dict[str, Any], verification: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """Scrive il verdetto e toglie la consegna se il titolo e' illeggibile.
+
+    ``delivered`` risponde alla domanda "questo lavoro si consegna?". Un
+    contrasto WCAG sotto 4.5 e' la prova che il titolo non si legge: il master
+    resta sul disco e la vista lo mostra come NON RIUSCITO, ma nessun report lo
+    dichiara consegnato. Il motivo viaggia in chiaro in ``failures``.
+    """
+    report["verification"] = dict(verification) if isinstance(verification, Mapping) else {}
+    contrast = next(
+        (
+            item
+            for item in report["verification"].get("checks") or ()
+            if isinstance(item, Mapping) and str(item.get("id")) == "contrast"
+        ),
+        None,
+    )
+    if contrast is None or contrast.get("passed"):
+        return report
+    report["delivered"] = False
+    report["outcome_suggested"] = "failed"
+    report["outcome"] = "failed"
+    measured = contrast.get("measured")
+    ratio = measured.get("ratio") if isinstance(measured, Mapping) else None
+    reason = (
+        "verification: contrasto del titolo "
+        + (f"{float(ratio):.2f}" if isinstance(ratio, (int, float)) else "sotto soglia")
+        + " < 4.5: titolo illeggibile, non consegnato"
+    )
+    if reason not in (report.get("failures") or []):
+        report.setdefault("failures", []).append(reason)
+    return report
+
+
+def _text_background(
+    plan: Any,
+    at_s: float,
+    *,
+    out_w: int,
+    out_h: int,
+    dst: Path,
+) -> Optional[Path]:
+    """Il fotogramma del piano all'istante del testo, sulla tela di uscita.
+
+    Il testo si sceglie prima del render, quindi il fondo non puo' essere il
+    master: si campiona il clip che la timeline mette in quell'istante, alla
+    stessa tela (fill + crop). Se il clip non ha un file, il chiamante riceve
+    ``None`` e la scelta lo dichiara invece di inventare una misura.
+    """
+    clip = _timeline_clip_at(plan, at_s)
+    if clip is None:
+        return None
+    source_id = str(getattr(clip, "source_id", "") or "")
+    ref = (getattr(plan, "sources", {}) or {}).get(source_id)
+    path = str(getattr(ref, "path", "") or "")
+    if not path or not Path(path).is_file():
+        return None
+    src_in = float(getattr(clip, "src_in", 0.0) or 0.0)
+    dst_in = float(getattr(clip, "dst_in", 0.0) or 0.0)
+    src_at = src_in + max(0.0, float(at_s) - dst_in)
+    try:
+        return subs.sample_frame(path, src_at, out_w=out_w, out_h=out_h, dst=dst)
+    except Exception:  # noqa: BLE001 - un frame non leggibile non ferma il montaggio
+        return None
+
+
 def pick_cover_frame(
     frames: Sequence[Mapping[str, Any]], threshold: float
 ) -> Tuple[Mapping[str, Any], str, bool]:
@@ -4210,9 +4291,20 @@ def _run_typography(
 
     width, height = int(plan.resolution[0]), int(plan.resolution[1])
     duration = max(0.2, float(plan.duration_sec))
+    aspect = str(getattr(plan, "aspect_ratio", "9:16") or "9:16")
     font = _typography_font(brief.font, caption_font, workdir)
+    # Il fontsdir della prova deve essere lo stesso che brucera' il render: la
+    # card di prova con un ripiego misurerebbe un altro carattere.
+    probe_fonts = str(font.get("fonts_dir") or caption_font.get("fonts_dir") or "")
+    text_work = workdir / "legibility"
     files: Dict[str, str] = {}
     texts: List[Dict[str, Any]] = []
+    legibility: Optional[Dict[str, Any]] = None
+    safe_zone: Optional[Dict[str, Any]] = None
+    cta_legibility: Optional[Dict[str, Any]] = None
+    cta_safe_zone: Optional[Dict[str, Any]] = None
+    contrast_region: Optional[List[float]] = None
+    contrast_at: Optional[float] = None
 
     hook_text = brief.hook_text
     if not hook_text and brief.asks_hook:
@@ -4226,6 +4318,28 @@ def _run_typography(
             if brief.style and brief.style.lower() not in ("karaoke", "clean")
             else "hook"
         )
+        safe_zone = subs.hook_placement(aspect, width, height)
+        hook_bg = _text_background(
+            plan,
+            hook_at,
+            out_w=width,
+            out_h=height,
+            dst=text_work / "hook_bg.png",
+        )
+        legibility = subs.choose_hook_legibility(
+            hook_bg,
+            hook_text,
+            out_w=width,
+            out_h=height,
+            style=hook_style,
+            font=font["family"],
+            size=brief.size,
+            margin_v=safe_zone["margin_v"],
+            alignment=safe_zone["alignment"],
+            fonts_dir=probe_fonts or None,
+            workdir=text_work / "hook",
+        )
+        chosen_style = legibility.get("params") or {}
         hook_path = Path(
             subs.write_hook_ass(
                 workdir / "hook.ass",
@@ -4237,9 +4351,18 @@ def _run_typography(
                 style=hook_style,
                 font=font["family"],
                 size=brief.size,
+                margin_v=safe_zone["margin_v"],
+                alignment=safe_zone["alignment"],
+                outline=chosen_style.get("outline"),
+                shadow=chosen_style.get("shadow"),
+                border_style=chosen_style.get("border_style"),
+                outline_colour=chosen_style.get("outline_colour"),
+                primary=chosen_style.get("primary"),
             )
         )
         files["hook"] = str(hook_path)
+        contrast_region = list(legibility.get("region") or [])
+        contrast_at = round(min(duration - 0.05, hook_at + 0.05), 3)
         texts.append(
             {
                 "kind": "hook",
@@ -4247,6 +4370,8 @@ def _run_typography(
                 "at": round(hook_at, 3),
                 "end": round(hook_at + hook_dur, 3),
                 "file": "hook.ass",
+                "placement": safe_zone.get("placement"),
+                "legibility": legibility.get("chosen"),
             }
         )
 
@@ -4260,6 +4385,28 @@ def _run_typography(
         requested_at = brief.cta_at if brief.cta_at is not None else default_at
         cta_at = max(0.0, min(float(requested_at), duration - 0.2))
         cta_dur = max(0.2, min(cta_dur, duration - cta_at))
+        cta_safe_zone = subs.cta_placement(aspect, width, height)
+        cta_bg = _text_background(
+            plan,
+            cta_at,
+            out_w=width,
+            out_h=height,
+            dst=text_work / "cta_bg.png",
+        )
+        cta_legibility = subs.choose_hook_legibility(
+            cta_bg,
+            brief.cta_text,
+            out_w=width,
+            out_h=height,
+            style="cta",
+            font=font["family"],
+            size=brief.size,
+            margin_v=cta_safe_zone["margin_v"],
+            alignment=cta_safe_zone["alignment"],
+            fonts_dir=probe_fonts or None,
+            workdir=text_work / "cta",
+        )
+        cta_style = cta_legibility.get("params") or {}
         subs_path = Path(
             subs.write_hook_ass(
                 workdir / "subs.ass",
@@ -4271,9 +4418,19 @@ def _run_typography(
                 style="cta",
                 font=font["family"],
                 size=brief.size,
+                margin_v=cta_safe_zone["margin_v"],
+                alignment=cta_safe_zone["alignment"],
+                outline=cta_style.get("outline"),
+                shadow=cta_style.get("shadow"),
+                border_style=cta_style.get("border_style"),
+                outline_colour=cta_style.get("outline_colour"),
+                primary=cta_style.get("primary"),
             )
         )
         files["subs"] = str(subs_path)
+        if contrast_region is None:
+            contrast_region = list(cta_legibility.get("region") or [])
+            contrast_at = round(min(duration - 0.05, cta_at + 0.05), 3)
         texts.append(
             {
                 "kind": "cta",
@@ -4281,6 +4438,8 @@ def _run_typography(
                 "at": round(cta_at, 3),
                 "end": round(cta_at + cta_dur, 3),
                 "file": "subs.ass",
+                "placement": cta_safe_zone.get("placement"),
+                "legibility": cta_legibility.get("chosen"),
             }
         )
 
@@ -4327,6 +4486,12 @@ def _run_typography(
             "texts": texts,
             "missing": missing,
             "sources": sources,
+            "legibility": legibility,
+            "safe_zone": safe_zone or cta_safe_zone,
+            "cta_legibility": cta_legibility,
+            "cta_safe_zone": cta_safe_zone,
+            "contrast_region": contrast_region,
+            "contrast_at": contrast_at,
             "render": {
                 "filter": "subtitles",
                 "note": (
@@ -5675,6 +5840,14 @@ def _run_locked(
         "effects": {**effects_section, "render": effects_report},
         "font": font_section,
         "typography": typography_section,
+        "text_required": bool(typography_section.get("texts")),
+        "texts": [
+            str(item.get("text") or "")
+            for item in typography_section.get("texts") or ()
+            if str(item.get("text") or "").strip()
+        ],
+        "contrast_region": typography_section.get("contrast_region"),
+        "contrast_at": typography_section.get("contrast_at"),
         "keyframes_gate": key_section,
         "questions": questions,
         "decisions": decision_log,
@@ -5864,6 +6037,12 @@ def _run_locked(
                 else str(verification.get("error") or "verdetto assente")
             )
         )
+    # Un titolo illeggibile non e' un dettaglio da mettere fra gli avvisi: e' la
+    # ragione per cui il lavoro non si consegna. Il master resta sul disco (la
+    # vista lo mostra come "NON RIUSCITO"), ma ``delivered`` dice la verita'.
+    apply_verification(report, verification)
+    if not report.get("delivered", True):
+        _log("[auto] " + str((report.get("failures") or [""])[-1]))
     report["timings"] = clock.as_dict()
     _emit(
         log,
@@ -5895,7 +6074,7 @@ def _run_locked(
     # Un master che esiste non e' un lavoro consegnato: la riga lo dice anche
     # a chi legge solo i log, e la riscrittura porta la guardia nel report.
     if not report.get("delivered", True):
-        _log("[auto] guardia non superata: il video c'e', la consegna no")
+        _log("[auto] non consegnato: il video c'e', la consegna no")
     # Il registro delle sessioni: se il comando ne ha aperta una (il decoratore
     # di ``cli``) e non e' riuscita a scrivere, il report lo dichiara qui. Non
     # si riapre e non si duplica: la sessione e' del comando, non del render.
