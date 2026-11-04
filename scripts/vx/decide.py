@@ -979,7 +979,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.duration and args.duration > 0:
         block = payload.get("beat_grid") or {}
         grid_bpm = float(block.get("bpm") or 0.0)
-        if args.beat_grid != "off" and grid_bpm > 0:
+        if args.beat_grid != "off" and grid_bpm > 0 and block.get("enabled"):
             from . import grammar
 
             plan = grammar.plan_beat_shots(

@@ -58,12 +58,19 @@ def beat_grid(
         raise ValueError(f"engine {engine!r} not in auto/numpy")
     if engine == "auto":
         try:
-            return _librosa_beat_grid(path, max_seconds=max_seconds)
+            measured = _librosa_beat_grid(path, max_seconds=max_seconds)
         except Exception as exc:  # noqa: BLE001 - optional stack, fall back
             fallback = numpy_beat_grid_from_path(path, max_seconds=max_seconds)
             if fallback.method.startswith("numpy"):
                 fallback.method += f" (librosa failed: {type(exc).__name__})"
             return fallback
+        if measured.bpm > 0 and measured.beats:
+            return measured
+        fallback = numpy_beat_grid_from_path(path, max_seconds=max_seconds)
+        if fallback.bpm > 0 and fallback.beats:
+            fallback.method += " (librosa returned no tempo)"
+            return fallback
+        return measured
     return numpy_beat_grid_from_path(path, max_seconds=max_seconds)
 
 
