@@ -157,9 +157,26 @@ DEFAULTS: Dict[str, Any] = {
     },
     "font": {
         # Rete attiva di default quando il catalogo risponde; --no-font-network
-        # la spegne per job. ``wait_sec`` e' quanto si aspetta una scelta umana.
+        # la spegne per job. ``wait_sec`` e' quanto si aspetta una scelta umana:
+        # 0 significa "aspetta solo se qualcuno guarda" (in quel caso il cancello
+        # usa FONT_WAIT_DEFAULT); un valore > 0 e' un'attesa esplicita e vince
+        # anche senza vista.
         "network": True,
-        "wait_sec": 180.0,
+        "wait_sec": 0.0,
+    },
+    "key": {
+        # Stessa regola del font per il cancello dei fotogrammi.
+        "wait_sec": 0.0,
+    },
+    "triage": {
+        # Stessa regola per le tre domande del triage. Un valore esplicito
+        # vince sempre e allo scadere dichiara ``timeout``.
+        "wait_sec": 0.0,
+    },
+    "budget": {
+        "max_seconds": 600.0,
+        # Stessa regola per la scelta full/fast. 0 = nessuna attesa senza vista.
+        "plan_wait_sec": 0.0,
     },
     "serve": {
         # Dopo quanti secondi un ``progress.json`` fermo non e' piu' una
@@ -167,6 +184,9 @@ DEFAULTS: Dict[str, Any] = {
         # vista dice che sta lavorando, altrimenti dice che non c'e' nulla in
         # corso. La soglia e' in secondi, non in "quanto sembra vecchio".
         "progress_stale_sec": 10.0,
+        # Per quanto un client che ha letto ``/api/state`` conta come "qualcuno
+        # che guarda": oltre questa soglia i cancelli non aspettano piu'.
+        "client_ttl_sec": 90.0,
     },
     "qc": {
         "duration_drift_ms": 40.0,

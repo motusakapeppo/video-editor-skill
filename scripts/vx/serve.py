@@ -86,6 +86,16 @@ FONT_SAMPLE_PREFIX = "/fonts/sample/"
 #: Il segnale che ``auto`` scrive quando il render e' fermo sui fotogrammi.
 KEYFRAMES_WAITING_NAME = "waiting.json"
 
+#: Il timbro che dice ad ``auto`` che qualcuno sta guardando questo lavoro.
+#: Stessa costante di ``vx.auto.VIEW_CLIENT_NAME``: il file vive nella workdir,
+#: cosi' due processi (server e lavoro) si parlano senza condividere memoria.
+VIEW_CLIENT_NAME = "view_client.json"
+VIEW_CLIENT_SCHEMA = "vx.viewclient/1"
+
+#: Lo stato dei cancelli che ``auto`` pubblica (``open``/``wait_sec``). La
+#: vista lo legge come ``gates`` e sa dire chi sta aspettando e per quanto.
+GATE_STATUS_NAME = "gate_wait.json"
+
 #: Al massimo tanti shot: la UI non deve disegnare una pellicola infinita.
 SHOT_LIMIT = 60
 
@@ -181,6 +191,74 @@ def _read_json(path: Path) -> Dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _mark_view_client(directory: Any) -> None:
+    """Lascia nella workdir la prova che un client ha appena letto lo stato.
+
+    ``auto`` non puo' vedere la memoria di questo processo: il timbro e' il
+    canale. Scrittura atomica, fail-soft (una cartella non scrivibile non deve
+    rompere la vista). Non entra nello stamp dello stato: non e' un artefatto
+    del lavoro, e' la presenza di chi guarda.
+    """
+    try:
+        folder = Path(directory)
+        if not folder.is_dir():
+            return
+        path = folder / VIEW_CLIENT_NAME
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "schema": VIEW_CLIENT_SCHEMA,
+                    "at_epoch": round(time.time(), 3),
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        temporary.replace(path)
+    except OSError:
+        return
+
+
+def _gates_state(directory: Any) -> List[Dict[str, Any]]:
+    """I cancelli aperti adesso, con il conto alla rovescia che la vista mostra.
+
+    ``gate_wait.json`` lo scrive ``auto``; qui si ricalcola ``remaining_sec``
+    adesso, cosi' un secondo in piu' di cache non fa mentire il countdown.
+    """
+    for folder in _workdir_candidates(Path(directory)):
+        record = _read_json(folder / GATE_STATUS_NAME)
+        raw = record.get("gates")
+        if not isinstance(raw, Mapping):
+            continue
+        now = time.time()
+        gates: List[Dict[str, Any]] = []
+        for name, item in raw.items():
+            if not isinstance(item, Mapping) or item.get("open") is not True:
+                continue
+            try:
+                until = float(item.get("until_epoch") or 0.0)
+            except (TypeError, ValueError):
+                until = 0.0
+            remaining = max(0.0, until - now) if until else 0.0
+            gates.append(
+                {
+                    "gate": str(name),
+                    "open": True,
+                    "asked": bool(item.get("asked")),
+                    "wait_sec": _number(item.get("wait_sec")) or 0.0,
+                    "remaining_sec": round(remaining, 1),
+                    "expires_in_sec": round(remaining, 1),
+                    "choice": item.get("choice"),
+                    "answered_by": str(item.get("answered_by") or ""),
+                }
+            )
+        return gates
+    return []
 
 
 def _number(value: Any) -> Optional[float]:
@@ -2060,6 +2138,7 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         "live": _live_state_cached(directory, data_dir),
         "font": font,
         "questions": _questions_state(directory, data_dir),
+        "gates": _gates_state(directory),
         "feedback": _feedback_state(directory),
         "beat": beat,
         "progress": progress_block,
@@ -2088,6 +2167,7 @@ def _job_state_stamp(directory: Path) -> tuple:
         "plan.json",
         "render/ffmpeg-progress.txt",
         "keyframes",
+        GATE_STATUS_NAME,
         "analysis",
         "out",
         "shots",
@@ -2968,6 +3048,14 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
                         else _empty_job_payload(self._root(), f"stato non leggibile: {type(exc).__name__}: {exc}")
                     )
                     payload["degraded"] = True
+                # Il client ha chiesto lo stato *adesso*: il lavoro puo'
+                # aprire un cancello e sapere che c'e' qualcuno a rispondere.
+                if session_mode:
+                    session_job = payload.get("job") or {}
+                    if session_job.get("job") and session_job.get("path"):
+                        _mark_view_client(session_job.get("path"))
+                elif payload.get("job") and payload.get("path"):
+                    _mark_view_client(payload.get("path"))
                 self._send_json(payload)
                 return
             if path in ("/result", "/result.mp4"):

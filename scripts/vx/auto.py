@@ -113,6 +113,21 @@ KEYFRAME_PICKS = (0.25, 0.5, 0.75)
 #: la vista le mostra con le opzioni, e senza vista si prende il default
 #: dichiarandolo (``answered_by="default"``), come per gli altri cancelli.
 TRIAGE_WAIT_DEFAULT = 180.0
+
+#: Un cancello aspetta solo se qualcuno puo' rispondere. La vista (``vx serve``)
+#: lascia questo timbro nella workdir ogni volta che serve ``/api/state``; il
+#: lavoro lo legge e decide se aprire il cancello. Un timbro vecchio non conta:
+#: la soglia e' ``serve.client_ttl_sec`` (90 s), cosi' una vista chiusa smette
+#: di far aspettare un lavoro nuovo.
+VIEW_CLIENT_NAME = "view_client.json"
+VIEW_CLIENT_SCHEMA = "vx.viewclient/1"
+VIEW_CLIENT_TTL_DEFAULT = 90.0
+
+#: Lo stato dei cancelli che la vista disegna (``gates[].open``/``wait_sec``):
+#: chi aspetta, da quando, fino a quando, e con quale scelta si e' chiuso.
+GATE_STATUS_NAME = "gate_wait.json"
+GATE_STATUS_SCHEMA = "vx.gatewait/1"
+
 TRIAGE_QUESTIONS: List[Dict[str, Any]] = [
     {
         "id": "target_format",
@@ -146,6 +161,205 @@ TRIAGE_QUESTIONS: List[Dict[str, Any]] = [
         "default": "karaoke",
     },
 ]
+
+
+def view_client_recent(
+    workdir: Any,
+    *,
+    ttl: Optional[float] = None,
+    now: Optional[float] = None,
+) -> bool:
+    """Vero se la vista ha chiesto ``/api/state`` per questa workdir da poco.
+
+    Il timbro e' ``<workdir>/view_client.json``, scritto da ``vx serve``; non e'
+    un'ipotesi sul pannello: un ``progress.html`` esiste anche quando nessuno lo
+    guarda. Un file assente, illeggibile o piu' vecchio di ``ttl`` risponde
+    ``False`` — e allora il cancello non deve far aspettare nessuno.
+    """
+    if ttl is None:
+        try:
+            ttl = float(settings.get("serve.client_ttl_sec", VIEW_CLIENT_TTL_DEFAULT))
+        except (TypeError, ValueError):
+            ttl = VIEW_CLIENT_TTL_DEFAULT
+    try:
+        limit = float(ttl)
+    except (TypeError, ValueError):
+        limit = VIEW_CLIENT_TTL_DEFAULT
+    if limit <= 0:
+        return False
+    path = Path(workdir) / VIEW_CLIENT_NAME
+    record: Any = {}
+    try:
+        record = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        record = {}
+    stamp: Optional[float] = None
+    if isinstance(record, Mapping):
+        try:
+            stamp = float(record.get("at_epoch"))
+        except (TypeError, ValueError):
+            stamp = None
+    if stamp is None:
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            return False
+    current = time.time() if now is None else float(now)
+    age = current - stamp
+    # Un orologio leggermente avanti non e' un cliente del futuro: la tolleranza
+    # copre solo lo scarto fra i due processi, non una data inventata.
+    return -5.0 <= age <= limit
+
+
+def view_is_attached(
+    workdir: Any,
+    *,
+    panel: Any = None,
+    view_url: str = "",
+) -> bool:
+    """C'e' qualcuno che puo' rispondere a un cancello di questo lavoro?
+
+    Due casi soli: una vista esplicitamente agganciata (``--watch`` ha gia' un
+    URL) oppure un client che ha letto lo stato da poco. Il pannello da solo non
+    basta: scrive un HTML anche quando la pagina non e' aperta da nessuno.
+    """
+    if str(view_url or "").strip():
+        return True
+    # Il pannello e' solo un file: se un client ha letto ``/api/state`` da poco,
+    # quella e' la prova che qualcuno puo' rispondere, anche con ``--no-panel``.
+    return view_client_recent(workdir)
+
+
+def _record_gate(
+    workdir: Any,
+    gate: str,
+    *,
+    open: bool,
+    asked: bool,
+    wait_sec: float = 0.0,
+    choice: Any = None,
+    answered_by: str = "",
+    expired: bool = False,
+) -> None:
+    """Aggiorna ``gate_wait.json``: e' cio' che la vista legge come ``gates``.
+
+    Fail-soft: un timbro che non si scrive non ferma il cancello. La voce resta
+    anche da chiusa (``open=False``) perche' il report e la vista devono poter
+    dire *come* si e' chiusa, non solo che non aspetta piu'.
+    """
+    path = Path(workdir) / GATE_STATUS_NAME
+    try:
+        current = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        current = {}
+    gates = dict(current.get("gates") or {}) if isinstance(current, Mapping) else {}
+    now = time.time()
+    try:
+        wait = max(0.0, float(wait_sec))
+    except (TypeError, ValueError):
+        wait = 0.0
+    entry: Dict[str, Any] = {
+        "open": bool(open),
+        "asked": bool(asked),
+        "wait_sec": round(wait, 3),
+        "expired": bool(expired),
+        "updated_epoch": round(now, 3),
+    }
+    if open and asked and wait > 0:
+        entry["until_epoch"] = round(now + wait, 3)
+    if choice is not None:
+        entry["choice"] = choice
+    if answered_by:
+        entry["answered_by"] = answered_by
+        entry["by"] = answered_by
+    gates[str(gate)] = entry
+    try:
+        _write_json_atomic(
+            path,
+            {"schema": GATE_STATUS_SCHEMA, "gates": gates},
+        )
+    except OSError:
+        pass
+
+
+def _gate_by(value: Any) -> str:
+    """Traduce i nomi storici (``default``, ``auto_after_timeout``) in tre soli."""
+    text = str(value or "").strip()
+    if text == "user":
+        return "user"
+    if text in ("timeout", "auto_after_timeout"):
+        return "timeout"
+    return "auto"
+
+
+def gates_report(
+    *,
+    questions: Any = None,
+    font_section: Any = None,
+    key_section: Any = None,
+    plan_section: Any = None,
+) -> Dict[str, Any]:
+    """Il riepilogo dei cancelli: chi ha chiesto, chi ha risposto, quanto.
+
+    ``waited_sec`` e' il tempo realmente speso, non il timeout dichiarato; per
+    il triage le tre domande girano in parallelo, quindi vale la piu' lunga.
+    ``total_waited_sec`` somma i cancelli in sequenza: e' il numero che dice se
+    un giro non interattivo ha davvero aspettato qualcuno.
+    """
+    question_rows = [
+        dict(item) for item in (questions or []) if isinstance(item, Mapping)
+    ]
+    triage_waited = max(
+        [float(item.get("waited_sec") or 0.0) for item in question_rows] or [0.0]
+    )
+    triage_by = "auto"
+    if any(_gate_by(item.get("answered_by")) == "user" for item in question_rows):
+        triage_by = "user"
+    elif any(bool(item.get("expired")) for item in question_rows):
+        triage_by = "timeout"
+    triage = {
+        "asked": any(bool(item.get("asked")) for item in question_rows),
+        "answered_by": triage_by,
+        "by": triage_by,
+        "waited_sec": round(triage_waited, 3),
+        "expired": any(bool(item.get("expired")) for item in question_rows),
+        "choice": {
+            str(item.get("id") or ""): item.get("value") for item in question_rows
+        },
+        "questions": question_rows,
+    }
+
+    def summary(section: Any, choice_key: str = "choice") -> Dict[str, Any]:
+        data = section if isinstance(section, Mapping) else {}
+        by = _gate_by(data.get("answered_by") or data.get("selected_by"))
+        return {
+            "asked": bool(data.get("asked")),
+            "answered_by": by,
+            "by": by,
+            "waited_sec": round(float(data.get("waited_sec") or 0.0), 3),
+            "expired": bool(data.get("expired")),
+            "choice": data.get(choice_key),
+        }
+
+    font = summary(font_section)
+    keyframes = summary(key_section)
+    plan = summary(plan_section)
+    total = (
+        float(triage["waited_sec"])
+        + float(font["waited_sec"])
+        + float(keyframes["waited_sec"])
+        + float(plan["waited_sec"])
+    )
+    return {
+        "total_waited_sec": round(total, 3),
+        "total_sec": round(total, 3),
+        "items": {
+            "triage": triage,
+            "font": font,
+            "keyframes": keyframes,
+            "plan": plan,
+        },
+    }
 
 
 def loudness_target(document: Any = None) -> tuple[float, float]:
@@ -3537,6 +3751,11 @@ def font_gate(
         "candidates": [],
         "pool": "local",
         "waited_sec": 0.0,
+        "asked": False,
+        "answered_by": "auto",
+        "by": "auto",
+        "expired": False,
+        "choice": "",
     }
     runner = propose
     if runner is None:
@@ -3573,12 +3792,23 @@ def font_gate(
     started = clock()
     family = _choice_family(root)
     selected_by = "user" if family else "auto"
+    asked = False
+    expired = False
     waited = 0.0
     if not family and gate and float(wait) > 0:
+        asked = True
         if str(view_url or "").strip():
             say(f"Scegli il font nella vista: {view_url}")
         else:
             say(f"Scegli il font nella cartella: {root} (file {FONT_CHOICE_NAME})")
+        _record_gate(
+            root,
+            "font",
+            open=True,
+            asked=True,
+            wait_sec=float(wait),
+            choice=family or None,
+        )
         deadline = started + float(wait)
         while True:
             remaining = deadline - clock()
@@ -3599,7 +3829,34 @@ def font_gate(
             selected_by = (
                 "auto_after_timeout" if (gate and float(wait) > 0) else "auto"
             )
+            expired = bool(gate and float(wait) > 0)
     section["waited_sec"] = round(waited, 3)
+    answered_by = _gate_by(selected_by)
+    if asked and not family:
+        # La domanda e' stata fatta e nessuno ha risposto: anche senza un
+        # ripiego valido il cancello e' scaduto, e il report non lo tace.
+        answered_by = "timeout"
+        expired = True
+    section.update(
+        {
+            "asked": asked,
+            "answered_by": answered_by,
+            "by": answered_by,
+            "expired": expired,
+            "choice": family,
+        }
+    )
+    if gate:
+        _record_gate(
+            root,
+            "font",
+            open=False,
+            asked=asked,
+            wait_sec=float(wait),
+            choice=family,
+            answered_by=answered_by,
+            expired=expired,
+        )
 
     item = by_family.get(family)
     if item is not None:
@@ -3655,10 +3912,28 @@ def _run_font_gate(
         allow_network = bool(settings.get("font.network", True)) and (
             font_network_available()
         )
-    wait = getattr(args, "font_wait", None)
-    if wait is None:
-        wait = float(settings.get("font.wait_sec", FONT_WAIT_DEFAULT))
-    gate = bool(view_active) and not bool(getattr(args, "no_font_gate", False))
+    explicit = getattr(args, "font_wait", None)
+    try:
+        configured = float(settings.get("font.wait_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        configured = 0.0
+    if explicit is not None:
+        # Un'attesa chiesta a mano vince sempre, anche senza nessuno davanti.
+        wait = float(explicit)
+        asked_wait = True
+    elif configured > 0:
+        wait = configured
+        asked_wait = True
+    elif bool(view_active):
+        # Il default (180 s) vale solo mentre qualcuno guarda.
+        wait = FONT_WAIT_DEFAULT
+        asked_wait = False
+    else:
+        wait = 0.0
+        asked_wait = False
+    gate = (bool(view_active) or asked_wait) and not bool(
+        getattr(args, "no_font_gate", False)
+    )
     return font_gate(
         workdir,
         requirement=font_requirement(getattr(args, "prompt", ""), payload, plan),
@@ -3675,6 +3950,8 @@ def _run_plan_gate(
     args: Any,
     workdir: Path,
     plan: Any,
+    *,
+    view_active: bool = False,
 ) -> Dict[str, Any]:
     """Stima il lavoro e, sopra il tetto, chiede full o fast.
 
@@ -3690,20 +3967,46 @@ def _run_plan_gate(
             settings.get("budget.max_seconds", estimate.BUDGET_DEFAULT)
             or estimate.BUDGET_DEFAULT
         )
-    wait = getattr(args, "plan_wait", None)
-    if wait is None:
-        wait = float(
-            settings.get("budget.plan_wait_sec", estimate.PLAN_WAIT_DEFAULT)
-            or estimate.PLAN_WAIT_DEFAULT
-        )
+    explicit = getattr(args, "plan_wait", None)
+    try:
+        configured = float(settings.get("budget.plan_wait_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        configured = 0.0
+    if explicit is not None:
+        wait = float(explicit)
+        gate = True
+    elif configured > 0:
+        wait = configured
+        gate = True
+    elif bool(view_active):
+        wait = float(estimate.PLAN_WAIT_DEFAULT)
+        gate = True
+    else:
+        wait = 0.0
+        gate = False
     result = estimate.plan_gate(
         workdir,
         plan,
         budget=float(budget),
         wait=float(wait),
+        gate=gate,
         preset=str(getattr(args, "preset", None) or settings.get("render.preset", "medium")),
         crf=int(getattr(args, "crf", None) or settings.get("render.crf", 18)),
         notify=_say,
+    )
+    section = result["plan_choice"]
+    answered_by = _gate_by(section.get("selected_by"))
+    if bool(section.get("asked")) and section.get("chosen") == "fast" and not gate:
+        answered_by = "auto"
+    section.update(
+        {
+            "answered_by": answered_by,
+            "by": answered_by,
+            "expired": bool(
+                section.get("asked") and section.get("selected_by") == "timeout"
+            ),
+            "choice": section.get("chosen"),
+        }
     )
     if result["plan_choice"].get("chosen") == "fast":
         setattr(args, "preset", estimate.FAST_PRESET)
@@ -3933,6 +4236,11 @@ def keyframe_gate(
         "waited_sec": 0.0,
         "frames": [],
         "reason": "",
+        "asked": False,
+        "answered_by": "auto",
+        "by": "auto",
+        "expired": False,
+        "choice": "auto",
     }
     runner = propose if propose is not None else propose_keyframes
     proposal: Any = {}
@@ -3986,19 +4294,48 @@ def keyframe_gate(
         # Il caso di un giro ripreso: l'approvazione c'e' gia' e vale per questo piano.
         waiting_path.unlink(missing_ok=True)
         section.update(
-            {"required": True, "approved": True, "selected_by": "user", "reason": ""}
+            {
+                "required": True,
+                "approved": True,
+                "selected_by": "user",
+                "reason": "",
+                "asked": False,
+                "answered_by": "user",
+                "by": "user",
+                "expired": False,
+                "choice": "approved",
+            }
+        )
+        _record_gate(
+            root,
+            "keyframes",
+            open=False,
+            asked=False,
+            wait_sec=float(wait),
+            choice="approved",
+            answered_by="user",
         )
         say("Fotogrammi: approvati, si va al render.")
     elif gate and float(wait) > 0:
+        started_wait = time.time()
         _write_json_atomic(
             waiting_path,
             {
                 "schema": KEYFRAMES_WAIT_SCHEMA,
                 "since_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                "wait_sec": round(float(wait), 3),
+                "until_epoch": round(started_wait + float(wait), 3),
                 "frames": frames,
             },
         )
-        section.update({"required": True, "waiting": True})
+        section.update({"required": True, "waiting": True, "asked": True})
+        _record_gate(
+            root,
+            "keyframes",
+            open=True,
+            asked=True,
+            wait_sec=float(wait),
+        )
         if str(view_url or "").strip():
             say(f"Guarda e approva i fotogrammi nella vista: {view_url}")
         else:
@@ -4024,7 +4361,15 @@ def keyframe_gate(
         section["waiting"] = False
         if approved:
             section.update(
-                {"approved": True, "selected_by": "user", "reason": ""}
+                {
+                    "approved": True,
+                    "selected_by": "user",
+                    "reason": "",
+                    "answered_by": "user",
+                    "by": "user",
+                    "expired": False,
+                    "choice": "approved",
+                }
             )
             say("Fotogrammi: approvati nella vista, si va al render.")
         else:
@@ -4033,12 +4378,26 @@ def keyframe_gate(
                     "approved": False,
                     "selected_by": "timeout",
                     "reason": f"nessuna approvazione in {float(wait):g} s",
+                    "answered_by": "timeout",
+                    "by": "timeout",
+                    "expired": True,
+                    "choice": "timeout",
                 }
             )
             say(
                 f"Fotogrammi: nessuna approvazione in {float(wait):g} s — "
                 "il render prosegue e il report lo dichiara."
             )
+        _record_gate(
+            root,
+            "keyframes",
+            open=False,
+            asked=True,
+            wait_sec=float(wait),
+            choice=section["choice"],
+            answered_by=section["answered_by"],
+            expired=section["expired"],
+        )
     else:
         # Nessuno aspetta: un ``waiting.json`` di un giro precedente direbbe il falso.
         waiting_path.unlink(missing_ok=True)
@@ -4048,7 +4407,21 @@ def keyframe_gate(
                 "selected_by": "auto",
                 "reason": reason_when_closed
                 or "cancello dei fotogrammi chiuso: nessuna attesa",
+                "asked": False,
+                "answered_by": "auto",
+                "by": "auto",
+                "expired": False,
+                "choice": "auto",
             }
+        )
+        _record_gate(
+            root,
+            "keyframes",
+            open=False,
+            asked=False,
+            wait_sec=0.0,
+            choice="auto",
+            answered_by="auto",
         )
         say(f"Fotogrammi: {section['reason']}")
     section["waited_sec"] = round(waited, 3)
@@ -4064,17 +4437,37 @@ def _run_key_gate(
     view_active: bool = False,
 ) -> Dict[str, Any]:
     """Legge i flag, decide se il cancello e' aperto, e restituisce la sezione."""
-    wait = getattr(args, "key_wait", None)
-    if wait is None:
-        wait = float(settings.get("key.wait_sec", KEY_GATE_WAIT_DEFAULT))
+    explicit_wait = getattr(args, "key_wait", None)
+    try:
+        configured = float(settings.get("key.wait_sec", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        configured = 0.0
+    if explicit_wait is not None:
+        wait = float(explicit_wait)
+        asked_wait = True
+    elif configured > 0:
+        wait = configured
+        asked_wait = True
+    elif bool(view_active):
+        wait = KEY_GATE_WAIT_DEFAULT
+        asked_wait = False
+    else:
+        wait = 0.0
+        asked_wait = False
     explicit = getattr(args, "key_gate", None)
-    gate = bool(view_active) if explicit is None else bool(explicit)
+    if explicit is None:
+        gate = bool(view_active) or asked_wait
+    else:
+        gate = bool(explicit)
     if not gate:
         closed_reason = (
             "cancello dei fotogrammi spento (--no-key-gate)"
             if explicit is False
             else "nessuna vista: il cancello dei fotogrammi non aspetta nessuno"
         )
+    elif wait <= 0:
+        closed_reason = "nessuna vista: il cancello dei fotogrammi non aspetta nessuno"
+        gate = False
     else:
         closed_reason = ""
     return keyframe_gate(
@@ -5103,6 +5496,7 @@ def collect_triage_questions(
     view_active: bool,
     view_url: str = "",
     wait: float = TRIAGE_WAIT_DEFAULT,
+    ask_anyway: bool = False,
     notify: Optional[Callable[[str], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Le tre domande del triage, nella vista; senza vista il default dichiarato.
@@ -5130,16 +5524,24 @@ def collect_triage_questions(
             "question": str(spec.get("question") or ""),
             "default": spec.get("default"),
             "value": spec.get("default"),
-            "answered_by": "default",
+            "answered_by": "auto",
+            "by": "auto",
             "answered": False,
+            "asked": False,
             "timed_out": False,
+            "expired": False,
+            "waited_sec": 0.0,
+            "choice": spec.get("default"),
         }
         if error:
             entry["error"] = error
             entry["degraded"] = True
         return entry
 
-    if not view_active or limit <= 0:
+    # Senza vista non si aspetta nessuno. L'unica eccezione e' un'attesa
+    # esplicita (``triage.wait_sec``), che vince sempre e allo scadere dichiara
+    # il timeout invece di fingere che nessuno avesse chiesto.
+    if limit <= 0 or (not view_active and not ask_anyway):
         return [fallback(spec) for spec in TRIAGE_QUESTIONS]
 
     if str(view_url or "").strip():
@@ -5148,6 +5550,14 @@ def collect_triage_questions(
         say(
             "Rispondi alle domande del triage: "
             f"{root} (cartella {ask.QUESTION_DIR})"
+        )
+    if view_active:
+        _record_gate(
+            root,
+            "triage",
+            open=True,
+            asked=True,
+            wait_sec=limit,
         )
 
     results: Dict[str, Dict[str, Any]] = {}
@@ -5189,14 +5599,22 @@ def collect_triage_questions(
         if not isinstance(result, Mapping):
             entries.append(fallback(spec, "nessuna risposta entro la scadenza"))
             continue
+        raw_by = str(result.get("answered_by") or "default")
+        expired = bool(result.get("timed_out"))
+        answered_by = "user" if raw_by == "user" else ("timeout" if expired else "auto")
         entry = {
             "id": key,
             "question": str(spec.get("question") or ""),
             "default": spec.get("default"),
             "value": result.get("value"),
-            "answered_by": str(result.get("answered_by") or "default"),
-            "answered": str(result.get("answered_by") or "") == "user",
-            "timed_out": bool(result.get("timed_out")),
+            "answered_by": answered_by,
+            "by": answered_by,
+            "answered": raw_by == "user",
+            "asked": True,
+            "timed_out": expired,
+            "expired": expired,
+            "waited_sec": round(float(result.get("waited_sec") or 0.0), 3),
+            "choice": result.get("value"),
         }
         if result.get("error"):
             entry["error"] = str(result.get("error"))
@@ -5205,8 +5623,29 @@ def collect_triage_questions(
     for entry in entries:
         if entry["answered_by"] == "user":
             say(f"Triage: {entry['id']} = {entry['value']} (scelto nella vista).")
-        elif entry["answered_by"] == "default":
+        elif entry["answered_by"] == "timeout":
+            say(
+                f"Triage: {entry['id']} = {entry['value']} "
+                f"(nessuna risposta in {limit:g} s, default dichiarato)."
+            )
+        else:
             say(f"Triage: {entry['id']} = {entry['value']} (default dichiarato).")
+    if view_active:
+        triage_by = "auto"
+        if any(item["answered_by"] == "user" for item in entries):
+            triage_by = "user"
+        elif any(item["expired"] for item in entries):
+            triage_by = "timeout"
+        _record_gate(
+            root,
+            "triage",
+            open=False,
+            asked=True,
+            wait_sec=limit,
+            choice={item["id"]: item["value"] for item in entries},
+            answered_by=triage_by,
+            expired=any(item["expired"] for item in entries),
+        )
     return entries
 
 
@@ -5223,6 +5662,10 @@ def _run_locked(
 ) -> Dict[str, Any]:
     from . import events as events_mod
     from . import features as features_mod
+
+    def watching() -> bool:
+        """C'e' qualcuno *adesso*? Un client puo' aprire la vista a lavoro avviato."""
+        return bool(view_active) or view_client_recent(workdir)
 
     log = events_mod.EventLog(workdir / "events.jsonl")
     flags = features_mod.effective()
@@ -5248,23 +5691,31 @@ def _run_locked(
     # Con una vista si aspettano le tre risposte (in parallelo, una sola
     # scadenza); senza vista si usano i default e il report lo dichiara.
     with clock.time("questions"):
+        watched = watching()
         try:
-            question_wait = float(
-                settings.get("triage.wait_sec", TRIAGE_WAIT_DEFAULT)
-            )
+            configured = float(settings.get("triage.wait_sec", 0.0) or 0.0)
         except (TypeError, ValueError):
+            configured = 0.0
+        # Un'attesa esplicita nelle settings vince; altrimenti il default vale
+        # solo se c'e' qualcuno che puo' rispondere, e senza vista e' zero.
+        if configured > 0:
+            question_wait = configured
+        elif watched:
             question_wait = TRIAGE_WAIT_DEFAULT
+        else:
+            question_wait = 0.0
         questions = collect_triage_questions(
             workdir,
-            view_active=bool(view_active),
+            view_active=watched,
             view_url=str(view_url or ""),
             wait=question_wait,
+            ask_anyway=configured > 0,
             notify=_say,
         )
     _emit(
         log,
         "questions",
-        "done" if view_active else "skip",
+        "done" if watched else "skip",
         ", ".join(
             f"{item['id']}={item['value']} ({item['answered_by']})"
             for item in questions
@@ -5484,7 +5935,9 @@ def _run_locked(
     # stima supera il tetto (``--budget``/settings) si chiede full o fast;
     # sotto il tetto non si chiede niente e non si scrive nessun file.
     with clock.time("plan_choice"):
-        plan_choice = _run_plan_gate(args, workdir, plan)
+        plan_choice = _run_plan_gate(
+            args, workdir, plan, view_active=watching()
+        )
     plan = plan_choice["plan"]
     if plan_choice["plan_choice"].get("chosen") == "fast":
         # Il piano su disco deve essere quello che si rende, non quello di prima.
@@ -5560,7 +6013,12 @@ def _run_locked(
     # in autonomia senza pannello si prende il ``chosen`` e lo si dichiara.
     with clock.time("font"):
         font_section = _run_font_gate(
-            args, workdir, plan, payload, view_url=view_url, view_active=view_active
+            args,
+            workdir,
+            plan,
+            payload,
+            view_url=view_url,
+            view_active=watching(),
         )
     _emit(
         log,
@@ -5650,7 +6108,7 @@ def _run_locked(
     # dichiara nel report: un'attesa finita non e' un blocco.
     with clock.time("keyframes"):
         key_section = _run_key_gate(
-            args, workdir, plan, view_url=view_url, view_active=view_active
+            args, workdir, plan, view_url=view_url, view_active=watching()
         )
     _emit(
         log,
@@ -5850,6 +6308,12 @@ def _run_locked(
         "contrast_at": typography_section.get("contrast_at"),
         "keyframes_gate": key_section,
         "questions": questions,
+        "gates": gates_report(
+            questions=questions,
+            font_section=font_section,
+            key_section=key_section,
+            plan_section=plan_choice["plan_choice"],
+        ),
         "decisions": decision_log,
         "bridge": bridge_summary,
         "coherence": coherence_section,
@@ -6123,8 +6587,10 @@ def run(
     ``montage`` and ``fill`` default to ``None``: the flags on ``args`` win
     unless a caller passes an explicit value, so an existing caller that only
     has ``args`` keeps the single-a_roll and ``fit`` behaviour unchanged.
-    ``view_active`` says whether a human can actually see this job (panel or
-    ``--watch``); when it is ``None`` a narrator carrying a panel counts as one.
+    ``view_active`` says whether a human can actually answer a gate here
+    (``--watch`` or a client that read the state recently); when it is ``None``
+    only an explicitly attached view or a fresh ``view_client.json`` counts, not
+    a panel that merely writes HTML.
     """
     out = Path(args.out)
     assets_dir = Path(args.assets)
@@ -6150,7 +6616,9 @@ def run(
     workdir.mkdir(parents=True, exist_ok=True)
     if view_active is None:
         panel = getattr(progress, "panel", None) if progress is not None else None
-        view_active = bool(view_url) or panel is not None
+        # Un pannello che scrive HTML non e' una persona: serve un URL
+        # esplicitamente agganciato o un client che ha letto lo stato da poco.
+        view_active = view_is_attached(workdir, panel=panel, view_url=view_url)
     beat = lock.acquire(
         workdir,
         stage="auto",

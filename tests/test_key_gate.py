@@ -425,13 +425,22 @@ def test_flags() -> None:
             section["selected_by"] == "timeout" and elapsed >= 0.15,
             f"{section['selected_by']} {elapsed:.3f}s",
         )
-        args = argparse.Namespace(key_gate=None, key_wait=30.0)
+        args = argparse.Namespace(key_gate=None, key_wait=None)
         started = time.monotonic()
         section = auto._run_key_gate(args, workdir, Plan(), view_active=False)
         elapsed = time.monotonic() - started
         check(
             "senza vista non si aspetta nessuno",
             section["selected_by"] == "auto" and elapsed < 0.5,
+            f"{section['selected_by']} {elapsed:.3f}s",
+        )
+        args = argparse.Namespace(key_gate=None, key_wait=0.2)
+        started = time.monotonic()
+        section = auto._run_key_gate(args, workdir, Plan(), view_active=False)
+        elapsed = time.monotonic() - started
+        check(
+            "un --key-wait esplicito vince anche senza vista",
+            section["selected_by"] == "timeout" and elapsed >= 0.15,
             f"{section['selected_by']} {elapsed:.3f}s",
         )
 

@@ -3167,20 +3167,13 @@ def cmd_auto(args: argparse.Namespace) -> int:
         args.font_network = bool(settings.get("font.network", True)) and (
             auto.font_network_available()
         )
-    if getattr(args, "font_wait", None) is None:
-        args.font_wait = float(settings.get("font.wait_sec", auto.FONT_WAIT_DEFAULT))
-
-    # Il tetto dichiarato e l'attesa della scelta full/fast: stesse regole dei
-    # cancelli dei font e dei fotogrammi (settings, poi il flag vince).
+    # ``font_wait``/``plan_wait`` restano ``None`` finche' l'utente non li
+    # passa: solo cosi' ``auto`` distingue un'attesa esplicita dal default, e
+    # puo' non aspettare nessuno quando non c'e' una vista agganciata.
     if getattr(args, "budget", None) is None:
         args.budget = float(
             settings.get("budget.max_seconds", auto.estimate.BUDGET_DEFAULT)
             or auto.estimate.BUDGET_DEFAULT
-        )
-    if getattr(args, "plan_wait", None) is None:
-        args.plan_wait = float(
-            settings.get("budget.plan_wait_sec", auto.estimate.PLAN_WAIT_DEFAULT)
-            or auto.estimate.PLAN_WAIT_DEFAULT
         )
 
     progress_target = narrator
@@ -3190,13 +3183,18 @@ def cmd_auto(args: argparse.Namespace) -> int:
             _session.stage(str(stage), float(percent))
             _narrator(percent, stage)
 
+    view_url = str(getattr(panel, "watch_url", "") or "") if panel else ""
+    # "C'e' qualcuno" non e' "il pannello esiste": serve un URL agganciato con
+    # ``--watch`` oppure un client che ha letto lo stato da poco. Senza,
+    # i cancelli usano la proposta e lo dichiarano (``by: auto``) subito.
+    view_active = auto.view_is_attached(workdir, panel=panel, view_url=view_url)
     try:
         report = auto.run(
             args,
             progress=progress_target,
             progress_file=str(auto.progress_path(args)),
-            view_url=str(getattr(panel, "watch_url", "") or "") if panel else "",
-            view_active=panel is not None,
+            view_url=view_url,
+            view_active=view_active,
         )
     except GrammarError as exc:
         _out(
