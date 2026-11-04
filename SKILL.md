@@ -67,6 +67,8 @@ $VX   = "<SKILL_DIR>\scripts\vx.py"
 stdout; `vx down` lo ferma), `--watch` lo riusa invece di aprire un secondo
 server. Il comando OpenCode `/reel` lo fa per costruzione: la vista si apre
 prima di ogni altra cosa. Una vista promessa e non aperta e' un difetto.
+I cancelli (font, fotogrammi, piano) aspettano una risposta **e scadono da soli**:
+la pagina dice che sta aspettando te, e a lavoro chiuso non chiede piu' niente.
 
 **2. Ingest.** Probe, proxy 640 px, pre-analisi, parlato, anteprime, triage.
 
@@ -76,13 +78,13 @@ prima di ogni altra cosa. Una vista promessa e non aperta e' un difetto.
 ```
 
 **3. Triage / answers.** Se il brief non dichiara formato, hook e sottotitoli,
-`ingest` esce con codice 3 e stampa tre domande. Mostra il briefing e FERMATI:
-non indovinare il formato, non proseguire con un default. Le opzioni dell'hook
-sono `testo | auto | nessuno`; quelle dei sottotitoli `karaoke | clean | nessuno`;
-il formato usa le opzioni del contratto. In una corsa notturna si aggiunge
-`--autonomous` a `ingest` o `run`: non restituisce mai 3, registra i tre default
-nel report (`triage.status = "autonomous"`, `triage.defaults`, provenienza
-`declared:autonomous`) e prosegue.
+`ingest` esce 3 e stampa tre domande: mostrale e FERMATI (hook `testo|auto|nessuno`,
+sottotitoli `karaoke|clean|nessuno`). Con `--autonomous` non esce mai 3: registra i
+default (`triage.status`, `triage.defaults`, provenienza `declared:autonomous`).
+Se **tutte** le clip sono scartate solo per risoluzione (`RESOLUTION_TOO_LOW`),
+`auto` si **adatta**: alza il limite dell'upscale o abbassa l'uscita, e scrive
+`triage.adapted` col fattore misurato; con motivi misti non si adatta e l'errore
+li conta. Nessun rifiuto senza alternativa dichiarata.
 
 **4. Plan.** Le risposte diventano un piano verificabile.
 
@@ -110,21 +112,20 @@ una corsa manuale restano `subs`, `render --precision proxy|full`, `qc`, `delive
 
 **EDL3.** Effetti, transizioni e testo passano da `vx edl3`: `validate FILE` non
 renderizza (exit 2 col campo che sbaglia); `render --plan FILE --out M` scrive
-`progress.json` e `report.json` e accetta `--watch`. Schema `vx.edl3/1.2`, ref 26.
+`progress.json` e `report.json` e accetta `--watch`; `migrate --plan P --out Q`
+porta un piano `vx.edl/2.2` di `auto` in `vx.edl3/1.2` **dichiarando le perdite**,
+ed esce 2 se non riesce a migrare senza. Schema `vx.edl3/1.2`, ref 26.
 
-**Ricette.** Una composizione e' un file JSON (`vx.recipe/1`) in `recipes/` o
-`~/.vx/recipes/`: `settings` (layer validato), `brief`, `params` (`beat_grid`,
-`shot_max`, `effects_per_shot`, `font`, `font_size`, `hook_at`, `cta`, `loudness`),
-`extends`. `vx recipe list|show|validate|init` la ispeziona; `vx auto --recipe
-beat-cut` la applica. Se e' rotta si scarta e il report dice `recipe.applied=false`.
+**Ricette.** Una composizione e' un JSON (`vx.recipe/1`) in `recipes/` o `~/.vx/recipes/`:
+`settings` (layer validato), `brief`, `params` (`beat_grid`, `shot_max`, `effects_per_shot`,
+`font`, `font_size`, `hook_at`, `cta`, `loudness`), `extends`; `vx recipe list|show|validate|init`
+la ispeziona, `vx auto --recipe beat-cut` la applica (rotta: `recipe.applied=false`).
 
 ### Exit codes
 
-`0` ok · `2` usage error · `3` needs input (briefing e fermati) · `4` dipendenza
-mancante (`references/01-ambiente.md`) · `5` QC failed
-(`references/08-qc-e-consegna.md`) · `6` render failed (tail di ffmpeg, non
-ritentare a caso). `1` non e' di `vx`: la shell ha unito `stderr` (`2>&1`);
-il progresso va su stdout, gli errori su stderr.
+`0` ok · `2` usage error · `3` needs input (briefing e fermati) · `4` dipendenza mancante
+(`references/01-ambiente.md`) · `5` QC failed (`references/08-qc-e-consegna.md`) · `6` render failed
+(tail di ffmpeg). `1` non e' di `vx`: la shell ha unito `stderr`; progresso su stdout, errori su stderr.
 
 ## Legge fondamentale
 
@@ -157,14 +158,13 @@ Trattamenti (sottotitoli, font, fade, compress, loudness, hook):
 
 ## Deliverable
 
-Esattamente quattro artefatti, con sha256 in `out/deliverables.json`:
-`out/master.mp4` sempre; `out/subtitles.srt` solo se esiste parlato;
-`out/thumbnail.jpg` e `out/contact_sheet.jpg` sempre. `master` si chiama cosi'
-solo dopo loudness e verifica: prima e' `picture`. L'export multi-aspect non e'
-implementato: non esistono varianti per piattaforma. Gate di regressione visiva:
-`python tests/test_edl3_golden.py` (un frame per effetto) e
-`python tests/test_motion_golden.py` (54 template, tre istanti, byte per byte).
-La suite intera e' `python tests/run_all.py`; `--heavy` aggiunge i golden pesanti.
+Quattro artefatti in `out/`, dichiarati con sha256 in `auto_report.json`
+(`deliverables[]`): `master.mp4` sempre; `subtitles.srt` solo se esiste parlato;
+`thumbnail.jpg` e `contact_sheet.jpg` sempre. `master` si chiama cosi' solo dopo
+loudness e verifica: prima e' `picture`. Niente varianti per piattaforma. Gate
+visivi: `tests/test_edl3_golden.py` (un frame per effetto) e
+`tests/test_motion_golden.py` (54 template, tre istanti, byte per byte); la suite
+intera e' `python tests/run_all.py`, `--heavy` aggiunge i golden pesanti.
 **Voto.** A lavoro finito la vista chiede un voto 1–5, facoltativo e non
 bloccante, col contesto misurato. Il registro si legge **solo su richiesta**
 (`vx learn`), mai all'avvio: ricalibrare a ogni corsa costa secondi.
