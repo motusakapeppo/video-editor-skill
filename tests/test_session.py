@@ -8,6 +8,7 @@ cartella). Avvio: ``python tests/test_session.py``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -261,8 +262,29 @@ def check_view_and_actions() -> None:
     base = root("view")
     job = make_job(base)
     (job / "keyframes").mkdir()
+    # Un pending.json con frame veri: dal 2026-11-04 un fotogramma senza sha non
+    # ha un'immagine da approvare e il cancello non si apre (difetto reale: le
+    # estrazioni fallivano tutte e la vista chiedeva di approvare il nulla).
+    frame_png = job / "keyframes" / "kf0.png"
+    frame_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"frame-bytes" * 8)
+    frame_sha = hashlib.sha256(frame_png.read_bytes()).hexdigest()
     (job / "keyframes" / "pending.json").write_text(
-        json.dumps({"digest": "d1", "timeline_digest": "t1", "count": 3, "frames": []}),
+        json.dumps(
+            {
+                "digest": "d1",
+                "timeline_digest": "t1",
+                "count": 1,
+                "frames": [
+                    {
+                        "clip": "v0_0_0",
+                        "index": 0,
+                        "at": 1.0,
+                        "sha256": frame_sha,
+                        "path": str(frame_png),
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
     (job / "font_proposal.json").write_text(
