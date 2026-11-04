@@ -16,6 +16,14 @@ Forma di un evento::
 Il registro non deve costare: con ``VX_SESSION=0`` (o ``false``/``off``/``no``)
 non si apre nessun file, e qualunque errore di scrittura spegne la sessione in
 silenzio. Nessuna eccezione di questo modulo deve fermare un lavoro.
+
+Il silenzio e' un guasto della vista, non un dettaglio: uno stadio lungo che non
+scrive niente per minuti sembra un processo morto. Per questo la sessione batte
+il cuore da sola — un ``heartbeat`` ogni :data:`HEARTBEAT_SEC` al massimo — e
+tace **solo** quando e' ferma ad aspettare una risposta umana: li' l'evento e'
+``gate`` e lo dice. Con ``VX_HEARTBEAT=0`` o un ``clock`` iniettato il thread non
+parte: il battito lo pilota chi chiama ``tick()``, cosi' i test sono
+deterministici.
 """
 
 from __future__ import annotations
@@ -43,6 +51,12 @@ ENV_ENABLED = "VX_SESSION"
 #: pezzi in ordine, quindi la rotazione non interrompe la storia.
 MAX_EVENT_BYTES = 5 * 1024 * 1024
 
+#: Il tetto di silenzio promesso alla vista. Il battito parte a meta' di questo
+#: intervallo: un thread non e' un orologio, e il margine e' quello che rende
+#: vera la promessa "< 2 s" anche quando lo scheduling del sistema ritarda.
+HEARTBEAT_SEC = 2.0
+ENV_HEARTBEAT = "VX_HEARTBEAT"
+
 #: Valori che spengono il registro. Il confronto e' case-insensitive.
 _DISABLED_VALUES = frozenset({"0", "false", "no", "off", "none", "disabled"})
 
@@ -68,6 +82,12 @@ def _warn_once(message: Any) -> None:
 def enabled() -> bool:
     """True se il registro e' acceso (default) e la scrittura vale la pena."""
     raw = str(os.environ.get(ENV_ENABLED, "1")).strip().lower()
+    return raw not in _DISABLED_VALUES
+
+
+def heartbeats_enabled() -> bool:
+    """True se il battito automatico e' acceso (default), spento da ``VX_HEARTBEAT=0``."""
+    raw = str(os.environ.get(ENV_HEARTBEAT, "1")).strip().lower()
     return raw not in _DISABLED_VALUES
 
 
@@ -195,6 +215,7 @@ class Session:
         started_utc: str = "",
         status: str = "running",
         events: Optional[Sequence[Dict[str, Any]]] = None,
+        heartbeat: Optional[float] = None,
     ) -> None:
         self.directory = Path(directory) if directory is not None else None
         self.id = str(session_id)
@@ -223,6 +244,20 @@ class Session:
         self._live: Dict[str, Any] = {"ready": 0, "total": 0, "chunks": []}
         self._rotated: List[str] = []
         self.events: List[Dict[str, Any]] = []
+        #: Il battito: intervallo dichiarato, soglia reale (meta'), thread e stato.
+        self._beat = max(0.05, float(HEARTBEAT_SEC if heartbeat is None else heartbeat))
+        self._beat_at = max(0.02, self._beat / 2.0)
+        self._beat_thread: Optional[threading.Thread] = None
+        self._beat_stop = threading.Event()
+        self._beats = 0
+        self._real_clock = clock is None
+        self._stage_started = 0.0
+        self._eta_total: Optional[float] = None
+        self._duration_sec: Optional[float] = None
+        self._last_heartbeat: Dict[str, Any] = {}
+        #: Un solo scrittore alla volta: il thread del battito e il lavoro
+        #: appende righe allo stesso file.
+        self._lock = threading.RLock()
         #: Perche' la sessione non scrive (se non scrive): lo legge ``auto``
         #: per dichiarare il degrado senza indovinare.
         self.last_error = ""
@@ -262,6 +297,7 @@ class Session:
         root: Optional[Any] = None,
         max_bytes: Optional[int] = None,
         clock: Any = None,
+        heartbeat: Optional[float] = None,
     ) -> "Session":
         """Apre una sessione e scrive ``start``. Non solleva mai eccezioni."""
         try:
@@ -285,8 +321,10 @@ class Session:
                 started=now,
                 started_utc=_utc_now(),
                 status="running",
+                heartbeat=heartbeat,
             )
             session.event("start", kind=str(kind), argv=session.argv, cwd=session.cwd)
+            session.start_heartbeat()
             return session
         except Exception as exc:  # noqa: BLE001 - un registro rotto non ferma un lavoro
             try:
@@ -382,6 +420,10 @@ class Session:
 
     def event(self, type: str, **fields: Any) -> Optional[Dict[str, Any]]:
         """Appende un evento e aggiorna lo snapshot. Muto se spento/rotto."""
+        with self._lock:
+            return self._event(type, **fields)
+
+    def _event(self, type: str, **fields: Any) -> Optional[Dict[str, Any]]:
         if not self._active or self._ended or self.directory is None:
             return None
         try:
@@ -411,6 +453,123 @@ class Session:
         except Exception as exc:  # noqa: BLE001 - lo snapshot e' accessorio
             self._soft_fail(exc)
         return row
+
+    # -- battito --------------------------------------------------------- #
+
+    def set_eta(self, seconds: Optional[float] = None, *, duration_sec: Any = None) -> None:
+        """Dichiara il tempo atteso: l'ETA del battito parte da qui.
+
+        ``seconds`` e' il totale previsto per il lavoro; ``duration_sec`` e' la
+        durata del montaggio, che :mod:`vx.estimate` sa convertire in secondi di
+        render. Senza nessuna dichiarazione l'ETA resta quella dell'estimatore.
+        """
+        with self._lock:
+            try:
+                self._eta_total = float(seconds) if seconds is not None else None
+            except (TypeError, ValueError):
+                self._eta_total = None
+            try:
+                self._duration_sec = (
+                    float(duration_sec) if duration_sec is not None else None
+                )
+            except (TypeError, ValueError):
+                self._duration_sec = None
+
+    def _eta_sec(self, stage_elapsed: float) -> float:
+        """Quanto manca secondo :mod:`vx.estimate`: mai un numero inventato qui."""
+        total = self._eta_total
+        if total is None:
+            try:
+                from . import estimate as estimate_mod
+
+                predicted = estimate_mod.estimate(
+                    {"duration_sec": float(self._duration_sec or 0.0)}
+                ).get("predicted_seconds")
+                total = float(predicted or 0.0)
+            except Exception:  # noqa: BLE001 - la stima e' un di piu', non un requisito
+                total = 0.0
+        return max(0.0, round(float(total) - float(stage_elapsed), 3))
+
+    def waiting_on(self) -> List[str]:
+        """I cancelli aperti: la sessione e' ferma aspettando una risposta umana."""
+        return [name for name, is_open in self._gate_state.items() if is_open]
+
+    def tick(self) -> Optional[Dict[str, Any]]:
+        """Un battito se lo stadio tace da troppo; ``None`` se non serve.
+
+        Regola: al massimo :data:`HEARTBEAT_SEC` di silenzio durante uno stadio.
+        Se un cancello e' aperto non si batte — la pausa e' voluta e l'evento
+        ``gate`` l'ha gia' detta. Con un ``clock`` iniettato questo metodo e' la
+        sola sorgente di battiti: il thread non parte.
+        """
+        with self._lock:
+            if not self._active or self._ended:
+                return None
+            try:
+                moment = max(0.0, float(self._clock()) - self._started)
+            except Exception:  # noqa: BLE001
+                return None
+            if moment - self._last_t < self._beat_at:
+                return None
+            waiting = self.waiting_on()
+            if waiting:
+                return None
+            stage = str(self._stage.get("stage") or "")
+            if not stage:
+                # Nessuno stadio dichiarato: non c'e' un lavoro da rassicurare.
+                return None
+            stage_elapsed = max(0.0, moment - self._stage_started)
+            detail = str(self._stage.get("detail") or "")
+            return self._event(
+                "heartbeat",
+                stage=stage,
+                detail=detail or "lavoro in corso",
+                elapsed_sec=round(stage_elapsed, 3),
+                eta_sec=self._eta_sec(stage_elapsed),
+                percent=self._stage.get("percent"),
+            )
+
+    def start_heartbeat(self) -> "Session":
+        """Avvia il battito automatico, una volta sola, senza mai sollevare."""
+        try:
+            if not self._active or not self._real_clock or not heartbeats_enabled():
+                return self
+            with self._lock:
+                if self._beat_thread is not None:
+                    return self
+                self._beat_stop.clear()
+                thread = threading.Thread(
+                    target=self._beat_loop,
+                    name=f"vx-heartbeat-{self.id or 'session'}",
+                    daemon=True,
+                )
+                self._beat_thread = thread
+            thread.start()
+        except Exception as exc:  # noqa: BLE001 - la vista perde il battito, non il lavoro
+            self._soft_fail(exc)
+        return self
+
+    def _beat_loop(self) -> None:
+        """Batte finche' la sessione vive: ogni giro costa un ``tick`` muto."""
+        while not self._beat_stop.wait(min(0.25, self._beat_at)):
+            if not self._active or self._ended:
+                return
+            try:
+                self.tick()
+            except Exception:  # noqa: BLE001
+                return
+
+    def stop_heartbeat(self) -> None:
+        """Ferma e aspetta il thread: dopo ``end`` non deve restare nessuno."""
+        self._beat_stop.set()
+        with self._lock:
+            thread = self._beat_thread
+            self._beat_thread = None
+        if thread is not None and thread is not threading.current_thread():
+            try:
+                thread.join(timeout=1.0)
+            except Exception:  # noqa: BLE001
+                pass
 
     def stage(
         self,
@@ -494,10 +653,12 @@ class Session:
 
     def end(self, status: str = "done") -> Optional[Dict[str, Any]]:
         if not self._active or self._ended:
+            self.stop_heartbeat()
             return None
         row = self.event("end", status=str(status or "done"))
         self.status = str(status or "done")
         self._ended = True
+        self.stop_heartbeat()
         return row
 
     # -- snapshot -------------------------------------------------------- #
@@ -537,6 +698,12 @@ class Session:
             },
             "events_path": str(self.path or ""),
             "rotated": list(self._rotated),
+            "heartbeat": {
+                "interval_sec": round(self._beat, 3),
+                "max_silence_sec": HEARTBEAT_SEC,
+                "count": int(self._beats),
+                "last": dict(self._last_heartbeat),
+            },
         }
 
     # -- interni --------------------------------------------------------- #
@@ -579,6 +746,7 @@ class Session:
             if row.get("cwd"):
                 self.cwd = str(row.get("cwd"))
         elif kind == "stage":
+            previous = str(self._stage.get("stage") or "")
             entry = {
                 "t": row.get("t"),
                 "stage": str(row.get("stage") or ""),
@@ -586,6 +754,10 @@ class Session:
                 "detail": str(row.get("detail") or ""),
             }
             self._stage = entry
+            # Un aggiornamento dello stesso stadio non sposta l'inizio:
+            # `elapsed_sec` conta dal primo ingresso nello stadio.
+            if entry["stage"] != previous:
+                self._stage_started = float(row.get("t") or 0.0)
             self._stages.append(entry)
             if len(self._stages) > 2000:
                 del self._stages[: len(self._stages) - 2000]
@@ -649,6 +821,14 @@ class Session:
                     if isinstance(item, dict)
                 ],
             }
+        elif kind == "heartbeat":
+            self._beats = max(self._beats, int(self._counts.get("heartbeat") or 0))
+            self._last_heartbeat = {
+                "t": row.get("t"),
+                "stage": str(row.get("stage") or ""),
+                "elapsed_sec": row.get("elapsed_sec"),
+                "eta_sec": row.get("eta_sec"),
+            }
         elif kind == "end":
             self.status = str(row.get("status") or "done")
             self._ended = True
@@ -701,10 +881,11 @@ class Session:
     def _write_state(self) -> None:
         if self.directory is None:
             return
-        payload = json.dumps(
-            self.as_dict(), ensure_ascii=False, indent=2, default=str
-        ) + "\n"
-        _atomic_write(self.directory / STATE_NAME, payload.encode("utf-8"))
+        with self._lock:
+            payload = json.dumps(
+                self.as_dict(), ensure_ascii=False, indent=2, default=str
+            ) + "\n"
+            _atomic_write(self.directory / STATE_NAME, payload.encode("utf-8"))
 
 
 def begin(
@@ -755,7 +936,9 @@ def load(
 __all__ = [
     "ENV_DIR",
     "ENV_ENABLED",
+    "ENV_HEARTBEAT",
     "EVENTS_NAME",
+    "HEARTBEAT_SEC",
     "MAX_EVENT_BYTES",
     "SCHEMA",
     "STATE_NAME",
@@ -763,6 +946,7 @@ __all__ = [
     "begin",
     "default_root",
     "enabled",
+    "heartbeats_enabled",
     "latest",
     "list_sessions",
     "load",

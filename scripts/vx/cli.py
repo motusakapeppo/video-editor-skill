@@ -14,6 +14,9 @@ import argparse
 import functools
 import json
 import os
+import signal
+import socket
+import subprocess
 import sys
 import time
 import traceback
@@ -2688,9 +2691,10 @@ def cmd_auto(args: argparse.Namespace) -> int:
                 phases=list(narrate.PHASES.items()),
             )
             if getattr(args, "watch", False):
-                from . import watch as watch_mod
-
-                url = watch_mod.running(panel_dir) or watch_mod.spawn(panel_dir)
+                # Il daemon e' uno solo: se e' acceso lo si usa, altrimenti si
+                # avvia. Un secondo server per lo stesso lavoro sarebbe una
+                # seconda verita' da tenere allineata.
+                url = _watch_url()
                 if url:
                     panel.watch_url = url
                     print(f"Lo guardi qui: {url}", flush=True)
@@ -2783,6 +2787,332 @@ def _media_count(directory: str) -> int:
     return sum(1 for item in root.iterdir() if item.is_file() and item.suffix.lower() in _MEDIA_SUFFIXES)
 
 
+# --------------------------------------------------------------------------- #
+# il daemon della vista: `vx up` / `vx down`
+# --------------------------------------------------------------------------- #
+
+#: Il pid file vive nella radice delle sessioni, non nel lavoro: un daemon serve
+#: tutte le sessioni (l'ultima, o `?session=ID`) e deve sopravvivere al singolo
+#: comando che l'ha avviato.
+UP_NAME = "up.json"
+UP_PORT = 8100
+UP_PORT_TRIES = 20
+UP_START_SEC = 30.0
+
+
+def _up_file() -> Path:
+    from . import session as session_mod
+
+    return session_mod.default_root() / UP_NAME
+
+
+def _read_up() -> Dict[str, Any]:
+    """Il contenuto di ``up.json``, senza fidarsi della forma."""
+    try:
+        data = json.loads(_up_file().read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_up(path: Path, port: int, url: str) -> None:
+    """Il pid file lo scrive il daemon stesso: il pid e' il suo, non quello del padre."""
+    from datetime import datetime, timezone
+
+    payload = {
+        "pid": os.getpid(),
+        "port": int(port),
+        "url": str(url),
+        "started_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        temp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _pid_alive(pid: Any) -> bool:
+    """Vivo? Su Windows ``os.kill(pid, 0)`` non e' un probe valido: si usa OpenProcess."""
+    try:
+        number = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if number <= 0:
+        return False
+    if os.name == "nt":
+        return _win_pid_alive(number)
+    try:
+        os.kill(number, 0)
+    except PermissionError:
+        # Esiste ma non e' nostro: vivo, e comunque mai da terminare.
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _win_pid_alive(pid: int) -> bool:
+    """Vivo senza segnali: OpenProcess + GetExitCodeProcess (STILL_ACTIVE)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return int(code.value) == 259
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001 - se non si puo' sapere, non si tocca nulla
+        return False
+
+
+def _answers(port: Any, timeout: float = 0.4) -> bool:
+    """La porta risponde con lo stato della vista? (loopback, nessuna rete esterna)."""
+    try:
+        number = int(port)
+    except (TypeError, ValueError):
+        return False
+    if number <= 0:
+        return False
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{number}/api/state", timeout=timeout
+        ) as response:
+            return 200 <= int(getattr(response, "status", 200)) < 300
+    except Exception:  # noqa: BLE001 - una porta chiusa e' la risposta normale
+        return False
+
+
+def _url_of(port: Any) -> str:
+    return f"http://127.0.0.1:{int(port)}/"
+
+
+def _daemon(wait: float = 0.0) -> Dict[str, Any]:
+    """Il daemon **vivo**: pid vivo *e* porta che risponde, altrimenti ``{}``.
+
+    Il pid da solo non basta: un numero di processo puo' essere riciclato dal
+    sistema, e `vx down` non deve mai fermare un processo che non e' il nostro.
+    ``wait`` concede qualche istante a un daemon che sta ancora accendendo:
+    senza, un secondo `vx up` lo scambierebbe per morto e ne avvierebbe un altro.
+    """
+    record = _read_up()
+    try:
+        pid = int(record.get("pid") or 0)
+        port = int(record.get("port") or 0)
+    except (TypeError, ValueError):
+        return {}
+    if not _pid_alive(pid) or not port:
+        return {}
+    deadline = time.monotonic() + max(0.0, float(wait))
+    while not _answers(port, 0.5):
+        if time.monotonic() >= deadline:
+            return {}
+        time.sleep(0.15)
+    return {**record, "pid": pid, "port": port, "url": _url_of(port)}
+
+
+def _port_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", int(port)))
+        except OSError:
+            return False
+    return True
+
+
+def _choose_port(preferred: Optional[int]) -> int:
+    """La porta chiesta se e' libera, altrimenti la prima libera dopo; 0 = il sistema."""
+    first = UP_PORT if preferred in (None, 0) else int(preferred)
+    for offset in range(UP_PORT_TRIES):
+        candidate = first + offset
+        if candidate > 65535:
+            break
+        if _port_free(candidate):
+            return candidate
+    return 0
+
+
+def _daemon_command(extra: Sequence[str]) -> List[str]:
+    """Come rilanciare questo stesso vx, senza dipendere dal PATH dell'utente.
+
+    ``python vx.py`` (o ``python -m vx.cli`` se il pacchetto e' installato)
+    invece del launcher ``vx.exe``: un processo solo, quindi il pid scritto in
+    ``up.json`` e' davvero quello del server.
+    """
+    python = str(Path(sys.executable))
+    script = Path(__file__).resolve().parents[1] / "vx.py"
+    if script.is_file():
+        return [python, str(script), *extra]
+    return [python, "-m", "vx.cli", *extra]
+
+
+def _spawn_daemon(port: int) -> Optional[subprocess.Popen]:
+    target = _up_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    command = _daemon_command(
+        ["serve", "--session", "--port", str(port), "--up", str(target)]
+    )
+    base = 0
+    if os.name == "nt":
+        # Staccato dalla console del padre e senza finestra: sopravvive alla fine.
+        base = 0x00000008 | 0x08000000
+    options = dict(
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        start_new_session=os.name != "nt",
+    )
+    if os.name == "nt":
+        # CREATE_BREAKAWAY_FROM_JOB: se chi lancia vive dentro un job "kill on
+        # close" (terminali, CI, agenti), il daemon ne esce invece di morire con
+        # lui. Se il job non lo permette si riprova senza: meglio un daemon che
+        # dura quanto il terminale che nessuna vista.
+        try:
+            return subprocess.Popen(  # noqa: S603 - comando costruito qui
+                command, creationflags=base | 0x01000000, **options
+            )
+        except OSError:
+            pass
+    try:
+        return subprocess.Popen(command, creationflags=base, **options)  # noqa: S603
+    except OSError:
+        return None
+
+
+def _start_up(preferred: Optional[int] = None) -> Dict[str, Any]:
+    """Riusa il daemon vivo, altrimenti lo avvia e aspetta che risponda."""
+    running = _daemon(wait=3.0)
+    if running:
+        return {**running, "reused": True}
+    try:
+        _up_file().unlink(missing_ok=True)
+    except OSError:
+        pass
+    child = _spawn_daemon(_choose_port(preferred))
+    if child is None:
+        return {}
+    deadline = time.monotonic() + UP_START_SEC
+    while time.monotonic() < deadline:
+        record = _read_up()
+        try:
+            pid = int(record.get("pid") or 0)
+            port = int(record.get("port") or 0)
+        except (TypeError, ValueError):
+            pid, port = 0, 0
+        # Il file e' stato rimosso prima dell'avvio: il primo record vivo e
+        # che risponde e' il nostro. Il pid non si confronta con ``child.pid``
+        # perche' l'interprete di un venv e' un rinvio a un secondo processo.
+        if pid and port and _pid_alive(pid) and _answers(port, 0.5):
+            return {**record, "pid": pid, "port": port, "url": _url_of(port),
+                    "reused": False}
+        if child.poll() is not None:
+            return {}
+        time.sleep(0.1)
+    try:
+        child.terminate()
+    except OSError:
+        pass
+    return {}
+
+
+def _watch_url() -> str:
+    """L'URL da dare a ``--watch``: il daemon vivo, o uno appena avviato."""
+    return str(_start_up(None).get("url") or "")
+
+
+def _stop_pid(pid: int) -> bool:
+    """Ferma **solo** il pid dato, aspettando che sparisca. True se e' andato."""
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except (OSError, SystemError):
+        return not _pid_alive(pid)
+    deadline = time.monotonic() + 4.0
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.1)
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(int(pid)), "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except OSError:
+            pass
+        time.sleep(0.2)
+    return not _pid_alive(pid)
+
+
+def cmd_up(args: argparse.Namespace) -> int:
+    """Avvia (o riusa) il daemon della vista di sessione e stampa l'URL."""
+    record = _start_up(getattr(args, "port", None))
+    if not record:
+        _log("[up] il daemon non e' partito: la vista resta chiusa")
+        return EXIT_USAGE
+    if getattr(args, "open", False):
+        try:
+            import webbrowser
+
+            webbrowser.open(str(record.get("url") or ""))
+        except Exception:  # noqa: BLE001 - aprire il browser e' un di piu'
+            pass
+    # Una riga sola su stdout: due `vx up` di fila devono stampare lo stesso URL.
+    print(str(record.get("url") or ""), flush=True)
+    return EXIT_OK
+
+
+def cmd_down(args: argparse.Namespace) -> int:
+    """Ferma il daemon di ``vx up``: solo il suo pid, mai processi altrui."""
+    record = _read_up()
+    path = _up_file()
+    try:
+        pid = int(record.get("pid") or 0)
+        port = int(record.get("port") or 0)
+    except (TypeError, ValueError):
+        pid, port = 0, 0
+    # Si termina solo un pid vivo **e** che risponde su quella porta: se la
+    # porta tace il numero potrebbe essere di un altro processo (pid riciclato).
+    ours = bool(pid) and _pid_alive(pid) and bool(port) and _answers(port, 0.5)
+    stopped = _stop_pid(pid) if ours else False
+    if ours and stopped:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and _answers(port, 0.2):
+            time.sleep(0.05)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    if ours:
+        print(f"daemon fermato (pid {pid}, porta {port})", flush=True)
+    elif pid:
+        print(f"nessun daemon vivo (pid {pid}): pid file rimosso", flush=True)
+    else:
+        print("nessun daemon acceso", flush=True)
+    return EXIT_OK
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """Local UI: the live panel plus the keyframe approval, on 127.0.0.1."""
     from . import serve
@@ -2790,12 +3120,28 @@ def cmd_serve(args: argparse.Namespace) -> int:
     sessions = bool(getattr(args, "session", False)) or not getattr(args, "dir", None)
     root = Path(args.dir) if getattr(args, "dir", None) else None
     server = serve.Server(root, port=int(args.port), session=sessions).start()
+    record: Optional[Path] = None
+    raw = getattr(args, "up", None)
+    if raw:
+        record = Path(str(raw))
+        try:
+            _write_up(record, server.port, server.url)
+        except OSError as exc:
+            _log(f"[serve] pid file non scritto ({type(exc).__name__}): {exc}")
+            record = None
     _log(f"vx serve: {server.url}  (Ctrl+C per fermare)")
     try:
         while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
         server.stop()
+        if record is not None:
+            try:
+                current = json.loads(record.read_text(encoding="utf-8-sig"))
+                if int(current.get("pid") or 0) == os.getpid():
+                    record.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                pass
         return EXIT_OK
 
 
@@ -3455,6 +3801,19 @@ def build_parser() -> argparse.ArgumentParser:
     e3.add_argument("--json", action="store_true")
     e3.set_defaults(func=cmd_edl3)
 
+    p = add("up", "daemon della vista di sessione: avvia (o riusa) e stampa l'URL")
+    p.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=f"porta preferita (default {UP_PORT}, altrimenti la prima libera)",
+    )
+    p.add_argument("--open", action="store_true", help="apre la vista nel browser")
+    p.set_defaults(func=cmd_up)
+
+    p = add("down", "ferma il daemon di `vx up` (solo il suo pid)")
+    p.set_defaults(func=cmd_down)
+
     p = add("serve", "UI locale: guarda il lavoro e approva i fotogrammi")
     p.add_argument(
         "dir",
@@ -3470,6 +3829,12 @@ def build_parser() -> argparse.ArgumentParser:
         "(l'ultima, oppure ?session=ID)",
     )
     p.add_argument("--port", type=int, default=0, help="0 = porta libera scelta dal sistema")
+    p.add_argument(
+        "--up",
+        default=None,
+        metavar="FILE",
+        help="scrive qui il pid file del daemon (usato da `vx up`)",
+    )
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser(
