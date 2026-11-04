@@ -45,7 +45,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import (
     ask,
@@ -569,10 +569,95 @@ def _discover(args: Any) -> List[asset_triage.AssetInfo]:
     return assets
 
 
+def _rejection_digest(rejected: Sequence[Mapping[str, Any]]) -> str:
+    """Reasons with their counts and, for geometry, the numbers behind them.
+
+    An error that only says "nessun video selezionato" hides the cause and
+    leaves the operator to guess. This digest names every reason, how many
+    assets carry it, and — for the resolution gate — how far the material would
+    have to grow and on which canvas.
+    """
+    counts: Dict[str, int] = {}
+    for item in rejected:
+        reason = str(item.get("rejection_reason") or "")
+        counts[reason] = counts.get(reason, 0) + 1
+    parts: List[str] = []
+    for reason in sorted(counts):
+        count = counts[reason]
+        detail = ""
+        rows = [
+            dict(item.get("details") or {})
+            for item in rejected
+            if item.get("rejection_reason") == reason
+        ]
+        if reason == "RESOLUTION_TOO_LOW" and rows:
+            needed = max(float(row.get("upscale") or 0.0) for row in rows)
+            limit = min(float(row.get("max_upscale") or 0.0) for row in rows)
+            sizes = sorted(
+                {
+                    f"{int(row.get('src_w') or 0)}x{int(row.get('src_h') or 0)}"
+                    for row in rows
+                }
+            )
+            canvas = next(
+                (
+                    f"{int(row.get('target_w') or 0)}x{int(row.get('target_h') or 0)}"
+                    for row in rows
+                    if row.get("target_w")
+                ),
+                "",
+            )
+            detail = (
+                f" (upscale {needed:.2f}x > limite {limit:.2f}x"
+                + (f", sorgenti {', '.join(sizes)}" if sizes else "")
+                + (f" su {canvas}" if canvas else "")
+                + ")"
+            )
+        parts.append(f"{count}x {reason}{detail}")
+    return ", ".join(parts)
+
+
+def _upscale_remedy(rejected: Sequence[Mapping[str, Any]]) -> str:
+    """The exact flag that would admit this material, with its number."""
+    rows = [
+        dict(item.get("details") or {})
+        for item in rejected
+        if item.get("rejection_reason") == "RESOLUTION_TOO_LOW"
+    ]
+    if not rows:
+        return ""
+    needed = max(float(row.get("upscale") or 0.0) for row in rows)
+    return (
+        f"--override thresholds.triage_max_upscale={needed + 0.1:.2f} "
+        f"(serve {needed:.2f}x), oppure --assets con materiale piu' grande"
+    )
+
+
+def _no_video_error(
+    selected: Sequence[Mapping[str, Any]],
+    rejected: Sequence[Mapping[str, Any]],
+) -> contract.VxError:
+    """Why no video reached the timeline, with numbers and the way out."""
+    digest = _rejection_digest(rejected)
+    remedy = _upscale_remedy(rejected)
+    images = any(entry.get("type") == "image" for entry in selected)
+    if images:
+        head = "serve --fps: il pool contiene immagini e nessun video da cui dedurre il frame rate"
+    else:
+        head = "serve --fps: nessun video selezionato da cui dedurre il frame rate"
+    message = head
+    if digest:
+        message += f" — scarti: {digest}"
+    if remedy:
+        message += f". Rimedio: {remedy}"
+    return contract.VxError(message)
+
+
 def _fps(
     args: Any,
     selected: List[Mapping[str, Any]],
     assets_by_id: Mapping[str, asset_triage.AssetInfo],
+    rejected: Sequence[Mapping[str, Any]] = (),
 ) -> float:
     """The frame rate comes from the flag, then from a selected video, never a constant."""
     explicit = getattr(args, "fps", None)
@@ -592,14 +677,392 @@ def _fps(
         if float(info.fps or 0.0) > 0:
             return float(info.fps)
 
-    if any(entry.get("type") == "image" for entry in selected):
-        raise contract.VxError(
-            "serve --fps: il pool contiene immagini e nessun video da cui dedurre "
-            "il frame rate"
+    raise _no_video_error(selected, rejected)
+
+
+#: How many a_rolls the opening rule looks at. Beyond this the manifest order is
+#: the editorial decision and re-rolling the dice on sharpness would only make
+#: the cut unpredictable.
+OPENING_CANDIDATES = 5
+
+
+def _clip_sharpness(asset: asset_triage.AssetInfo) -> Optional[Dict[str, Any]]:
+    """The triage measure of a clip: Laplacian variance, median of 5 frames.
+
+    Same function and same unit the gate uses, so the number that picks the
+    opening is the number that would have rejected the shot. A dark clip whose
+    variance is not reliable (D-21) is declared unknown instead of ranked.
+    """
+    try:
+        from . import visual
+    except Exception:  # noqa: BLE001 - a missing module is a declared absence
+        return None
+    try:
+        measured = visual.measure_sharpness(asset.path)
+    except Exception:  # noqa: BLE001
+        return None
+    method = str(measured.get("method") or "")
+    if int(measured.get("samples") or 0) <= 0 or method.startswith("unavailable"):
+        return None
+    if not measured.get("reliable", True):
+        return None
+    return {
+        "sharpness": round(float(measured["sharpness"]), 2),
+        "samples": int(measured.get("samples") or 0),
+        "mean_luma": round(float(measured.get("mean_luma") or 0.0), 2),
+        "method": method,
+    }
+
+
+def opening_section(
+    selected: Sequence[Mapping[str, Any]],
+    assets_by_id: Mapping[str, asset_triage.AssetInfo],
+    *,
+    threshold: float,
+    limit: int = OPENING_CANDIDATES,
+) -> Optional[Dict[str, Any]]:
+    """Pick the opening a_roll by measured sharpness, not by file name.
+
+    Clips below ``triage_sharpness_low`` are unusable as an opening: they are
+    excluded while a usable one exists. When every candidate is below the
+    threshold the best of them still opens the reel — never the worst — and the
+    report says ``quality: "below_threshold"``. The remaining a_rolls keep their
+    order (the manifest's, when there is one), so only position 0 moves.
+    """
+    a_rolls = [entry for entry in selected if entry.get("role") == "a_roll"]
+    if not a_rolls:
+        return None
+    head = a_rolls[: max(1, int(limit))]
+    measured: List[Tuple[Mapping[str, Any], Dict[str, Any]]] = []
+    unknown: List[str] = []
+    for entry in head:
+        asset_id = str(entry.get("asset_id") or "")
+        asset = assets_by_id.get(asset_id)
+        value = _clip_sharpness(asset) if asset is not None else None
+        if value is None:
+            unknown.append(asset_id)
+            continue
+        measured.append((entry, value))
+    usable = [row for row in measured if row[1]["sharpness"] >= float(threshold)]
+    pool = usable or measured
+    if not pool:
+        return {
+            "rule": "sharpness",
+            "metric": "laplacian_variance_median",
+            "threshold": float(threshold),
+            "candidates": len(head),
+            "considered": [],
+            "not_evaluated": unknown,
+            "chosen": None,
+            "quality": "unknown",
+            "moved": False,
+            "reason": (
+                "nitidezza non misurabile sulle prime "
+                f"{len(head)} clip: ordine lasciato com'e'"
+            ),
+        }
+    best_entry, best_value = pool[0]
+    for entry, value in pool[1:]:
+        if value["sharpness"] > best_value["sharpness"]:
+            best_entry, best_value = entry, value
+    first_before = str(a_rolls[0].get("asset_id") or "")
+    chosen_id = str(best_entry.get("asset_id") or "")
+    reordered = [best_entry] + [
+        entry for entry in a_rolls if entry is not best_entry
+    ]
+    moved = chosen_id != first_before
+    quality = "measured" if usable else "below_threshold"
+    if not moved:
+        reason = (
+            f"la prima clip ({chosen_id}, nitidezza {best_value['sharpness']:.1f}) "
+            "era gia' la piu' nitida: ordine e qualita' coincidono"
         )
-    raise contract.VxError(
-        "serve --fps: nessun video selezionato da cui dedurre il frame rate"
+    else:
+        reason = (
+            f"apertura scelta per nitidezza ({chosen_id}, "
+            f"{best_value['sharpness']:.1f} contro {first_before}); le altre "
+            "clip restano nell'ordine dichiarato"
+        )
+    return {
+        "rule": "sharpness",
+        "metric": "laplacian_variance_median",
+        "threshold": float(threshold),
+        "candidates": len(head),
+        "considered": [
+            {
+                "asset_id": str(entry.get("asset_id") or ""),
+                "sharpness": value["sharpness"],
+            }
+            for entry, value in measured
+        ],
+        "not_evaluated": unknown,
+        "chosen": {"asset_id": chosen_id, "sharpness": best_value["sharpness"]},
+        "first_before": first_before,
+        "moved": moved,
+        "quality": quality,
+        "reordered": reordered,
+        "reason": reason,
+    }
+
+
+def apply_opening(
+    block: Dict[str, Any],
+    assets_by_id: Mapping[str, asset_triage.AssetInfo],
+    *,
+    threshold: float,
+) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+    """Reorder ``block["selected_assets"]`` so the measured opening comes first."""
+    selected = list(block.get("selected_assets") or [])
+    section = opening_section(selected, assets_by_id, threshold=threshold)
+    if not section:
+        return selected, None
+    reordered = section.pop("reordered")
+    if not section.get("moved"):
+        return selected, section
+    queue = list(reordered)
+    merged: List[Any] = []
+    for entry in selected:
+        if entry.get("role") == "a_roll" and queue:
+            merged.append(queue.pop(0))
+        else:
+            merged.append(entry)
+    block["selected_assets"][:] = merged
+    return merged, section
+
+
+#: Frames sampled inside the opening shot when looking for the cover. The first
+#: second of a phone clip is often a slow zoom out of a blur; the cover must not
+#: be that frame if a sharp one exists in the same shot.
+THUMBNAIL_SAMPLES = 12
+
+
+def _yunet_detector(width: int, height: int) -> Any:
+    """A single-image YuNet detector, or ``None`` when the asset is absent."""
+    try:
+        import cv2
+        from . import faces
+    except Exception:  # noqa: BLE001
+        return None
+    if not faces.yunet_available():
+        return None
+    try:
+        return cv2.FaceDetectorYN.create(
+            faces.model_path(), "", (int(width), int(height)), 0.6, 0.3, 5000
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _face_count(detector: Any, frame: Any) -> Optional[int]:
+    if detector is None:
+        return None
+    try:
+        _, detections = detector.detect(frame)
+    except Exception:  # noqa: BLE001
+        return None
+    if detections is None:
+        return 0
+    return int(len(detections))
+
+
+def _frame_sharpness(gray: Any) -> Optional[float]:
+    """Laplacian variance on one frame — the gate's own number."""
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _opening_clip(plan: Any) -> Optional[Any]:
+    """The clip that opens the timeline: earliest layer-0 destination time."""
+    best = None
+    for track in getattr(plan, "video_tracks", ()) or ():
+        for clip in getattr(track, "clips", ()) or ():
+            if int(getattr(clip, "layer", 0) or 0) != 0:
+                continue
+            if float(getattr(clip, "dst_out", 0.0) or 0.0) <= 0.0:
+                continue
+            if best is None or float(clip.dst_in) < float(best.dst_in):
+                best = clip
+    return best
+
+
+def pick_cover_frame(
+    frames: Sequence[Mapping[str, Any]], threshold: float
+) -> Tuple[Mapping[str, Any], str, bool]:
+    """Choose the cover among measured frames: usable first, face, then sharpest.
+
+    Order of the two preferences matters: a frame below ``triage_sharpness_low``
+    is what the gate calls unusable, so a face never rescues it. Among the usable
+    frames a face wins (a cover of skin is a better cover than a wall), and if no
+    frame is usable the sharpest of them all still is the cover — never the
+    worst, and the caller declares ``below_threshold``.
+    """
+    usable = [
+        row for row in frames if float(row.get("sharpness") or 0.0) >= float(threshold)
+    ]
+    with_face = [row for row in usable if (row.get("faces") or 0) > 0]
+    pool = with_face or usable or list(frames)
+    if not pool:
+        raise ValueError("nessun frame da cui scegliere la copertina")
+    best = pool[0]
+    for row in pool[1:]:
+        if float(row["sharpness"]) > float(best["sharpness"]):
+            best = row
+    quality = (
+        "measured"
+        if float(best["sharpness"]) >= float(threshold)
+        else "below_threshold"
     )
+    return best, quality, bool(with_face)
+
+
+def thumbnail_frame(
+    plan: Any,
+    assets_by_id: Mapping[str, asset_triage.AssetInfo],
+    opening: Optional[Mapping[str, Any]],
+    *,
+    threshold: float,
+) -> Optional[Dict[str, Any]]:
+    """The sharpest usable frame of the opening clip, with its source time.
+
+    The cover is a deliverable, so it cannot be a frame the coherence gate calls
+    unusable: frames inside the opening shot are measured, the ones with a face
+    are preferred (when the detector is available), and the sharpest wins. When
+    every frame is below ``triage_sharpness_low`` the best of them is still used
+    and ``quality`` says ``below_threshold`` — a declared choice, not a silent
+    blurry cover.
+    """
+    try:
+        import cv2
+    except Exception:  # noqa: BLE001 - without OpenCV the frame cannot be measured
+        return None
+    clip = _opening_clip(plan)
+    if clip is None:
+        return None
+    chosen = (opening or {}).get("chosen") or {}
+    asset_id = str(chosen.get("asset_id") or "")
+    asset = assets_by_id.get(asset_id)
+    if asset is None or not str(asset.path or ""):
+        return None
+    source_id = str(getattr(clip, "source_id", "") or "")
+    # The "opening clip" is the whole opening shot: with a beat recipe the plan
+    # slices it into many short clips that all read the same source in order.
+    # The cover is chosen over the window the cut actually uses, not over the
+    # first slice — the first 0.6 s of a phone clip are often a blurry zoom.
+    siblings = [
+        item
+        for track in getattr(plan, "video_tracks", ()) or ()
+        for item in getattr(track, "clips", ()) or ()
+        if int(getattr(item, "layer", 0) or 0) == 0
+        and str(getattr(item, "source_id", "") or "") == source_id
+    ] or [clip]
+    src_in = min(float(getattr(item, "src_in", 0.0) or 0.0) for item in siblings)
+    src_out = max(float(getattr(item, "src_out", 0.0) or 0.0) for item in siblings)
+    if src_out <= src_in:
+        return None
+    head = min(siblings, key=lambda item: float(getattr(item, "dst_in", 0.0) or 0.0))
+    dst_base = float(getattr(head, "dst_in", 0.0) or 0.0)
+    src_base = float(getattr(head, "src_in", 0.0) or 0.0)
+    capture = cv2.VideoCapture(str(asset.path))
+    if not capture.isOpened():
+        capture.release()
+        return None
+    frames: List[Dict[str, Any]] = []
+    first_frame: Optional[float] = None
+    detector = None
+    try:
+        capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, src_in) * 1000.0)
+        ok, frame = capture.read()
+        if ok and frame is not None:
+            first_frame = _frame_sharpness(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            )
+        for step in range(1, THUMBNAIL_SAMPLES + 1):
+            at = src_in + (src_out - src_in) * (step / (THUMBNAIL_SAMPLES + 1.0))
+            capture.set(cv2.CAP_PROP_POS_MSEC, max(0.0, at) * 1000.0)
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            value = _frame_sharpness(gray)
+            if value is None:
+                continue
+            if detector is None:
+                detector = _yunet_detector(frame.shape[1], frame.shape[0])
+            frames.append(
+                {
+                    "t_src": round(at, 3),
+                    "sharpness": round(value, 2),
+                    "faces": _face_count(detector, frame),
+                }
+            )
+    finally:
+        capture.release()
+    if not frames:
+        return None
+    best, quality, face_preferred = pick_cover_frame(frames, threshold)
+    dst = dst_base + (best["t_src"] - src_base)
+    duration = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+    if duration > 0:
+        dst = max(0.0, min(dst, max(0.0, duration - 0.05)))
+    return {
+        "clip_id": str(getattr(head, "clip_id", "") or ""),
+        "source_id": source_id,
+        "asset_id": asset.asset_id,
+        "t_src": float(best["t_src"]),
+        "t": round(float(dst), 3),
+        "window": [round(src_in, 3), round(src_out, 3)],
+        "sharpness": float(best["sharpness"]),
+        "first_frame_sharpness": (
+            None if first_frame is None else round(float(first_frame), 2)
+        ),
+        "faces": best.get("faces"),
+        "face_preferred": bool(face_preferred),
+        "threshold": float(threshold),
+        "quality": quality,
+        "samples": len(frames),
+    }
+
+
+def write_thumbnail(master: Any, at: float, target: Any) -> bool:
+    """Re-extract the cover at the chosen instant, keeping the same JPEG path."""
+    target = Path(target)
+    temporary = target.with_name(target.name + ".tmp.jpg")
+    try:
+        proc = subprocess.run(
+            [
+                ff.ffmpeg(),
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                f"{float(at):.3f}",
+                "-i",
+                str(master),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                "-update",
+                "1",
+                str(temporary),
+            ],
+            capture_output=True,
+        )
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        return False
+    if proc.returncode != 0 or not temporary.is_file():
+        temporary.unlink(missing_ok=True)
+        return False
+    temporary.replace(target)
+    return True
 
 
 def _timeline_est(
@@ -623,11 +1086,11 @@ def _timeline_est(
             ) from exc
         total += min(target, float(asset.duration_sec))
     if total <= 0:
-        discarded = ", ".join(
-            f"{entry.get('asset_id')}={entry.get('rejection_reason')}"
-            for entry in rejected
-        )
-        detail = f"; scarti: {discarded}" if discarded else ""
+        digest = _rejection_digest(rejected)
+        remedy = _upscale_remedy(rejected)
+        detail = f" — scarti: {digest}" if digest else ""
+        if remedy:
+            detail += f". Rimedio: {remedy}"
         raise contract.VxError(
             "timeline stimata non positiva: nessun a_roll utilizzabile" + detail
         )
@@ -4012,6 +4475,26 @@ def _run_locked(
         raise contract.VxError("payload senza asset_triage: triage non eseguito")
     selected = list(block.get("selected_assets") or [])
     rejected = list(block.get("rejected_assets") or [])
+    # The canvas the triage actually agreed to: the adaptation is the payload's,
+    # not a local note, because scene.resolution is what the EDL and the render
+    # read. `order_source` says which rule put the assets in this order.
+    order_source = "manifest" if getattr(args, "manifest", None) else "name"
+    adapted = block.get("adapted")
+    adapted = dict(adapted) if isinstance(adapted, Mapping) else None
+    if adapted and adapted.get("resolution"):
+        payload["scene"]["resolution"] = [int(value) for value in adapted["resolution"]]
+    sharpness_low = float(contract.THRESHOLDS["triage_sharpness_low"])
+    selected, opening = apply_opening(block, assets_by_id, threshold=sharpness_low)
+    if adapted:
+        message = str(adapted.get("warning") or "")
+        if message:
+            _say(message)
+    if opening:
+        _say(
+            "Apertura: "
+            + str(opening.get("reason") or "")
+            + (" (sotto soglia)" if opening.get("quality") == "below_threshold" else "")
+        )
     selected_assets = _selected_asset_infos(selected, assets_by_id)
     with clock.time("hash"):
         source_sha = _source_hashes(selected_assets)
@@ -4023,7 +4506,7 @@ def _run_locked(
     _notify(progress, 5.0, "triage", log=log)
 
     with clock.time("probe"):
-        fps = _fps(args, selected, assets_by_id)
+        fps = _fps(args, selected, assets_by_id, rejected)
         timeline_est = _timeline_est(selected, assets_by_id, rejected)
 
     sources_map: Dict[str, str] = {}
@@ -4408,6 +4891,51 @@ def _run_locked(
         )
     _notify(progress, 100.0, "deliverables", log=log)
 
+    # La copertina nasce dall'apertura: il frame piu' nitido (col volto, se c'e')
+    # dello shot che apre il reel, non il fotogramma a meta' secondo che
+    # `deliverables` prende per default. Il gate di coerenza chiama "inutilizzabile"
+    # un frame sotto la soglia di nitidezza: la copertina non puo' essere uno di
+    # quelli, e quando lo sono tutti il report lo dichiara.
+    thumbnail = thumbnail_frame(
+        plan, assets_by_id, opening, threshold=sharpness_low
+    )
+    thumbnail_item = next(
+        (item for item in produced if item.get("kind") == "thumbnail"), None
+    )
+    if thumbnail is not None and thumbnail_item is not None:
+        if write_thumbnail(out, thumbnail["t"], thumbnail_item.get("path")):
+            target = Path(str(thumbnail_item.get("path")))
+            try:
+                thumbnail_item["bytes"] = target.stat().st_size
+                thumbnail_item["sha256"] = _sha256(target)
+            except OSError:  # noqa: BLE001 - the file exists, the number is the loss
+                pass
+            thumbnail_item.update(
+                {
+                    "clip_id": thumbnail["clip_id"],
+                    "asset_id": thumbnail["asset_id"],
+                    "t": thumbnail["t"],
+                    "t_src": thumbnail["t_src"],
+                    "sharpness": thumbnail["sharpness"],
+                    "first_frame_sharpness": thumbnail.get("first_frame_sharpness"),
+                    "faces": thumbnail["faces"],
+                    "face_preferred": thumbnail.get("face_preferred"),
+                    "quality": thumbnail["quality"],
+                }
+            )
+            _say(
+                "Copertina: "
+                f"{thumbnail['clip_id']} a {thumbnail['t']:.2f}s, "
+                f"nitidezza {thumbnail['sharpness']:.1f}"
+                + (
+                    " (sotto soglia: la migliore disponibile)"
+                    if thumbnail["quality"] == "below_threshold"
+                    else ""
+                )
+            )
+        else:
+            thumbnail = None
+
     with clock.time("hash"):
         _assert_sources_unchanged(selected_assets, source_sha)
 
@@ -4500,6 +5028,13 @@ def _run_locked(
             for entry in rejected
         ],
         "not_evaluated": list(block.get("not_evaluated") or []),
+        "order_source": order_source,
+        "triage": {
+            "adapted": adapted,
+            "order_source": order_source,
+            "opening": opening,
+        },
+        "opening": opening,
         "plan_notes": list(getattr(plan, "notes", ()) or ()),
         "camera_exemptions": exemptions,
         "gate1": gate1.to_dict(),
@@ -4520,6 +5055,15 @@ def _run_locked(
             "duration_shortfall: chiesti {requested_sec:g} s, consegnati "
             "{delivered_sec:g} s".format(**shortfall)
         )
+    if adapted and adapted.get("warning"):
+        report.setdefault("warnings", []).append(str(adapted["warning"]))
+    if opening and opening.get("quality") == "below_threshold":
+        report.setdefault("warnings", []).append(
+            "opening: ogni clip candidata e' sotto la soglia di nitidezza "
+            f"{sharpness_low:.1f}; apre la migliore "
+            f"({(opening.get('chosen') or {}).get('asset_id')}, "
+            f"{(opening.get('chosen') or {}).get('sharpness')})"
+        )
     if render_cache:
         report["stage_cache"] = render_cache
     if typography_section.get("applied") and typography_section.get("font", {}).get(
@@ -4537,6 +5081,27 @@ def _run_locked(
                 if violations
                 else str(coherence_section.get("error"))
             )
+        )
+    # Il `weak_open` non e' un problema di nitidezza: il primo shot non porta un
+    # hook. Dirlo qui evita che due violazioni diverse vengano lette come una.
+    if opening and any(
+        str(item.get("code")) == "weak_open" for item in violations
+    ):
+        report["opening"]["weak_open"] = {
+            "code": "weak_open",
+            "cause": (
+                "il primo shot non porta un hook: nessun hook_overlay e nessun "
+                "primo verso nei primi secondi"
+            ),
+            "sharpness_related": False,
+            "opening_sharpness": (opening.get("chosen") or {}).get("sharpness"),
+            "note": (
+                "l'apertura e' scelta per nitidezza misurata; questa violazione "
+                "riguarda il motivo dell'apertura, non la sua nitidezza"
+            ),
+        }
+        report.setdefault("warnings", []).append(
+            "opening: weak_open spiegato — manca l'hook, non la nitidezza"
         )
     # La guardia di consegna: l'audit di `vx.guard` sulla workdir, dopo le
     # consegne e prima del report finale. Il report provvisorio e' la prova che

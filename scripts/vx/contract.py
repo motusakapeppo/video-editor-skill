@@ -131,6 +131,14 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "broll_min_score": 0.35,
     # asset triage (Fase 4)
     "triage_max_upscale": 1.5,
+    # Adaptation, declared. The triage refuses a canvas that would need more than
+    # `triage_max_upscale` of growth; when *every* refusal is that one, the limit
+    # is raised up to `triage_adapt_max_upscale` (4x keeps a 360x640 phone clip
+    # legible on a 1080x1920 canvas). Past the ceiling the canvas is lowered
+    # instead, and the ladder aims at `triage_adapt_target_upscale`. Both numbers
+    # are written in `triage.adapted` and can be overridden like every threshold.
+    "triage_adapt_max_upscale": 4.0,
+    "triage_adapt_target_upscale": 2.0,
     "triage_max_broll": 3,
     "triage_max_music": 2,
     "triage_min_duration_sec": 1.0,

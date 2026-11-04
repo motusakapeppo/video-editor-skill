@@ -72,6 +72,8 @@ _MANIFEST_DUCKING = "_manifest_ducking_db"
 
 _TRIAGE_KEYS = (
     "triage_max_upscale",
+    "triage_adapt_max_upscale",
+    "triage_adapt_target_upscale",
     "triage_max_broll",
     "triage_max_music",
     "triage_min_duration_sec",
@@ -101,6 +103,10 @@ class AssetInfo:
     role: Optional[str] = None
     at_sec: Optional[float] = None
     metrics: Mapping[str, Any] = field(default_factory=dict)
+    #: Position in discovery: the manifest order when there is a manifest, the
+    #: file name otherwise. ``-1`` means "not discovered" and keeps the
+    #: alphabetical order a hand-built pool has always had.
+    order_index: int = -1
 
 
 @dataclass(frozen=True)
@@ -124,6 +130,8 @@ class TriageResult:
     thresholds: Mapping[str, Any]
     role_source: str
     kinds: Mapping[str, str] = field(default_factory=dict, repr=False, compare=False)
+    #: Declared adaptation of the canvas (``None`` when the material fit as asked).
+    adapted: Optional[Mapping[str, Any]] = None
 
     def _decision_dict(self, decision: TriageDecision) -> Dict[str, Any]:
         return {
@@ -140,13 +148,16 @@ class TriageResult:
         }
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "selected": [self._decision_dict(item) for item in self.selected],
             "rejected": [self._decision_dict(item) for item in self.rejected],
             "not_evaluated": list(self.not_evaluated),
             "thresholds": dict(self.thresholds),
             "role_source": self.role_source,
         }
+        if self.adapted:
+            data["adapted"] = dict(self.adapted)
+        return data
 
     def payload_block(self) -> Dict[str, Any]:
         """External contract: the key names a scene payload is allowed to carry."""
@@ -171,13 +182,18 @@ class TriageResult:
             }
             for item in self.rejected
         ]
-        return {
+        block: Dict[str, Any] = {
             "selected_assets": selected,
             "rejected_assets": rejected,
             "not_evaluated": list(self.not_evaluated),
             "thresholds": dict(self.thresholds),
             "role_source": self.role_source,
         }
+        # Only when something was adapted: an unchanged canvas keeps the block
+        # shape every older consumer already validates.
+        if self.adapted:
+            block["adapted"] = dict(self.adapted)
+        return block
 
 
 # --------------------------------------------------------------------------- #
@@ -419,7 +435,9 @@ def _read_manifest(manifest: Any) -> Optional[Dict[str, Mapping[str, Any]]]:
     if isinstance(manifest, Mapping):
         data: Any = manifest
     else:
-        data = json.loads(Path(manifest).read_text(encoding="utf-8"))
+        # ``utf-8-sig``: PowerShell's ``Set-Content -Encoding utf8`` writes a BOM,
+        # and a manifest is a file a human hands us, not a place to be strict.
+        data = json.loads(Path(manifest).read_text(encoding="utf-8-sig"))
     if not isinstance(data, Mapping) or not isinstance(data.get("assets"), list):
         raise ValueError("manifest: atteso un oggetto con la lista 'assets'")
     entries: Dict[str, Mapping[str, Any]] = {}
@@ -466,6 +484,26 @@ def _manifest_entry(
     return raw
 
 
+def _discovery_key(
+    path: Path,
+    root: Path,
+    entries: Optional[Mapping[str, Mapping[str, Any]]],
+) -> Tuple[int, int, str]:
+    """Manifest order first, then the file name.
+
+    A manifest is a human decision about sequence, so it wins over the
+    alphabetical listing; without one the order stays the file name. An asset
+    the manifest does not mention comes after the declared ones, in name order,
+    instead of disappearing from the pool.
+    """
+    if entries:
+        key = path.relative_to(root).as_posix().lower()
+        if key in entries:
+            position = list(entries).index(key)
+            return (0, position, path.name.lower())
+    return (1, 0, path.name.lower())
+
+
 def discover_assets(
     directory: str | Path,
     *,
@@ -493,7 +531,7 @@ def discover_assets(
             for item in root.iterdir()
             if item.is_file() and not item.name.startswith(".")
         ),
-        key=lambda item: item.name.lower(),
+        key=lambda item: _discovery_key(item, root, entries),
     )
 
     assets: List[AssetInfo] = []
@@ -520,6 +558,7 @@ def discover_assets(
                     path=str(path),
                     size=size,
                     metrics=metrics,
+                    order_index=len(assets),
                 )
             )
             continue
@@ -533,6 +572,7 @@ def discover_assets(
             has_audio=bool(info.has_audio),
             size=size,
             metrics=metrics,
+            order_index=len(assets),
         )
         if measure is not None:
             try:
@@ -549,6 +589,7 @@ def discover_assets(
                 has_audio=asset.has_audio,
                 size=asset.size,
                 metrics=metrics,
+                order_index=asset.order_index,
             )
         assets.append(asset)
 
@@ -594,6 +635,7 @@ def discover_assets(
                 role=role,
                 at_sec=at_sec,
                 metrics=metrics,
+                order_index=asset.order_index,
             )
         )
     return resolved
@@ -778,6 +820,161 @@ def _decision(
     )
 
 
+# Relative canvas steps tried when the requested resolution cannot host the
+# material: the vertical standards 1080x1920 -> 720x1280 -> 540x960 are the
+# 1 / 2/3 / 1/2 rungs of this ladder, and the same fractions hold for 16:9.
+RESOLUTION_LADDER: Tuple[float, ...] = (1.0, 2.0 / 3.0, 0.5)
+
+
+def _even(value: float) -> int:
+    """Nearest positive even integer: the EDL rejects an odd canvas."""
+    return max(2, int(round(value / 2.0)) * 2)
+
+
+def resolution_ladder(target_w: int, target_h: int) -> List[Tuple[int, int]]:
+    """The canvas standards from the requested size downwards, highest first."""
+    out: List[Tuple[int, int]] = [(int(target_w), int(target_h))]
+    for scale in RESOLUTION_LADDER[1:]:
+        pair = (_even(target_w * scale), _even(target_h * scale))
+        if pair not in out and pair[0] < int(target_w) and pair[1] < int(target_h):
+            out.append(pair)
+    return out
+
+
+def resolution_adaptation(
+    rejected: Sequence[TriageDecision],
+    target_w: int,
+    target_h: int,
+    *,
+    thresholds: Mapping[str, Any],
+    requested_limit: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """How to fit the material when **only** the resolution refused it.
+
+    Returns ``None`` when the refusals are of another kind (too short, duplicate,
+    noisy...): those are not a canvas problem and raising a limit would invent a
+    selection. When every refusal is ``RESOLUTION_TOO_LOW`` the decision is
+    arithmetic, and it is written down either way:
+
+    * the needed growth is at most ``triage_adapt_max_upscale`` -> keep the
+      requested canvas and raise the limit to exactly what the material needs;
+    * otherwise lower the canvas to the highest standard whose growth stays
+      inside ``triage_adapt_target_upscale``.
+
+    If even the smallest standard exceeds the ceiling the material cannot reach a
+    deliverable size; the caller then keeps the original refusals, so the error
+    can name the number instead of a guess.
+    """
+    reasons = {item.rejection_reason for item in rejected}
+    if reasons != {"RESOLUTION_TOO_LOW"}:
+        return None
+    sizes = []
+    for item in rejected:
+        width = int(item.details.get("src_w") or 0)
+        height = int(item.details.get("src_h") or 0)
+        if width > 0 and height > 0:
+            sizes.append((width, height))
+    if not sizes:
+        return None
+
+    ceiling = float(thresholds["triage_adapt_max_upscale"])
+    aim = float(thresholds["triage_adapt_target_upscale"])
+    limit_before = float(
+        thresholds["triage_max_upscale"] if requested_limit is None else requested_limit
+    )
+
+    def needed_for(width: int, height: int) -> float:
+        return max(
+            max(width / float(src_w), height / float(src_h)) for src_w, src_h in sizes
+        )
+
+    requested = [int(target_w), int(target_h)]
+    needed = needed_for(target_w, target_h)
+    if needed <= ceiling:
+        return {
+            "reason": "all_rejections_resolution_too_low",
+            "mode": "upscale_limit",
+            "needed_upscale": round(needed, 4),
+            "max_upscale_used": round(needed, 4),
+            # The raw value: the report rounds, the gate compares.
+            "limit": float(needed),
+            "max_upscale_ceiling": ceiling,
+            "target_upscale": aim,
+            "requested_limit": limit_before,
+            "requested_resolution": requested,
+            "resolution": requested,
+            "ladder": [list(pair) for pair in resolution_ladder(target_w, target_h)],
+            "sources": [list(pair) for pair in sorted(set(sizes))],
+        }
+
+    ladder = resolution_ladder(target_w, target_h)
+    chosen: Optional[Tuple[int, int, float]] = None
+    for width, height in ladder[1:]:
+        value = needed_for(width, height)
+        if value <= aim:
+            chosen = (width, height, value)
+            break
+    if chosen is None:
+        width, height = ladder[-1]
+        value = needed_for(width, height)
+        if value > ceiling:
+            return None
+        chosen = (width, height, value)
+        within_target = False
+    else:
+        within_target = True
+    width, height, value = chosen
+    return {
+        "reason": "all_rejections_resolution_too_low",
+        "mode": "resolution",
+        "needed_upscale": round(needed, 4),
+        "max_upscale_used": round(value, 4),
+        # The raw value: the report rounds, the gate compares.
+        "limit": float(value),
+        "max_upscale_ceiling": ceiling,
+        "target_upscale": aim,
+        "within_target_upscale": within_target,
+        "requested_limit": limit_before,
+        "requested_resolution": requested,
+        "resolution": [int(width), int(height)],
+        "ladder": [list(pair) for pair in ladder],
+        "sources": [list(pair) for pair in sorted(set(sizes))],
+    }
+
+
+def reason_counts(rejected: Sequence[TriageDecision]) -> Dict[str, int]:
+    """Refusals by reason: the numbers an error message has to name."""
+    counts: Dict[str, int] = {}
+    for item in rejected:
+        key = str(item.rejection_reason or "")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _adaptation_warning(adapted: Mapping[str, Any], recovered: int) -> str:
+    """One readable line: what the canvas asked, what it now costs, what came back."""
+    requested = "x".join(str(item) for item in adapted["requested_resolution"])
+    resolution = "x".join(str(item) for item in adapted["resolution"])
+    needed = float(adapted["needed_upscale"])
+    used = float(adapted["max_upscale_used"])
+    sources = ", ".join(
+        "x".join(str(item) for item in pair) for pair in adapted.get("sources") or []
+    )
+    if adapted["mode"] == "upscale_limit":
+        return (
+            f"triage: {requested} chiedeva un upscale di {needed:.2f}x ({sources}) "
+            f"oltre il limite {float(adapted['requested_limit']):.2f}x; limite alzato "
+            f"a {used:.2f}x (tetto {float(adapted['max_upscale_ceiling']):.2f}x), "
+            f"{recovered} asset recuperati"
+        )
+    return (
+        f"triage: {requested} chiedeva un upscale di {needed:.2f}x ({sources}) oltre "
+        f"il tetto {float(adapted['max_upscale_ceiling']):.2f}x; risoluzione di uscita "
+        f"abbassata a {resolution} (upscale {used:.2f}x, obiettivo "
+        f"{float(adapted['target_upscale']):.2f}x), {recovered} asset recuperati"
+    )
+
+
 def triage_assets(
     assets: Sequence[AssetInfo],
     target_resolution: Any,
@@ -912,203 +1109,273 @@ def triage_assets(
             )
         alive = kept
 
-    roles = _assign_roles(
-        alive, from_manifest=role_source == "manifest", montage=montage
-    )
-    candidates: List[TriageDecision] = []
+    base_rejected: List[TriageDecision] = list(rejected)
+    base_not_evaluated: set[str] = set(not_evaluated)
+    # The output order follows discovery: the manifest when there is one, the
+    # file name otherwise. A pool built by hand carries no ``order_index``, so it
+    # keeps the alphabetical order triage has always returned. The checks below
+    # iterate alphabetically either way, so dedup and role choice stay
+    # deterministic whatever the caller's order is.
+    rank = {
+        asset.asset_id: (
+            asset.order_index if asset.order_index >= 0 else len(assets),
+            asset.asset_id.lower(),
+        )
+        for asset in assets
+    }
 
-    for asset in alive:
-        role = roles.get(asset.asset_id, "b_roll")
-        effective = _effective_duration(asset, thresholds)
-        if effective < float(thresholds["triage_min_duration_sec"]):
-            rejected.append(
-                _decision(
-                    asset,
-                    role=role,
-                    selected=False,
-                    reason="TOO_SHORT",
-                    details={
-                        "effective_duration_sec": round(effective, 3),
-                        "threshold": float(thresholds["triage_min_duration_sec"]),
-                        "confidence": 1.0,
-                    },
-                )
-            )
-            continue
+    def _evaluate(
+        limit: float, canvas_w: int, canvas_h: int
+    ) -> Tuple[List[TriageDecision], List[TriageDecision], set[str]]:
+        rejected: List[TriageDecision] = list(base_rejected)
+        not_evaluated: set[str] = set(base_not_evaluated)
+        roles = _assign_roles(
+            alive, from_manifest=role_source == "manifest", montage=montage
+        )
+        candidates: List[TriageDecision] = []
 
-        if asset.kind in ("video", "image") and asset.width > 0 and asset.height > 0:
-            upscale = max(target_w / float(asset.width), target_h / float(asset.height))
-            if upscale > upscale_limit:
+        for asset in alive:
+            role = roles.get(asset.asset_id, "b_roll")
+            effective = _effective_duration(asset, thresholds)
+            if effective < float(thresholds["triage_min_duration_sec"]):
                 rejected.append(
                     _decision(
                         asset,
                         role=role,
                         selected=False,
-                        reason="RESOLUTION_TOO_LOW",
+                        reason="TOO_SHORT",
                         details={
-                            "upscale": round(upscale, 4),
-                            "max_upscale": upscale_limit,
-                            "src_w": int(asset.width),
-                            "src_h": int(asset.height),
-                            "target_w": target_w,
-                            "target_h": target_h,
+                            "effective_duration_sec": round(effective, 3),
+                            "threshold": float(thresholds["triage_min_duration_sec"]),
                             "confidence": 1.0,
                         },
                     )
                 )
                 continue
 
-        metrics: Dict[str, Any] = dict(asset.metrics)
-        if measure is not None:
-            try:
-                metrics.update(dict(measure(asset) or {}))
-            except Exception as exc:  # noqa: BLE001 - a failed measurement is absence
-                metrics.pop("sharpness", None)
-                metrics.pop("mean_luma", None)
-                metrics.pop("snr_db", None)
-                metrics.pop("music_ratio", None)
-                metrics["measure_error"] = f"{type(exc).__name__}: {exc}"
+            if (
+                asset.kind in ("video", "image")
+                and asset.width > 0
+                and asset.height > 0
+            ):
+                upscale = max(
+                    canvas_w / float(asset.width), canvas_h / float(asset.height)
+                )
+                if upscale > limit:
+                    rejected.append(
+                        _decision(
+                            asset,
+                            role=role,
+                            selected=False,
+                            reason="RESOLUTION_TOO_LOW",
+                            details={
+                                "upscale": round(upscale, 4),
+                                "max_upscale": limit,
+                                "src_w": int(asset.width),
+                                "src_h": int(asset.height),
+                                "target_w": canvas_w,
+                                "target_h": canvas_h,
+                                "confidence": 1.0,
+                            },
+                        )
+                    )
+                    continue
 
-        details: Dict[str, Any] = {}
-        confidences: List[float] = []
-        rejected_here: Optional[TriageDecision] = None
+            metrics: Dict[str, Any] = dict(asset.metrics)
+            if measure is not None:
+                try:
+                    metrics.update(dict(measure(asset) or {}))
+                except Exception as exc:  # noqa: BLE001 - a failed measurement is absence
+                    metrics.pop("sharpness", None)
+                    metrics.pop("mean_luma", None)
+                    metrics.pop("snr_db", None)
+                    metrics.pop("music_ratio", None)
+                    metrics["measure_error"] = f"{type(exc).__name__}: {exc}"
 
-        for check, key, threshold, reason in _metric_specs(asset, thresholds):
-            if key not in metrics:
-                not_evaluated.add(check)
+            details: Dict[str, Any] = {}
+            confidences: List[float] = []
+            rejected_here: Optional[TriageDecision] = None
+
+            for check, key, threshold, reason in _metric_specs(asset, thresholds):
+                if key not in metrics:
+                    not_evaluated.add(check)
+                    continue
+                try:
+                    value = float(metrics[key])
+                except (TypeError, ValueError):
+                    not_evaluated.add(check)
+                    continue
+                confidence = _confidence(value, threshold)
+                confidences.append(confidence)
+                details[key] = round(value, 4)
+                if value < threshold and confidence > high:
+                    rejected_here = _decision(
+                        asset,
+                        role=role,
+                        selected=False,
+                        reason=reason,
+                        details={
+                            "value": round(value, 4),
+                            "threshold": threshold,
+                            "confidence": round(confidence, 4),
+                        },
+                        confidence=confidence,
+                    )
+                    break
+
+            if rejected_here is not None:
+                rejected.append(rejected_here)
                 continue
-            try:
-                value = float(metrics[key])
-            except (TypeError, ValueError):
-                not_evaluated.add(check)
+
+            if role == "b_roll" and require_anchor and not _has_anchor(asset):
+                rejected.append(
+                    _decision(
+                        asset,
+                        role=role,
+                        selected=False,
+                        reason="NO_SEMANTIC_ANCHOR",
+                        details={"reason": "no declared anchor", "confidence": 1.0},
+                    )
+                )
                 continue
-            confidence = _confidence(value, threshold)
-            confidences.append(confidence)
-            details[key] = round(value, 4)
-            if value < threshold and confidence > high:
-                rejected_here = _decision(
+            if role == "b_roll" and not require_anchor:
+                not_evaluated.add("semantic_anchor")
+
+            if not confidences:
+                details["signal"] = "none"
+            elif any(low <= value <= high for value in confidences):
+                details["uncertain"] = True
+                details["signal"] = "ambiguous"
+                details["confidence"] = round(
+                    max(value for value in confidences if low <= value <= high), 4
+                )
+            elif all(value < low for value in confidences):
+                details["signal"] = "none"
+            else:
+                details["signal"] = "ok"
+                details["confidence"] = round(max(confidences), 4)
+
+            treatment = metrics.get(_MANIFEST_TREATMENT) or (
+                "ken_burns_zoom_in" if asset.kind == "image" else "none"
+            )
+            if role == "music":
+                default_gain = float(thresholds["triage_music_gain_db"])
+            else:
+                default_gain = 0.0
+            gain = metrics.get(_MANIFEST_DUCKING, default_gain)
+            candidates.append(
+                _decision(
                     asset,
                     role=role,
-                    selected=False,
-                    reason=reason,
-                    details={
-                        "value": round(value, 4),
-                        "threshold": threshold,
-                        "confidence": round(confidence, 4),
-                    },
-                    confidence=confidence,
-                )
-                break
-
-        if rejected_here is not None:
-            rejected.append(rejected_here)
-            continue
-
-        if role == "b_roll" and require_anchor and not _has_anchor(asset):
-            rejected.append(
-                _decision(
-                    asset,
-                    role=role,
-                    selected=False,
-                    reason="NO_SEMANTIC_ANCHOR",
-                    details={"reason": "no declared anchor", "confidence": 1.0},
+                    selected=True,
+                    target_duration_sec=_target_duration(asset, role, thresholds),
+                    treatment=str(treatment),
+                    ducking_db=float(gain),
+                    details=details,
                 )
             )
-            continue
-        if role == "b_roll" and not require_anchor:
-            not_evaluated.add("semantic_anchor")
 
-        if not confidences:
-            details["signal"] = "none"
-        elif any(low <= value <= high for value in confidences):
-            details["uncertain"] = True
-            details["signal"] = "ambiguous"
-            details["confidence"] = round(
-                max(value for value in confidences if low <= value <= high), 4
-            )
-        elif all(value < low for value in confidences):
-            details["signal"] = "none"
-        else:
-            details["signal"] = "ok"
-            details["confidence"] = round(max(confidences), 4)
-
-        treatment = metrics.get(_MANIFEST_TREATMENT) or (
-            "ken_burns_zoom_in" if asset.kind == "image" else "none"
-        )
-        if role == "music":
-            default_gain = float(thresholds["triage_music_gain_db"])
-        else:
-            default_gain = 0.0
-        gain = metrics.get(_MANIFEST_DUCKING, default_gain)
-        candidates.append(
-            _decision(
-                asset,
-                role=role,
-                selected=True,
-                target_duration_sec=_target_duration(asset, role, thresholds),
-                treatment=str(treatment),
-                ducking_db=float(gain),
-                details=details,
+        selected: List[TriageDecision] = []
+        broll = [item for item in candidates if item.role == "b_roll"]
+        broll.sort(
+            key=lambda item: (
+                0 if _has_anchor(_asset_for(item, alive)) else 1,
+                -_resolution_score(_asset_for(item, alive)),
+                item.asset_id.lower(),
             )
         )
+        broll_ids = {item.asset_id for item in broll}
+        for index, item in enumerate(broll):
+            if index < broll_cap:
+                selected.append(item)
+            else:
+                asset = _asset_for(item, alive)
+                rejected.append(
+                    _decision(
+                        asset,
+                        role="b_roll",
+                        selected=False,
+                        reason="REDUNDANT_BROLL",
+                        details={
+                            "rank": index + 1,
+                            "cap": broll_cap,
+                            "selected_count": min(len(broll), broll_cap),
+                        },
+                    )
+                )
 
-    selected: List[TriageDecision] = []
-    broll = [item for item in candidates if item.role == "b_roll"]
-    broll.sort(
-        key=lambda item: (
-            0 if _has_anchor(_asset_for(item, alive)) else 1,
-            -_resolution_score(_asset_for(item, alive)),
-            item.asset_id.lower(),
-        )
-    )
-    broll_ids = {item.asset_id for item in broll}
-    for index, item in enumerate(broll):
-        if index < broll_cap:
+        music = [item for item in candidates if item.role == "music"]
+        music.sort(key=lambda item: item.asset_id.lower())
+        for index, item in enumerate(music):
+            if index < music_cap:
+                selected.append(item)
+            else:
+                asset = _asset_for(item, alive)
+                rejected.append(
+                    _decision(
+                        asset,
+                        role="music",
+                        selected=False,
+                        reason="REDUNDANT_MUSIC",
+                        details={
+                            "rank": index + 1,
+                            "cap": music_cap,
+                            "selected_count": min(len(music), music_cap),
+                        },
+                    )
+                )
+
+        for item in candidates:
+            if item.asset_id in broll_ids or item.role == "music":
+                continue
             selected.append(item)
-        else:
-            asset = _asset_for(item, alive)
-            rejected.append(
-                _decision(
-                    asset,
-                    role="b_roll",
-                    selected=False,
-                    reason="REDUNDANT_BROLL",
-                    details={
-                        "rank": index + 1,
-                        "cap": broll_cap,
-                        "selected_count": min(len(broll), broll_cap),
-                    },
-                )
+
+        return selected, rejected, not_evaluated
+
+    selected, rejected, not_evaluated = _evaluate(upscale_limit, target_w, target_h)
+
+    adapted: Optional[Dict[str, Any]] = None
+    if not any(item.role == "a_roll" for item in selected) and rejected:
+        # The machine adapts to the material instead of refusing it, but only
+        # when the refusal is a canvas problem and nothing else: a short or
+        # duplicated asset is not recovered by moving the resolution. The
+        # trigger is "no a_roll": a music bed alone is not a timeline.
+        planned = resolution_adaptation(
+            rejected,
+            target_w,
+            target_h,
+            thresholds=thresholds,
+            requested_limit=upscale_limit,
+        )
+        if planned is not None:
+            width, height = (int(value) for value in planned["resolution"])
+            trial = _evaluate(
+                float(planned.get("limit", planned["max_upscale_used"])),
+                width,
+                height,
+            )
+            trial_selected, trial_rejected, trial_not_evaluated = trial
+            planned = dict(planned)
+            planned["assets_before"] = len(selected)
+            planned["assets_recovered"] = max(
+                0, len(trial_selected) - len(selected)
+            )
+            planned["still_rejected"] = reason_counts(trial_rejected)
+            planned["warning"] = _adaptation_warning(
+                planned, planned["assets_recovered"]
+            )
+            adapted = planned
+            selected, rejected, not_evaluated = (
+                trial_selected,
+                trial_rejected,
+                trial_not_evaluated,
             )
 
-    music = [item for item in candidates if item.role == "music"]
-    music.sort(key=lambda item: item.asset_id.lower())
-    for index, item in enumerate(music):
-        if index < music_cap:
-            selected.append(item)
-        else:
-            asset = _asset_for(item, alive)
-            rejected.append(
-                _decision(
-                    asset,
-                    role="music",
-                    selected=False,
-                    reason="REDUNDANT_MUSIC",
-                    details={
-                        "rank": index + 1,
-                        "cap": music_cap,
-                        "selected_count": min(len(music), music_cap),
-                    },
-                )
-            )
+    def _rank(item: TriageDecision) -> Tuple[int, str]:
+        return rank.get(item.asset_id, (len(assets), item.asset_id.lower()))
 
-    for item in candidates:
-        if item.asset_id in broll_ids or item.role == "music":
-            continue
-        selected.append(item)
-
-    selected.sort(key=lambda item: item.asset_id.lower())
-    rejected.sort(key=lambda item: item.asset_id.lower())
+    selected.sort(key=_rank)
+    rejected.sort(key=_rank)
     return TriageResult(
         selected=tuple(selected),
         rejected=tuple(rejected),
@@ -1116,6 +1383,7 @@ def triage_assets(
         thresholds=thresholds,
         role_source=role_source,
         kinds=kinds,
+        adapted=adapted,
     )
 
 

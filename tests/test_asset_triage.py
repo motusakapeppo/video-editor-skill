@@ -66,17 +66,21 @@ def main() -> int:
     )
     over = _triage([square], target=(151, 151))
     check(
-        "upscale 1.51 rifiutato",
-        _ids(over.rejected) == ["a.mp4"]
-        and over.rejected[0].rejection_reason == "RESOLUTION_TOO_LOW",
-        over.rejected[0].rejection_reason if over.rejected else "selezionato",
+        "upscale 1.51: il rifiuto geometrico diventa un adattamento dichiarato",
+        _ids(over.selected) == ["a.mp4"]
+        and over.adapted is not None
+        and over.adapted["mode"] == "upscale_limit"
+        and over.adapted["assets_recovered"] == 1,
+        (_ids(over.selected), dict(over.adapted or {})),
     )
     check(
-        "il rifiuto geometrico porta i numeri",
-        over.rejected
-        and {"upscale", "max_upscale", "src_w", "src_h", "target_w", "target_h"}
-        <= set(over.rejected[0].details),
-        sorted(over.rejected[0].details) if over.rejected else [],
+        "l'adattamento geometrico porta i numeri",
+        over.adapted is not None
+        and {"needed_upscale", "max_upscale_used", "resolution", "sources"}
+        <= set(over.adapted)
+        and abs(float(over.adapted["needed_upscale"]) - 1.51) <= 1e-6
+        and over.adapted["resolution"] == [151, 151],
+        dict(over.adapted or {}),
     )
 
     # -- inaction rule: dead band ----------------------------------------- #
