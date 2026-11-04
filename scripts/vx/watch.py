@@ -28,9 +28,29 @@ def free_port() -> int:
 
 
 def script() -> Path:
-    """Il launcher ``vx`` accanto all'interprete in uso."""
-    candidate = Path(sys.executable).with_name("vx.exe")
-    return candidate if candidate.is_file() else Path(sys.executable)
+    """L'interprete da usare per il server, **senza console**.
+
+    ``vx.exe`` e' un lanciatore di console: esegue python come figlio e quel
+    figlio, non ereditando il "nessuna finestra", se ne fa allocare una nuova -
+    la finestra nera col percorso del python che compariva a ogni ``--watch``.
+    ``pythonw.exe`` non ha sottosistema console e non ne crea mai.
+    """
+    python = Path(sys.executable)
+    if os.name == "nt":
+        windowless = python.with_name("pythonw.exe")
+        if windowless.is_file():
+            return windowless
+    return python
+
+
+def _startupinfo() -> Optional[subprocess.STARTUPINFO]:
+    """Seconda cintura: anche se una console nascesse, nasce nascosta."""
+    if os.name != "nt":
+        return None
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = 0  # SW_HIDE
+    return info
 
 
 def spawn(directory: Path, port: Optional[int] = None) -> str:
@@ -43,12 +63,14 @@ def spawn(directory: Path, port: Optional[int] = None) -> str:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     chosen = int(port or free_port())
-    python = Path(sys.executable)
-    command = [str(python)]
-    launcher = python.with_name("vx.exe")
-    if launcher.is_file():
-        command = [str(launcher)]
-    command += ["serve", str(directory), "--port", str(chosen)]
+    launcher = script()
+    # ``python vx.py serve ...`` invece di ``vx.exe serve ...``: un processo
+    # solo, senza console, e il pid registrato e' quello del server vero.
+    root = Path(__file__).resolve().parents[1] / "vx.py"
+    if root.is_file():
+        command = [str(launcher), str(root), "serve", str(directory), "--port", str(chosen)]
+    else:
+        command = [str(launcher), "-m", "vx.cli", "serve", str(directory), "--port", str(chosen)]
     flags = _DETACHED | _NO_WINDOW if os.name == "nt" else 0
     try:
         child = subprocess.Popen(  # noqa: S603 - comando costruito qui, niente shell
@@ -58,6 +80,7 @@ def spawn(directory: Path, port: Optional[int] = None) -> str:
             stdin=subprocess.DEVNULL,
             close_fds=True,
             creationflags=flags,
+            startupinfo=_startupinfo(),
         )
     except OSError:
         return ""

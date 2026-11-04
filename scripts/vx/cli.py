@@ -3638,6 +3638,10 @@ def _stop_pid(pid: int) -> bool:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,
+                # Senza questo, `taskkill` e' un eseguibile di console: da un
+                # processo senza console se ne fa allocare una -> finestra nera
+                # che appare e sparisce a ogni `vx down` / riavvio del daemon.
+                creationflags=0x08000000,
             )
         except OSError:
             pass
