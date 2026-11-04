@@ -54,11 +54,17 @@ percorso normale).
 | fjallaone | FjallaOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/fjallaone) | ce3b299625abe3c7… | 03/11/2026 |
 | lobster | Lobster-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/lobster) | d6568e697fd50ced… | 03/11/2026 |
 | manrope | Manrope[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/manrope) | 3ae11c49db0455a3… | 04/11/2026 |
+| metalmania | MetalMania-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/metalmania) | 4b95f0e55b291990… | 04/11/2026 |
 | nosifer | Nosifer-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/nosifer) | 09c5ac35e34dc7a3… | 03/11/2026 |
 | oswald | Oswald[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/oswald) | 5b38c246e255a12f… | 03/11/2026 |
+| pirataone | PirataOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/pirataone) | 5347a2e155589ecf… | 04/11/2026 |
+| rubikburned | RubikBurned-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/rubikburned) | 149705177b7fe352… | 04/11/2026 |
 | rubikglitch | RubikGlitch-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/rubikglitch) | 260245012483d569… | 03/11/2026 |
+| sairacondensed | 9 file | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/sairacondensed) | 3edf5f2f027e2d52… | 04/11/2026 |
+| specialelite | SpecialElite-Regular.ttf | Apache-2.0 | [google/fonts](https://github.com/google/fonts/tree/main/apache/specialelite) | a776fcb4ceb8bdf0… | 04/11/2026 |
 | squadaone | SquadaOne-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/squadaone) | 5b34a1633dbc48db… | 03/11/2026 |
 | staatliches | Staatliches-Regular.ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/staatliches) | 8395212aa4c6c353… | 03/11/2026 |
+| teko | Teko[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/teko) | d1321889f262bbbf… | 04/11/2026 |
 | worksans | WorkSans-Italic[wght].ttf<br>WorkSans[wght].ttf | OFL-1.1 | [google/fonts](https://github.com/google/fonts/tree/main/ofl/worksans) | 0a9f935ea490d347… | 04/11/2026 |
 
 ## Da verificare prima dell'integrazione
