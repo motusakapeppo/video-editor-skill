@@ -102,6 +102,39 @@ def test_intents() -> None:
         fake["discarded"],
     )
 
+    # S11: il tono documentario/sobrio deve pesare. Il 4 novembre un prompt che
+    # diceva "tono sobrio e documentario" proponeva Archivo Black, Black Ops One
+    # e Butcherman, tutti a punteggio 3.0: quelle parole non erano in tabella.
+    editorial = fontproposal.intent_families("un taglio sobrio e documentario")
+    check(
+        "sobrio/documentario accende 'editorial' e non 'aggressive'",
+        "editorial" in editorial["matched"] and "aggressive" not in editorial["matched"],
+        editorial["matched"],
+    )
+    check(
+        "i segnali dicono quale parola ha deciso",
+        any(item.startswith("editorial:") for item in editorial["signals"]),
+        editorial["signals"],
+    )
+    check(
+        "la shortlist parte da una famiglia editoriale, non da un display",
+        bool(editorial["selected"])
+        and editorial["selected"][0]
+        in {name for name in fontproposal.INTENT_FAMILIES["editorial"]},
+        editorial["selected"][:3],
+    )
+    check(
+        "il ranking chiede un peso regolare, non nero",
+        "regular" in fontproposal._rank_requirement("tono sobrio e documentario").split()
+        and "black" not in fontproposal._rank_requirement("tono sobrio e documentario").split(),
+        fontproposal._rank_requirement("tono sobrio e documentario"),
+    )
+    check(
+        "senza tono nel brief non si inventa un intento",
+        fontproposal.intent_families("un video qualunque")["matched"] == ["default"],
+        fontproposal.intent_families("un video qualunque")["matched"],
+    )
+
 
 def test_candidates(payload: dict, workdir: Path) -> None:
     print("\n-- proposta: tre famiglie, tre campioni, punteggi decrescenti")
@@ -195,9 +228,15 @@ def test_json_and_pool(workdir: Path, payload: dict) -> None:
         "condensed" in rank_text and ("black" in rank_text or "bold" in rank_text),
         rank_text,
     )
+    # Cambiato il 2026-11-06: offline il brief viene **letto** anche senza rete,
+    # perché il report deve dichiarare quale parola ha orientato la proposta.
+    # L'indice è locale: nessuna richiesta esce dalla macchina (il test del
+    # pool lo verifica già con `network: false`).
     check(
-        "intents e' una lista (offline non interroga il catalogo)",
-        isinstance(payload.get("intents"), list) and payload.get("intents") == [],
+        "intents e' una lista letta dal brief, anche offline",
+        isinstance(payload.get("intents"), list)
+        and "condensed" in (payload.get("intents") or [])
+        and isinstance(payload.get("signals"), list),
         payload.get("intents"),
     )
 

@@ -564,12 +564,19 @@ def check_variety(master: Any, report: Mapping[str, Any]) -> Dict[str, Any]:
     threshold = float(extra["min_variety"])
     expected = {"min_variety": threshold, "detail": extra["detail"]}
     if variety is None:
+        # "Non misurabile" non e' "insufficiente". Prima questo ramo bloccava la
+        # consegna: un reel a inquadratura singola (o un piano che non dichiara
+        # gli shot distinti) finiva NON-PUBBLICABILE per un check che non aveva
+        # niente da misurare. Le ripetizioni vere le misura la legge B
+        # (coherence, pHash) e le toglie; qui si dichiara e si prosegue.
         return _result(
             "variety",
-            False,
-            None,
+            True,
+            {"applicable": False},
             expected,
-            "varieta' non misurata dal referto del piano",
+            "varieta' non misurabile su questo piano: il referto non porta le "
+            "inquadrature distinte; le ripetizioni le misura la legge B "
+            "(coherence), non questo check",
         )
     return _result(
         "variety",

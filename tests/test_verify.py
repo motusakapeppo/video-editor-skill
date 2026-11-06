@@ -227,6 +227,15 @@ def main() -> int:
             not f["passed"] and f["measured"]["variety"] == 0.25,
             str(f["measured"]),
         )
+        # S6: senza le misure, il check dichiara di non applicarsi e NON blocca.
+        none = verify.check_variety(good, _report(coherence={"metrics": {}}))
+        check(
+            "varieta' non misurabile: dichiarata, non bocciata",
+            none["passed"] is True
+            and none["measured"].get("applicable") is False
+            and "non misurabile" in str(none.get("why")),
+            (none["passed"], none.get("why")),
+        )
 
         print("\ntext_present: titolo/hook richiesto")
         ass = work / "captions.ass"

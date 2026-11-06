@@ -4643,6 +4643,10 @@ def font_gate(
         for family, item in by_family.items()
     ]
     section["pool"] = str(proposal.get("pool") or "local")
+    # Quale parola del brief ha deciso la proposta: senza, "perche' proprio
+    # questo font?" non ha risposta nel report.
+    section["intents"] = list(proposal.get("intents") or [])
+    section["signals"] = list(proposal.get("signals") or [])
 
     started = clock()
     family = _choice_family(root)

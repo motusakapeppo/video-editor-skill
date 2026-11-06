@@ -116,6 +116,18 @@ INTENT_FAMILIES: Dict[str, Tuple[str, ...]] = {
         "librebaskerville",
         "dmserifdisplay",
     ),
+    # Il tono documentario/sobrio non era in tabella: un prompt che diceva
+    # "tono sobrio e documentario" non selezionava niente, e la shortlist cadeva
+    # su Archivo Black, Black Ops One e Butcherman (tre display pesanti, tutti a
+    # punteggio 3.0). Misurato il 4 novembre su un lavoro vero.
+    "editorial": (
+        "librebaskerville",
+        "ebgaramond",
+        "cormorantgaramond",
+        "inter",
+        "worksans",
+        "dmsans",
+    ),
     "technical": (
         "jetbrainsmono",
         "spacemono",
@@ -158,6 +170,16 @@ INTENT_KEYWORDS: Dict[str, Tuple[str, ...]] = {
         "impact",
     ),
     "elegant": ("elegant", "editorial", "raffinat", "lusso", "luxury", "serif", "classic"),
+    "editorial": (
+        "sobri",
+        "documentar",
+        "istituzional",
+        "giornalis",
+        "intervist",
+        "testimonianz",
+        "reportage",
+        "cronaca",
+    ),
     "technical": ("tecnic", "mono", "code", "terminal", "digital", "cyber", "futur"),
     "minimal": ("minimal", "pulit", "clean", "modern", "grotesque", "sans", "neutro"),
     "vintage": ("vintage", "retro", "retr", "nostalg", "oldstyle"),
@@ -184,6 +206,15 @@ _RANK_WORDS: Dict[str, str] = {
     "light": "light",
     "thin": "light",
     "legger": "light",
+    # Il tono sobrio/documentario chiede un peso regolare, non un display nero:
+    # senza questa riga il ranking ordinava comunque per peso e i primi tre
+    # erano le facce piu' pesanti del catalogo.
+    "sobri": "regular",
+    "documentar": "regular",
+    "istituzional": "regular",
+    "giornalis": "regular",
+    "intervist": "regular",
+    "testimonianz": "regular",
 }
 
 
@@ -329,10 +360,17 @@ def intent_families(
 
     words = _words(requirement)
     matched: List[str] = []
+    signals: List[str] = []
     for intent in table:
         keywords = INTENT_KEYWORDS.get(intent, ())
-        if any(_keyword_hit(word, keyword) for word in words for keyword in keywords):
+        hits = [
+            word
+            for word in words
+            if any(_keyword_hit(word, keyword) for keyword in keywords)
+        ]
+        if hits:
             matched.append(intent)
+            signals.extend(f"{intent}:{word}" for word in dict.fromkeys(hits))
     groups: List[Sequence[str]] = []
     if matched:
         for intent in matched:
@@ -370,7 +408,7 @@ def intent_families(
         if not progressed:
             break
         index += 1
-    return {"selected": selected, "discarded": discarded, "matched": matched}
+    return {"selected": selected, "discarded": discarded, "matched": matched, "signals": signals}
 
 
 def _rank_requirement(requirement: str) -> str:
@@ -479,12 +517,12 @@ def _catalogue_record(
 
 def _catalogue_entries(
     requirement: str, local_families: set[str]
-) -> Tuple[List[Tuple[fontlib.FontRecord, str, bool]], List[str], List[str], bool]:
-    """Selected catalogue records, discarded reasons, matched intents, usable."""
+) -> Tuple[List[Tuple[fontlib.FontRecord, str, bool]], List[str], List[str], List[str], bool]:
+    """Selected catalogue records, discarded reasons, matched intents, signals, usable."""
     try:
         rows = list(fontstore.catalogue().get("families") or [])
     except Exception as exc:
-        return [], [f"catalogo non leggibile: {exc}"], [], False
+        return [], [f"catalogo non leggibile: {exc}"], [], [], False
     intent = intent_families(requirement, rows=rows)
     discarded = list(intent["discarded"])
     found: List[Tuple[fontlib.FontRecord, str, bool]] = []
@@ -502,7 +540,13 @@ def _catalogue_entries(
             discarded.append(reason)
             continue
         found.append((record, source, downloaded))
-    return found, discarded, list(intent["matched"]), True
+    return (
+        found,
+        discarded,
+        list(intent["matched"]),
+        list(intent.get("signals") or []),
+        True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -719,14 +763,22 @@ def propose(
 
     pool = "local"
     matched_intents: List[str] = []
+    signals: List[str] = []
     if allow_network:
         local_families = {_norm(record.family) for record, _s, _d in entries}
-        catalogue, reasons, matched_intents, readable = _catalogue_entries(
+        catalogue, reasons, matched_intents, signals, readable = _catalogue_entries(
             text, local_families
         )
         discarded.extend(reasons)
         entries.extend(catalogue)
         pool = "local+catalogo" if readable else "local"
+    if not matched_intents:
+        # Anche senza catalogo il brief va letto: il report deve poter dire
+        # quale parola ha orientato la proposta (o che nessuna l'ha fatto).
+        # quale parola ha orientato la proposta (o che nessuna l'ha fatto).
+        declared = intent_families(text)
+        matched_intents = list(declared["matched"])
+        signals = list(declared.get("signals") or [])
 
     usable: List[Tuple[fontlib.FontRecord, str, bool]] = []
     for record, source, downloaded in entries:
@@ -750,6 +802,21 @@ def propose(
         record.sha256 or record.file: (source, downloaded)
         for record, source, downloaded in usable
     }
+
+    # Il brief deve pesare anche sul pool locale: senza catalogo, il ranking
+    # ordina per peso ma non sa che "documentario" vuole un editoriale. Le
+    # famiglie dell'intento riconosciuto vanno davanti, il resto resta in coda
+    # nell'ordine che il ranking aveva dato.
+    preferred = {
+        _norm(name)
+        for intent in matched_intents
+        if intent in INTENT_FAMILIES
+        for name in INTENT_FAMILIES[intent]
+    }
+    if preferred:
+        ranked = [item for item in ranked if _norm(item["record"].family) in preferred] + [
+            item for item in ranked if _norm(item["record"].family) not in preferred
+        ]
 
     eligible: List[Tuple[Dict[str, Any], str, bool]] = []
     used_families: set[str] = set()
@@ -815,6 +882,7 @@ def propose(
         "network": bool(allow_network),
         "pool": pool,
         "intents": matched_intents,
+        "signals": signals,
         "created_utc": _now(),
         "chosen": candidates[0]["family"] if candidates else None,
         "reason_if_none": (
