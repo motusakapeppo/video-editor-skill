@@ -1324,6 +1324,66 @@ def _declare_restore(
 # --------------------------------------------------------------------------- #
 
 
+def _fill_tail(
+    clip: Any,
+    *,
+    source_id: str,
+    analysis: Any,
+    limit: float,
+    deficit: float,
+    record_rows: Dict[Tuple[str, float, float], List[Dict[str, Any]]],
+    fragments: Dict[str, List[Tuple[float, float, float, float]]],
+) -> Tuple[float, Any]:
+    """Allunga l'ultimo frammento nel materiale che segue, senza rimettere silenzio.
+
+    Il taglio dei silenzi accorcia la catena: senza questo, un parlato con pause
+    consegna sempre meno del chiesto anche quando il girato continua. Si estende
+    ``src_out`` fino al prossimo silenzio (o alla fine della sorgente), e si
+    aggiornano **insieme** clip video, riga del mirror audio e frammenti: se una
+    delle tre restasse indietro, il parlato si disallineerebbe dal video.
+    Restituisce i secondi aggiunti (0 se non c'e' spazio).
+    """
+    try:
+        current = float(clip.src_out)
+        wanted = float(deficit)
+        ceiling = float(limit) if limit and float(limit) > current else current
+    except (TypeError, ValueError):
+        return 0.0
+    if wanted <= 0:
+        return 0.0, clip
+    allowed = ceiling
+    for span in _spans(_analysis_field(analysis, "dead_air")) or ():
+        try:
+            start = float(span[0])
+            end = float(span[1])
+        except (TypeError, IndexError, ValueError):
+            continue
+        # Un silenzio che **copre** la fine del frammento blocca subito: il pad
+        # di 0.12 s lo fa cominciare prima di `current`, ma allungare li' dentro
+        # sarebbe rimettere il morto appena tolto.
+        if end > current + 1e-6:
+            allowed = min(allowed, max(current, start))
+            break
+    extra = min(wanted, allowed - current)
+    if extra <= 1e-6:
+        return 0.0, clip
+    new_clip = replace(
+        clip,
+        src_out=round(current + extra, 6),
+        dst_out=round(float(clip.dst_out) + extra, 6),
+    )
+    key = (source_id, round(float(clip.dst_in), 6), round(float(clip.dst_out), 6))
+    rows = record_rows.get(key)
+    if rows:
+        rows[-1]["src_out"] = round(float(rows[-1]["src_out"]) + extra, 6)
+        rows[-1]["dst_out"] = round(float(rows[-1]["dst_out"]) + extra, 6)
+    spans = fragments.get(source_id) or []
+    if spans:
+        first, last, dst_in, dst_out = spans[-1]
+        spans[-1] = (first, round(last + extra, 6), dst_in, round(dst_out + extra, 6))
+    return extra, new_clip
+
+
 def build(
     plan: edl_plan.EDLPlan,
     analyses: Mapping[str, Any],
@@ -1408,12 +1468,15 @@ def build(
     layer0_by_track: Dict[int, List[edl_plan.ClipSegment]] = {}
     fragments_by_source: Dict[str, List[Tuple[float, float, float, float]]] = {}
     anchor_dst: Dict[str, List[Tuple[float, float]]] = {}
+    #: L'analisi di ogni sorgente, per riempire la coda dopo i tagli.
+    analysis_by_source: Dict[str, Any] = {}
     source_order: List[str] = []
     anchor_seq = 0
     cursor = 0.0
 
     for track_index, clip in chain:
         analysis = analyses.get(clip.source_id) if analyses else None
+        analysis_by_source[str(clip.source_id)] = analysis
         fragments: List[Tuple[float, float]]
         clip_removals: List[Dict[str, Any]] = []
         clip_applied: set = set()
@@ -1614,6 +1677,38 @@ def build(
             )
 
     duration = cursor
+    # cut_silence accorcia la catena e nessuno la rimpiazza: un parlato con pause
+    # consegnava meno del chiesto (15 s chiesti, 12.508 resi, con 32.4 s di
+    # materiale). Qui l'ultimo frammento si allunga nel materiale che segue,
+    # fermandosi prima del prossimo silenzio: la durata torna quella chiesta
+    # senza rimettere il morto che si era tolto.
+    if created:
+        deficit = float(plan.duration_sec) - duration
+        if deficit > 1e-6:
+            filled, replacement = _fill_tail(
+                created[-1],
+                source_id=str(created[-1].source_id),
+                analysis=analysis_by_source.get(str(created[-1].source_id)),
+                limit=_media_duration(plan, str(created[-1].source_id), 0.0),
+                deficit=deficit,
+                record_rows=mirror,
+                fragments=fragments_by_source,
+            )
+            if filled > 1e-6 and replacement is not None:
+                stale = created[-1]
+                created[-1] = replacement
+                for rows in layer0_by_track.values():
+                    if rows and rows[-1] is stale:
+                        rows[-1] = replacement
+                cursor = round(cursor + filled, 6)
+                duration = cursor
+                report.not_applied.append(
+                    {
+                        "anchor_id": None,
+                        "reason": "tail_filled_after_cut",
+                        "seconds": round(filled, 3),
+                    }
+                )
     if duration <= 1e-6:
         raise VxError("bridge: the a_roll chain is empty after the cuts")
 
