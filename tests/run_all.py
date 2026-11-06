@@ -158,6 +158,11 @@ def child_env() -> Dict[str, str]:
         "VX_SESSION_DIR",
         str(Path(tempfile.gettempdir()) / "vx-tests-sessions" / f"run-{os.getpid()}"),
     )
+    # Nessuna prova deve aprire finestre sulla macchina dell'utente, Explorer
+    # compreso: era il difetto del 2026-11-06 (una finestra su una cartella
+    # fixture "vuota" a ogni giro). `serve.reveal_native` esce subito quando
+    # questa variabile e' attiva.
+    env["VX_NO_REVEAL"] = "1"
     return env
 
 

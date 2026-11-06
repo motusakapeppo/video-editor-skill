@@ -2863,6 +2863,11 @@ def reveal_native(path: Path) -> None:
     sola**, con le virgolette gia' dentro.
     """
     path = Path(path)
+    # Le prove non devono toccare il desktop dell'utente: `run_all` esporta
+    # VX_NO_REVEAL=1 per ogni figlio, cosi' nessun test puo' aprire Explorer
+    # (e' quello che ha riempito lo schermo di finestre su cartelle fixture).
+    if os.environ.get("VX_NO_REVEAL", "").strip().lower() in ("1", "true", "yes", "on"):
+        return
     # Se il file indicato non c'e' piu' (spostato, rinominato, cancellato) si apre
     # la sua cartella: meglio una cartella giusta di una finestra sbagliata.
     target = path if path.is_file() else path.parent

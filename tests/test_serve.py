@@ -1322,17 +1322,27 @@ def main() -> int:
             )
 
             master.unlink()
-            answer = post(server.url + "api/reveal")
-            # Cambiato il 2026-11-06: con il master sparito non si apre piu' il
-            # nulla in silenzio, si apre la **cartella del lavoro** e lo si dice.
-            # La proprieta' di sicurezza resta: il percorso aperto sta dentro il
-            # lavoro, mai uno scelto dal client.
+            # Anche questa chiamata va con REVEAL finto: senza patch partiva
+            # Explorer vero sulla cartella fixture in TEMP, e la suite apriva
+            # una finestra "vuota" a ogni giro (visto dall'utente, 2026-11-06).
+            opened = []
+            original = serve.REVEAL
+            serve.REVEAL = lambda where: opened.append(Path(where))
+            try:
+                answer = post(server.url + "api/reveal")
+            finally:
+                serve.REVEAL = original
+            # Con il master sparito non si apre il nulla in silenzio: si apre la
+            # **cartella del lavoro** e lo si dice. La proprieta' di sicurezza
+            # resta: il percorso aperto sta dentro il lavoro, mai uno scelto dal
+            # client.
             opened_folder = Path(str(answer.get("folder") or ""))
             check(
                 "S5 senza il file si apre la cartella del lavoro, dichiarandolo",
                 answer.get("ok") is True
                 and opened_folder.is_dir()
                 and str(opened_folder).startswith(str(job))
+                and opened == [opened_folder]
                 and "master" in str(answer.get("note", "")),
                 answer,
             )
