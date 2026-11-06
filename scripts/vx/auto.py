@@ -1517,6 +1517,93 @@ def opening_section(
     }
 
 
+def promote_a_roll(
+    selected: Sequence[Mapping[str, Any]],
+    assets_by_id: Mapping[str, Any],
+    requested_sec: Any,
+    *,
+    montage: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Porta in a_roll il video che serve, **prima** del montaggio, dichiarandolo.
+
+    Il criterio dei ruoli e' uno solo: un video con audio diventa a_roll, tutto il
+    resto b_roll. Con un girato in cui il secondo video non ha audio, 15 s di
+    materiale davano 4.65 s di reel e il lavoro finiva `NON-PUBBLICABILE` per
+    durata: il materiale c'era, era solo assegnato a un ruolo che il montaggio
+    non usa.
+
+    Qui, se gli a_roll non coprono la durata chiesta, si promuovono i video in
+    b_roll dal piu' lungo, e si dichiara ogni promozione con il perche'. Se il
+    materiale non basta comunque, `still_short_sec` lo dice **prima** del render.
+    """
+    entries = [dict(entry) for entry in selected]
+    want = None
+    try:
+        want = float(requested_sec) if requested_sec is not None else None
+    except (TypeError, ValueError):
+        want = None
+
+    def seconds_of(entry: Mapping[str, Any]) -> float:
+        value = entry.get("target_duration_sec")
+        planned = (
+            float(value)
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+            else 0.0
+        )
+        asset = assets_by_id.get(str(entry.get("asset_id") or ""))
+        source = float(getattr(asset, "duration_sec", 0.0) or 0.0)
+        # Un video vale quello che dura davvero, non lo slot di b-roll che gli
+        # era stato assegnato: il secondo video del caso del 4 novembre aveva
+        # 9.97 s di girato e uno slot da 3.0 s.
+        return max(planned, source) if source else planned
+
+    a_rolls = [entry for entry in entries if entry.get("role") == "a_roll"]
+    before = round(sum(seconds_of(entry) for entry in a_rolls), 3)
+    block: Dict[str, Any] = {
+        "rule": "a_roll con audio; promozione dichiarata se la durata non regge",
+        "requested_sec": None if want is None else round(want, 3),
+        "a_roll_sec_before": before,
+        "a_roll_sec_after": before,
+        "promoted": [],
+        "still_short_sec": 0.0,
+        "montage": bool(montage),
+    }
+    if want is None or want <= 0 or before >= want:
+        return entries, block
+
+    candidates = [
+        entry
+        for entry in entries
+        if entry.get("role") not in ("a_roll", "music")
+        and str(getattr(assets_by_id.get(str(entry.get("asset_id") or "")), "kind", ""))
+        == "video"
+    ]
+    candidates.sort(key=seconds_of, reverse=True)
+    total = before
+    for entry in candidates:
+        if total >= want:
+            break
+        gained = seconds_of(entry)
+        if gained <= 0:
+            continue
+        entry["role"] = "a_roll"
+        total += gained
+        block["promoted"].append(
+            {
+                "asset_id": entry.get("asset_id"),
+                "seconds": round(gained, 3),
+                "why": (
+                    "gli a_roll coprivano "
+                    f"{total - gained:.3f} s su {want:.3f} richiesti: senza "
+                    "questo video il reel sarebbe stato piu' corto del chiesto"
+                ),
+            }
+        )
+    block["a_roll_sec_after"] = round(total, 3)
+    block["still_short_sec"] = round(max(0.0, want - total), 3)
+    return entries, block
+
+
 def apply_opening(
     block: Dict[str, Any],
     assets_by_id: Mapping[str, asset_triage.AssetInfo],
@@ -6447,6 +6534,88 @@ def _shot_max_reason(section: Mapping[str, Any], plan: Any) -> str:
     )
 
 
+def policy_checks(
+    report: Mapping[str, Any], policy: Optional[Mapping[str, Any]]
+) -> Dict[str, Any]:
+    """Le soglie della policy dei giudizi, quando esiste, contro il piano vero.
+
+    La policy nasce dai voti (``vx.learning``) e ha quattro numeri. Finche'
+    ``version`` e' 0 non esiste e qui non cambia niente: nessuna regressione su
+    chi non ha mai votato. Da v1 in poi e' un contratto come gli altri — se il
+    montaggio cade fuori dalle sue soglie, la consegna si ferma e il motivo ha
+    misura e soglia. ``variety_min`` non produce un check: entra in
+    ``report["min_variety"]``, che e' il numero che ``verify`` legge.
+    """
+    data = policy if isinstance(policy, Mapping) else {}
+    thresholds = data.get("thresholds") if isinstance(data.get("thresholds"), Mapping) else {}
+    version = int(data.get("version") or 0)
+    measured = report.get("measured") if isinstance(report.get("measured"), Mapping) else {}
+    effects_block = report.get("effects") if isinstance(report.get("effects"), Mapping) else {}
+    shots = _as_seconds(measured.get("clips"))
+    duration = _as_seconds(measured.get("duration_sec"))
+    effects = _as_seconds(effects_block.get("count"))
+    cut_rate = shots / duration if duration > 0 else None
+    density = effects / shots if shots > 0 else None
+
+    block: Dict[str, Any] = {
+        "version": version,
+        "provisional": bool(data.get("provisional")),
+        "thresholds": dict(thresholds),
+        "measured": {
+            "cut_rate": None if cut_rate is None else round(cut_rate, 4),
+            "effects_density": None if density is None else round(density, 4),
+        },
+        "checks": [],
+        "note": "" if version else "nessuna policy scritta: le soglie non si applicano",
+    }
+    if not version:
+        return block
+
+    def add(identifier: str, ok: bool, measured_value: Any, expected: Any, why: str) -> None:
+        block["checks"].append(
+            {
+                "id": identifier,
+                "passed": bool(ok),
+                "measured": {"value": measured_value},
+                "expected": expected,
+                "why": why,
+            }
+        )
+
+    low = thresholds.get("cut_rate_min")
+    high = thresholds.get("cut_rate_max")
+    if cut_rate is not None and isinstance(low, (int, float)):
+        add(
+            "policy_cut_rate_min",
+            cut_rate >= float(low),
+            round(cut_rate, 4),
+            {"cut_rate_min": low},
+            f"tagli {cut_rate:.2f}/s >= {float(low):.2f}" if cut_rate >= float(low)
+            else f"tagli {cut_rate:.2f}/s sotto il minimo {float(low):.2f}: montaggio troppo lento",
+        )
+    if cut_rate is not None and isinstance(high, (int, float)):
+        add(
+            "policy_cut_rate_max",
+            cut_rate <= float(high),
+            round(cut_rate, 4),
+            {"cut_rate_max": high},
+            f"tagli {cut_rate:.2f}/s <= {float(high):.2f}" if cut_rate <= float(high)
+            else f"tagli {cut_rate:.2f}/s sopra il massimo {float(high):.2f}: montaggio frenetico",
+        )
+    cap = thresholds.get("effects_density_max")
+    if density is not None and isinstance(cap, (int, float)):
+        add(
+            "policy_effects_density_max",
+            density <= float(cap),
+            round(density, 4),
+            {"effects_density_max": cap},
+            f"effetti {density:.2f}/inquadratura <= {float(cap):.2f}" if density <= float(cap)
+            else f"effetti {density:.2f}/inquadratura sopra il tetto {float(cap):.2f}",
+        )
+    block["ok"] = all(check["passed"] for check in block["checks"])
+    return block
+
+
 def taste_law_checks(laws: Any) -> List[Dict[str, Any]]:
     """I check bloccanti delle due leggi del gusto (C8).
 
@@ -6884,6 +7053,48 @@ def _run_locked(
         payload["scene"]["resolution"] = [int(value) for value in adapted["resolution"]]
     sharpness_low = float(contract.THRESHOLDS["triage_sharpness_low"])
     selected, opening = apply_opening(block, assets_by_id, threshold=sharpness_low)
+    # Il monte a_roll si controlla **prima** del montaggio: se non copre la
+    # durata chiesta e c'e' altro video, si promuove e lo si dice. Scoprirlo a
+    # render finito e' troppo tardi per fare qualcosa.
+    scene_requested = (
+        payload.get("scene", {}).get("duration_sec")
+        if isinstance(payload.get("scene"), Mapping)
+        else None
+    )
+    selected, promotion = promote_a_roll(
+        selected, assets_by_id, scene_requested, montage=montage_mode
+    )
+    if promotion["promoted"] and not montage_mode:
+        # Gli a_roll non coprono la durata chiesta e c'e' altro video: si rifa' la
+        # decisione in modalita' montage **prima** del piano, cosi' il reel usa
+        # il materiale che c'e' invece di uscire corto. Il ruolo deciso prima non
+        # bastava: il piano nasce dal payload, che era gia' stato costruito.
+        payload, recipe_decide_note = _decide_payload(
+            args, assets, recipe_section, True, music=music_section
+        )
+        block = payload.get("asset_triage")
+        if isinstance(block, Mapping) and block:
+            selected, opening = apply_opening(block, assets_by_id, threshold=sharpness_low)
+            montage_mode = True
+            promotion["redecided_with_montage"] = True
+            # Il secondo payload puo' aver scartato o adattato altro: il report
+            # deve leggere quello, non quello della prima decisione.
+            rejected = list(block.get("rejected_assets") or [])
+            adapted = block.get("adapted")
+            adapted = dict(adapted) if isinstance(adapted, Mapping) else None
+            if adapted and adapted.get("resolution"):
+                payload["scene"]["resolution"] = [
+                    int(value) for value in adapted["resolution"]
+                ]
+            _say(
+                "Ruoli: il monte a_roll non copriva la durata chiesta, "
+                f"decisione rifatta in modalita' montage (+{promotion['a_roll_sec_after'] - promotion['a_roll_sec_before']:.2f} s)"
+            )
+    for item in promotion["promoted"]:
+        _say(
+            f"Ruolo: {item['asset_id']} promosso ad a_roll "
+            f"(+{float(item['seconds']):.2f} s)"
+        )
     if adapted:
         message = str(adapted.get("warning") or "")
         if message:
@@ -7561,6 +7772,16 @@ def _run_locked(
     )
     clock.waited(gates_block.get("total_waited_sec"))
 
+    # La policy dei giudizi: se qualcuno ha votato abbastanza da scriverla, le
+    # sue soglie valgono come le altre. Senza policy (version 0) non cambia nulla.
+    try:
+        from . import learning as learning_mod  # noqa: PLC0415 - import a chiamata
+
+        policy_block = learning_mod.policy_load()
+    except Exception as exc:  # noqa: BLE001 - una policy rotta non ferma il montaggio
+        degrade.note("policy", exc)
+        policy_block = None
+
     report: Dict[str, Any] = {
         "ok": True,
         "payload_version": str(payload.get("contract_version") or contract.VERSION),
@@ -7581,6 +7802,7 @@ def _run_locked(
         "montage": {
             "mode": "montage" if montage_mode else "single",
             "a_roll_count": len(a_roll_indices),
+            "roles": promotion,
         },
         "fill": _fill_declaration(plan, media_by_source, fill_mode),
         "recipe": recipe_section,
@@ -7791,6 +8013,12 @@ def _run_locked(
     # QC e la guardia, prima che il report finale venga scritto. Un verdetto
     # negativo non ferma il processo — il master esiste — ma resta nel report
     # con la misura che lo sostiene.
+    # Il numero che `verify.check_variety` legge: se una policy esiste, la sua
+    # soglia vince sulla costante dichiarata. Va scritto **prima** del verdetto.
+    if int((policy_block or {}).get("version") or 0) > 0:
+        policy_variety = ((policy_block or {}).get("thresholds") or {}).get("variety_min")
+        if isinstance(policy_variety, (int, float)):
+            report["min_variety"] = float(policy_variety)
     from . import verify as verify_mod
 
     try:
@@ -7838,9 +8066,8 @@ def _run_locked(
     # Un titolo illeggibile non e' un dettaglio da mettere fra gli avvisi: e' la
     # ragione per cui il lavoro non si consegna. Il master resta sul disco (la
     # vista lo mostra come "NON RIUSCITO"), ma ``delivered`` dice la verita'.
-    apply_verification(report, verification)
-    if not report.get("delivered", True):
-        _log("[auto] " + str((report.get("failures") or [""])[-1]))
+    # La verifica si applica **dopo** `measured` e i check della policy: il
+    # verdetto deve vedere i numeri del lavoro, non un blocco ancora vuoto.
     report["timings"] = clock.as_dict()
     _emit(
         log,
@@ -7922,6 +8149,20 @@ def _run_locked(
         "assets_used": len(selected),
         "gates_wait_sec": (report.get("gates") or {}).get("total_waited_sec"),
     }
+    # La policy dei giudizi, adesso che le misure del lavoro esistono: le sue
+    # soglie entrano nella verifica come le leggi del gusto, e una violazione
+    # ferma la consegna con misura e soglia.
+    report["policy"] = policy_checks(report, policy_block)
+    if report["policy"].get("checks") and not report["policy"].get("ok", True):
+        verification = dict(verification)
+        verification["checks"] = list(verification.get("checks") or ()) + list(
+            report["policy"]["checks"]
+        )
+        verification["ok"] = False
+        report["verification"] = verification
+    apply_verification(report, verification)
+    if not report.get("delivered", True):
+        _log("[auto] " + str((report.get("failures") or [""])[-1]))
     # L'esito e' sempre valorizzato, e viene dai fatti: master + verifiche verdi
     # -> ``delivered``; consegna fermata -> ``failed``; lavoro interrotto prima
     # della decisione -> ``incomplete``. Nessun report esce senza questa riga.

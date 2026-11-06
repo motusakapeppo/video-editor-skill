@@ -581,7 +581,25 @@ def run(args: Any) -> Dict[str, Any]:
             failures.append(f"{stage}: {event.get('why')}")
 
     final_stages = completed
+    # Il motore ha gia' deciso se il lavoro e' consegnabile: se ha detto no
+    # (`delivered: false` o `verification.ok: false`), `reel` non puo' dire si'
+    # solo perche' gli otto stadi hanno firmato. Prima lo faceva: un check di
+    # verifica fallito (la policy, per esempio) restava scritto in `failures` e
+    # il file usciva lo stesso come consegnato.
+    engine = report.get("verification") if isinstance(report.get("verification"), Mapping) else {}
+    engine_refused = report.get("delivered") is False or engine.get("ok") is False
     delivered = all(stage in final_stages for stage in STAGES) and not failures
+    if delivered and engine_refused:
+        blocking = [
+            str(item.get("id"))
+            for item in engine.get("checks") or ()
+            if isinstance(item, Mapping) and not item.get("passed")
+        ]
+        failures.append(
+            "verifica del motore: lavoro non consegnabile"
+            + (f" ({', '.join(blocking)})" if blocking else "")
+        )
+        delivered = False
     report["delivered"] = delivered
     report["outcome"] = "delivered" if delivered else "failed"
     report["outcome_suggested"] = "done" if delivered else "failed"

@@ -944,6 +944,23 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return EXIT_OK if rep.get("verdict") != "broken" else EXIT_MISSING_DEP
 
 
+def cmd_capabilities(args: argparse.Namespace) -> int:
+    """Le 25 capability di ffmpeg, il verdetto dell'ambiente e cosa si perde.
+
+    Esce 4 quando manca una dipendenza obbligatoria (ffmpeg o libx264: la
+    stessa legge che rende ``doctor`` "broken"), 0 altrimenti. Non installa e
+    non modifica niente: legge e riferisce.
+    """
+    from . import doctor
+
+    report = doctor.capabilities_report()
+    if getattr(args, "json", False):
+        _out(report)
+    else:
+        print(doctor.capabilities_text(report))
+    return int(report.get("exit_code") or EXIT_OK)
+
+
 def cmd_probe(args: argparse.Namespace) -> int:
     from . import probe as probe_mod
     from . import report as report_io
@@ -3982,6 +3999,8 @@ def cmd_learn(args: argparse.Namespace) -> int:
             _out(data)
             return EXIT_OK
         print(f"policy v{int(data.get('version') or 0)} ({data.get('updated_utc') or 'mai salvata'})")
+        if data.get("provisional"):
+            print("  provvisoria: nessuna calibrazione definitiva")
         from . import feedback as feedback_mod  # noqa: PLC0415 - solo su richiesta
 
         verdicts = feedback_mod.report()
@@ -4000,8 +4019,43 @@ def cmd_learn(args: argparse.Namespace) -> int:
             print(f"motivo: {data['reason']}")
         if data.get("feedback_ids"):
             print(f"feedback citati: {len(data['feedback_ids'])}")
+        if data.get("rule"):
+            print(f"regola: {data['rule']}")
         return EXIT_OK
-    _log("uso: vx learn status | prune | policy --show [--root DIR] [--budget-mb N] [--json]")
+    if action == "update":
+        result = learning.learn_update(
+            root=root,
+            feedback_root=getattr(args, "feedback_root", None),
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
+        if getattr(args, "json", False):
+            _out(result)
+            return EXIT_OK
+        if int(result.get("count") or 0) == 0:
+            print(result["reason"])
+            print(f"  registro: {result['register']}")
+            print(f"  policy: v{int(result.get('version') or 0)} invariata")
+            return EXIT_OK
+        state = "provvisoria" if result["provisional"] else "calibrata"
+        if result["written"]:
+            print(f"policy v{result['version']} scritta ({state})")
+        elif result["unchanged"]:
+            print(result["reason"])
+            return EXIT_OK
+        else:
+            print(f"proposta per la v{result['version']} ({state}), non scritta: --dry-run")
+        print(f"motivo: {result['reason']}")
+        for key in sorted(result["thresholds"]):
+            print(f"  {key:<22} {result['thresholds'][key]}")
+        if result["feedback_ids"]:
+            print(f"giudizi citati: {len(result['feedback_ids'])}")
+        for move in result["moves"]:
+            print(f"  mossa: {move['threshold']} {move['from']} -> {move['to']}")
+        return EXIT_OK
+    _log(
+        "uso: vx learn status | prune | policy --show | update [--dry-run] "
+        "[--root DIR] [--feedback-root DIR] [--budget-mb N] [--json]"
+    )
     return EXIT_USAGE
 
 
@@ -4047,6 +4101,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("doctor", "scansione ambiente e verdetto (Fase 1)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_doctor)
+
+    p = add("capabilities", "le 25 capability di ffmpeg, cosa manca e cosa si perde")
+    p.add_argument("--json", action="store_true", help="referto macchina")
+    p.set_defaults(func=cmd_capabilities)
 
     p = add("probe", "sonda tecnica del file (read-only)")
     p.add_argument("--input", required=True)
@@ -4730,6 +4788,18 @@ def build_parser() -> argparse.ArgumentParser:
     y.add_argument("--root", default=None, help="archivio (default: ~/.vx/learning, o VX_LEARNING_DIR)")
     y.add_argument("--json", action="store_true", help="referto macchina")
     y.set_defaults(func=cmd_learn)
+    u = learn_sub.add_parser(
+        "update", help="impara dai giudizi: soglie proposte, policy scritta o invariata"
+    )
+    u.add_argument("--root", default=None, help="archivio (default: ~/.vx/learning, o VX_LEARNING_DIR)")
+    u.add_argument(
+        "--feedback-root",
+        default=None,
+        help="registro dei giudizi (default: accanto all'archivio, o VX_FEEDBACK_ROOT)",
+    )
+    u.add_argument("--dry-run", action="store_true", help="mostra le soglie proposte senza scrivere")
+    u.add_argument("--json", action="store_true", help="referto macchina")
+    u.set_defaults(func=cmd_learn)
 
     return ap
 

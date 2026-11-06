@@ -32,9 +32,11 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
+import statistics
 import struct
 import tempfile
 import threading
@@ -85,6 +87,56 @@ DEFAULT_THRESHOLDS: Dict[str, Any] = {
     "cut_rate_min": 0.18,
     "cut_rate_max": 0.75,
     "effects_density_max": 0.35,
+}
+
+#: La regola che trasforma i giudizi in soglie, scritta per esteso perche' una
+#: policy che si sposta senza poter dire *come* e' una scatola nera. Ogni
+#: giudizio si riduce a tre misure:
+#:
+#:   cut_rate        = shots / duration_sec   (tagli al secondo)
+#:   effects_density = effects / shots        (effetti per inquadratura)
+#:   balance         = -1 low, 0 ok, +1 high  (l'ordinale di ``vx.feedback``)
+#:
+#: I voti bassi (<= 2) e alti (>= 4) si mediano a parte. Un voto basso che
+#: misura uno scostamento dalle soglie sposta la soglia di **un passo**
+#: (``RULE_STEP``) nella direzione che rimprovera il difetto: cut_rate sotto il
+#: minimo alza ``cut_rate_min``, sopra il massimo abbassa ``cut_rate_max``,
+#: effects_density sopra il tetto abbassa ``effects_density_max``, balance low
+#: alza ``variety_min`` e balance high la abbassa. I voti alti allentano, mai
+#: stringono. Le soglie restano nei limiti dichiarati e ``cut_rate_min`` resta
+#: sotto ``cut_rate_max``. Il voto 3 non sposta niente: entra solo nel conteggio
+#: che decide se la calibrazione e' provvisoria.
+POLICY_RULE = (
+    "cut_rate = shots / duration_sec; effects_density = effects / shots; "
+    "balance = -1/0/+1 (low/ok/high). Voti <=2 e >=4 mediati a parte. "
+    "Un voto basso che misura cut_rate sotto il minimo alza cut_rate_min di un "
+    "passo, sopra il massimo abbassa cut_rate_max, effects_density sopra il "
+    "tetto abbassa effects_density_max, balance low alza variety_min e balance "
+    "high la abbassa. I voti alti allentano le stesse soglie, non le stringono. "
+    "Soglie nei limiti dichiarati, cut_rate_min < cut_rate_max. Sotto "
+    "CORRELATION_MIN_N valutazioni la policy e' provisional."
+)
+
+#: Il voto che conta come basso e quello che conta come alto (``vx.feedback``).
+LOW_RATING = 2
+HIGH_RATING = 4
+
+#: Un passo, non una curva: con poca evidenza la soglia si sposta di 0.05 e la
+#: policy dichiara di essere provvisoria. Due voti non comprano una calibrazione.
+RULE_STEP = 0.05
+
+#: Scelta dichiarata: sotto ``CORRELATION_MIN_N`` la policy **si scrive** come
+#: v1, non resta v0, ma porta ``provisional: true``. Una v1 provvisoria e' un
+#: fatto registrato, databile e citabile; una v0 mai scritta non lo e'.
+PROVISIONAL_POLICY_VERSION = 1
+
+#: Fuori di qui il numero non descriverebbe piu' un montaggio: la policy non
+#: deve poter dire "taglia ogni 0.01 secondi" ne' "non tagliare mai".
+THRESHOLD_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "cut_rate_min": (0.05, 0.60),
+    "cut_rate_max": (0.25, 0.95),
+    "effects_density_max": (0.05, 0.95),
+    "variety_min": (0.30, 0.90),
 }
 
 META_KEYS = (
@@ -732,6 +784,11 @@ def _default_policy() -> Dict[str, Any]:
         "feedback_ids": [],
         "feedback_digest": "",
         "thresholds": dict(DEFAULT_THRESHOLDS),
+        # v0 non e' una calibrazione: e' il punto di partenza, quindi provvisorio
+        # per definizione. Una policy vera porta il valore che le ha dato la
+        # regola (``compute_thresholds``), non un default silenzioso.
+        "provisional": True,
+        "rule": POLICY_RULE,
     }
 
 
@@ -763,7 +820,9 @@ def _feedback_candidates(base: Path) -> List[Path]:
     return unique
 
 
-def _feedback_hashes(ids: Sequence[str], base: Path) -> Dict[str, str]:
+def _feedback_hashes(
+    ids: Sequence[str], base: Path, extra: Optional[Any] = None
+) -> Dict[str, str]:
     """L'hash della riga di registro di ogni feedback citato, quando esiste.
 
     Il registro dei giudizi non si tocca (e' di ``vx.feedback``): lo si legge
@@ -773,7 +832,12 @@ def _feedback_hashes(ids: Sequence[str], base: Path) -> Dict[str, str]:
     found: Dict[str, str] = {}
     if not wanted:
         return found
-    for path in _feedback_candidates(base):
+    candidates = _feedback_candidates(base)
+    if extra:
+        register = Path(extra) / "feedback.jsonl"
+        if register not in candidates:
+            candidates.append(register)
+    for path in candidates:
         if not path.is_file():
             continue
         try:
@@ -794,6 +858,11 @@ def _feedback_hashes(ids: Sequence[str], base: Path) -> Dict[str, str]:
                 value = str(record.get(key) or "")
                 if value and value in wanted and value not in found:
                     found[value] = hashlib.sha256(text_line.encode("utf-8")).hexdigest()
+            # Un giudizio senza id esplicito si cita come ``job@quando``: lo
+            # stesso nome che usa la policy, cosi' la storia sa ritrovarlo.
+            composite = feedback_id(record)
+            if composite in wanted and composite not in found:
+                found[composite] = hashlib.sha256(text_line.encode("utf-8")).hexdigest()
     return found
 
 
@@ -841,6 +910,7 @@ def policy_save(
     reason: str,
     feedback_ids: Optional[Sequence[Any]] = None,
     root: Optional[Any] = None,
+    feedback_root: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Scrive la policy con versione +1 e ne conserva il diff in ``history``.
 
@@ -855,9 +925,15 @@ def policy_save(
     if not why:
         raise ValueError("policy_save: serve un motivo scritto (reason)")
     ids = [str(item) for item in (feedback_ids or [])]
+    digest = _sha256(sorted(ids))
     base = root_dir(root)
     with _locked(base / POLICY_LOCK):
         current = _policy_load_at(base)
+        # Idempotenza dichiarata: gli stessi giudizi, gia' usati, non meritano
+        # una versione nuova. Il file non si tocca e il chiamante lo scopre dal
+        # ritorno (stessa versione, stesso digest).
+        if digest and str(current.get("feedback_digest") or "") == digest:
+            return dict(current)
         version = int(current.get("version") or 0) + 1
         moment = _now()
         body = _policy_body(policy)
@@ -868,11 +944,16 @@ def policy_save(
             "updated_utc": _iso(moment),
             "reason": why,
             "feedback_ids": ids,
-            "feedback_digest": _sha256(sorted(ids)),
+            "feedback_digest": digest,
         }
         saved.update(body)
         if not isinstance(saved.get("thresholds"), Mapping):
             saved["thresholds"] = dict(DEFAULT_THRESHOLDS)
+        # La regola viaggia con la policy: chi legge le soglie deve poter
+        # leggere anche come sono state ricavate.
+        saved["rule"] = str(policy.get("rule") or current.get("rule") or POLICY_RULE)
+        if "provisional" not in saved:
+            saved["provisional"] = bool(current.get("provisional", True))
         _write_json_atomic(policy_path(base), saved)
         history = {
             "schema": SCHEMA_POLICY_HISTORY,
@@ -881,13 +962,373 @@ def policy_save(
             "created_utc": _iso(moment),
             "reason": why,
             "feedback_ids": ids,
-            "feedback_digest": _sha256(sorted(ids)),
-            "feedback_hashes": _feedback_hashes(ids, base),
-            "diff": _diff(_policy_body(current), body),
-            "policy": body,
+            "feedback_digest": digest,
+            "feedback_hashes": _feedback_hashes(ids, base, feedback_root),
+            "diff": _diff(_policy_body(current), _policy_body(saved)),
+            "policy": _policy_body(saved),
         }
         _write_json_atomic(history_dir(base) / f"v{version:03d}.json", history)
     return saved
+
+
+# --------------------------------------------------------------------------- #
+# dal giudizio alla policy: la regola dichiarata in ``POLICY_RULE``
+# --------------------------------------------------------------------------- #
+
+
+def feedback_id(record: Mapping[str, Any]) -> str:
+    """L'id con cui una riga di registro si cita in una policy.
+
+    Il registro di ``vx.feedback`` non ha un campo ``id``: un giudizio si
+    riconosce da ``job_id`` + ``created_utc``. Se un giorno arriva un id
+    esplicito, vince quello. Il nome resta stabile fra due letture, quindi il
+    digest della policy non cambia per caso.
+    """
+    explicit = str(record.get("id") or record.get("feedback_id") or "").strip()
+    if explicit:
+        return explicit
+    job = str(record.get("job_id") or "").strip() or "anon"
+    when = str(record.get("created_utc") or "").strip() or "senza-data"
+    return f"{job}@{when}"
+
+
+def _finite(value: Any) -> Optional[float]:
+    """Un float finito, o ``None``: un campo assente non e' uno zero."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _context_of(record: Mapping[str, Any]) -> Dict[str, Any]:
+    context = record.get("context")
+    return dict(context) if isinstance(context, Mapping) else {}
+
+
+def _observations(records: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """Le tre misure dichiarate per ogni giudizio, piu' il voto e l'id."""
+    from . import feedback as feedback_mod  # noqa: PLC0415 - l'ordinale e' suo
+
+    out: List[Dict[str, Any]] = []
+    for record in records:
+        rating = _finite(record.get("rating"))
+        if rating is None:
+            continue
+        context = _context_of(record)
+        shots = _finite(context.get("shots"))
+        duration = _finite(context.get("duration_sec"))
+        effects = _finite(context.get("effects"))
+        cut_rate = None
+        if shots is not None and duration is not None and duration > 0 and shots >= 0:
+            cut_rate = round(shots / duration, 4)
+        density = None
+        if shots is not None and shots > 0 and effects is not None and effects >= 0:
+            density = round(effects / shots, 4)
+        balance = str(context.get("balance") or "").strip().lower()
+        out.append(
+            {
+                "id": feedback_id(record),
+                "rating": int(rating),
+                "cut_rate": cut_rate,
+                "effects_density": density,
+                "balance": balance,
+                "balance_axis": feedback_mod.BALANCE_AXIS.get(balance),
+                "shots": shots,
+                "duration_sec": duration,
+            }
+        )
+    return out
+
+
+def _group_mean(items: Sequence[Mapping[str, Any]], key: str) -> Optional[float]:
+    values = [float(item[key]) for item in items if item.get(key) is not None]
+    return round(statistics.fmean(values), 4) if values else None
+
+
+def _clamp(name: str, value: float) -> float:
+    low, high = THRESHOLD_BOUNDS[name]
+    return round(min(high, max(low, value)), 4)
+
+
+def compute_thresholds(records: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Le soglie proposte da ``records``, piu' i passi che le hanno mosse.
+
+    Funzione pura rispetto ai giudizi: parte sempre dai valori di partenza, non
+    dalla policy in vigore, quindi rieseguirla sugli stessi voti da' lo stesso
+    risultato (e lo stesso digest). Il dettaglio dei passi torna in ``moves``,
+    cosi' ``--dry-run`` e ``reason`` possono dire *perche'* una soglia si e'
+    spostata invece di mostrare solo il numero finale.
+    """
+    from . import feedback as feedback_mod  # noqa: PLC0415 - la soglia e' sua
+
+    observed = _observations(records)
+    thresholds = dict(DEFAULT_THRESHOLDS)
+    moves: List[Dict[str, Any]] = []
+
+    def move(key: str, direction: int, why: str) -> None:
+        before = float(thresholds[key])
+        after = _clamp(key, before + direction * RULE_STEP)
+        if abs(after - before) < 1e-9:
+            return
+        thresholds[key] = after
+        moves.append({"threshold": key, "from": before, "to": after, "why": why})
+
+    low = [item for item in observed if item["rating"] <= LOW_RATING]
+    high = [item for item in observed if item["rating"] >= HIGH_RATING]
+
+    # --- voti bassi: la soglia si stringe dove il difetto e' stato misurato ---
+    low_cut = _group_mean(low, "cut_rate")
+    low_density = _group_mean(low, "effects_density")
+    low_balance = _group_mean(low, "balance_axis")
+    if low_cut is not None and low_cut < DEFAULT_THRESHOLDS["cut_rate_min"]:
+        move(
+            "cut_rate_min",
+            +1,
+            f"i voti bassi misurano {low_cut} tagli/s, sotto il minimo "
+            f"{DEFAULT_THRESHOLDS['cut_rate_min']}: il minimo accettava un "
+            "montaggio troppo fermo",
+        )
+    if low_cut is not None and low_cut > DEFAULT_THRESHOLDS["cut_rate_max"]:
+        move(
+            "cut_rate_max",
+            -1,
+            f"i voti bassi misurano {low_cut} tagli/s, sopra il massimo "
+            f"{DEFAULT_THRESHOLDS['cut_rate_max']}: il tetto accettava un "
+            "montaggio troppo frenetico",
+        )
+    if low_density is not None and low_density > DEFAULT_THRESHOLDS["effects_density_max"]:
+        move(
+            "effects_density_max",
+            -1,
+            f"i voti bassi misurano {low_density} effetti per inquadratura, "
+            f"sopra il tetto {DEFAULT_THRESHOLDS['effects_density_max']}",
+        )
+    if low_balance is not None and low_balance < 0:
+        move(
+            "variety_min",
+            +1,
+            "i voti bassi stavano su balance=low (montaggio lento): la "
+            "varieta' minima sale",
+        )
+    elif low_balance is not None and low_balance > 0:
+        move(
+            "variety_min",
+            -1,
+            "i voti bassi stavano su balance=high (troppo frenetico): la "
+            "varieta' minima scende",
+        )
+
+    # --- voti alti: allentano, non stringono ---
+    high_cut = _group_mean(high, "cut_rate")
+    high_density = _group_mean(high, "effects_density")
+    high_balance = _group_mean(high, "balance_axis")
+    if high_cut is not None and high_cut < DEFAULT_THRESHOLDS["cut_rate_min"]:
+        move(
+            "cut_rate_min",
+            -1,
+            f"un voto alto con {high_cut} tagli/s sta sotto il minimo: il "
+            "minimo si allenta",
+        )
+    if high_cut is not None and high_cut > DEFAULT_THRESHOLDS["cut_rate_max"]:
+        move(
+            "cut_rate_max",
+            +1,
+            f"un voto alto con {high_cut} tagli/s sta sopra il massimo: il "
+            "tetto si alza",
+        )
+    if high_density is not None and high_density > DEFAULT_THRESHOLDS["effects_density_max"]:
+        move(
+            "effects_density_max",
+            +1,
+            f"un voto alto con {high_density} effetti per inquadratura sta "
+            "sopra il tetto: il tetto si alza",
+        )
+    if high_balance is not None and high_balance < 0:
+        move(
+            "variety_min",
+            -1,
+            "un voto alto con balance=low dice che il lento piace: la "
+            "varieta' minima scende",
+        )
+
+    # Invariante dichiarata: un minimo sopra il massimo non e' una policy.
+    if thresholds["cut_rate_min"] >= thresholds["cut_rate_max"]:
+        thresholds["cut_rate_min"] = _clamp(
+            "cut_rate_min", thresholds["cut_rate_max"] - RULE_STEP
+        )
+
+    count = len(observed)
+    threshold = int(feedback_mod.CORRELATION_MIN_N)
+    provisional = count < threshold
+    return {
+        "thresholds": thresholds,
+        "moves": moves,
+        "count": count,
+        "provisional": provisional,
+        "min_n": threshold,
+        "feedback_ids": [str(item["id"]) for item in observed],
+        "rule": POLICY_RULE,
+    }
+
+
+def _update_reason(computed: Mapping[str, Any]) -> str:
+    """"Quante valutazioni" e "provvisoria" non sono decorazioni: sono lo stato."""
+    count = int(computed.get("count") or 0)
+    words = f"{count} {'valutazione' if count == 1 else 'valutazioni'}"
+    if computed.get("provisional"):
+        head = (
+            f"{words} nel registro, sotto le {computed.get('min_n')} che rendono "
+            "conclusiva una calibrazione: policy provvisoria"
+        )
+    else:
+        head = f"{words} nel registro, sopra le {computed.get('min_n')}: calibrazione"
+    moves = computed.get("moves") or []
+    if not moves:
+        return (
+            head
+            + ". Nessuna soglia si muove: i voti non misurano uno scostamento "
+            "dalle soglie dichiarate"
+        )
+    detail = "; ".join(
+        f"{item['threshold']} {item['from']} -> {item['to']} ({item['why']})"
+        for item in moves
+    )
+    return f"{head}. {detail}"
+
+
+def _register_for(base: Path, explicit: Optional[Any]) -> Path:
+    """Dove sta il registro dei giudizi, accanto all'archivio o dov'e' dichiarato.
+
+    Ordine: argomento esplicito, ``VX_FEEDBACK_ROOT``, il registro dentro
+    l'archivio, quello accanto all'archivio (``~/.vx/feedback.jsonl``), e alla
+    fine la home di ``vx.feedback``. Il registro non si scrive mai: si legge.
+    """
+    if explicit:
+        return Path(explicit)
+    env = str(os.environ.get("VX_FEEDBACK_ROOT") or "").strip()
+    if env:
+        return Path(env)
+    if (base / "feedback.jsonl").is_file():
+        return base
+    # Il layout documentato e' ``~/.vx/learning`` accanto a ``~/.vx/feedback.jsonl``:
+    # il registro sta nella cartella che contiene l'archivio.
+    return base.parent
+
+
+def learn_update(
+    *,
+    root: Optional[Any] = None,
+    feedback_root: Optional[Any] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Legge i giudizi e scrive la policy proposta da ``POLICY_RULE``.
+
+    Tre uscite, tutte dichiarate nel ritorno: ``written`` (policy nuova),
+    ``unchanged`` (stessi giudizi, digest uguale: il file non si tocca) e
+    ``dry_run`` (soglie proposte, nessuna scrittura). Con zero giudizi non si
+    scrive niente e si dice che non c'e' niente da imparare.
+    """
+    from . import feedback as feedback_mod  # noqa: PLC0415 - il registro e' suo
+
+    base = root_dir(root)
+    register = _register_for(base, feedback_root)
+    report_data = feedback_mod.report(root=register)
+    count = int(report_data.get("count") or 0)
+    current = policy_load(root=root)
+    current_thresholds = dict(current.get("thresholds") or DEFAULT_THRESHOLDS)
+    result: Dict[str, Any] = {
+        "schema": "vx.learning.update/1",
+        "root": str(base),
+        "register": str(register),
+        "count": count,
+        "written": False,
+        "unchanged": False,
+        "dry_run": bool(dry_run),
+        "version": int(current.get("version") or 0),
+        "provisional": bool(current.get("provisional", True)),
+        "thresholds": current_thresholds,
+        "moves": [],
+        "reason": "",
+        "feedback_ids": [],
+        "feedback_digest": "",
+        "rule": POLICY_RULE,
+    }
+    if count <= 0:
+        result["reason"] = "nessun giudizio nel registro: non c'e' niente da imparare"
+        return result
+
+    records = feedback_mod.read_all(root=register)
+    if not records:
+        # Il registro e' cambiato fra report e lettura: si dichiara il vuoto
+        # invece di calibrare su zero righe.
+        result["count"] = 0
+        result["reason"] = "nessun giudizio nel registro: non c'e' niente da imparare"
+        return result
+
+    computed = compute_thresholds(records)
+    reason = _update_reason(computed)
+    ids = list(computed["feedback_ids"])
+    digest = _sha256(sorted(ids))
+    result.update(
+        {
+            "count": int(computed["count"]),
+            "thresholds": dict(computed["thresholds"]),
+            "moves": list(computed["moves"]),
+            "provisional": bool(computed["provisional"]),
+            "feedback_ids": ids,
+            "feedback_digest": digest,
+            "reason": reason,
+        }
+    )
+
+    if dry_run:
+        result["unchanged"] = str(current.get("feedback_digest") or "") == digest
+        if int(current.get("version") or 0) == 0:
+            # Scelta dichiarata: la prima policy provvisoria si propone come v1.
+            result["version"] = PROVISIONAL_POLICY_VERSION
+        else:
+            result["version"] = int(current.get("version") or 0) + (
+                0 if result["unchanged"] else 1
+            )
+        suffix = (
+            " (dry-run: la policy e' gia' a questo digest, nessuna scrittura)"
+            if result["unchanged"]
+            else " (proposta non scritta: --dry-run)"
+        )
+        result["reason"] = reason + suffix
+        return result
+
+    if str(current.get("feedback_digest") or "") == digest:
+        result["unchanged"] = True
+        result["reason"] = (
+            f"nessuna novita': i {computed['count']} giudizi sono gli stessi gia' "
+            f"usati dalla policy v{int(current.get('version') or 0)} "
+            f"(digest {digest[:12]}), il file resta com'e'"
+        )
+        return result
+
+    saved = policy_save(
+        {
+            "thresholds": computed["thresholds"],
+            "provisional": computed["provisional"],
+            "rule": POLICY_RULE,
+        },
+        reason=reason,
+        feedback_ids=ids,
+        root=root,
+        feedback_root=register,
+    )
+    result.update(
+        {
+            "written": True,
+            "version": int(saved.get("version") or 0),
+            "provisional": bool(saved.get("provisional", computed["provisional"])),
+            "thresholds": dict(saved.get("thresholds") or computed["thresholds"]),
+            "reason": str(saved.get("reason") or reason),
+        }
+    )
+    return result
 
 
 # --------------------------------------------------------------------------- #

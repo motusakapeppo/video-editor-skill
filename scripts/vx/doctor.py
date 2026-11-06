@@ -19,14 +19,14 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from . import ffmpeg as ff
 from .contract import EXIT_MISSING_DEP, EXIT_OK, VERSION
 from .faces import YUNET_MODEL
 from .winpath import work_root
 
-__all__ = ["scan", "to_text", "main"]
+__all__ = ["scan", "to_text", "capabilities_report", "capabilities_text", "main"]
 
 # The 25 capabilities the pipeline actually calls. Order is the report order.
 REQUIRED_CAPS = (
@@ -291,6 +291,188 @@ def to_text(report: dict) -> str:
             lines.append(f"  ... altri {rest}")
 
     return "\n".join(lines[:MAX_TEXT_LINES])
+
+
+# --------------------------------------------------------------------------- #
+# capabilities: le stesse 25, con cosa si perde quando manca qualcosa
+# --------------------------------------------------------------------------- #
+
+#: Una frase per capability: cosa smette di funzionare senza di lei. Non e'
+#: un'etichetta generica, e' la conseguenza concreta sulla pipeline.
+CAPABILITY_EFFECTS: Dict[str, str] = {
+    "vidstabdetect": "niente stabilizzazione: la ripresa a mano libera resta mossa",
+    "vidstabtransform": "niente stabilizzazione: la ripresa a mano libera resta mossa",
+    "silencedetect": "niente rilevamento dei silenzi: i tagli sui vuoti non si misurano",
+    "silenceremove": "niente rimozione automatica dei silenzi",
+    "loudnorm": "niente normalizzazione loudness EBU R128 in un passaggio",
+    "ebur128": "niente misura loudness/true peak a norma",
+    "astats": "niente statistiche audio: clipping, picchi e rumore restano non misurati",
+    "ametadata": "niente lettura/scrittura dei metadati audio",
+    "scdet": "niente rilevamento scene cut: i tagli si scelgono a mano",
+    "freezedetect": "niente rilevamento dei fotogrammi congelati",
+    "subtitles": "niente sottotitoli bruciati da file .srt/.ass",
+    "ass": "niente sottotitoli ASS stilizzati (font, posizione, animazione)",
+    "concat": "niente concatenazione dei segmenti senza ricodifica",
+    "trim": "niente taglio video preciso",
+    "atrim": "niente taglio audio preciso",
+    "acrossfade": "niente dissolvenze audio fra i segmenti",
+    "afade": "niente fade audio in entrata e in uscita",
+    "crop": "niente rifilatura/reframe",
+    "scale": "niente ridimensionamento: proxy e formati multipiattaforma si fermano",
+    "zoompan": "niente Ken Burns ne' zoom animato",
+    "boxblur": "niente sfocature di riempimento per i formati diversi",
+    "overlay": "niente composizione di overlay, testi e watermark",
+    "afftdn": "niente riduzione spettrale del rumore",
+    "libx264": "niente codifica H.264: il render non parte",
+    "aac": "niente audio AAC: l'export resta senza traccia audio",
+}
+
+#: Le stesse frasi per le dipendenze python, cosi' un verdetto degradato dice
+#: sempre *cosa* si perde e non solo che manca un pacchetto.
+DEP_EFFECTS: Dict[str, str] = {
+    "cv2": "niente analisi video (jitter, esposizione, colore, freeze) ne' volti",
+    "mediapipe": "niente pose/gesture da MediaPipe",
+    "moviepy": "niente backend alternativo MoviePy per i tagli",
+    "librosa": "niente analisi ritmica: il montaggio sul beat resta senza misure",
+    "faster_whisper": "niente trascrizione: sottotitoli e tagli sul parlato non partono",
+    "soundfile": "niente lettura/scrittura audio oltre il WAV",
+    "scipy": "niente filtri scientifici (smoothing, correlazioni)",
+    "pydub": "niente montaggio audio rapido di fallback",
+    "numpy": "niente pipeline numerica: quasi tutto si ferma",
+    "yaml": "niente ricette e profili in YAML",
+}
+
+#: Cio' che senza di lui non si codifica niente: la stessa legge del verdetto
+#: ``broken`` di ``doctor``, non una lista nuova.
+ENCODE_REQUIRED = ("ffmpeg", "libx264")
+
+CAPABILITIES_SCHEMA = "vx.capabilities/1"
+
+
+def _ffprobe_block() -> Dict[str, Any]:
+    """``path`` e ``version`` di ffprobe, o l'errore: il probe non si inventa."""
+    block: Dict[str, Any] = {"path": None, "version": None}
+    try:
+        path = ff.ffprobe()
+        proc = ff.run([path, "-version"], step="probe")
+        first = proc.stdout.splitlines()[0] if proc.stdout else ""
+        block["path"] = path
+        block["version"] = (
+            first.replace("ffprobe version ", "").split()[0] if first else "unknown"
+        )
+    except Exception as exc:  # noqa: BLE001 - manca il binario o e' rotto
+        block["error"] = str(exc)
+    return block
+
+
+def capabilities_report() -> Dict[str, Any]:
+    """Il referto delle capability: verdetto, binari, le 25 e cosa si perde.
+
+    Il verdetto non mente: se una qualunque delle 25 manca, o l'ambiente non e'
+    ``ready``, il verdetto scende a ``degraded``. Solo ffmpeg o libx264
+    mancanti portano a ``broken`` e a exit 4, come in ``doctor``.
+    """
+    environment = scan()
+    ffmpeg_block = environment.get("ffmpeg") or {}
+    caps = dict(ffmpeg_block.get("capabilities") or {})
+    present = [name for name in REQUIRED_CAPS if caps.get(name)]
+    missing = [name for name in REQUIRED_CAPS if not caps.get(name)]
+    deps = dict(environment.get("deps") or {})
+    deps_missing = [name for name in DEPS if not deps.get(name)]
+
+    required_missing: List[str] = []
+    if not ffmpeg_block.get("path"):
+        required_missing.append("ffmpeg")
+    for cap in ENCODE_REQUIRED:
+        if cap != "ffmpeg" and not caps.get(cap):
+            required_missing.append(cap)
+
+    lost = [
+        {"capability": name, "what": CAPABILITY_EFFECTS.get(name, "funzione non disponibile")}
+        for name in missing
+    ]
+    lost += [
+        {"capability": name, "what": DEP_EFFECTS.get(name, "pacchetto python non disponibile")}
+        for name in deps_missing
+    ]
+
+    if required_missing:
+        verdict = "broken"
+    elif missing or deps_missing or str(environment.get("verdict")) != "ready":
+        verdict = "degraded"
+    else:
+        verdict = "ready"
+
+    return {
+        "schema": CAPABILITIES_SCHEMA,
+        "verdict": verdict,
+        "ok": not required_missing,
+        "exit_code": EXIT_MISSING_DEP if required_missing else EXIT_OK,
+        "ffmpeg": {
+            "path": ffmpeg_block.get("path"),
+            "version": ffmpeg_block.get("version"),
+            **({"error": ffmpeg_block["error"]} if ffmpeg_block.get("error") else {}),
+        },
+        "ffprobe": _ffprobe_block(),
+        "capabilities": {name: bool(caps.get(name)) for name in REQUIRED_CAPS},
+        "present": len(present),
+        "total": len(REQUIRED_CAPS),
+        "missing": missing,
+        "missing_required": required_missing,
+        "deps": deps,
+        "deps_missing": deps_missing,
+        "lost": lost,
+        "warnings": list(environment.get("warnings") or []),
+    }
+
+
+_VERDICT_IT: Dict[str, str] = {
+    "ready": "pronto",
+    "degraded": "degradato",
+    "broken": "rotto",
+}
+
+
+def capabilities_text(report: Mapping[str, Any]) -> str:
+    """La tabella per il terminale: verdetto, binari, 25 righe, cosa si perde."""
+    verdict = str(report.get("verdict") or "?")
+    ffmpeg_block = report.get("ffmpeg") or {}
+    ffprobe_block = report.get("ffprobe") or {}
+    caps = report.get("capabilities") or {}
+    lost = report.get("lost") or []
+    deps_missing = report.get("deps_missing") or []
+    missing_required = report.get("missing_required") or []
+
+    lines: List[str] = [
+        f"VX capabilities {VERSION}",
+        f"ambiente     {_VERDICT_IT.get(verdict, verdict).upper()} ({verdict})",
+        f"ffmpeg       {ffmpeg_block.get('version') or 'ASSENTE'}"
+        + (f"  {ffmpeg_block['path']}" if ffmpeg_block.get("path") else ""),
+        f"ffprobe      {ffprobe_block.get('version') or 'ASSENTE'}"
+        + (f"  {ffprobe_block['path']}" if ffprobe_block.get("path") else ""),
+        f"capacita'    {int(report.get('present') or 0)}/{int(report.get('total') or 0)} presenti",
+    ]
+
+    for name in REQUIRED_CAPS:
+        state = "presente" if caps.get(name) else "ASSENTE "
+        lines.append(f"  {name:<18} {state}")
+
+    if lost:
+        lines.append("cosa si perde")
+        for item in lost:
+            lines.append(f"  - {item['capability']}: {item['what']}")
+    else:
+        lines.append("cosa si perde   niente: tutte le capability e le dipendenze rispondono")
+
+    if missing_required:
+        lines.append(
+            "dipendenze obbligatorie mancanti: " + ", ".join(str(item) for item in missing_required)
+        )
+    if deps_missing and not missing_required:
+        lines.append(
+            "python mancante: " + ", ".join(str(item) for item in deps_missing)
+        )
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
