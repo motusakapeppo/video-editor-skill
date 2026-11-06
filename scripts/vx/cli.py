@@ -3100,6 +3100,50 @@ def _auto_panel_dir(args: argparse.Namespace, workdir: Path) -> Path:
     return Path(str(target)) if target else Path(workdir)
 
 
+@_session_command("reel")
+def cmd_reel(args: argparse.Namespace) -> int:
+    """Prompt + cartella -> auto + run log firmato -> consegna o rinomina."""
+    from . import reel
+
+    workdir = reel.resolve_workdir(args)
+    session = _session_of(args)
+    if session is not None:
+        try:
+            session.set_job(workdir)
+        except Exception:  # noqa: BLE001 - il registro non deve fermare il giro
+            pass
+
+    report = reel.run(args)
+    if getattr(args, "json", False):
+        _out(report)
+        return EXIT_OK
+
+    run = report.get("run") or {}
+    _say(
+        "[reel] "
+        + ("consegnato" if report.get("delivered") else "NON consegnato")
+        + f": {report.get('master')}"
+    )
+    _say(
+        "  stadi firmati: "
+        + (", ".join(run.get("signed") or []) or "nessuno")
+        + (
+            f" | mancanti: {', '.join(run.get('missing') or [])}"
+            if run.get("missing")
+            else ""
+        )
+    )
+    if run.get("resume", {}).get("enabled"):
+        _say(
+            "  ripresa: salta "
+            + (", ".join(run["resume"].get("skipped") or []) or "nessuno stadio")
+            + f" ({run['resume'].get('elapsed_sec')} s)"
+        )
+    for reason in run.get("failures") or ():
+        _say(f"  motivo: {reason}")
+    return EXIT_OK
+
+
 @_session_command("auto")
 def cmd_auto(args: argparse.Namespace) -> int:
     """Prompt + folder -> triage -> EDL -> render -> QC -> deliverables -> report."""
@@ -4386,6 +4430,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_auto)
+
+    p = add(
+        "reel",
+        "orchestratore con contratto: 8 stadi firmati, master o NON-PUBBLICABILE",
+    )
+    p.add_argument("--prompt", required=True, help="richiesta in linguaggio naturale")
+    p.add_argument("--assets", required=True, help="cartella degli asset (sola lettura)")
+    p.add_argument("--out", required=True, help="percorso del master")
+    p.add_argument(
+        "--workdir",
+        default=None,
+        help="default: <out parent>/<out stem>-reel",
+    )
+    p.add_argument("--music", default=None, metavar="FILE", help="traccia musicale (sola lettura)")
+    p.add_argument("--recipe", default=None, metavar="NAME", help="ricetta vx.recipe/1")
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="riprende dal run.jsonl: salta gli stadi gia' firmati, rifa' i mancanti",
+    )
+    p.add_argument("--fps", type=float, default=None)
+    p.add_argument("--manifest", default=None)
+    p.add_argument("--autonomous", action="store_true")
+    p.add_argument("--montage", action="store_true")
+    p.add_argument("--fill", choices=("crop", "fit", "blur"), default="fit")
+    p.add_argument("--no-bridge", action="store_true")
+    p.add_argument("--free", action="store_true")
+    p.add_argument("--no-coherence", action="store_true")
+    p.add_argument("--subs", action="store_true")
+    p.add_argument("--no-subs", action="store_true")
+    p.add_argument("--no-guard", action="store_true")
+    p.add_argument("--font-network", dest="font_network", action="store_true", default=None)
+    p.add_argument("--no-font-network", dest="font_network", action="store_false")
+    p.add_argument("--font-wait", type=float, default=None)
+    p.add_argument("--no-font-gate", action="store_true")
+    p.add_argument("--key-gate", dest="key_gate", action="store_true", default=None)
+    p.add_argument("--no-key-gate", dest="key_gate", action="store_false")
+    p.add_argument("--key-wait", type=float, default=None)
+    p.add_argument("--budget", type=float, default=None)
+    p.add_argument("--plan-wait", type=float, default=None)
+    p.add_argument("--crf", type=int, default=None)
+    p.add_argument("--preset", default=None)
+    p.add_argument("--no-feature", action="append", default=[], metavar="NAME")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_reel)
 
     from . import edl3 as edl3_mod  # noqa: PLC0415 - one version, one spelling
 

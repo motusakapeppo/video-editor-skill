@@ -602,6 +602,20 @@ def duration_tail(
             "materiale insufficiente: massimo raggiungibile {got:.3f}s "
             "({frames} frame), richiesti {want:g}s"
         ).format(got=got, frames=got_frames, want=want)
+        if material_sec is not None:
+            try:
+                note = (
+                    "materiale insufficiente: massimo raggiungibile {got:.3f}s "
+                    "({frames} frame); materiale utilizzabile {mat:.3f}s, "
+                    "richiesti {want:g}s"
+                ).format(
+                    got=got,
+                    frames=got_frames,
+                    mat=float(material_sec),
+                    want=want,
+                )
+            except (TypeError, ValueError):
+                pass
     elif got_frames > want_frames:
         note = (
             "ultima battuta allungata di {delta:.3f}s per chiudere a {frames} "
@@ -616,9 +630,9 @@ def duration_tail(
         note = "ultima battuta sulla griglia: {frames} frame esatti".format(
             frames=got_frames
         )
-    if material_sec is not None:
+    if material_sec is not None and reachable:
         try:
-            note += f"; materiale utile {float(material_sec):.3f}s"
+            note += f"; materiale utilizzabile {float(material_sec):.3f}s"
         except (TypeError, ValueError):
             pass
     return {
@@ -1673,6 +1687,10 @@ def _usable_runs(
             if first is None:
                 first = index
         elif first is not None:
+            peak = max(
+                float(samples[mark].get("sharpness") or 0.0)
+                for mark in range(first, index)
+            )
             runs.append(
                 {
                     "from": first,
@@ -1680,6 +1698,7 @@ def _usable_runs(
                     "start": float(samples[first]["t"]),
                     "end": float(samples[index - 1]["t"]) + float(step),
                     "seconds": (index - first) * float(step),
+                    "sharpness": round(peak, 3),
                 }
             )
             first = None
@@ -1756,6 +1775,52 @@ def choose_in_point(
         kept_head = removed
     window = max(1e-6, usable_end - usable_start)
     usable_fraction = round(window / total, 3) if total > 0 else 0.0
+    raw_runs = _usable_runs(
+        rows,
+        step=step,
+        threshold=floor,
+        black_luma=black_luma,
+        freeze_seconds=freeze_seconds,
+    )
+    usable_runs: List[Dict[str, Any]] = []
+    for run in raw_runs:
+        run_start = max(0.0, min(float(run["start"]), total))
+        run_end = max(run_start, min(float(run["end"]), total))
+        if run_end - run_start <= 1e-9:
+            continue
+        usable_runs.append(
+            {
+                "start": round(run_start, 6),
+                "end": round(run_end, 6),
+                "sharpness": round(float(run.get("sharpness") or 0.0), 3),
+            }
+        )
+    if not usable_runs:
+        usable_runs.append(
+            {
+                "start": round(usable_start, 6),
+                "end": round(usable_end, 6),
+                "sharpness": round(float(max(
+                    (float(row.get("sharpness") or 0.0) for row in rows),
+                    default=0.0,
+                )), 3),
+            }
+        )
+    if kept_head:
+        # Oltre la quota di scarto ammessa la finestra intera rientra: le corse
+        # dichiarate sono allora tutto il materiale tenuto, non solo quello
+        # sopra il pavimento.
+        usable_runs = [
+            {
+                "start": 0.0,
+                "end": round(total, 6),
+                "sharpness": round(float(max(
+                    (float(row.get("sharpness") or 0.0) for row in rows),
+                    default=0.0,
+                )), 3),
+                "kept_below_preferred": True,
+            }
+        ]
     preferred_count = sum(
         1
         for index in usable_index
@@ -1793,6 +1858,7 @@ def choose_in_point(
             "below_preferred_fraction": below_fraction,
             "thresholds": thresholds,
             "kept_below_preferred": bool(kept_head),
+            "usable_runs": usable_runs,
             "why": (
                 f"la clip e' gia' sopra la soglia preferita dal primo fotogramma "
                 f"(nitidezza {float(head.get('sharpness') or 0.0):.1f} >= "
@@ -1828,6 +1894,7 @@ def choose_in_point(
         "below_preferred_fraction": below_fraction,
         "thresholds": thresholds,
         "kept_below_preferred": bool(kept_head),
+        "usable_runs": usable_runs,
         "why": (
             f"picco di nitidezza {float(best.get('sharpness') or 0.0):.1f} "
             f"(soglia preferita {preferred:.1f} = 35% del 75° percentile "
@@ -1961,6 +2028,7 @@ def frame_choice(
                 "excluded": False,
                 "moved": False,
                 "samples": [],
+                "usable_runs": [],
                 "why": (
                     "not_measured: profilo per-frame non disponibile (analisi "
                     "non eseguita o proxy assente), punto di presa non misurato, "
@@ -1992,6 +2060,7 @@ def frame_choice(
                 "moved": False,
                 "thresholds": thresholds,
                 "samples": samples,
+                "usable_runs": [],
                 "why": (
                     f"nessun istante utilizzabile: nitidezza massima {best:.1f}, "
                     f"75° percentile {float(thresholds['p75']):.1f} sotto il "
@@ -2076,7 +2145,11 @@ def opening_in_point(
 
 
 def segment_quality(
-    plan: Any, choice: Mapping[str, Dict[str, Any]], *, step: float = IN_POINT_STEP_SEC
+    plan: Any,
+    choice: Mapping[str, Dict[str, Any]],
+    *,
+    step: float = IN_POINT_STEP_SEC,
+    owner: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Classifica il **punto di presa** di ogni segmento layer-0.
 
@@ -2084,13 +2157,19 @@ def segment_quality(
     della propria clip ma sopra il pavimento: restano nel montaggio, dichiarati.
     ``unusable`` sono quelli che partono sotto il pavimento: non dovrebbero
     esistere, e se esistono il report lo dice invece di nasconderli.
+
+    ``owner`` riporta lo ``source_id`` dell'EDL all'``asset_id`` del payload:
+    senza, una clip con spazi nel nome non verrebbe trovata e il report
+    direbbe zero segmenti ``below_preferred`` anche quando ci sono.
     """
     out: Dict[str, List[Dict[str, Any]]] = {"below_preferred": [], "unusable": []}
     for track in getattr(plan, "video_tracks", ()) or ():
         for clip in getattr(track, "clips", ()) or ():
             if int(getattr(clip, "layer", 0) or 0) != 0:
                 continue
-            row = choice.get(str(getattr(clip, "source_id", ""))) or {}
+            source_id = str(getattr(clip, "source_id", ""))
+            asset_id = (owner or {}).get(source_id) or source_id
+            row = choice.get(asset_id) or {}
             samples = row.get("samples") or []
             if not samples:
                 continue
@@ -2102,7 +2181,7 @@ def segment_quality(
             floor = float(thresholds.get("absolute") or 0.0)
             record = {
                 "clip_id": str(getattr(clip, "clip_id", "") or ""),
-                "asset_id": str(getattr(clip, "source_id", "") or ""),
+                "asset_id": asset_id,
                 "src_in": round(at, 3),
                 "sharpness": value,
                 "threshold_preferred": preferred,
@@ -2114,12 +2193,99 @@ def segment_quality(
     return out
 
 
+def usable_material_sec(
+    choice: Mapping[str, Dict[str, Any]],
+    selected: Sequence[Mapping[str, Any]],
+    assets_by_id: Mapping[str, asset_triage.AssetInfo],
+) -> float:
+    """I secondi davvero montabili: la somma delle corse utilizzabili a-roll.
+
+    Non e' la somma dei target (che puo' essere piu' lunga del materiale buono)
+    e non e' la durata del piano (che puo' fermarsi prima): e' il tetto reale
+    che il report deve dichiarare. Se una clip non e' stata misurata si usa il
+    comportamento di sempre (``min(target, durata)``).
+    """
+    total = 0.0
+    for entry in selected:
+        if entry.get("role") != "a_roll":
+            continue
+        asset_id = entry.get("asset_id")
+        row = choice.get(str(asset_id or "")) or {}
+        runs = row.get("usable_runs") or []
+        if runs:
+            for run in runs:
+                try:
+                    span = float(run.get("end")) - float(run.get("start"))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(span) and span > 0.0:
+                    total += span
+            continue
+        try:
+            start = float(row.get("usable_start"))
+            end = float(row.get("usable_end"))
+        except (TypeError, ValueError):
+            start = end = 0.0
+        if end > start:
+            total += end - start
+            continue
+        asset = assets_by_id.get(asset_id)
+        if asset is None:
+            continue
+        try:
+            target = float(entry.get("target_duration_sec"))
+        except (TypeError, ValueError):
+            target = float(asset.duration_sec)
+        total += min(target, float(asset.duration_sec))
+    return round(total, 6)
+
+
+def plan_runs_used(
+    plan: Any,
+    choice: Mapping[str, Dict[str, Any]],
+    owner: Mapping[str, str],
+) -> int:
+    """Quante corse utilizzabili distinte il piano ha davvero toccato."""
+    used = set()
+    for track in getattr(plan, "video_tracks", ()) or ():
+        for clip in getattr(track, "clips", ()) or ():
+            if int(getattr(clip, "layer", 0) or 0) != 0:
+                continue
+            source_id = str(getattr(clip, "source_id", "") or "")
+            asset_id = owner.get(source_id) or source_id
+            row = choice.get(asset_id) or {}
+            runs = list(row.get("usable_runs") or ())
+            if not runs:
+                try:
+                    runs = [
+                        {
+                            "start": float(row.get("usable_start")),
+                            "end": float(row.get("usable_end")),
+                        }
+                    ]
+                except (TypeError, ValueError):
+                    continue
+            at_in = float(getattr(clip, "src_in", 0.0) or 0.0)
+            at_out = float(getattr(clip, "src_out", 0.0) or 0.0)
+            for index, run in enumerate(runs):
+                try:
+                    run_start = float(run.get("start"))
+                    run_end = float(run.get("end"))
+                except (TypeError, ValueError):
+                    continue
+                if at_out > run_start + 1e-6 and at_in < run_end - 1e-6:
+                    used.add((asset_id, index))
+                    break
+    return len(used)
+
+
 def plan_declaration(
     choice: Mapping[str, Dict[str, Any]],
     *,
     segments: Optional[Mapping[str, Sequence[Mapping[str, Any]]]] = None,
     plan: Any = None,
     material_sec: Optional[float] = None,
+    runs_used: Optional[int] = None,
 ) -> Dict[str, Any]:
     """La sezione ``report["plan"]``: soglie per clip, punti di presa, scarti."""
     in_points: List[Dict[str, Any]] = []
@@ -2169,6 +2335,7 @@ def plan_declaration(
                 "p75": thresholds.get("p75"),
                 "kept_below_preferred": bool(row.get("kept_below_preferred")),
                 "moved": bool(row.get("moved")),
+                "usable_runs": list(row.get("usable_runs") or ()),
                 "why": str(row.get("why") or ""),
             }
         )
@@ -2187,13 +2354,15 @@ def plan_declaration(
         "unusable_segments": unusable,
         "unusable_segment_count": len(unusable),
     }
+    if runs_used is not None:
+        declaration["runs_used"] = int(runs_used)
     if plan is not None:
         duration = float(getattr(plan, "duration_sec", 0.0) or 0.0)
         declaration["timeline_sec"] = round(duration, 3)
         if material_sec is not None and float(material_sec) > 0:
             declaration["material_sec"] = round(float(material_sec), 3)
             declaration["duration_retained"] = round(
-                duration / float(material_sec), 4
+                min(1.0, duration / float(material_sec)), 4
             )
     return declaration
 
@@ -6617,7 +6786,16 @@ def _run_locked(
         if errors:
             raise contract.VxError("EDL non valido: " + "; ".join(errors))
         media_by_source = _media_by_source_key(plan, staged, media_info_map)
-        segment_rows = segment_quality(plan, in_points)
+        staged_owner = {
+            str(_staged_path(result)): asset_id
+            for asset_id, result in staged.items()
+        }
+        source_owner = {
+            str(key): staged_owner.get(str(getattr(ref, "path", "") or ""))
+            or str(key)
+            for key, ref in getattr(plan, "sources", {}).items()
+        }
+        segment_rows = segment_quality(plan, in_points, owner=source_owner)
 
     bridge_summary: Dict[str, Any] = {
         "enabled": False,
@@ -7057,6 +7235,21 @@ def _run_locked(
         if isinstance(asset_id, str) and asset_id not in a_roll_indices:
             a_roll_indices[asset_id] = len(a_roll_indices)
 
+    # Il numero che il report dichiara come "materiale utile" e' il tetto vero:
+    # la somma delle corse utilizzabili, non la somma dei target. Se il piano
+    # non lo raggiunge, la nota dice quanta parte era davvero montabile.
+    usable_sec = usable_material_sec(in_points, selected, assets_by_id)
+    if usable_sec <= 0.0:
+        usable_sec = timeline_est
+    staged_owner = {
+        str(_staged_path(result)): asset_id for asset_id, result in staged.items()
+    }
+    source_owner = {
+        str(key): staged_owner.get(str(getattr(ref, "path", "") or "")) or str(key)
+        for key, ref in getattr(plan, "sources", {}).items()
+    }
+    runs_used = plan_runs_used(plan, in_points, source_owner)
+
     scene_block = payload.get("scene") if isinstance(payload, dict) else None
     requested_sec = (
         scene_block.get("duration_sec") if isinstance(scene_block, dict) else None
@@ -7184,7 +7377,8 @@ def _run_locked(
             in_points,
             segments=segment_rows,
             plan=plan,
-            material_sec=timeline_est,
+            material_sec=usable_sec,
+            runs_used=runs_used,
         ),
         "camera_exemptions": exemptions,
         "gate1": gate1.to_dict(),
@@ -7215,7 +7409,7 @@ def _run_locked(
         requested_sec,
         plan.duration_sec,
         fps,
-        material_sec=timeline_est,
+        material_sec=usable_sec,
     )
     if timeline_block is not None:
         # La coda della timeline: e' l'ultima battuta, quella che si accorcia o
@@ -7248,14 +7442,16 @@ def _run_locked(
             "pavimento): tenuti e dichiarati".format(count=len(below_plan))
         )
     retained = report["plan"].get("duration_retained")
-    if isinstance(retained, (int, float)) and float(retained) < 0.85:
+    retained_floor = 1.0 - float(IN_POINT_MAX_REMOVAL)
+    if isinstance(retained, (int, float)) and float(retained) < retained_floor - 1e-9:
         report.setdefault("warnings", []).append(
-            "plan: la timeline tiene il {pct:.0f}% del materiale ottenibile "
-            "({timeline:.2f}s su {material:.2f}s): il resto e' davvero "
-            "inutilizzabile".format(
+            "plan: la timeline tiene il {pct:.0f}% del materiale utilizzabile "
+            "({timeline:.2f}s su {material:.2f}s), sotto il minimo dichiarato "
+            "{floor:.0%}: il resto e' scarto oltre la quota ammessa".format(
                 pct=float(retained) * 100.0,
                 timeline=float(report["plan"].get("timeline_sec") or 0.0),
                 material=float(report["plan"].get("material_sec") or 0.0),
+                floor=retained_floor,
             )
         )
     if adapted and adapted.get("warning"):
@@ -7404,6 +7600,35 @@ def _run_locked(
     degrade.merge_into(report)
     if report.get("degraded"):
         _say("Accessori degradati: " + degrade.text(report) + " - il lavoro e' proseguito.")
+    # I numeri che il contratto del lavoro firma, gia' misurati da questo giro:
+    # un orchestratore (``vx reel``) li legge da qui invece di rimisurare un
+    # master che il motore ha appena controllato.
+    contrast_ratio = None
+    for item in verification.get("checks") or ():
+        if isinstance(item, Mapping) and str(item.get("id")) == "contrast":
+            measured = item.get("measured")
+            if isinstance(measured, Mapping) and isinstance(
+                measured.get("ratio"), (int, float)
+            ):
+                contrast_ratio = float(measured["ratio"])
+            break
+    report["measured"] = {
+        "duration_sec": round(float(plan.duration_sec), 6),
+        "requested_duration_sec": (
+            round(float(requested_sec), 6)
+            if isinstance(requested_sec, (int, float)) and not isinstance(requested_sec, bool)
+            else None
+        ),
+        "lufs": (qc_result.get("measured") or {}).get("i"),
+        "contrast": contrast_ratio,
+        "clips": sum(
+            len(getattr(track, "clips", ()) or ())
+            for track in getattr(plan, "video_tracks", ()) or ()
+        ),
+        "sources_measured": len(analyses),
+        "assets_used": len(selected),
+        "gates_wait_sec": (report.get("gates") or {}).get("total_waited_sec"),
+    }
     # L'esito e' sempre valorizzato, e viene dai fatti: master + verifiche verdi
     # -> ``delivered``; consegna fermata -> ``failed``; lavoro interrotto prima
     # della decisione -> ``incomplete``. Nessun report esce senza questa riga.

@@ -1116,6 +1116,69 @@ def payload_to_edl_plan(
             return 0.0, total, 0.0, row
         return start, end, point, row
 
+    def _take_runs(asset_id: str) -> List[Tuple[float, float]]:
+        """Le corse utilizzabili di un a-roll, in ordine, dentro la sorgente.
+
+        ``usable_runs`` e' la misura del probe (tutte le corse, non solo la
+        migliore). Un verdetto vecchio senza corse ricade sulla finestra unica
+        ``[usable_start, usable_end]``: stesso piano di prima, nessuna
+        invenzione.
+        """
+        row = verdicts.get(str(asset_id or "")) or {}
+        total = _media_duration(asset_id)
+        if row.get("excluded"):
+            return []
+        raw = row.get("usable_runs")
+        runs: List[Tuple[float, float]] = []
+        if isinstance(raw, (list, tuple)) and raw:
+            for item in raw:
+                if not isinstance(item, Mapping):
+                    continue
+                try:
+                    run_start = float(item.get("start"))
+                    run_end = float(item.get("end"))
+                except (TypeError, ValueError):
+                    continue
+                run_start = max(0.0, min(run_start, total))
+                run_end = max(run_start, min(run_end, total))
+                if run_end - run_start > 1e-9:
+                    runs.append((run_start, run_end))
+        if not runs:
+            start, end, _point, _row = _take_window(asset_id)
+            if end - start > 1e-9:
+                runs.append((start, end))
+        return runs
+
+    def _ordered_pieces(
+        runs: Sequence[Tuple[float, float]], point: float, first: bool
+    ) -> List[Tuple[float, float]]:
+        """Le corse nell'ordine in cui consumarle.
+
+        La prima clip entra dal punto di presa preferito (l'hook) e poi usa il
+        resto della sua corsa e le altre corse: nessun secondo della clip va
+        sprecato. Le clip successive partono dalla prima corsa e proseguono in
+        ordine, senza tornare indietro.
+        """
+        if not runs:
+            return []
+        if not first:
+            return list(runs)
+        index = 0
+        for position, (run_start, run_end) in enumerate(runs):
+            if run_start - 1e-9 <= point <= run_end + 1e-9:
+                index = position
+                break
+        run_start, run_end = runs[index]
+        start = max(run_start, min(point, run_end))
+        pieces: List[Tuple[float, float]] = []
+        if run_end - start > 1e-9:
+            pieces.append((start, run_end))
+        pieces.extend(runs[index + 1 :])
+        pieces.extend(runs[:index])
+        if start - run_start > 1e-9:
+            pieces.append((run_start, start))
+        return pieces
+
     if not a_entries:
         raise VxError("payload.asset_triage has no a_roll: cannot build a timeline")
 
@@ -1364,40 +1427,58 @@ def payload_to_edl_plan(
             )
         cursor = beat_plan.total
     else:
+        # Nessuna griglia: il piano riempie la durata chiesta consumando le
+        # corse utilizzabili, non la sola corsa del picco. La prima clip entra
+        # dal punto di presa preferito (l'hook), le successive proseguono in
+        # ordine. Ogni ``src_in`` cade dentro una corsa dichiarata: mai nel
+        # nero, nel freeze o sotto il pavimento.
         for index, entry in enumerate(a_entries[: len(lengths)]):
             asset_id = entry.get("asset_id")
+            if not isinstance(asset_id, str) or not asset_id:
+                raise VxError(f"selected a_roll[{index}] has no asset_id")
             ref = _source_ref(asset_id)
-            length = float(lengths[index])
-            begin = float(points[index]) if index < len(points) else 0.0
-            stop = float(ends[index]) if index < len(ends) else begin + length
-            take = max(0.0, min(length, stop - begin))
-            referenced[_source_id(asset_id)] = ref
-            a_clips.append(
-                edl_plan.ClipSegment(
-                    clip_id=f"v0_{index}",
-                    source_id=_source_id(asset_id),
-                    src_in=begin,
-                    src_out=begin + take,
-                    dst_in=cursor,
-                    dst_out=cursor + take,
-                    layer=0,
-                    role="main_talking_head",
+            budget = float(lengths[index])
+            point = float(points[index]) if index < len(points) else 0.0
+            pieces = _ordered_pieces(_take_runs(asset_id), point, index == 0)
+            remaining = budget
+            sub = 0
+            for run_start, run_end in pieces:
+                if remaining <= 1e-9:
+                    break
+                take = min(run_end - run_start, remaining)
+                if take <= 1e-9:
+                    continue
+                src_in = round(run_start, 6)
+                src_out = round(run_start + take, 6)
+                referenced[_source_id(asset_id)] = ref
+                a_clips.append(
+                    edl_plan.ClipSegment(
+                        clip_id=f"v0_{index}_{sub}",
+                        source_id=_source_id(asset_id),
+                        src_in=src_in,
+                        src_out=src_out,
+                        dst_in=cursor,
+                        dst_out=cursor + take,
+                        layer=0,
+                        role="main_talking_head",
+                    )
                 )
-            )
-            dialogue_clips.append(
-                edl_plan.ClipSegment(
-                    clip_id=f"a0_{index}",
-                    source_id=_source_id(asset_id),
-                    src_in=begin,
-                    src_out=begin + take,
-                    dst_in=cursor,
-                    dst_out=cursor + take,
-                    layer=0,
-                    role="dialogue",
-                    gain_db=0.0,
+                dialogue_clips.append(
+                    edl_plan.ClipSegment(
+                        clip_id=f"a0_{index}_{sub}",
+                        source_id=_source_id(asset_id),
+                        src_in=src_in,
+                        src_out=src_out,
+                        dst_in=cursor,
+                        dst_out=cursor + take,
+                        layer=0,
+                        role="dialogue",
+                        gain_db=0.0,
+                    )
                 )
-            )
-            cursor += take
+                cursor += take
+                remaining -= take
+                sub += 1
     duration = cursor
     if duration <= 0:
         raise VxError("a_roll total duration is zero")
