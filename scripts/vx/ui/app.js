@@ -12,6 +12,8 @@
     jobsList: $('jobsList'),
     jobsCount: $('jobsCount'),
     jobTitle: $('jobTitle'),
+    jobStamp: $('jobStamp'),
+    jobStampFile: $('jobStampFile'),
     jobClock: $('jobClock'),
     sessionLine: $('sessionLine'),
     sessionChip: $('sessionChip'),
@@ -41,6 +43,15 @@
     verdictMeta: $('verdictMeta'),
     resultMeta: $('resultMeta'),
     resultBody: $('resultBody'),
+    contract: $('contract'),
+    contractSub: $('contractSub'),
+    contractScore: $('contractScore'),
+    contractScoreWord: $('contractScoreWord'),
+    contractStrip: $('contractStrip'),
+    contractLog: $('contractLog'),
+    contractNote: $('contractNote'),
+    contractCorrupt: $('contractCorrupt'),
+    contractList: $('contractList'),
     fontGate: $('fontGate'),
     fontCards: $('fontCards'),
     fontReq: $('fontReq'),
@@ -238,7 +249,7 @@
   }
 
   // Il motivo arriva da `note`: si riporta com'è, senza inventarne uno.
-  function verdictSentence(kind, note) {
+  function verdictSentence(kind, note, hasMaster = false) {
     const reason = String(note || '').trim();
     const quoted = reason ? 'Motivo dichiarato: ' + reason + (/[.!?]$/.test(reason) ? '' : '.') : '';
 
@@ -252,7 +263,11 @@
     if (kind === 'failed') {
       return quoted || 'Il lavoro non è riuscito, senza un motivo dichiarato.';
     }
-    return 'Il master non è stato prodotto.' + (quoted ? ' ' + quoted : '');
+    return (
+      hasMaster
+        ? 'Il master c’è, ma il contratto non è tutto firmato.'
+        : 'Il master non è stato prodotto.'
+    ) + (quoted ? ' ' + quoted : '');
   }
 
   function sizeLabel(bytes) {
@@ -309,9 +324,18 @@
     return '';
   }
 
+  // Il nome da mostrare è quello **vero**: se il contratto ha timbrato il file,
+  // la pagina non deve chiamarlo ancora "master.mp4".
+  function displayMasterName(state) {
+    const run = state && state.run && typeof state.run === 'object' ? state.run : null;
+    const master = run && run.master && typeof run.master === 'object' ? run.master : null;
+    if (master && master.stamped === true && master.name) return String(master.name);
+    return String((state && state.master) || '').trim();
+  }
+
   function closeReport(state, verdict) {
     const ready = state.master_ready === true;
-    const name = String(state.master || '').trim() || 'master.mp4';
+    const name = displayMasterName(state) || 'master.mp4';
     const bytes = Number(state.master_bytes) || 0;
     const masterBit = ready
       ? "Il master c'è (" + name + (bytes > 0 ? ', ' + sizeLabel(bytes) : '') +
@@ -387,9 +411,11 @@
     }
 
     return {
-      word: OUTCOME_WORD.incomplete,
-      title: OUTCOME_TITLE.incomplete,
-      text: verdictSentence('incomplete', state.note) + ' ' + masterBit,
+      word: ready ? 'Contratto incompleto' : OUTCOME_WORD.incomplete,
+      title: ready ? 'Chiuso senza il contratto completo' : OUTCOME_TITLE.incomplete,
+      text: ready
+        ? verdictSentence('incomplete', state.note, true)
+        : verdictSentence('incomplete', state.note) + ' ' + masterBit,
       meta,
     };
   }
@@ -684,9 +710,349 @@
   // Il risultato dipende dal file, non da una parola: `master_ready` lo dice il
   // server leggendo il disco. Se il file c'è, il player è in pagina e il pulsante
   // apre lo stesso flusso a schermo intero; se non c'è, resta una riga sola.
+  /* --------------------------------------------------------------- contratto */
+
+  // Gli otto stadi del lavoro, nell'ordine in cui `vx reel` li firma. La
+  // promessa e la gloss sono scritte anche qui: il log non ripete una frase per
+  // lo stadio che non è mai arrivato, e la riga deve restare leggibile lo
+  // stesso. Il verdetto, però, viene solo dal log: senza, tutto è "mancante".
+  const CONTRACT_STAGES = [
+    'doctor',
+    'ingest',
+    'analyze',
+    'decide',
+    'gates',
+    'render',
+    'qc',
+    'deliver',
+  ];
+
+  const STAGE_GLOSS = {
+    doctor: 'ambiente',
+    ingest: 'materiale',
+    analyze: 'analisi',
+    decide: 'montaggio',
+    gates: 'cancelli',
+    render: 'render',
+    qc: 'qualità',
+    deliver: 'consegna',
+  };
+
+  const STAGE_PROMISE = {
+    doctor: "l'ambiente non è rotto: ffmpeg e libx264 rispondono",
+    ingest: 'almeno un asset entra nella timeline',
+    analyze: 'almeno una sorgente misurata',
+    decide: 'densità di taglio ≥ 1,0 tagli/10s',
+    gates: 'attesa totale ≤ 5,0 s',
+    render: 'durata del master = richiesta ± 1 frame',
+    qc: 'LUFS = target ± 1,5 LU',
+    deliver: 'contrasto del titolo ≥ 4,5',
+  };
+
+  // Cosa fare quando lo stadio fallisce: due scelte vere, non un "riprova".
+  const STAGE_DO = {
+    doctor: {
+      what: "L'ambiente non è utilizzabile: senza ffmpeg non parte nessun lavoro.",
+      opts: [
+        'Reinstalla ffmpeg e libx264, poi rilancia il lavoro',
+        "Sposta il lavoro su una macchina con ffmpeg funzionante",
+      ],
+    },
+    ingest: {
+      what: 'Nessun asset è entrato nella timeline.',
+      opts: [
+        'Aggiungi almeno un file alla cartella degli asset',
+        'Togli i file che non si aprono e rilancia import',
+      ],
+    },
+    analyze: {
+      what: "L'analisi non ha misurato nessuna sorgente.",
+      opts: [
+        'Rilancia l’analisi sui file importati',
+        'Escludi le sorgenti illeggibili e riprova',
+      ],
+    },
+    decide: {
+      what: 'Il montaggio è troppo lento: pochi tagli per la durata.',
+      opts: [
+        'Accorcia i clip: più tagli nella stessa durata',
+        'Accetta un ritmo più lento e abbassa la soglia',
+      ],
+    },
+    gates: {
+      what: 'Il lavoro ha aspettato troppo: i cancelli sono rimasti aperti.',
+      opts: [
+        'Rispondi ai cancelli appena la pagina li chiede',
+        'Rilancia senza cancelli, in autonomia',
+      ],
+    },
+    render: {
+      what: 'La durata del master non è quella richiesta.',
+      opts: [
+        'Taglia o allunga la timeline fino alla durata richiesta',
+        'Tieni la durata prodotta e aggiorna la richiesta',
+      ],
+    },
+    qc: {
+      what: 'Il loudness del master è fuori target.',
+      opts: [
+        'Normalizza il master al LUFS del target e rifai il QC',
+        'Sposta il target sul livello che il master ha davvero',
+      ],
+    },
+    deliver: {
+      what: 'Il titolo non è leggibile sul fotogramma campionato.',
+      opts: ['Contorno nero dietro al titolo', 'Sposta il titolo in safe zone'],
+    },
+  };
+
+  // Un numero del log, leggibile: la virgola è italiana, i decimali sono quelli
+  // misurati e non un arrotondamento che fa sembrare il valore un altro.
+  function measureValue(value) {
+    if (value === null || value === undefined || value === '') return 'n/d';
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return 'n/d';
+      if (Number.isInteger(value)) return String(value);
+      return value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '').replace('.', ',');
+    }
+    return String(value);
+  }
+
+  // Il server dice lo stato in italiano, il foglio di stile ha una classe per
+  // ognuno: questa tabella è l'unico punto in cui le due lingue si toccano.
+  const STATE_CLASS = { firmato: 'signed', fallito: 'failed', mancante: 'missing' };
+
+  function stateClass(state) {
+    return STATE_CLASS[String(state || 'mancante')] || 'missing';
+  }
+
+  function contractRow(name, index, stage) {
+    const state = String(stage.state || 'mancante');
+    const item = document.createElement('li');
+    item.className = 'cstage is-' + stateClass(state);
+
+    const idx = document.createElement('span');
+    idx.className = 'cstage-idx num';
+    idx.textContent = pad2(index + 1);
+
+    const label = document.createElement('span');
+    label.className = 'cstage-name';
+    label.textContent = name;
+    const gloss = document.createElement('span');
+    gloss.className = 'cstage-gloss';
+    gloss.textContent = STAGE_GLOSS[name] || '';
+    label.append(gloss);
+
+    const mid = document.createElement('div');
+    mid.className = 'cstage-mid';
+    const promise = document.createElement('p');
+    promise.className = 'cstage-contract';
+    promise.textContent =
+      String(stage.contract || '').trim() || STAGE_PROMISE[name] || '';
+    const measure = document.createElement('p');
+    measure.className = 'cstage-measure num';
+    if (state === 'mancante') {
+      measure.textContent = stage.event
+        ? 'in corso · nessuna firma'
+        : 'non misurato · nessuna firma';
+    } else {
+      measure.append(document.createTextNode('misurato '));
+      const value = document.createElement('b');
+      value.textContent = measureValue(stage.value);
+      measure.append(value);
+      if (stage.threshold !== null && stage.threshold !== undefined) {
+        measure.append(document.createTextNode(' · soglia '));
+        const threshold = document.createElement('b');
+        threshold.textContent = measureValue(stage.threshold);
+        measure.append(threshold);
+      } else {
+        measure.append(document.createTextNode(' · nessuna soglia'));
+      }
+    }
+    mid.append(promise, measure);
+
+    const pill = document.createElement('span');
+    pill.className = 'cstate';
+    pill.textContent = state;
+
+    item.append(idx, label, mid, pill);
+
+    if (state === 'fallito') {
+      const advice = STAGE_DO[name] || { what: '', opts: [] };
+      const say = document.createElement('p');
+      say.className = 'cstage-say';
+      say.textContent =
+        String(stage.why || '').trim() ||
+        advice.what ||
+        'Lo stadio non ha passato la sua soglia.';
+      item.append(say);
+
+      const opts = Array.isArray(advice.opts) ? advice.opts.slice(0, 2) : [];
+      if (opts.length) {
+        const wrap = document.createElement('div');
+        wrap.className = 'cstage-do';
+        const caption = document.createElement('p');
+        caption.className = 'cdo-label';
+        caption.textContent = 'Cosa fare';
+        const list = document.createElement('ul');
+        list.className = 'cdo-opts';
+        opts.forEach((text, position) => {
+          const choice = document.createElement('li');
+          choice.className = 'cdo-opt';
+          const key = document.createElement('span');
+          key.className = 'cdo-key';
+          key.textContent = position === 0 ? 'A' : 'B';
+          const body = document.createElement('span');
+          body.textContent = text;
+          choice.append(key, body);
+          list.append(choice);
+        });
+        wrap.append(caption, list);
+        item.append(wrap);
+      }
+    }
+    return item;
+  }
+
+  function paintContract(state) {
+    const run = state && state.run && typeof state.run === 'object' ? state.run : null;
+    if (!run) {
+      el.contract.hidden = true;
+      return;
+    }
+    el.contract.hidden = false;
+
+    const stages = run.stages && typeof run.stages === 'object' ? run.stages : {};
+    const corrupt =
+      run.corrupt && typeof run.corrupt === 'object' ? run.corrupt : null;
+    const total = Number(run.total) || CONTRACT_STAGES.length;
+    const signed = Number(run.count) || 0;
+    const failed = Array.isArray(run.failed) ? run.failed : [];
+    const present = run.present === true;
+
+    el.contract.classList.toggle('is-blocked', Boolean(corrupt) || failed.length > 0);
+    el.contract.classList.toggle('is-complete', run.complete === true);
+    el.contractScore.textContent = corrupt ? '—' : signed + '/' + total;
+    el.contractScoreWord.textContent = corrupt
+      ? 'ignoto'
+      : run.complete === true
+        ? 'firmati · completo'
+        : 'firmati';
+    el.contractSub.textContent = corrupt
+      ? 'il registro non si legge: nessuno stadio è verificabile'
+      : present
+        ? 'otto stadi, ognuno con la misura e la soglia'
+        : 'questo lavoro non ha un registro del contratto';
+
+    const log = String(run.log || '');
+    el.contractLog.textContent = log ? 'log · ' + log : '';
+    el.contractLog.hidden = !log;
+
+    const notes = [];
+    if (!present) {
+      notes.push(
+        'Nessun .vx/run.jsonl per questo lavoro: non è passato da vx reel, ' +
+          'quindi non c’è nessuno stadio firmato da mostrare.'
+      );
+    }
+    if (run.tail_truncated === true) {
+      notes.push(
+        'Il log finisce a metà riga: l’ultimo evento è stato perso in una ' +
+          'scrittura interrotta, non è una firma.'
+      );
+    }
+    if (corrupt) {
+      notes.push(
+        'Con una riga rotta non posso fidarmi di quelle dopo: nessuno stadio ' +
+          'qui è dichiarato firmato.'
+      );
+    }
+    el.contractNote.textContent = notes.join(' ');
+    el.contractNote.hidden = notes.length === 0;
+
+    // Il segno di quello che cambia: otto stati, la riga rotta, il log. Finché
+    // non cambia niente, il disegno resta — la pagina chiede ogni secondo.
+    const signature =
+      CONTRACT_STAGES.map((name) => (stages[name] && stages[name].state) || 'mancante').join('|') +
+      '|' + (corrupt ? 'c' + String(corrupt.line || '') : '') +
+      '|' + log +
+      '|' + String(run.tail_truncated === true);
+    if (el.contract.dataset.signature === signature) return;
+    el.contract.dataset.signature = signature;
+
+    el.contractStrip.textContent = '';
+    el.contractStrip.hidden = Boolean(corrupt);
+    el.contractList.textContent = '';
+    el.contractList.hidden = Boolean(corrupt);
+
+    if (!corrupt) {
+      CONTRACT_STAGES.forEach((name) => {
+        const stage = stages[name] && typeof stages[name] === 'object' ? stages[name] : {};
+        const seg = document.createElement('i');
+        seg.className = 'is-' + stateClass(stage.state);
+        el.contractStrip.append(seg);
+      });
+      CONTRACT_STAGES.forEach((name, index) => {
+        const stage = stages[name] && typeof stages[name] === 'object' ? stages[name] : {};
+        el.contractList.append(contractRow(name, index, stage));
+      });
+    }
+
+    el.contractCorrupt.textContent = '';
+    el.contractCorrupt.hidden = !corrupt;
+    if (corrupt) {
+      const title = document.createElement('p');
+      title.className = 'corrupt-title';
+      title.textContent = 'Il registro del contratto è illeggibile';
+
+      const line = document.createElement('p');
+      line.className = 'corrupt-line';
+      line.textContent =
+        'riga ' + String(Number(corrupt.line) || 1) + ' · ' +
+        (String(corrupt.why || '').trim() || 'contenuto non valido');
+
+      const say = document.createElement('p');
+      say.className = 'corrupt-say';
+      say.textContent =
+        'Il log è la prova delle firme: con una riga rotta non posso dire ' +
+        'quali stadi siano passati. Nessuno è verde per gentilezza.';
+
+      const hint = document.createElement('p');
+      hint.className = 'corrupt-do';
+      hint.textContent =
+        'Cosa fare: ripristina .vx/run.jsonl da una copia integra, oppure ' +
+        'rilancia il lavoro da capo in una cartella nuova.';
+
+      el.contractCorrupt.append(title, line, say, hint);
+    }
+  }
+
+  // Il timbro in testata: se il master si chiama NON-PUBBLICABILE-* la pagina
+  // lo dice subito, senza aprire il report. Il pulsante resta attivo perché il
+  // file esiste: è timbrato, non invisibile.
+  function paintStamp(state) {
+    const run = state && state.run && typeof state.run === 'object' ? state.run : null;
+    const master = run && run.master && typeof run.master === 'object' ? run.master : null;
+    const stamped = Boolean(master && master.stamped);
+    body.classList.toggle('is-stamped', stamped);
+    el.jobStamp.hidden = !stamped;
+    if (!stamped) {
+      el.jobStampFile.textContent = '';
+      el.jobStamp.removeAttribute('title');
+      return;
+    }
+    el.jobStampFile.textContent = String(master.name || 'master');
+    const failed = Array.isArray(run.failed) ? run.failed.join(', ') : '';
+    el.jobStamp.title = failed
+      ? 'Il contratto non passa (' + failed + '): il file è timbrato e non va consegnato.'
+      : 'Il file è timbrato: non va consegnato.';
+  }
+
   function paintResult(state, closed) {
     const ready = state.master_ready === true;
-    const name = String(state.master || '').trim();
+    // Il nome del file è quello vero: se il contratto l'ha timbrato, il nome
+    // che si legge è il timbro, non il "master.mp4" della cartella.
+    const name = displayMasterName(state);
     const bytes = Number(state.master_bytes) || 0;
     const signature =
       (ready ? 'ready|' + name + '|' + bytes : 'empty|' + (closed ? 'closed' : 'open')) +
@@ -3296,6 +3662,7 @@
       beat: {},
       progress: { value: null, source: '', age_sec: null, alive: false, why: '' },
       progress_source: '',
+      run: null,
     };
   }
 
@@ -3467,7 +3834,7 @@
     // Una classe sola decide cosa si vede: il resto della pagina non esiste.
     body.classList.add('is-empty');
     body.classList.remove('is-done', 'is-stopped', 'is-failed', 'is-incomplete');
-    body.classList.remove('has-master', 'is-offline');
+    body.classList.remove('has-master', 'is-offline', 'is-stamped');
     body.classList.add('is-idle');
 
     if (el.fontGate.open) closeGate();
@@ -3498,6 +3865,10 @@
 
     el.jobTitle.textContent = 'Nessun lavoro da mostrare';
     document.title = 'vx — nessun lavoro';
+
+    // Senza un lavoro non c'è un contratto da mostrare né un timbro da esibire.
+    el.contract.hidden = true;
+    el.jobStamp.hidden = true;
   }
 
   // Il contrario: c'è un lavoro, la pagina torna a essere una pagina di lavoro.
@@ -3556,6 +3927,8 @@
     lastState = state;
     paintJournal(state);
     paintDecisions(state);
+    paintStamp(state);
+    paintContract(state);
 
     const finished = !state.current && percent >= 99.9;
     const ready = state.master_ready === true;

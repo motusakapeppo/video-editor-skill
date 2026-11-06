@@ -173,6 +173,62 @@ body {
   gap: 3px;
 }
 
+/* Il timbro del master: se il file si chiama NON-PUBBLICABILE-* la testata lo
+   dice qui, a caratteri chiari, senza aspettare che si apra il report. */
+.job-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin: 0 0 3px;
+  padding: 4px 10px 4px 7px;
+  border: 1px solid rgba(255, 143, 143, .5);
+  border-radius: 6px;
+  background: rgba(255, 143, 143, .12);
+  box-shadow:
+    0 0 0 1px rgba(255, 143, 143, .08),
+    0 0 22px -8px rgba(255, 143, 143, .8);
+  font: 700 9.5px/1.2 var(--mono);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: #ffc9c9;
+  animation: stamp-in 420ms var(--ease-out) both;
+}
+
+.job-stamp-mark {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  background: rgba(255, 143, 143, .22);
+  font-size: 9px;
+  letter-spacing: 0;
+  color: #ff9d9d;
+}
+
+.job-stamp-file {
+  min-width: 0;
+  font: 500 10px/1.2 var(--mono);
+  letter-spacing: .02em;
+  text-transform: none;
+  color: #ffb3b3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.is-stamped .top { border-bottom-color: rgba(255, 143, 143, .28); }
+body.is-stamped .brand-dot {
+  background: #ff9d9d;
+  box-shadow: 0 0 12px rgba(255, 143, 143, .85);
+}
+
+@keyframes stamp-in {
+  from { opacity: 0; transform: scale(1.07) translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+
 .session-line {
   display: flex;
   align-items: center;
@@ -398,22 +454,23 @@ body {
 }
 
 .col-work > .stage { order: 1; }
-.col-work > .vote-card { order: 2; }
-.col-work > .live { order: 3; }
-.col-work > .journal { order: 4; }
-.col-work > .decisions { order: 5; }
-.col-work > .regia { order: 6; }
-.col-work > .result { order: 7; }
-.col-work > .deck-wrap { order: 8; }
+.col-work > .contract { order: 2; }
+.col-work > .vote-card { order: 3; }
+.col-work > .live { order: 4; }
+.col-work > .journal { order: 5; }
+.col-work > .decisions { order: 6; }
+.col-work > .regia { order: 7; }
+.col-work > .result { order: 8; }
+.col-work > .deck-wrap { order: 9; }
 
 /* Con il lavoro consegnato il player è la prima cosa dopo lo stato. */
-body.is-done .col-work > .result { order: 6; }
-body.is-done .col-work > .regia { order: 7; }
+body.is-done .col-work > .result { order: 7; }
+body.is-done .col-work > .regia { order: 8; }
 
 /* Un master pronto c'è anche quando il lavoro è chiuso male: il file va mostrato
    nella stessa posizione, senza farlo cercare in fondo alla pagina. */
-body.has-master .col-work > .result { order: 6; }
-body.has-master .col-work > .regia { order: 7; }
+body.has-master .col-work > .result { order: 7; }
+body.has-master .col-work > .regia { order: 8; }
 
 .col-rail { min-width: 0; }
 
@@ -538,6 +595,366 @@ body.is-offline .eyebrow { color: var(--warn); }
   text-transform: uppercase;
   color: var(--ink-2);
   white-space: nowrap;
+}
+
+/* ----------------------------------------------------------------- contratto */
+
+/* Il contratto non è un avanzamento: è la prova. Otto righe, ognuna con la
+   misura e la soglia che doveva passare; una sola può essere rossa. */
+.contract {
+  position: relative;
+  padding: 18px 22px 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(560px 220px at 96% -24%, rgba(78, 161, 255, .09), transparent 70%),
+    linear-gradient(180deg, #0f141a 0%, #0a0e13 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .045) inset,
+    0 20px 44px -34px rgba(0, 0, 0, .9);
+  overflow: hidden;
+  animation: rise 560ms var(--ease-out) 90ms backwards;
+}
+
+.contract::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(142, 200, 255, .8), rgba(78, 161, 255, .05) 78%);
+}
+
+.contract.is-blocked { border-color: rgba(255, 143, 143, .24); }
+.contract.is-blocked::before {
+  background: linear-gradient(180deg, #ff9d9d, rgba(255, 143, 143, .08) 78%);
+}
+
+.contract-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.contract-titles { min-width: 0; }
+
+.contract-head h2 {
+  margin: 0;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.contract-sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.contract-score {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.contract-score .num {
+  font: 600 21px/1 var(--mono);
+  letter-spacing: -.01em;
+  color: #e8eef6;
+}
+
+.contract-score-word {
+  font: 600 9.5px/1 var(--mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.contract.is-complete .contract-score .num { color: var(--ok); }
+.contract.is-blocked .contract-score .num { color: #ff9d9d; }
+
+.contract-strip {
+  display: flex;
+  gap: 4px;
+  margin: 13px 0 0;
+}
+
+.contract-strip i {
+  flex: 1 1 0;
+  height: 5px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .05);
+  transition: background var(--t-move) var(--e-in), box-shadow var(--t-move) var(--e-in);
+}
+
+.contract-strip i.is-signed {
+  background: linear-gradient(180deg, #6fe0a4, #3aa571);
+  box-shadow: 0 0 10px -2px rgba(111, 224, 164, .6);
+}
+
+.contract-strip i.is-failed {
+  background: linear-gradient(180deg, #ff9d9d, #d45555);
+  box-shadow: 0 0 12px -2px rgba(255, 143, 143, .7);
+  animation: contract-flag 2.5s var(--ease-soft) infinite;
+}
+
+.contract-strip i.is-missing {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(255, 255, 255, .12) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+@keyframes contract-flag {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+
+.contract-log {
+  margin: 10px 0 0;
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.contract-note {
+  margin: 9px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.contract-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.cstage {
+  display: grid;
+  grid-template-columns: 22px 104px minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: baseline;
+  padding: 9px 8px 9px 6px;
+  border-radius: 9px;
+  transition: background var(--t-in) var(--e-in);
+}
+
+.cstage + .cstage { box-shadow: 0 -1px 0 rgba(255, 255, 255, .045); }
+
+.cstage-idx {
+  font: 600 9.5px/1.7 var(--mono);
+  letter-spacing: .04em;
+  color: var(--ink-3);
+}
+
+.cstage-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font: 600 10.5px/1.5 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.cstage-gloss {
+  font: 400 10.5px/1.35 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
+}
+
+.cstage-mid { min-width: 0; }
+
+.cstage-contract {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.cstage-measure {
+  margin: 2px 0 0;
+  font-size: 10px;
+  letter-spacing: .05em;
+  color: var(--ink-3);
+}
+
+.cstage-measure b {
+  font-weight: 600;
+  color: #c8d6e5;
+}
+
+.cstate {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font: 600 8.5px/1 var(--mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.cstate::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Firmato: la riga si ritira, non ha più niente da chiedere. */
+.cstage.is-signed .cstage-name { color: #bfe6d2; }
+.cstage.is-signed .cstage-contract { color: var(--ink-3); }
+.cstage.is-signed .cstate {
+  color: var(--ok);
+  border-color: rgba(111, 224, 164, .28);
+  background: rgba(111, 224, 164, .07);
+}
+
+/* Fallito: è l'unica riga che deve farsi leggere per prima. */
+.cstage.is-failed {
+  margin: 3px 0;
+  border: 1px solid rgba(255, 143, 143, .26);
+  background: linear-gradient(90deg, rgba(255, 143, 143, .1), rgba(255, 143, 143, .015) 62%, transparent);
+  border-radius: 10px;
+  padding: 11px 12px 12px 10px;
+  box-shadow: none;
+}
+
+.cstage.is-failed + .cstage { box-shadow: none; }
+
+.cstage.is-failed .cstage-idx { color: #d79a9a; }
+.cstage.is-failed .cstage-name { color: #ffd6d6; }
+.cstage.is-failed .cstage-gloss { color: #cfa6a6; }
+.cstage.is-failed .cstage-contract { color: #e7c9c9; }
+.cstage.is-failed .cstage-measure b { color: #ffdede; }
+
+.cstage.is-failed .cstate {
+  color: #ff9d9d;
+  border-color: rgba(255, 143, 143, .45);
+  background: rgba(255, 143, 143, .13);
+}
+
+.cstage.is-missing .cstage-name { color: var(--ink-3); }
+.cstage.is-missing .cstage-contract { color: var(--ink-3); }
+.cstage.is-missing .cstate { border-style: dashed; }
+
+.cstage-say {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  padding: 2px 0 2px 11px;
+  border-left: 2px solid rgba(255, 143, 143, .55);
+  font: 500 14.5px/1.45 var(--display);
+  letter-spacing: .004em;
+  color: #ffdfdf;
+  max-width: 68ch;
+}
+
+.cstage-do {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-left: 13px;
+}
+
+.cdo-label {
+  margin: 0 0 6px;
+  font: 600 9.5px/1 var(--mono);
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  color: #d79a9a;
+}
+
+.cdo-opts {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+}
+
+.cdo-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .025);
+  font-size: 12px;
+  line-height: 1.3;
+  color: #dfe8f2;
+}
+
+.cdo-key {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgba(255, 143, 143, .16);
+  font: 700 9px/1 var(--mono);
+  color: #ffb3b3;
+}
+
+.contract-corrupt {
+  margin-top: 13px;
+  padding: 13px 15px 14px;
+  border: 1px solid rgba(255, 143, 143, .34);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 143, 143, .09), rgba(255, 143, 143, .02));
+}
+
+.corrupt-title {
+  margin: 0;
+  font: 600 14px/1.35 var(--display);
+  color: #ffdede;
+}
+
+.corrupt-line {
+  margin: 7px 0 0;
+  font: 600 12px/1.4 var(--mono);
+  letter-spacing: .04em;
+  color: #ffb3b3;
+}
+
+.corrupt-say {
+  margin: 7px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #d8b9b9;
+  max-width: 66ch;
+}
+
+.corrupt-do {
+  margin: 9px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 143, 143, .18);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #e6cbcb;
 }
 
 /* ------------------------------------------------------------- stato vuoto */
@@ -3920,6 +4337,24 @@ html.has-view body { overflow: hidden; }
   .result-card { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .monitor { width: min(100%, 280px); height: auto; margin: 0 auto; }
   .result-info { padding: 0 2px 4px; }
+  /* Il contratto su schermo stretto: indice e nome in cima, la misura sotto,
+     il verdetto a destra. Quattro colonne qui schiacciano la frase in colonna. */
+  .contract { padding: 16px 15px 18px 17px; }
+  .contract-score .num { font-size: 18px; }
+  .cstage { grid-template-columns: 20px minmax(0, 1fr) auto; padding: 10px 6px; }
+  .cstage-idx { grid-column: 1; grid-row: 1; }
+  .cstage-name {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 7px;
+  }
+  .cstage-state { grid-column: 3; grid-row: 1; }
+  .cstage-mid { grid-column: 2 / -1; grid-row: 2; }
+  .cstage.is-failed { padding: 11px 10px 12px 8px; }
+  .cstage-say { font-size: 13.5px; }
+  .cdo-opt { font-size: 11.5px; }
 }
 
 @media (max-width: 980px) {

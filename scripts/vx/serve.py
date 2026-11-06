@@ -7,7 +7,9 @@ Un server stdlib su `127.0.0.1`. Con **un** lavoro si comporta come sempre; con
 * ``/``                    la pagina, che chiede lo stato ogni secondo;
 * ``/api/state?job=N``     lo stato: fase, percentuale, fotogrammi, approvazione,
                            il master, gli ``shots`` con sorgente ed effetti, il
-                           registro ``decisions`` e la lista ``jobs``;
+                           registro ``decisions``, la lista ``jobs`` e il
+                           **contratto** ``run`` (gli otto stadi di
+                           ``.vx/run.jsonl`` con valore, soglia e verdetto);
 * ``/api/state?session=ID`` in modalita' sessione: ``session``, ``events``,
                            ``artifacts``, ``gates``, ``live`` e ``journal``;
 * ``/api/approve?job=N``   POST che scrive il record **nella forma di keygate**;
@@ -41,7 +43,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-from . import ask, degrade, feedback, guard, keygate, lock
+from . import ask, degrade, feedback, guard, keygate, lock, runlog
 from . import session as session_store
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
@@ -1213,6 +1215,315 @@ def render_state(directory: Path, plan: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+#: Il timbro che ``reel`` mette davanti al master quando il contratto non passa:
+#: il nome del file dice da solo che non e' un lavoro consegnabile.
+STAMP_PREFIX = "NON-PUBBLICABILE-"
+
+#: Gli otto stadi del contratto, nell'ordine in cui vanno letti.
+RUN_STAGES = runlog.STAGES
+
+#: La cache del blocco ``run``: ``percorso del log -> ((mtime_ns, byte), blocco)``.
+#: La verita' e' l'mtime del log, non un TTL: la pagina chiede ogni secondo e a
+#: caldo la risposta deve costare un ``stat``, non una rilettura con la catena di
+#: sha. Un log riscritto (``os.replace``) cambia inode e mtime: la voce scade.
+_run_cache: Dict[str, tuple] = {}
+
+
+def _empty_run(why: str = "") -> Dict[str, Any]:
+    """Nessun contratto leggibile: otto stadi mancanti, **non** otto stadi verdi.
+
+    La forma e' quella promessa alla pagina (``stages``/``complete``/``failed``/
+    ``log``/``corrupt``) anche quando non c'e' niente da leggere: cosi' la vista
+    non deve indovinare se un campo assente sia "tutto ok" o "non lo so".
+    """
+    stages = {
+        name: {
+            "stage": name,
+            "state": "mancante",
+            "event": "",
+            "ok": False,
+            "contract": "",
+            "value": None,
+            "threshold": None,
+            "why": why,
+            "at": "",
+            "seq": 0,
+        }
+        for name in RUN_STAGES
+    }
+    return {
+        "present": False,
+        "stages": stages,
+        "signed": [],
+        "failed": [],
+        "missing": list(RUN_STAGES),
+        "count": 0,
+        "total": len(RUN_STAGES),
+        "complete": False,
+        "log": "",
+        "workdir": "",
+        "at": "",
+        "corrupt": None,
+        "tail_truncated": False,
+        "why": why,
+        "master": {"name": "", "path": "", "stamped": False, "exists": False},
+    }
+
+
+def _run_log_path(
+    directory: Path,
+    data_dir: Optional[Path] = None,
+    report: Optional[Mapping[str, Any]] = None,
+) -> tuple:
+    """Dove sta ``.vx/run.jsonl``, e quale workdir lo possiede.
+
+    La fonte prima e' il report: ``reel`` scrive ``run.log`` proprio perche' la
+    vista non deve indovinare quando il lavoro e' dichiarato altrove. Poi la
+    cartella del lavoro, la sua ``work`` e le workdir che il report dichiara.
+    Nessun log trovato e' ``(None, None)``, mai un'eccezione.
+    """
+    base = _data_dir(directory) if data_dir is None else Path(data_dir)
+    if isinstance(report, Mapping):
+        block = report.get("run")
+        raw = block.get("log") if isinstance(block, Mapping) else None
+        if raw:
+            declared = Path(str(raw))
+            try:
+                if declared.is_file() and declared.parent.name == ".vx":
+                    return declared.parent.parent, declared
+            except OSError:
+                pass
+    folders: List[Path] = []
+    for folder in [
+        directory,
+        base,
+        directory / "work",
+        *_report_workdirs(directory, base),
+    ]:
+        try:
+            resolved = folder.resolve()
+        except OSError:
+            continue
+        if resolved not in folders:
+            folders.append(resolved)
+    for folder in folders:
+        log = runlog.path(folder)
+        try:
+            if log.is_file():
+                return folder, log
+        except OSError:
+            continue
+    return None, None
+
+
+def _tail_truncated(raw: bytes) -> bool:
+    """Vero se il log finisce a meta' riga: l'ultimo evento non e' mai successo.
+
+    ``runlog`` scarta una coda troncata (la caduta fra i byte e il newline), ma
+    la pagina deve **dirlo**: un evento perso e' un fatto, non un silenzio. Una
+    riga completa senza newline finale resta un evento valido e non e' troncata.
+    """
+    if not raw or raw.endswith(b"\n"):
+        return False
+    tail = raw.rsplit(b"\n", 1)[-1]
+    try:
+        json.loads(tail.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return True
+    return False
+
+
+def _run_state_uncached(workdir: Path, log: Path) -> Dict[str, Any]:
+    """Gli otto stadi come li racconta il log: firmati, falliti, mancanti.
+
+    L'ultimo evento di ogni stadio vince: un ``fail`` dopo un ``sign`` toglie la
+    firma. Un log rotto **non** produce stadi: la risposta dichiara la riga e il
+    motivo, e lascia tutti gli stadi mancanti — meglio "non lo so" di un verde
+    inventato.
+    """
+    corrupt: Optional[Dict[str, Any]] = None
+    records: List[Mapping[str, Any]] = []
+    try:
+        records = runlog.read(workdir)
+    except runlog.RunLogCorrupt as exc:
+        corrupt = {
+            "line": int(getattr(exc, "line", 0) or 0),
+            "why": str(getattr(exc, "why", "") or ""),
+            "message": str(exc),
+        }
+    except Exception as exc:  # noqa: BLE001 - un log che non si legge non ferma la vista
+        degrade.note("serve", exc)
+        corrupt = {
+            "line": 1,
+            "why": f"log illeggibile: {type(exc).__name__}",
+            "message": f"RUN_LOG_CORRUPT: {type(exc).__name__}: {exc}",
+        }
+    try:
+        raw = log.read_bytes()
+    except OSError:
+        raw = b""
+
+    last: Dict[str, Mapping[str, Any]] = {}
+    for record in records:
+        last[str(record.get("stage") or "")] = record
+
+    stages: Dict[str, Dict[str, Any]] = {}
+    for name in RUN_STAGES:
+        record = last.get(name)
+        if record is None:
+            stages[name] = {
+                "stage": name,
+                "state": "mancante",
+                "event": "",
+                "ok": False,
+                "contract": "",
+                "value": None,
+                "threshold": None,
+                "why": "",
+                "at": "",
+                "seq": 0,
+            }
+            continue
+        kind = str(record.get("event") or "")
+        ok = record.get("ok") is True
+        signed = kind == "sign" and ok
+        failed = not signed and (kind == "fail" or (kind == "sign" and not ok))
+        stages[name] = {
+            "stage": name,
+            "state": "firmato" if signed else ("fallito" if failed else "mancante"),
+            "event": kind,
+            "ok": ok,
+            "contract": str(record.get("contract") or ""),
+            "value": record.get("value"),
+            "threshold": record.get("threshold"),
+            "why": str(record.get("why") or ""),
+            "at": str(record.get("at") or ""),
+            "seq": int(record.get("seq") or 0),
+        }
+
+    signed_names = [name for name in RUN_STAGES if stages[name]["state"] == "firmato"]
+    failed_names = [name for name in RUN_STAGES if stages[name]["state"] == "fallito"]
+    return {
+        "present": True,
+        "stages": stages,
+        "signed": signed_names,
+        "failed": failed_names,
+        "missing": [name for name in RUN_STAGES if stages[name]["state"] == "mancante"],
+        "count": len(signed_names),
+        "total": len(RUN_STAGES),
+        # Otto firme vere e un log che si legge: "consegnato" non e' un'opinione.
+        "complete": bool(corrupt is None and len(signed_names) == len(RUN_STAGES)),
+        "log": str(log),
+        "workdir": str(workdir),
+        "at": str(records[-1].get("at") or "") if records else "",
+        "corrupt": corrupt,
+        "tail_truncated": _tail_truncated(raw),
+        "why": "",
+        "master": {"name": "", "path": "", "stamped": False, "exists": False},
+    }
+
+
+def _run_cached(workdir: Path, log: Path) -> Dict[str, Any]:
+    """Il blocco ``run`` riusato finche' (mtime, byte) del log non cambiano."""
+    key = str(log)
+    try:
+        info = log.stat()
+        stamp: Any = (info.st_mtime_ns, info.st_size)
+    except OSError:
+        stamp = None
+    with _cache_lock:
+        entry = _run_cache.get(key)
+    if entry is not None and stamp is not None and entry[0] == stamp:
+        return entry[1]
+    value = _run_state_uncached(workdir, log)
+    if stamp is not None:
+        with _cache_lock:
+            if len(_run_cache) > 16:
+                _run_cache.clear()
+            _run_cache[key] = (stamp, value)
+    return value
+
+
+def _contract_outcome(outcome: str, contract: Mapping[str, Any]) -> str:
+    """Il contratto può togliere un "consegnato", non regalarlo.
+
+    Un master scritto non è un lavoro consegnato: se il log c'è e non è tutto
+    firmato, ``done`` sarebbe una promessa che le firme non sostengono. Il
+    contrario (firme complete su un master sparito) non diventa ``done``: il
+    file è un fatto, e la pagina lo dice lo stesso.
+    """
+    if not isinstance(contract, Mapping) or not contract.get("present"):
+        return outcome
+    if contract.get("complete") is True or outcome != "done":
+        return outcome
+    return "failed" if (contract.get("failed") or contract.get("corrupt")) else "incomplete"
+
+
+def _run_master(
+    master: Optional[Path], report: Optional[Mapping[str, Any]]
+) -> Dict[str, Any]:
+    """Il file che il contratto consegna: il nome **vero**, timbro compreso.
+
+    Quando il report dichiara un master col prefisso ``NON-PUBBLICABILE-`` che
+    esiste davvero, vince quello: e' il file che ``reel`` ha rinominato, non il
+    ``master.mp4`` che la cartella mostra ancora. `stamped` e' l'unica cosa che
+    serve alla testata per dire "non pubblicabile" senza aprire il report.
+    """
+    declared: List[Path] = []
+    if isinstance(report, Mapping):
+        for field in ("master", "deliverable"):
+            raw = report.get(field)
+            if raw:
+                declared.append(Path(str(raw)))
+    for candidate in declared:
+        if candidate.name.startswith(STAMP_PREFIX):
+            return {
+                "name": candidate.name,
+                "path": str(candidate),
+                "stamped": True,
+                "exists": _ready_file(candidate),
+            }
+    if master is not None:
+        path = Path(master)
+        return {
+            "name": path.name,
+            "path": str(path),
+            "stamped": path.name.startswith(STAMP_PREFIX),
+            "exists": _ready_file(path),
+        }
+    if declared:
+        path = declared[0]
+        return {
+            "name": path.name,
+            "path": str(path),
+            "stamped": path.name.startswith(STAMP_PREFIX),
+            "exists": _ready_file(path),
+        }
+    return {"name": "", "path": "", "stamped": False, "exists": False}
+
+
+def run_state(
+    directory: Path,
+    data_dir: Optional[Path] = None,
+    report: Optional[Mapping[str, Any]] = None,
+    master: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Il contratto del lavoro: gli otto stadi, il verdetto, il log.
+
+    Il blocco e' uno solo per tutti i consumatori (pagina e sessione): la forma
+    pubblica non cambia fra un lavoro con log e uno senza. Il file del master si
+    rilegge a ogni giro (due ``stat``) perche' e' l'unica cosa che puo' cambiare
+    senza che il log cambi: il timbro, e se il file c'e' ancora.
+    """
+    workdir, log = _run_log_path(directory, data_dir, report)
+    if log is None or workdir is None:
+        block = _empty_run()
+    else:
+        block = dict(_run_cached(workdir, log))
+    block["master"] = _run_master(master, report)
+    return block
+
+
 def _ui(name: str) -> Optional[bytes]:
     if name not in UI_FILES:
         return None
@@ -1936,25 +2247,36 @@ def _job_brief(directory: Path) -> Dict[str, Any]:
 
     La risposta resta in cache per un secondo, con lo stamp sui due file che
     raccontano il lavoro (``progress.json`` e il report): finche' non cambiano,
-    l'elenco non rilegge niente. La guardia non si esegue qui (un audit puo'
-    avere un costo vero): vale il ``guard`` gia' dichiarato nel report, e per un
-    lavoro dedotto senza report si assume pulito. Lo stato completo del lavoro
-    scelto rifa' l'audit come prima.
+    l'elenco non rilegge niente. Lo stamp guarda anche ``.vx/``: un log del
+    contratto riscritto cambia l'esito, e la voce non deve restare indietro. La
+    guardia non si esegue qui (un audit puo' avere un costo vero): vale il
+    ``guard`` gia' dichiarato nel report, e per un lavoro dedotto senza report
+    si assume pulito. Lo stato completo del lavoro scelto rifa' l'audit come
+    prima.
     """
     directory = Path(directory)
-    return _cached_scan(
-        f"brief:{directory}",
-        lambda: _job_brief_uncached(directory),
-        lambda value: (
-            (
+
+    def stamp(value: Mapping[str, Any]) -> tuple:
+        if value.get("published"):
+            base: tuple = (
                 _mtime_ns(directory / "progress.json"),
                 _mtime_ns(directory / "report.json"),
                 _mtime_ns(directory / "out"),
                 _mtime_ns(Path(str(value["data_dir"])) / "keyframes"),
             )
-            if value.get("published")
-            else (_state_mtime(directory),)
-        ),
+        else:
+            base = (_state_mtime(directory),)
+        # Il contratto vive qui: un log riscritto cambia anche l'esito, e la
+        # voce in cache non deve continuare a dire "consegnato".
+        return base + (
+            _mtime_ns(directory / ".vx"),
+            _mtime_ns(Path(str(value["data_dir"])) / ".vx"),
+        )
+
+    return _cached_scan(
+        f"brief:{directory}",
+        lambda: _job_brief_uncached(directory),
+        stamp,
     )
 
 
@@ -2012,6 +2334,10 @@ def _job_brief_uncached(directory: Path) -> Dict[str, Any]:
         # parola sull'esito, e ``done`` non e' un esito possibile con violazioni.
         if outcome == "done" and guard.get("ok") is False:
             outcome = "failed"
+    # Il contratto e' la prova piu' forte che abbiamo: se il log c'e' e non e'
+    # tutto firmato, "consegnato" scende a "fallito" o "incompleto".
+    contract = run_state(directory, data_dir, report, master)
+    outcome = _contract_outcome(outcome, contract)
     return {
         "job": directory.name,
         "path": str(directory),
@@ -2034,6 +2360,7 @@ def _job_brief_uncached(directory: Path) -> Dict[str, Any]:
         "master": master,
         "ready": ready,
         "artifact_ready": artifact_ready,
+        "run": contract,
     }
 
 
@@ -2126,6 +2453,8 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         # parola sull'esito, e ``done`` non e' un esito possibile con violazioni.
         if outcome == "done" and guard_section.get("ok") is False:
             outcome = "failed"
+    contract = run_state(directory, data_dir, report, master)
+    outcome = _contract_outcome(outcome, contract)
     beat = _beat_state(directory)
     progress_block = _progress_block(
         directory,
@@ -2172,6 +2501,7 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         "beat": beat,
         "progress": progress_block,
         "progress_source": "derived" if derived else "json",
+        "run": contract,
     }
 
 
@@ -2201,6 +2531,9 @@ def _job_state_stamp(directory: Path) -> tuple:
         "out",
         "shots",
         LIVE_DIR,
+        # Il contratto vive qui: un log riscritto deve far scadere anche questa
+        # voce, o la pagina mostrerebbe le firme di un lavoro precedente.
+        ".vx",
     )
     stamps: List[Any] = [_mtime_ns(directory / name) for name in names]
     if data_dir != directory:
@@ -2702,6 +3035,7 @@ def _empty_job_payload(directory: Any, why: str = "") -> Dict[str, Any]:
             "why": why or "nessun lavoro da leggere",
         },
         "progress_source": "",
+        "run": _empty_run(why or "nessun lavoro da leggere"),
         "jobs": [],
         "selected": 0,
         "selector": False,
@@ -2774,6 +3108,7 @@ def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
                 "why": "nessun lavoro in corso · nessun progress.json da leggere",
             },
             "progress_source": "",
+            "run": _empty_run("nessun lavoro da mostrare"),
             "jobs": [],
             "selected": 0,
             "selector": False,
@@ -3513,7 +3848,7 @@ __all__ = ["ACTIVE_SEC", "FONT_CHOICE_NAME", "FONT_CHOICE_SCHEMA", "FONT_PROPOSA
            "MAX_DEPTH", "PAGE", "RECENT_SEC", "REVEAL", "RENDER_FRESH_SEC",
            "SHOT_DIR", "SHOT_LIMIT", "Server", "UI_DIR", "UI_FILES", "add_feedback",
            "approve", "discover", "font_pick", "live_state", "make_handler",
-           "render_state", "reveal", "reveal_native", "session_approve",
+           "render_state", "reveal", "reveal_native", "run_state", "session_approve",
            "session_chunk", "session_feedback", "session_font_pick",
            "session_master", "session_plan_choice", "session_reveal",
            "session_state", "shots", "state", "timeline"]

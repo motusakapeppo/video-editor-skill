@@ -20,6 +20,11 @@
         <span class="brand-role">banco di montaggio</span>
       </p>
       <div class="job-head">
+        <p class="job-stamp" id="jobStamp" hidden>
+          <span class="job-stamp-mark" aria-hidden="true">✕</span>
+          <span class="job-stamp-word">Non pubblicabile</span>
+          <span class="job-stamp-file num" id="jobStampFile"></span>
+        </p>
         <h1 class="job-title" id="jobTitle">Lavoro in corso</h1>
         <p class="session-line" id="sessionLine" hidden>
           <span class="session-chip" id="sessionChip">ultima sessione</span>
@@ -123,6 +128,26 @@
               <p class="verdict-meta num" id="verdictMeta"></p>
             </div>
           </div>
+        </section>
+
+        <!-- Il contratto del lavoro: otto stadi, ognuno con la sua misura.
+             Non è una percentuale: è quello che il log `.vx/run.jsonl` firma. -->
+        <section class="contract" id="contract" aria-labelledby="contractTitle" hidden>
+          <div class="contract-head">
+            <div class="contract-titles">
+              <h2 id="contractTitle">Contratto</h2>
+              <p class="contract-sub" id="contractSub">otto stadi, ognuno con la sua misura</p>
+            </div>
+            <p class="contract-score">
+              <span class="num" id="contractScore">—</span>
+              <span class="contract-score-word" id="contractScoreWord">firmati</span>
+            </p>
+          </div>
+          <div class="contract-strip" id="contractStrip" aria-hidden="true"></div>
+          <p class="contract-log num" id="contractLog"></p>
+          <p class="contract-note" id="contractNote" hidden></p>
+          <div class="contract-corrupt" id="contractCorrupt" role="alert" hidden></div>
+          <ol class="contract-list" id="contractList" aria-label="Gli otto stadi del contratto"></ol>
         </section>
 
         <section class="vote-card" id="voteCard" hidden aria-labelledby="voteTitle">
