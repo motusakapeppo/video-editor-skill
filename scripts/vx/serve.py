@@ -2610,10 +2610,21 @@ def session_master(session_id: Optional[str] = None) -> Optional[Path]:
 
 def session_reveal(session_id: Optional[str] = None) -> Dict[str, Any]:
     master = session_master(session_id)
-    if master is None:
-        return {"ok": False, "reason": "il master non esiste ancora"}
-    REVEAL(master)
-    return {"ok": True, "folder": str(master.parent), "name": master.name}
+    if master is not None:
+        REVEAL(master)
+        return {"ok": True, "folder": str(master.parent), "name": master.name}
+    # Nessun master vivo: si apre la cartella del lavoro della sessione, dicendolo.
+    job = _session_job(session_id)
+    if job is not None and job.is_dir():
+        folder = _data_dir(job)
+        REVEAL(folder if folder.is_dir() else job)
+        return {
+            "ok": True,
+            "folder": str(folder if folder.is_dir() else job),
+            "name": "",
+            "note": "nessun master nella sessione: apro la cartella del lavoro",
+        }
+    return {"ok": False, "reason": "il master non esiste ancora"}
 
 
 def session_chunk(session_id: Optional[str], name: str) -> Optional[Path]:
@@ -2842,15 +2853,30 @@ def _failed_brief(directory: Path, exc: BaseException) -> Dict[str, Any]:
 
 
 def reveal_native(path: Path) -> None:
-    """Apre la cartella col file selezionato, senza toccare il file."""
+    """Apre la cartella col file selezionato, senza toccare il file.
+
+    Su Windows il percorso **non** si passa come voce di lista: ``subprocess``
+    quota un argomento che contiene spazi, quindi Explorer riceve
+    ``"/select,C:\\...\\sp ace\\file.mp4"``, non riconosce piu' lo switch e apre
+    la cartella predefinita (Documenti). Riprodotto: un lavoro in
+    ``D:\\VOX POPULI - ALBUM\\...`` apriva ``Documenti``. Serve **una stringa
+    sola**, con le virgolette gia' dentro.
+    """
     path = Path(path)
+    # Se il file indicato non c'e' piu' (spostato, rinominato, cancellato) si apre
+    # la sua cartella: meglio una cartella giusta di una finestra sbagliata.
+    target = path if path.is_file() else path.parent
+    if not target.exists():
+        return
     if os.name == "nt":
-        # `explorer /select,` vuole la virgola attaccata al percorso.
-        subprocess.Popen(["explorer", f"/select,{path}"])  # noqa: S603,S607
+        if target.is_file():
+            subprocess.Popen(f'explorer /select,"{target}"')  # noqa: S603,S607
+        else:
+            os.startfile(str(target))  # type: ignore[attr-defined]  # noqa: S606
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", str(path)])  # noqa: S603,S607
+        subprocess.Popen(["open", "-R", str(target)])  # noqa: S603,S607
     else:
-        subprocess.Popen(["xdg-open", str(path.parent)])  # noqa: S603,S607
+        subprocess.Popen(["xdg-open", str(target.parent)])  # noqa: S603,S607
 
 
 #: Sostituibile nei test: qui si vuole provare il contratto, non aprire finestre.
@@ -2862,7 +2888,9 @@ def reveal(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
 
     Si apre **solo** il file d'uscita di un lavoro scoperto — quello registrato
     in ``progress.json`` o, per un lavoro dedotto, quello presente in ``out/``:
-    la richiesta sceglie il lavoro, non il percorso.
+    la richiesta sceglie il lavoro, non il percorso. Se il file registrato non
+    esiste piu' (spostato o cancellato) si apre la **cartella del lavoro** e lo
+    si dice: meglio una cartella giusta di una finestra sbagliata.
     """
     jobs = discover(root)
     if not jobs:
@@ -2870,10 +2898,25 @@ def reveal(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     chosen = _default_index(jobs) if index is None else max(0, min(int(index), len(jobs) - 1))
     directory = jobs[chosen]
     master = _master_path(directory, _read_json(directory / "progress.json"))
-    if master is None or not master.is_file():
-        return {"ok": False, "reason": "il master non esiste ancora"}
-    REVEAL(master)
-    return {"ok": True, "folder": str(master.parent), "name": master.name}
+    if master is not None and master.is_file():
+        REVEAL(master)
+        return {"ok": True, "folder": str(master.parent), "name": master.name}
+    folder = _data_dir(directory)
+    if not folder.is_dir():
+        folder = directory
+    if not folder.is_dir():
+        return {"ok": False, "reason": "la cartella del lavoro non esiste piu'"}
+    REVEAL(folder)
+    return {
+        "ok": True,
+        "folder": str(folder),
+        "name": "",
+        "note": (
+            "il master indicato non esiste piu': apro la cartella del lavoro"
+            if master is not None
+            else "nessun master registrato: apro la cartella del lavoro"
+        ),
+    }
 
 
 def approve(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
