@@ -3916,6 +3916,36 @@ def cmd_learn(args: argparse.Namespace) -> int:
             f"eventi {data['events_count']} | corpus {data['corpus_count']} | "
             f"archivi {data['archive_count']} | piu' vecchio {oldest}"
         )
+        # Il registro dei giudizi e' un'altra cosa dall'archivio che si pota:
+        # senza questa riga "eventi 0" sembrava "nessuno ha mai votato", e per
+        # due giorni si e' creduto che le valutazioni non venissero registrate.
+        from . import feedback as feedback_mod  # noqa: PLC0415 - solo su richiesta
+
+        verdicts = feedback_mod.report()
+        count = int(verdicts.get("count") or 0)
+        if count:
+            mean = verdicts.get("mean")
+            spread = "  ".join(
+                f"{value}:{verdicts['distribution'].get(str(value), 0)}"
+                for value in feedback_mod.RATINGS
+            )
+            print(
+                f"giudizi umani {count} | media "
+                f"{float(mean):.2f}/5 | {spread}"
+                if mean is not None
+                else f"giudizi umani {count} | media non calcolabile"
+            )
+            print(f"  registro: {verdicts.get('root')}")
+            if verdicts.get("error"):
+                print(f"  registro illeggibile: {verdicts['error']}")
+            correlation = verdicts.get("correlation") or {}
+            if count < int(correlation.get("min_n") or 0):
+                print(
+                    f"  sotto {correlation.get('min_n')} valutazioni: la correlazione "
+                    "non e' conclusiva, la policy resta v0"
+                )
+        else:
+            print(f"giudizi umani 0 | registro: {verdicts.get('root')}")
         if data["will_prune_next"]:
             print(
                 f"prossima potatura: {len(data['will_prune_next'])} elementi, "
@@ -3952,6 +3982,17 @@ def cmd_learn(args: argparse.Namespace) -> int:
             _out(data)
             return EXIT_OK
         print(f"policy v{int(data.get('version') or 0)} ({data.get('updated_utc') or 'mai salvata'})")
+        from . import feedback as feedback_mod  # noqa: PLC0415 - solo su richiesta
+
+        verdicts = feedback_mod.report()
+        count = int(verdicts.get("count") or 0)
+        if count:
+            print(
+                f"  giudizi nel registro: {count} (media "
+                f"{float(verdicts['mean']):.2f}/5)"
+                if verdicts.get("mean") is not None
+                else f"  giudizi nel registro: {count}"
+            )
         thresholds = data.get("thresholds") or {}
         for key in sorted(thresholds):
             print(f"  {key:<22} {thresholds[key]}")

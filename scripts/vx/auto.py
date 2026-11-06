@@ -3538,7 +3538,11 @@ def _shorten_variety(plan: Any, workdir: Path) -> Tuple[Any, Dict[str, Any]]:
     from . import coherence  # noqa: PLC0415 - import cost at call time
 
     try:
-        frames = coherence.sample_frames(plan, workdir / "variety")
+        # I fotogrammi campionati sono un intermedio: vanno sotto `cache/`, che e'
+        # una cartella dichiarata del lavoro. Scritti in `<workdir>/variety/`
+        # facevano comparire un artefatto in piu' e il test di crash (che
+        # controlla il layout della workdir) lo segnalava come corpo estraneo.
+        frames = coherence.sample_frames(plan, workdir / "cache" / "variety")
         candidate, block = coherence.shorten_plan(plan, frames)
     except Exception as exc:  # noqa: BLE001 - il montaggio prosegue, il report no
         degrade.note("variety", exc)

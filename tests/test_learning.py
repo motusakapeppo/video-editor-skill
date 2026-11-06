@@ -421,6 +421,47 @@ def test_module_hygiene() -> None:
     check("nessun riferimento a socket/urllib/http", not re.search(r"\b(socket|urllib|http\.client)\b", source))
 
 
+def test_feedback_is_not_the_archive(base: Path) -> None:
+    """Un giudizio umano vive nel suo registro, non nell'archivio che si pota.
+
+    Il 6 novembre 2026 due valutazioni vere (4 novembre, voti 2 e 1) sono state
+    lette come "nessuna valutazione" perche' ``learn status`` stampava solo
+    ``eventi 0``: il registro dei giudizi e' un altro file, e nessuno lo contava.
+    Questi check tengono separati i due numeri.
+    """
+    from vx import feedback  # noqa: PLC0415 - modulo sotto prova solo qui
+
+    root = base / "feedback-root"
+    root.mkdir(parents=True, exist_ok=True)
+    empty = feedback.report(root=root)
+    check("registro vuoto: zero giudizi, nessuna media", empty["count"] == 0 and empty["mean"] is None, empty["count"])
+    feedback.append(
+        {
+            "job_id": "job-registry",
+            "prompt": "una prova",
+            "rating": 2,
+            "note": "",
+            "context": {"outcome": "failed"},
+        },
+        root=root,
+    )
+    data = feedback.report(root=root)
+    check("il giudizio e' nel registro", data["count"] == 1, data["count"])
+    check("la media si calcola dal registro", data["mean"] == 2.0, data["mean"])
+    archive = learning.status(root=base / "learning-root")
+    check(
+        "l'archivio dell'apprendimento resta a zero eventi",
+        archive["events_count"] == 0,
+        archive["events_count"],
+    )
+    check(
+        "i due numeri non si confondono piu'",
+        learning.policy_load(root=base / "learning-root")["version"] == 0
+        and data["count"] == 1,
+        (learning.policy_load(root=base / "learning-root")["version"], data["count"]),
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx-learning-") as tmp:
         base = Path(tmp)
@@ -430,6 +471,7 @@ def main() -> int:
         test_status_and_prune(base)
         test_archive(base)
         test_policy(base)
+        test_feedback_is_not_the_archive(base)
     test_module_hygiene()
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
