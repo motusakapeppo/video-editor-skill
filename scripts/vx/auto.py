@@ -3355,7 +3355,7 @@ def _bridge_plan(
             faces=face_tracks,
             motion=motion,
         )
-    return new_plan, report, analyses
+    return new_plan, report, analyses, motion
 
 
 def audio_summary(
@@ -3526,25 +3526,111 @@ def _render_effects(report: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
     return reframe, restore
 
 
+def _shorten_variety(plan: Any, workdir: Path) -> Tuple[Any, Dict[str, Any]]:
+    """C8, legge B: applica ``coherence.shorten_plan`` prima del ponte.
+
+    Il taglio delle ripetizioni deve avvenire **prima** che il ponte costruisca
+    caption, reframe e tracce audio: accorciare dopo disallineerebbe tutto. I
+    fotogrammi sono quelli campionati sullo stesso piano che si sta per montare.
+    Un accorciamento impossibile non e' un ``ok``: il blocco porta il motivo e
+    ``removed: 0``.
+    """
+    from . import coherence  # noqa: PLC0415 - import cost at call time
+
+    try:
+        frames = coherence.sample_frames(plan, workdir / "variety")
+        candidate, block = coherence.shorten_plan(plan, frames)
+    except Exception as exc:  # noqa: BLE001 - il montaggio prosegue, il report no
+        degrade.note("variety", exc)
+        return plan, {
+            "removed": 0,
+            "duration_before": round(float(getattr(plan, "duration_sec", 0.0)), 3),
+            "duration_after": round(float(getattr(plan, "duration_sec", 0.0)), 3),
+            "threshold": int(contract.THRESHOLDS["variety_repeat_max"]),
+            "min_duration": float(contract.THRESHOLDS["variety_min_duration_sec"]),
+            "below_minimum": False,
+            "remaining_runs": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    if block.get("removed"):
+        _say(
+            f"Varieta': {block['removed']} inquadrature ripetute tolte, "
+            f"{block['duration_before']:.2f}s -> {block['duration_after']:.2f}s "
+            f"(soglia {block['threshold']})"
+        )
+    return candidate, block
+
+
+def _effect_evidence(
+    plan: Any,
+    motion: Mapping[str, Any],
+    bridge_report: Any = None,
+    frames: Optional[Mapping[str, str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Le misure per clip che rendono ammissibile una spec (C8, legge A).
+
+    Ogni clip di layer 0 porta solo cio' che e' stato misurato su di lei:
+    jitter e cast colore dall'analisi della sorgente, volti inseguiti dai
+    keyframe del ponte, bordo/centro dal fotogramma campionato dalla coerenza.
+    Un dato assente resta assente: nessun default zero.
+    """
+    tracked = {
+        str(item.get("clip_id"))
+        for item in getattr(bridge_report, "reframe", ()) or ()
+        if item.get("keyframes")
+    }
+    out: Dict[str, Dict[str, Any]] = {}
+    for track in getattr(plan, "video_tracks", ()) or ():
+        for clip in getattr(track, "clips", ()) or ():
+            if int(getattr(clip, "layer", 0) or 0) != 0:
+                continue
+            clip_id = str(getattr(clip, "clip_id", "") or "")
+            if not clip_id:
+                continue
+            measures: Dict[str, Any] = {}
+            source_id = str(getattr(clip, "source_id", "") or "")
+            analysis = motion.get(source_id)
+            if analysis is not None and not isinstance(analysis, BaseException):
+                to_dict = getattr(analysis, "to_dict", None)
+                data = to_dict() if callable(to_dict) else analysis
+                if isinstance(data, Mapping):
+                    jitter = data.get("jitter")
+                    if isinstance(jitter, Mapping):
+                        measures["jitter"] = jitter.get("score")
+                    color = data.get("color")
+                    if isinstance(color, Mapping):
+                        measures["cast_rg"] = color.get("cast_rg")
+                        measures["cast_by"] = color.get("cast_by")
+                        measures["saturation"] = color.get("saturation")
+            measures["faces"] = 1 if clip_id in tracked else 0
+            if frames and clip_id in frames:
+                measures.update(efx.frame_measures(frames[clip_id]))
+            out[clip_id] = measures
+    return out
+
+
 def _coherence_section(
     args: Any,
     workdir: Path,
     plan: Any,
     bridge_report: Any,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Dict[int, str]]:
     """Il referto di coerenza, calcolato prima del render.
 
-    Senza flag il lavoro prosegue anche con violazioni: il report e la
-    narrazione devono dire quali sono, non bloccare in silenzio ne' fingere un
-    successo pulito. ``--free``/``--no-coherence`` spegne i controlli e lo
-    dichiara (``disabled``), perche' un ``ok`` senza controllo non e' un ``ok``.
+    Ritorna ``(referto, fotogrammi)``: i PNG campionati servono alla legge A
+    (prova del bordo) senza estrarli una seconda volta. Senza flag il lavoro
+    prosegue anche con violazioni: il report e la narrazione devono dire quali
+    sono, non bloccare in silenzio ne' fingere un successo pulito.
+    ``--free``/``--no-coherence`` spegne i controlli e lo dichiara
+    (``disabled``), perche' un ``ok`` senza controllo non e' un ``ok``.
     """
     from . import coherence
 
+    frames: Dict[int, str] = {}
     if bool(getattr(args, "free", False) or getattr(args, "no_coherence", False)):
         section = coherence.disabled("--free/--no-coherence")
         _say(f"Coerenza: {section['reason']}")
-        return section
+        return section, frames
     try:
         frames = coherence.sample_frames(plan, workdir / "coherence")
         section = coherence.evaluate(
@@ -3564,7 +3650,7 @@ def _coherence_section(
                 "checked": False,
                 "unknown": [{"check": "coherence", "reason": reason}],
             },
-        }
+        }, {}
     metrics = section.get("metrics") or {}
     if section.get("ok"):
         _say(
@@ -3577,7 +3663,7 @@ def _coherence_section(
         _say(f"Coerenza: {len(section['violations'])} violazioni — {codes}")
         for item in section["violations"]:
             _say(f"  {item.get('code')}: {item.get('evidence')}")
-    return section
+    return section, frames
 
 
 def _say(msg: str) -> None:
@@ -6322,14 +6408,57 @@ def _shot_max_reason(section: Mapping[str, Any], plan: Any) -> str:
     )
 
 
+def taste_law_checks(laws: Any) -> List[Dict[str, Any]]:
+    """I check bloccanti delle due leggi del gusto (C8).
+
+    ``laws`` e' il blocco ``report["laws"]``: ``law_a`` (prova e tetto dei
+    trattamenti) e ``law_b`` (ripetizioni e durata minima). Ogni violazione
+    diventa un check ``passed: False`` con la misura e la soglia, cosi'
+    ``apply_verification`` ferma la consegna e ``vx reel`` la vede come uno
+    stadio fallito. Una legge rispettata non produce nessun check.
+    """
+    data = laws if isinstance(laws, Mapping) else {}
+    checks: List[Dict[str, Any]] = []
+    for law in (data.get("law_a") or {}, data.get("law_b") or {}):
+        if not isinstance(law, Mapping):
+            continue
+        for violation in law.get("violations") or ():
+            if not isinstance(violation, Mapping):
+                continue
+            checks.append(
+                {
+                    "id": "taste_" + str(violation.get("code") or "law"),
+                    "passed": False,
+                    "measured": {
+                        "code": violation.get("code"),
+                        "value": violation.get("measured"),
+                        "names": violation.get("names"),
+                    },
+                    "expected": {"threshold": violation.get("threshold")},
+                    "why": str(violation.get("why") or ""),
+                }
+            )
+    return checks
+
+
 def _recipe_effects(
-    section: Dict[str, Any], plan: Any, workdir: Path
+    section: Dict[str, Any],
+    plan: Any,
+    workdir: Path,
+    *,
+    evidence: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    frames: Optional[Mapping[str, str]] = None,
 ) -> tuple[Dict[str, Any], Any]:
     """Genera le spec ``vx.effects`` per clip e le attacca al piano.
 
     Zero e' un valore: nessuna spec, nessuna tabella sul piano, grafo identico.
     Un nome non valido e' un errore (:class:`vx.efx.EffectError`), non un
     effetto inventato: qui si degrada e si dichiara, senza scrivere nulla.
+
+    Con ``evidence`` (C8, legge A) la generazione e' *strict*: ogni spec porta
+    una misura fatta su quella clip, le spec senza prova cadono e si contano,
+    e i trattamenti creativi distinti restano sotto il tetto del contratto.
+    Senza ``evidence`` (chiamata storica, test) resta il comportamento vecchio.
     """
     per_shot = _recipe_param(section, "effects_per_shot")
     if per_shot is None:
@@ -6363,9 +6492,14 @@ def _recipe_effects(
             },
             plan,
         )
+    strict = evidence is not None
     try:
         result = efx.generate(
-            plan, density, salt=str(section.get("name") or "")
+            plan,
+            density,
+            salt=str(section.get("name") or ""),
+            evidence=evidence,
+            strict=strict,
         )
     except Exception as exc:  # noqa: BLE001 - un effetto rotto non e' il montaggio
         degrade.note("recipe.effects", exc)
@@ -6384,6 +6518,12 @@ def _recipe_effects(
     if table:
         object.__setattr__(plan, "effects", table)
     summary = efx.summary(result)
+    if strict and evidence is not None and frames:
+        # La prova del bordo dipende dal fotogramma: se la clip non ne aveva uno
+        # la spec "vignette" e' gia' caduta, e il report lo dice.
+        summary["frames_measured"] = len(
+            [clip_id for clip_id in (table or {}) if clip_id in frames]
+        )
     path = Path(workdir) / "effects.json"
     try:
         path.write_text(
@@ -6394,12 +6534,21 @@ def _recipe_effects(
     except OSError as exc:
         degrade.note("effects.file", exc)
         path = None  # type: ignore[assignment]
+    detail = (
+        f"{summary['specs']} spec su {summary['clips']} clip, costo {summary['cost']:g}"
+        f"/{summary['budget']:g}"
+    )
+    if strict:
+        detail += (
+            f"; {summary.get('dropped_no_evidence', 0)} scartate senza prova, "
+            f"{summary.get('creative_distinct', 0)} trattamenti creativi distinti "
+            f"su {summary.get('creative_max', 0)}"
+        )
     _declare_param(
         section,
         "effects_per_shot",
         "plan.effects -> render.render_edl",
-        f"{summary['specs']} spec su {summary['clips']} clip, costo {summary['cost']:g}"
-        f"/{summary['budget']:g}",
+        detail,
     )
     return (
         {
@@ -6785,6 +6934,26 @@ def _run_locked(
         errors = plan.validate()
         if errors:
             raise contract.VxError("EDL non valido: " + "; ".join(errors))
+
+    # C8, legge B: prima del ponte si tolgono le inquadrature ripetute. Il
+    # ponte costruisce caption, reframe e bus audio sul piano che riceve:
+    # accorciare dopo disallineerebbe tutto. Il blocco ``variety`` va nel report.
+    with clock.time("variety"):
+        plan, variety_block = _shorten_variety(plan, workdir)
+    _emit(
+        log,
+        "variety",
+        "done" if variety_block.get("removed") else "skip",
+        (
+            f"{variety_block.get('removed')} ripetizioni tolte, "
+            f"{variety_block.get('duration_before')}s -> "
+            f"{variety_block.get('duration_after')}s"
+            if variety_block.get("removed")
+            else str(variety_block.get("note") or "materiale vario, piano intatto")
+        ),
+    )
+
+    with clock.time("plan"):
         media_by_source = _media_by_source_key(plan, staged, media_info_map)
         staged_owner = {
             str(_staged_path(result)): asset_id
@@ -6814,12 +6983,13 @@ def _run_locked(
     captions_srt: Optional[str] = None
     bridge_gains_applied = False
     analyses: Dict[str, Any] = {}
+    motion: Dict[str, Any] = {}
     bridge_report: Any = None
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge", log=log, status="start")
         # Un testo sopra il video non si scrive se nessuno l'ha chiesto.
         subs_enabled = bool(getattr(args, "subs", False))
-        plan, bridge_report, analyses = _bridge_plan(
+        plan, bridge_report, analyses, motion = _bridge_plan(
             plan,
             captions=subs_enabled,
             media=media_by_source,
@@ -6888,7 +7058,14 @@ def _run_locked(
     # prima del render, e finisce in ``report["coherence"]``. Le violazioni non
     # fermano il lavoro, ma non possono sparire nel silenzio.
     with clock.time("coherence"):
-        coherence_section = _coherence_section(args, workdir, plan, bridge_report)
+        coherence_section, coherence_frames = _coherence_section(
+            args, workdir, plan, bridge_report
+        )
+    from . import coherence as coherence_mod  # noqa: PLC0415
+    # La mappa clip_id -> PNG si costruisce sul piano che la coerenza ha
+    # guardato: se il piano creativo cambia, i clip sopravvissuti portano la
+    # prova del proprio fotogramma, non quella di un indice riciclato.
+    evidence_frames = coherence_mod.frames_by_clip(plan, coherence_frames)
     _emit(
         log,
         "coherence",
@@ -6961,8 +7138,19 @@ def _run_locked(
     # Gli effetti della ricetta: dopo che il piano definitivo e' stato scelto
     # (creative puo' sostituirlo) e prima del render, che li legge da
     # ``plan.effects``. zero e' un valore: nessuna tabella, grafo identico.
+    # C8, legge A: la generazione riceve le misure per clip (jitter, cast,
+    # volti, bordo dal fotogramma); senza prova la spec non nasce.
     with clock.time("effects"):
-        effects_section, plan = _recipe_effects(recipe_section, plan, workdir)
+        evidence = _effect_evidence(
+            plan, motion, bridge_report, evidence_frames
+        )
+        effects_section, plan = _recipe_effects(
+            recipe_section,
+            plan,
+            workdir,
+            evidence=evidence,
+            frames=evidence_frames,
+        )
     recipe_section["effects"] = effects_section
     _emit(
         log,
@@ -6970,7 +7158,9 @@ def _run_locked(
         "done" if effects_section.get("applied") else "skip",
         (
             f"{effects_section.get('specs', 0)} spec su "
-            f"{effects_section.get('clips', 0)} clip"
+            f"{effects_section.get('clips', 0)} clip, "
+            f"{effects_section.get('dropped_no_evidence', 0)} senza prova, "
+            f"{effects_section.get('creative_distinct', 0)} creativi distinti"
             if effects_section.get("applied")
             else str(effects_section.get("reason") or "")
         ),
@@ -7255,6 +7445,18 @@ def _run_locked(
         scene_block.get("duration_sec") if isinstance(scene_block, dict) else None
     )
     shortfall = duration_shortfall(requested_sec, plan.duration_sec)
+    # C8, legge B: un reel accorciato per togliere le ripetizioni non e' un
+    # reel fuori durata. La durata *dichiarata* diventa quella vera; se pero'
+    # scende sotto il minimo, la dichiarazione resta il minimo e ``reel`` firma
+    # il render come fallito: sotto quella soglia non si consegna.
+    declared_sec = requested_sec
+    if variety_block.get("removed"):
+        declared_sec = float(plan.duration_sec)
+        if variety_block.get("below_minimum"):
+            declared_sec = max(
+                declared_sec,
+                float(contract.THRESHOLDS["variety_min_duration_sec"]),
+            )
 
     # Le cinque scelte del giro, con la prova che le sostiene. Il registro si
     # costruisce qui, quando tutte le sezioni hanno gia' i loro numeri. Un
@@ -7292,6 +7494,22 @@ def _run_locked(
             bed["bpm"] = beat_provenance.get("bpm")
             bed["bpm_source"] = beat_provenance.get("bpm_source")
     beat_report = _beat_report(plan, beat_provenance, payload)
+
+    # C8: le due leggi del gusto, misurate sul piano che si sta per rendere.
+    # Legge A: ogni spec ha una prova e i nomi distinti restano sotto il tetto.
+    # Legge B: le ripetizioni sono state tolte e il reel non e' sotto il minimo.
+    law_a = efx.audit(
+        getattr(plan, "effects", {}) or {},
+        max_creative=contract.THRESHOLDS["max_creative_treatments"],
+    )
+    law_b = coherence_mod.audit_variety(variety_block)
+    laws_block = {
+        "ok": bool(law_a.get("ok")) and bool(law_b.get("ok")),
+        "law_a": law_a,
+        "law_b": law_b,
+        "violations": list(law_a.get("violations") or ())
+        + list(law_b.get("violations") or ()),
+    }
 
     report: Dict[str, Any] = {
         "ok": True,
@@ -7338,6 +7556,8 @@ def _run_locked(
         "decisions": decision_log,
         "bridge": bridge_summary,
         "coherence": coherence_section,
+        "variety": variety_block,
+        "laws": laws_block,
         "estimate": plan_choice["estimate"],
         "plan_choice": plan_choice["plan_choice"],
         "creative": creative_section,
@@ -7400,9 +7620,9 @@ def _run_locked(
             "duration_shortfall: chiesti {requested_sec:g} s, consegnati "
             "{delivered_sec:g} s".format(**shortfall)
         )
-    if requested_sec is not None:
+    if declared_sec is not None:
         try:
-            report["duration_requested_sec"] = round(float(requested_sec), 6)
+            report["duration_requested_sec"] = round(float(declared_sec), 6)
         except (TypeError, ValueError):
             pass
     timeline_block = timeline_declaration(
@@ -7481,6 +7701,13 @@ def _run_locked(
                 else str(coherence_section.get("error"))
             )
         )
+    for law_violation in laws_block.get("violations") or ():
+        report.setdefault("warnings", []).append(
+            "legge {}: {}".format(
+                law_violation.get("code") or "?",
+                law_violation.get("why") or "",
+            )
+        )
     # Il `weak_open` non e' un problema di nitidezza: il primo shot non porta un
     # hook. Dirlo qui evita che due violazioni diverse vengano lette come una.
     if opening and any(
@@ -7549,6 +7776,20 @@ def _run_locked(
                 else str(verification.get("error") or "verdetto assente")
             )
         )
+    # C8: le due leggi del gusto sono dure. Una violazione non e' un avviso:
+    # entra nella verifica come check bloccante, quindi ``apply_verification``
+    # ferma la consegna con il motivo in chiaro in ``failures``.
+    laws_block = report.get("laws") or {}
+    law_checks = taste_law_checks(laws_block)
+    if law_checks:
+        verification = dict(verification)
+        verification["checks"] = list(verification.get("checks") or ()) + law_checks
+        verification["ok"] = False
+        verification["taste_laws"] = {
+            "ok": False,
+            "violations": [check["id"] for check in law_checks],
+        }
+        report["verification"] = verification
     # Un titolo illeggibile non e' un dettaglio da mettere fra gli avvisi: e' la
     # ragione per cui il lavoro non si consegna. Il master resta sul disco (la
     # vista lo mostra come "NON RIUSCITO"), ma ``delivered`` dice la verita'.
@@ -7612,11 +7853,18 @@ def _run_locked(
             ):
                 contrast_ratio = float(measured["ratio"])
             break
+    # C8: la firma ``deliver`` di ``vx reel`` e' il contrasto del master
+    # consegnabile. Quando una legge del gusto ferma la consegna non esiste un
+    # consegnabile da firmare, quindi il numero resta non firmato: il reel vede
+    # il proprio stadio ``deliver`` fallire e rinomina in NON-PUBBLICABILE-*.
+    if not laws_block.get("ok", True):
+        contrast_ratio = None
     report["measured"] = {
         "duration_sec": round(float(plan.duration_sec), 6),
         "requested_duration_sec": (
-            round(float(requested_sec), 6)
-            if isinstance(requested_sec, (int, float)) and not isinstance(requested_sec, bool)
+            round(float(declared_sec), 6)
+            if isinstance(declared_sec, (int, float))
+            and not isinstance(declared_sec, bool)
             else None
         ),
         "lufs": (qc_result.get("measured") or {}).get("i"),

@@ -116,6 +116,21 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "hook_window": 4.0,
     "max_creative_treatments": 3,
     "cut_fade_ms": 12,
+    # C8 -- legge A: nessun effetto senza prova, e mai piu' di
+    # ``max_creative_treatments`` trattamenti creativi distinti per reel. Le
+    # soglie sotto sono le misure che rendono una spec ammissibile: movimento
+    # (jitter), cast colore, bordo piu' chiaro del centro (vignetta) e
+    # saturazione bassa (noir/sepia). Sono politiche dichiarate, non numeri
+    # calibrati: il test le legge da qui, nessun modulo le reinventa.
+    "effects_shake_jitter_min": 0.35,
+    "effects_color_cast_min": 12.0,
+    "effects_vignette_border_ratio": 1.06,
+    "effects_saturation_max": 0.22,
+    # C8 -- legge B: meglio corto che ripetuto. Una corsa di inquadrature quasi
+    # identiche piu' lunga di questo numero si accorcia; sotto la durata
+    # dichiarabile il lavoro non si consegna.
+    "variety_repeat_max": 2,
+    "variety_min_duration_sec": 3.0,
     # multitrack EDL audio buses
     "dialogue_fade_ms": 12,
     "broll_fade_sec": 0.5,

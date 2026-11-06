@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import math
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -65,9 +66,14 @@ __all__ = [
     "REPEAT_RUN",
     "SHORT_SHOT_ALLOWANCE",
     "SHOT_SAME_DISTANCE",
+    "VARIETY_MIN_DURATION_SEC",
+    "VARIETY_REPEAT_MAX",
+    "audit_variety",
     "disabled",
     "evaluate",
+    "frames_by_clip",
     "sample_frames",
+    "shorten_plan",
 ]
 
 #: Due fotogrammi con distanza media sotto questa soglia sono lo stesso shot.
@@ -81,6 +87,16 @@ MIN_VARIETY = 0.5
 
 #: Tre shot quasi identici di fila sono una ripetizione, non una scelta.
 REPEAT_RUN = 3
+
+#: C8, legge B: una corsa di inquadrature quasi identiche **piu' lunga** di
+#: questo numero si accorcia, tenendo la migliore per nitidezza. Il numero e'
+#: dichiarato in ``contract.THRESHOLDS`` (default 2: tre simili di fila sono gia'
+#: una ripetizione), cosi' il report porta la soglia che ha usato.
+VARIETY_REPEAT_MAX = int(THRESHOLDS["variety_repeat_max"])
+
+#: Sotto questa durata (secondi) il reel accorciato non si dichiara
+#: consegnabile: meglio non consegnare che consegnare un frammento.
+VARIETY_MIN_DURATION_SEC = float(THRESHOLDS["variety_min_duration_sec"])
 
 #: Un frame con luma media sotto questo valore e' nero: non mostra niente.
 BLACK_LUMA = 0.02
@@ -355,8 +371,15 @@ def _visual_shots(clips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 last["provenance"] = tuple(last["provenance"]) + tuple(
                     clip["provenance"]
                 )
+                last.setdefault("clip_ids", [last["clip_id"]]).append(clip["clip_id"])
                 continue
-        shots.append(dict(clip, provenance=tuple(clip["provenance"])))
+        shots.append(
+            dict(
+                clip,
+                provenance=tuple(clip["provenance"]),
+                clip_ids=[clip["clip_id"]],
+            )
+        )
     for index, shot in enumerate(shots):
         shot["index"] = index
     return shots
@@ -535,6 +558,327 @@ def sample_frames(plan: Any, workdir: Any) -> Dict[int, str]:
         if proc.returncode == 0 and png.is_file():
             out[shot["index"]] = str(png)
     return out
+
+
+def frames_by_clip(plan: Any, frames: Any) -> Dict[str, str]:
+    """``clip_id -> PNG`` per ogni clip coperta da un fotogramma campionato.
+
+    Un'inquadratura visiva puo' essere piu' clip contigui dello stesso sorgente
+    (il ponte li spezza su un silenzio): il fotogramma vale per tutti. Senza
+    frame la clip non compare: la prova manca, non si inventa.
+    """
+    out: Dict[str, str] = {}
+    for shot in _visual_shots(_shots(plan)):
+        path = _frame_path(frames, shot["index"], shot["clip_id"])
+        if not path:
+            continue
+        for clip_id in shot.get("clip_ids") or [shot["clip_id"]]:
+            out[str(clip_id)] = str(path)
+    return out
+
+
+def _retime_point(removed: Sequence[Tuple[float, float]], at: float) -> float:
+    """L'istante ``at`` sulla timeline senza le ripetizioni rimosse."""
+    shift = 0.0
+    for start, end in removed:
+        if end <= at + 1e-6:
+            shift += end - start
+        elif start < at < end:
+            shift += at - start
+            break
+        else:
+            break
+    return at - shift
+
+
+def shorten_plan(
+    plan: Any,
+    frames: Any = None,
+    *,
+    threshold: Any = None,
+    min_duration: Any = None,
+) -> Tuple[Any, Dict[str, Any]]:
+    """C8, legge B: toglie le corse di inquadrature quasi identiche.
+
+    ``frames`` mappa indice shot -> PNG (quello che :func:`sample_frames`
+    produce). Una corsa **piu' lunga** di ``threshold`` perde tutte le
+    inquadrature tranne quella piu' nitida: il montaggio si accorcia invece di
+    mostrare la stessa faccia dieci volte. Ritorna ``(piano, blocco)``; il
+    blocco e' il ``variety`` del report, con ``removed``, le due durate e la
+    soglia usata. Se non c'e' niente da togliere il piano torna identico
+    (stesso oggetto), cosi' il materiale vario non paga nulla.
+    """
+    from . import edl_plan  # noqa: PLC0415 - solo quando si accorcia davvero
+
+    try:
+        limit = int(VARIETY_REPEAT_MAX if threshold is None else int(threshold))
+    except (TypeError, ValueError):
+        limit = VARIETY_REPEAT_MAX
+    try:
+        floor = float(
+            VARIETY_MIN_DURATION_SEC if min_duration is None else min_duration
+        )
+    except (TypeError, ValueError):
+        floor = VARIETY_MIN_DURATION_SEC
+
+    shots = _visual_shots(_shots(plan))
+    duration_before = float(getattr(plan, "duration_sec", 0.0) or 0.0)
+    block: Dict[str, Any] = {
+        "removed": 0,
+        "duration_before": round(duration_before, 3),
+        "duration_after": round(duration_before, 3),
+        "threshold": limit,
+        "min_duration": floor,
+        "below_minimum": False,
+        "remaining_runs": 0,
+        "applied": False,
+        "note": "",
+    }
+    if not shots:
+        block["note"] = "piano senza inquadrature di layer 0"
+        return plan, block
+
+    hashes: Dict[int, str] = {}
+    sharpness: Dict[int, float] = {}
+    for shot in shots:
+        path = _frame_path(frames, shot["index"], shot["clip_id"])
+        if not path:
+            continue
+        try:
+            gray = _gray(path)
+        except Exception:  # noqa: BLE001 - un frame illeggibile non e' una prova
+            continue
+        hashes[shot["index"]] = _fingerprint(gray)
+        value = _sharpness(gray)
+        if value is not None:
+            sharpness[shot["index"]] = value
+    order = [shot["index"] for shot in shots]
+    runs = [run for run in _runs(hashes, order) if len(run) > limit]
+    if not runs:
+        return plan, block
+
+    remove: List[int] = []
+    for run in runs:
+        best = max(
+            run,
+            key=lambda index: (sharpness.get(index, float("-inf")), -index),
+        )
+        remove.extend(index for index in run if index != best)
+    remove_set = set(remove)
+    removed_spans = [
+        (float(shots[index]["dst_in"]), float(shots[index]["dst_out"]))
+        for index in sorted(remove_set)
+    ]
+    removed_ids = {
+        str(clip_id)
+        for index in remove_set
+        for clip_id in shots[index].get("clip_ids") or [shots[index]["clip_id"]]
+    }
+
+    kept_layer0 = [shot for shot in shots if shot["index"] not in remove_set]
+    new_duration = round(
+        sum(
+            max(0.0, float(shot["dst_out"]) - float(shot["dst_in"]))
+            for shot in kept_layer0
+        ),
+        6,
+    )
+    if not kept_layer0 or new_duration <= 0:
+        block["note"] = "tutte le inquadrature erano ripetizioni: piano intatto"
+        return plan, block
+
+    def shift(at: float) -> float:
+        return _retime_point(removed_spans, float(at))
+
+    video_tracks = []
+    for track in getattr(plan, "video_tracks", ()) or ():
+        clips = []
+        layer0_cursor = 0.0
+        for clip in getattr(track, "clips", ()) or ():
+            clip_id = str(getattr(clip, "clip_id", "") or "")
+            layer = int(getattr(clip, "layer", 0) or 0)
+            if layer == 0:
+                if clip_id in removed_ids:
+                    continue
+                length = float(clip.dst_out) - float(clip.dst_in)
+                clips.append(
+                    replace(
+                        clip,
+                        dst_in=round(layer0_cursor, 6),
+                        dst_out=round(layer0_cursor + length, 6),
+                    )
+                )
+                layer0_cursor += length
+                continue
+            new_in = shift(float(clip.dst_in))
+            new_out = min(
+                new_duration,
+                new_in + (float(clip.dst_out) - float(clip.dst_in)),
+            )
+            if new_out - new_in <= 1e-6:
+                continue
+            transition_out = clip.transition_out
+            if (
+                transition_out is not None
+                and float(transition_out.duration_sec) > (new_out - new_in) + 1e-6
+            ):
+                transition_out = None
+            transition_in = clip.transition_in
+            if (
+                transition_in is not None
+                and float(transition_in.duration_sec) > (new_out - new_in) + 1e-6
+            ):
+                transition_in = None
+            clips.append(
+                replace(
+                    clip,
+                    dst_in=round(new_in, 6),
+                    dst_out=round(new_out, 6),
+                    transition_in=transition_in,
+                    transition_out=transition_out,
+                )
+            )
+        if clips:
+            video_tracks.append(replace(track, clips=tuple(clips)))
+
+    starts: Dict[int, float] = {}
+    cursor = 0.0
+    for shot in kept_layer0:
+        starts[shot["index"]] = cursor
+        cursor += float(shot["dst_out"]) - float(shot["dst_in"])
+
+    audio_tracks = []
+    for track in getattr(plan, "audio_tracks", ()) or ():
+        role = str(getattr(track, "role", "") or "")
+        clips = []
+        if role == "dialogue":
+            for shot in kept_layer0:
+                base = starts[shot["index"]]
+                length = float(shot["dst_out"]) - float(shot["dst_in"])
+                for clip in getattr(track, "clips", ()) or ():
+                    if (
+                        str(getattr(clip, "source_id", ""))
+                        != str(shot.get("source_id", ""))
+                        or round(float(getattr(clip, "src_in", 0.0)), 3)
+                        != round(float(shot["src_in"]), 3)
+                        or round(float(getattr(clip, "src_out", 0.0)), 3)
+                        != round(float(shot["src_out"]), 3)
+                    ):
+                        continue
+                    clips.append(
+                        replace(
+                            clip,
+                            dst_in=round(base, 6),
+                            dst_out=round(base + length, 6),
+                        )
+                    )
+        else:
+            for clip in getattr(track, "clips", ()) or ():
+                new_in = shift(float(clip.dst_in))
+                new_out = (
+                    new_duration
+                    if role.startswith("music")
+                    else min(
+                        new_duration,
+                        new_in + (float(clip.dst_out) - float(clip.dst_in)),
+                    )
+                )
+                if new_out - new_in <= 1e-6:
+                    continue
+                clips.append(
+                    replace(
+                        clip,
+                        dst_in=round(new_in, 6),
+                        dst_out=round(new_out, 6),
+                    )
+                )
+        if clips:
+            audio_tracks.append(replace(track, clips=tuple(clips)))
+
+    candidate = edl_plan.EDLPlan(
+        contract_version=getattr(
+            plan, "contract_version", edl_plan.EDL_CONTRACT_VERSION
+        ),
+        fps=getattr(plan, "fps"),
+        duration_sec=new_duration,
+        aspect_ratio=getattr(plan, "aspect_ratio"),
+        resolution=getattr(plan, "resolution"),
+        sources=getattr(plan, "sources", {}) or {},
+        video_tracks=tuple(video_tracks),
+        audio_tracks=tuple(audio_tracks),
+        notes=tuple(getattr(plan, "notes", ()) or ()),
+        ducking=getattr(plan, "ducking", None),
+        ducking_tracks=tuple(getattr(plan, "ducking_tracks", ()) or ()),
+    )
+    errors = candidate.validate()
+    if errors:
+        block["note"] = "piano accorciato non valido: " + "; ".join(errors[:3])
+        return plan, block
+
+    kept_order = [shot["index"] for shot in shots if shot["index"] not in remove_set]
+    remaining = [run for run in _runs(hashes, kept_order) if len(run) > limit]
+    block.update(
+        {
+            "removed": len(remove_set),
+            "duration_after": round(new_duration, 3),
+            "applied": True,
+            "below_minimum": bool(remove_set) and new_duration < floor - 1e-9,
+            "remaining_runs": len(remaining),
+            "kept": len(kept_layer0),
+        }
+    )
+    return candidate, block
+
+
+def audit_variety(block: Any) -> Dict[str, Any]:
+    """C8, legge B sul blocco ``variety``: le ripetizioni sono un difetto.
+
+    ``shorten_plan`` toglie tutte le corse oltre soglia; se ne resta una (o se
+    il reel accorciato scende sotto la durata dichiarabile) il lavoro non e'
+    consegnabile. Il referto porta le due durate e la soglia usata, non un
+    ``ok`` senza numeri.
+    """
+    data = dict(block or {}) if isinstance(block, Mapping) else {}
+    violations: List[Dict[str, Any]] = []
+    if data.get("remaining_runs"):
+        violations.append(
+            {
+                "code": "law_b_repeated_shots",
+                "measured": int(data.get("remaining_runs") or 0),
+                "threshold": int(data.get("threshold") or VARIETY_REPEAT_MAX),
+                "why": (
+                    f"{int(data.get('remaining_runs') or 0)} corse di inquadrature "
+                    "quasi identiche restano oltre la soglia "
+                    f"{int(data.get('threshold') or VARIETY_REPEAT_MAX)}"
+                ),
+            }
+        )
+    if data.get("below_minimum"):
+        floor = float(
+            data.get("min_duration") or VARIETY_MIN_DURATION_SEC
+        )
+        violations.append(
+            {
+                "code": "law_b_below_minimum",
+                "measured": float(data.get("duration_after") or 0.0),
+                "threshold": floor,
+                "why": (
+                    f"dopo aver tolto {int(data.get('removed') or 0)} ripetizioni "
+                    f"il reel dura {float(data.get('duration_after') or 0.0):.2f}s, "
+                    f"sotto il minimo dichiarabile {floor:.1f}s"
+                ),
+            }
+        )
+    return {
+        "ok": not violations,
+        "removed": int(data.get("removed") or 0),
+        "duration_before": data.get("duration_before"),
+        "duration_after": data.get("duration_after"),
+        "threshold": data.get("threshold"),
+        "min_duration": data.get("min_duration"),
+        "remaining_runs": int(data.get("remaining_runs") or 0),
+        "violations": violations,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -814,6 +1158,7 @@ def evaluate(
         "shot_same_distance": SHOT_SAME_DISTANCE,
         "min_variety": MIN_VARIETY,
         "repeat_run": REPEAT_RUN,
+        "variety_repeat_max": VARIETY_REPEAT_MAX,
         "black_luma": BLACK_LUMA,
         "sharpness_low": float(THRESHOLDS["triage_sharpness_low"]),
         "hook_window": float(THRESHOLDS["hook_window"]),
