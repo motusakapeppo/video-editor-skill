@@ -45,6 +45,13 @@ restano disponibili come strumenti di livello più basso.
 - I cancelli (font, fotogrammi, piano) aspettano una risposta **solo se c'è un
   client agganciato** e scadono da soli; a lavoro chiuso non chiedono più niente.
 - Se nessuno guarda, la proposta si usa subito e si dichiara `by: "auto"`.
+- La pagina legge il **contratto** (`.vx/run.jsonl`) e non solo il progresso:
+  sezione `CONTRATTO` con gli otto stadi (`firmato` / `fallito` / `mancante`),
+  valore misurato e soglia; timbro `NON PUBBLICABILE` col nome vero del file
+  quando uno stadio non firma; per lo stadio rosso la frase e le due scelte
+  possibili. Con log corrotto dichiara la riga e nessuno stadio è verde.
+  Il blocco viaggia in `/api/state` (`run = {stages, complete, failed, log,
+  corrupt, signed, missing, tail_truncated, master}`) con cache su mtime.
 
 ## 3. Ingest e triage (livello basso)
 
@@ -117,6 +124,17 @@ voto 1–5, facoltativo e non bloccante; il registro si legge **solo su richiest
 
 Il sorgente non viene MAI modificato: l'ingest scrive lo sha256 in `source.json`
 e il QC riverifica `source_sha_unchanged`. i deliverable stanno in `out/` della
-workdir; il master registrato può essere altrove (`--out`). Il lavoro vive in una
-cartella propria con un lock di liveness che impedisce due sessioni sulla stessa
-workdir. `vx guard <dir>` dice se un lavoro è passato davvero da qui.
+workdir; il master registrato può essere altrove (`--out`). `vx guard <dir>` dice
+se un lavoro è passato davvero da qui.
+
+**Il lease è per cartella, non per macchina** (`<workdir>/.vx/lock`):
+`{pid, host, token, created, heartbeat_epoch, stage}`. Un thread dedicato rinnova
+il battito ogni 60 s, fuori dal loop di lavoro: un render che blocca non ferma il
+cuore. Il lease è vivo se il battito ha meno di 300 s; **scade solo su morte
+reale** (battito vecchio *e* pid sparito, o pid riciclato, o host diverso col
+battito fermo), e quando viene recuperato lo dichiara (`stale_recovered` con pid
+ed età del battito). Chi arriva secondo esce `2` e dice chi tiene la cartella, da
+quanto e a che stadio — senza toccare pannello, sessione o run log. Due cartelle
+diverse hanno due lease diversi: due lavori legittimi girano in parallelo. Il
+vecchio `<workdir>/.lock` resta leggibile, non più scritto.
+

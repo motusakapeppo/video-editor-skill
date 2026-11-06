@@ -49,7 +49,13 @@ restano strumenti di livello più basso, non il percorso normale).
 
 La vista non è un optional: `vx up` accende il daemon che resta vivo, `/reel`
 apre la pagina prima di ogni altra cosa. Una vista promessa e non aperta è un
-difetto, non una distrazione.
+difetto, non una distrazione. La pagina mostra il **contratto**, non solo la
+percentuale: otto stadi con valore e soglia, e il timbro `NON PUBBLICABILE` col
+nome vero del file quando il contratto non ha firmato.
+
+Due lavori sulla stessa cartella non convivono: `<workdir>/.vx/lock` è un lease
+con battito fuori banda, e chi arriva secondo esce `2` dicendo chi lo tiene. Su
+cartelle diverse si lavora in parallelo.
 
 ## Protocollo
 
@@ -88,8 +94,14 @@ Regole non negoziabili:
    `cut_silence` ogni intervallo rimosso cade dentro l'unione dei testimoni.
    Un finding stantio o uno span che non combacia ferma il render.
 2. Massimo **3 trattamenti creativi** (`autoframe`, `zoom`, `hook_overlay`, `fit`).
-   Un solo passaggio di stabilizzazione. Un effetto senza `evidence` non si applica.
-3. Il brief dell'utente vince sempre sulla rilevazione automatica. Se dice
+   Un solo passaggio di stabilizzazione. Un effetto senza `evidence` non si applica:
+   senza una misura che lo giustifichi su **quella** clip, la spec si scarta e si
+   conta (`dropped_no_evidence`); oltre il terzo trattamento distinto si rifiuta.
+3. **Meglio corto che ripetuto**: se più di due inquadrature consecutive sono
+   quasi identiche, il montaggio si accorcia tenendo la migliore, e il report
+   dichiara `variety: {removed, before, after}`. Sotto la durata minima il
+   lavoro non si consegna. Violare la 2 o la 3 è `delivered: false`, non un avviso.
+4. Il brief dell'utente vince sempre sulla rilevazione automatica. Se dice
    "lascia il rumore, è ambientale", il denoise non si applica.
 
 ## Come si giudica
