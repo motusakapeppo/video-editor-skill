@@ -7639,6 +7639,9 @@ def _run_locked(
             workdir / "out",
             srt_source=Path(captions_srt) if captions_srt else None,
             workdir=workdir,
+            # Se i sottotitoli non erano richiesti, il report lo dice; altrimenti
+            # "no speech" resterebbe una mezza verita'.
+            subtitles_requested=subs_requested(args),
         )
     _notify(progress, 100.0, "deliverables", log=log)
 

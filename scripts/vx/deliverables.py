@@ -192,6 +192,7 @@ def produce(
     *,
     srt_source: Optional[Path] = None,
     workdir: Optional[Path] = None,
+    subtitles_requested: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """Execute every available intent and return the produced manifest.
 
@@ -246,7 +247,11 @@ def produce(
                         "path": str(target.resolve()),
                         "kind": intent["kind"],
                         "available": False,
-                        "reason": "no speech",
+                        "reason": (
+                            "no speech"
+                            if subtitles_requested is not False
+                            else "sottotitoli non richiesti"
+                        ),
                     }
                 )
             continue
