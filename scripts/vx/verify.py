@@ -65,6 +65,51 @@ CONTRAST_MIN = 4.5
 BLACK_LUMA = 0.02
 BLACK_SAMPLE_FPS = 1.0
 DURATION_TOLERANCE_FRAMES = 1.0
+
+#: Scarto di durata tollerato **quando i secondi mancanti sono silenzio tolto**.
+#: Un reel da 15 s che ne rende 12.5 perche' ha tagliato le pause non e' un
+#: difetto nascosto: e' la stessa scelta di "meglio corto che ripetuto". Il tetto
+#: e' 20% della richiesta, mai piu' di 3 s; fuori di li' resta un fallimento.
+SILENCE_SHORTFALL_SHARE = 0.20
+SILENCE_SHORTFALL_MAX_SEC = 3.0
+
+
+def silence_allowance(report: Any, expected: Any) -> Tuple[float, str]:
+    """Secondi che possono mancare senza bocciare, se sono silenzi rimossi.
+
+    Regola unica: la usano il QC e il contratto di ``vx reel``, cosi' lo stesso
+    master non puo' essere buono per uno e fuori tolleranza per l'altro.
+    """
+    data = report if isinstance(report, Mapping) else {}
+    bridge = data.get("bridge") if isinstance(data.get("bridge"), Mapping) else {}
+    cuts = bridge.get("cuts")
+    # Nel report il riepilogo del ponte porta il **numero** di tagli, non la
+    # lista (quella vive in bridge_report.json): valgono entrambe le forme.
+    if isinstance(cuts, (int, float)) and not isinstance(cuts, bool):
+        removed = float(cuts) > 0
+        count = int(cuts)
+    else:
+        rows = cuts if isinstance(cuts, list) else []
+        removed = any(
+            isinstance(item, Mapping) and item.get("reason") == "dead_air"
+            for item in rows
+        )
+        count = len(rows)
+    if not removed:
+        return 0.0, ""
+    try:
+        allowance = min(
+            SILENCE_SHORTFALL_SHARE * float(expected), SILENCE_SHORTFALL_MAX_SEC
+        )
+    except (TypeError, ValueError):
+        return 0.0, ""
+    if allowance <= 0:
+        return 0.0, ""
+    return (
+        round(allowance, 3),
+        f"tollerati fino a {allowance:.2f}s: i secondi mancanti sono silenzi rimossi "
+        f"({count} tagli)",
+    )
 LOUDNESS_TOLERANCE_LU = 1.5
 TRUE_PEAK_MARGIN_DB = 0.1
 MIN_VARIETY = 0.5
@@ -401,9 +446,11 @@ def check_duration(master: Any, report: Mapping[str, Any]) -> Dict[str, Any]:
             "durata del master non misurabile",
         )
     delta = abs(actual - expected)
+    allowance, note = silence_allowance(report, expected)
+    tolerated = tolerance + allowance
     return _result(
         "duration",
-        delta <= tolerance + 1e-6,
+        delta <= tolerated + 1e-6,
         {
             "duration_sec": round(actual, 3),
             "delta_sec": round(delta, 3),

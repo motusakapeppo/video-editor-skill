@@ -262,6 +262,19 @@ def measure_stages(
             f"(+/- 1 frame = {_fmt(frame)} s)"
             + ("" if render_ok else ": fuori tolleranza")
         )
+        if not render_ok and duration < requested:
+            # Stessa regola del QC: se i secondi mancanti sono silenzi tolti,
+            # entro il 20% (max 3 s) non e' un fallimento. La funzione e' una
+            # sola, in `verify`, cosi' i due verdetti non possono divergere.
+            from . import verify as verify_mod  # noqa: PLC0415 - import a chiamata
+
+            allowance, note = verify_mod.silence_allowance(report, requested)
+            if allowance and (requested - duration) <= allowance + 1e-6:
+                render_ok = True
+                render_why = (
+                    f"durata master {_fmt(duration)} s su {_fmt(requested)} richiesti: "
+                    f"{_fmt(requested - duration)} s tolti come silenzio, {note}"
+                )
     events["render"] = {
         "contract": "durata master = richiesta +/- 1 frame",
         "value": render_value,
