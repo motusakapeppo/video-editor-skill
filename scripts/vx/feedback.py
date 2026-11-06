@@ -23,8 +23,15 @@ Forma di una riga (``vx.feedback/1``)::
      "context": {"outcome": "done|stopped|failed|incomplete",
                  "balance": "low|ok|high", "violations": ["..."],
                  "estimate_seconds": 274, "actual_seconds": 312,
+                 "waiting_seconds": 180,
                  "font": "Archivo Black", "effects": 3, "shots": 24,
                  "duration_sec": 30.4}}
+
+``actual_seconds`` e' il tempo **della macchina**: le attese ai cancelli stanno in
+``waiting_seconds``, a parte. Sommare tutto il blocco ``timings`` del report
+contava due volte (``total`` e' gia' il totale) e misurava anche il tempo in cui
+la persona pensava: due lavori identici risultavano uno piu' lento dell'altro
+solo perche' il telefono era rimasto in tasca.
 
 ``append`` e' atomico: la riga si scrive in append sotto un lock di file, con
 ``flush`` + ``fsync`` — non si riscrive il file intero, quindi due processi che
@@ -688,7 +695,28 @@ def context_from_report(report: Any) -> Dict[str, Any]:
 
     seconds = [_number(value) for value in timings.values()]
     seconds = [value for value in seconds if value is not None]
-    actual = round(sum(seconds), 3) if seconds else None
+    # Il tempo del giudizio e' quello **della macchina**: sommare tutte le chiavi
+    # di `timings` contava due volte (`total` e' gia' il totale) e ci infilava
+    # dentro le attese ai cancelli. Misurato il 2026-11-06 su un lavoro vero:
+    # 1457.7 s invece di 706.9, e 526.9 s di macchina vera.
+    machine = _number(timings.get("machine_total"))
+    waiting = _number(timings.get("waiting_total"))
+    if machine is not None:
+        source = "machine_total"
+    else:
+        # Report vecchio, senza i campi nuovi: si ricava dal totale dichiarato,
+        # oppure (ultima risorsa) dalla somma degli stadi, che e' il calcolo che
+        # c'era prima. La riga dichiara da dove viene il numero invece di farlo
+        # sembrare misurato.
+        declared = _number(timings.get("total"))
+        waiting = waiting if waiting is not None else 0.0
+        if declared is not None:
+            machine = max(0.0, declared - waiting)
+            source = "total_minus_waiting"
+        else:
+            machine = round(sum(seconds), 3) if seconds else None
+            source = "stage_sum" if seconds else "unknown"
+    actual = round(machine, 3) if machine is not None else None
 
     guard_block = data.get("guard") if isinstance(data.get("guard"), Mapping) else {}
     guard_violations = guard_block.get("violations")
@@ -713,6 +741,8 @@ def context_from_report(report: Any) -> Dict[str, Any]:
         "violations": violations,
         "estimate_seconds": estimate_seconds,
         "actual_seconds": actual,
+        "waiting_seconds": round(waiting, 3) if waiting is not None else None,
+        "actual_source": source,
         "font": str(font_block.get("family") or ""),
         "effects": int(effects) if effects is not None else None,
         "shots": int(shots) if shots is not None else None,

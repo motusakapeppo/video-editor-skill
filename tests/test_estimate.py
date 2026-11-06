@@ -241,7 +241,20 @@ def test_plan_estimate_declared() -> None:
         all(value > 0 for value in result["parts"].values()),
         result["parts"],
     )
-    check("il render e' la parte piu' cara", result["parts"]["render"] == max(result["parts"].values()), result["parts"]["render"])
+    check(
+        "il render costa piu' delle misure di materiale (in_point a parte)",
+        result["parts"]["render"]
+        > max(
+            result["parts"][stage]
+            for stage in ("probe", "ingest", "audio", "analysis", "faces", "qc")
+        ),
+        result["parts"]["render"],
+    )
+    check(
+        "il render resta la parte piu' cara a macchina libera",
+        result["parts"]["render"] == max(result["parts"].values()),
+        result["parts"]["render"],
+    )
 
     uhd = estimate.plan_estimate(Plan(resolution=(2160, 3840)))
     check(

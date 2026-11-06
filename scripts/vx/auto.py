@@ -470,6 +470,17 @@ TIMING_STAGES = (
 )
 
 
+def _as_seconds(value: Any) -> float:
+    """Secondi da un valore qualsiasi, senza inventare: ``0`` se non e' un numero."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return seconds if seconds > 0 else 0.0
+
+
 class _Clock:
     """Wall time per stage, accumulated. Measurement only: no call is reordered.
 
@@ -483,6 +494,10 @@ class _Clock:
     def __init__(self) -> None:
         self.started = time.monotonic()
         self.stages: Dict[str, float] = {}
+        #: Secondi passati **aspettando una persona** (cancelli): non sono tempo
+        #: di macchina e non devono entrare ne' nella calibrazione della stima
+        #: ne' nel giudizio sulla velocita' di un lavoro.
+        self.waiting: float = 0.0
         #: Dichiarazioni che non sono tempi (memoria vista, worker, priorita'):
         #: viaggiano con il profilo perche' il report le deve alla stessa riga.
         self.facts: Dict[str, Any] = {}
@@ -497,6 +512,17 @@ class _Clock:
 
     def add(self, stage: str, seconds: float) -> None:
         self.stages[stage] = self.stages.get(stage, 0.0) + float(seconds)
+
+    def waited(self, seconds: Any) -> None:
+        """Dichiara secondi di attesa umana: fuori dal tempo di macchina.
+
+        Il cancello misura quanto ha aspettato (``gates.total_waited_sec``); quel
+        numero finisce qui e non dentro uno stadio, altrimenti "quanto costa
+        questo lavoro" dipende da quanto il telefono e' rimasto in tasca.
+        """
+        value = _as_seconds(seconds)
+        if value > 0:
+            self.waiting += value
 
     def as_dict(self) -> Dict[str, float]:
         total = time.monotonic() - self.started
@@ -513,6 +539,11 @@ class _Clock:
             if stage != "measure_wall"
         )
         out["unaccounted"] = round(max(0.0, total - claimed), 3)
+        # Il conto che serve davvero: quanto ha lavorato la macchina, e quanto
+        # ha aspettato una persona. `total` resta il tempo di parete.
+        waiting = min(round(self.waiting, 3), round(total, 3))
+        out["waiting_total"] = waiting
+        out["machine_total"] = round(max(0.0, total - waiting), 3)
         return out
 
 
@@ -7515,6 +7546,17 @@ def _run_locked(
         + list(law_b.get("violations") or ()),
     }
 
+    # I cancelli sanno quanto hanno aspettato una persona: quel tempo esce dal
+    # tempo di macchina prima che il report lo dichiari. Serve a non chiamare
+    # "lento" un lavoro che era solo fermo in attesa di una risposta.
+    gates_block = gates_report(
+        questions=questions,
+        font_section=font_section,
+        key_section=key_section,
+        plan_section=plan_choice["plan_choice"],
+    )
+    clock.waited(gates_block.get("total_waited_sec"))
+
     report: Dict[str, Any] = {
         "ok": True,
         "payload_version": str(payload.get("contract_version") or contract.VERSION),
@@ -7551,12 +7593,7 @@ def _run_locked(
         "contrast_at": typography_section.get("contrast_at"),
         "keyframes_gate": key_section,
         "questions": questions,
-        "gates": gates_report(
-            questions=questions,
-            font_section=font_section,
-            key_section=key_section,
-            plan_section=plan_choice["plan_choice"],
-        ),
+        "gates": gates_block,
         "decisions": decision_log,
         "bridge": bridge_summary,
         "coherence": coherence_section,

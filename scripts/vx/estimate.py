@@ -33,6 +33,26 @@ per questo piano, e vogliamo aspettare?* ``plan_estimate`` somma gli stadi che
 effetti per shot con ``effects.cost`` e si calibra sulle righe di
 ``timing_history.jsonl`` (piu' la storia dei render per la parte ``render``).
 Senza misure usa costanti dichiarate e scrive ``calibrated: false``.
+Il tempo che si prezza e' quello della **macchina**, non quello di parete: le
+attese ai cancelli (``questions``, ``font``, ``keyframes``) sono tempo di una
+persona che pensa, e impararle vorrebbe dire stimare il tempo in cui il telefono
+e' rimasto in tasca. ``record_timings`` scrive quindi ``seconds_machine`` e
+``seconds_waiting`` accanto a ``seconds_total`` (che resta per compatibilita'),
+e la calibrazione legge la separazione per stadio (``timings_machine``) quando
+c'e': una riga vecchia senza quei campi degrada a ``source: "total"``, e gli
+stadi che possono contenere un'attesa non si imparano dal valore grezzo.
+
+Il piano prezza anche i quattro stadi che prima restavano fuori — ``font``,
+``in_point``, ``keyframes``, ``measure_wall`` — con lo stesso schema degli
+altri: costante dichiarata per secondo di materiale, sostituita dalla mediana
+della storia quando esiste. Misurato il 2026-11-06 su un lavoro vero, il costo
+stava proprio li': la stima diceva 20.5 s contro 265.8 s di macchina.
+
+La stima si calcola **solo** dalle caratteristiche del lavoro (durata,
+risoluzione, preset, materiale) e dalla storia dei giri **precedenti**: leggere
+i tempi del lavoro che si sta stimando non e' una stima, e' una profezia a cose
+fatte. ``calibrate`` rifiuta un mapping di ``timings`` per questo motivo.
+
 ``plan_gate`` confronta l'estremo alto con il tetto (``--budget``): sotto si
 parte, sopra scrive ``plan_choice.json`` e aspetta ``full`` o ``fast``, al
 massimo ``--plan-wait``; allo scadere prende la versione rapida e lo dichiara.
@@ -73,8 +93,45 @@ PLAN_CHOICE_VALUES = ("full", "fast")
 
 #: Gli stadi che il piano dichiara in ``parts``: quelli che ``auto`` cronometra
 #: e che la stima prezza.
-ESTIMATE_STAGES = ("probe", "ingest", "audio", "analysis", "faces", "render", "qc")
+ESTIMATE_STAGES = (
+    "probe",
+    "ingest",
+    "audio",
+    "analysis",
+    "faces",
+    "font",
+    "in_point",
+    "keyframes",
+    "measure_wall",
+    "render",
+    "qc",
+)
 MATERIAL_STAGES = ("probe", "ingest", "audio", "analysis", "faces")
+
+#: Gli stadi che costavano senza essere prezzati, misurati il 2026-11-06 su un
+#: lavoro vero (15 s di materiale, 1080x1920): ``in_point`` 141.8 s e
+#: ``measure_wall`` 43.8 s di macchina, piu' la parte di macchina di ``font``
+#: (183.1 s grezzi, 180.0 dei quali attesa al cancello) e di ``keyframes``
+#: (81.7 s grezzi, 81.1 di attesa). Si normalizzano come gli altri, per secondo
+#: di materiale: la costante dichiarata resta finche' non c'e' una storia.
+LATENT_STAGES = ("font", "in_point", "keyframes", "measure_wall")
+
+#: Il cancello che consuma il tempo di uno stadio: l'attesa sta **dentro** il
+#: cronometro dello stadio, quindi il valore grezzo di ``timings`` non e' tempo
+#: di macchina e non va imparato. Il cancello ``triage`` aspetta dentro
+#: ``questions`` (lo stadio ``triage`` e' il lavoro vero, pochi secondi).
+GATE_TIME_STAGES: Dict[str, str] = {
+    "font": "font",
+    "keyframes": "keyframes",
+    "triage": "questions",
+}
+
+#: Quante righe di storia servono prima di sostituire la costante dichiarata.
+#: Gli stadi piccoli (`font`, `keyframes`) si credono alla prima misura; i due che
+#: possono esplodere con la macchina occupata no: la corsa del 4 novembre ha dato
+#: 141.8 s di `in_point` dove la macchina libera ne impiega 2.9, e una sola riga
+#: cosi' non deve diventare la regola.
+MIN_HISTORY_ROWS: Dict[str, int] = {"in_point": 2, "measure_wall": 2}
 
 #: Costanti dichiarate, usate solo quando non c'e' una misura: secondi di stadio
 #: per secondo di materiale (1080p30) e per secondo di master. Non sono una
@@ -85,6 +142,20 @@ DECLARED_MATERIAL_RATES: Dict[str, float] = {
     "audio": 0.08,
     "analysis": 0.15,
     "faces": 0.12,
+    # Le quattro che non erano prezzate: secondi di **macchina** per secondo di
+    # materiale. Per ``font`` e ``keyframes`` l'attesa al cancello e' esclusa,
+    # altrimenti la stima imparerebbe quanto la persona ha guardato lo schermo.
+    #
+    # Questi numeri vengono da una corsa **a macchina libera** (13.27 s di
+    # materiale, 1080x1920, 25.5 s di macchina in tutto): font 0.19, in_point
+    # 2.88, keyframes 0.52, measure_wall 5.41 secondi. La prima versione li
+    # aveva presi da un lavoro da 22 minuti girato con la macchina occupata e
+    # diceva 151 s di ``in_point`` su un lavoro che ne impiega 2.9: una stima
+    # cosi' non e' prudente, e' sbagliata di dieci volte.
+    "font": 0.014,
+    "in_point": 0.217,
+    "measure_wall": 0.407,
+    "keyframes": 0.039,
 }
 DECLARED_OUTPUT_RATES: Dict[str, float] = {"qc": 0.04}
 DECLARED_RENDER_RATE = 0.85
@@ -136,6 +207,9 @@ __all__ = [
     "PLAN_CHOICE_SCHEMA",
     "PLAN_CHOICE_VALUES",
     "ESTIMATE_STAGES",
+    "MATERIAL_STAGES",
+    "LATENT_STAGES",
+    "GATE_TIME_STAGES",
     "FAST_PRESET",
     "TIMING_HISTORY_FILENAME",
     "estimate",
@@ -722,12 +796,30 @@ def calibrate(rows: Any) -> Dict[str, Any]:
     ``secondi * carico``. Mediana, minimo e massimo per stadio: l'intervallo
     della stima viene da qui, non da una percentuale inventata. Una riga senza
     ``timings`` (o con tempi a zero, cioe' stadio non eseguito) non entra.
+
+    Il tempo che si impara e' quello di **macchina**: quando la riga porta
+    ``timings_machine`` (la separazione scritta da ``record_timings``) si legge
+    quella, e uno stadio che puo' contenere un'attesa al cancello non si legge
+    dal valore grezzo (finirebbe nella calibrazione il tempo in cui la persona
+    pensava). Quelle righe si contano in ``unseparated``.
+
+    Un mapping al posto della lista viene **rifiutato**: sarebbe il profilo del
+    lavoro che si sta stimando, e una stima che legge i tempi misurati del
+    lavoro su cui gira non e' una stima.
     """
-    material: Dict[str, List[float]] = {stage: [] for stage in MATERIAL_STAGES}
+    if isinstance(rows, Mapping):
+        raise TypeError(
+            "timings: serve la storia dei giri (una riga per lavoro passato), "
+            "non i tempi del lavoro che si sta stimando"
+        )
+    material: Dict[str, List[float]] = {
+        stage: [] for stage in (*MATERIAL_STAGES, *LATENT_STAGES)
+    }
     output: Dict[str, List[float]] = {"qc": []}
     render: List[float] = []
     skipped = 0
     used = 0
+    unseparated = 0
 
     for row in rows or ():
         if not isinstance(row, Mapping):
@@ -737,6 +829,10 @@ def calibrate(rows: Any) -> Dict[str, Any]:
         if not isinstance(timings, Mapping):
             skipped += 1
             continue
+        machine_map = row.get("timings_machine")
+        if not isinstance(machine_map, Mapping):
+            machine_map = None
+        values = machine_map if machine_map is not None else timings
         material_sec = _positive(row.get("material_sec")) or _positive(
             row.get("timeline_sec")
         )
@@ -750,17 +846,22 @@ def calibrate(rows: Any) -> Dict[str, Any]:
             else 1.0
         )
         measured = 0
-        for stage in MATERIAL_STAGES:
-            seconds = _positive(timings.get(stage))
+        for stage in (*MATERIAL_STAGES, *LATENT_STAGES):
+            if machine_map is None and stage in GATE_TIME_STAGES:
+                # Senza separazione il valore puo' essere quasi tutto attesa:
+                # 183 s di ``font`` sono 180 s di cancello e 3 s di macchina.
+                unseparated += 1
+                continue
+            seconds = _positive(values.get(stage))
             if seconds and material_sec:
                 material[stage].append(seconds / material_sec)
                 measured += 1
         for stage in output:
-            seconds = _positive(timings.get(stage))
+            seconds = _positive(values.get(stage))
             if seconds and output_sec:
                 output[stage].append(seconds / output_sec)
                 measured += 1
-        render_sec = _positive(timings.get("render"))
+        render_sec = _positive(values.get("render"))
         if render_sec and output_sec:
             render.append(render_sec / (output_sec * workload))
             measured += 1
@@ -772,6 +873,7 @@ def calibrate(rows: Any) -> Dict[str, Any]:
     return {
         "n": used,
         "skipped": skipped,
+        "unseparated": unseparated,
         "material": {stage: _bucket_stats(values) for stage, values in material.items()},
         "output": {stage: _bucket_stats(values) for stage, values in output.items()},
         "render": _bucket_stats(render),
@@ -822,6 +924,9 @@ def plan_estimate(
 
     Il piano pesa anche per gli effetti: la somma di ``effect_cost`` per shot
     moltiplicata per i secondi alza la parte ``render`` (tetto dichiarato).
+
+    Nessuno degli stadi legge i tempi del lavoro che si sta stimando: le uniche
+    fonti sono le caratteristiche del piano e la storia dei giri precedenti.
     """
     facts = plan_facts(plan)
     model = calibrate(timings)
@@ -835,9 +940,18 @@ def plan_estimate(
     material_sec = float(facts["material_sec"])
     output_sec = float(facts["output_sec"])
 
-    for stage in MATERIAL_STAGES:
+    # Gli stadi di materiale: i cinque storici piu' i quattro che non erano
+    # prezzati (``font``/``in_point``/``keyframes``/``measure_wall``). Stesso
+    # schema per tutti: mediana misurata se c'e', altrimenti costante
+    # dichiarata — e il referto dice quale delle due.
+    for stage in (*MATERIAL_STAGES, *LATENT_STAGES):
         stats = model["material"].get(stage) or {}
-        if stats.get("n"):
+        # Una riga sola non e' una calibrazione: puo' essere una macchina
+        # occupata (il lavoro da 22 minuti di cui sopra). `in_point` e
+        # `measure_wall` chiedono due giri prima di sostituire la costante; la
+        # riga singola allarga solo il limite alto.
+        need = MIN_HISTORY_ROWS.get(stage, 1)
+        if int(stats.get("n") or 0) >= need:
             rate = float(stats["median"])
             spread = _spread_of(stats)
             basis[stage] = f"measured n={stats['n']}"
@@ -845,9 +959,18 @@ def plan_estimate(
             rate = DECLARED_MATERIAL_RATES[stage]
             spread = DECLARED_SPREAD
             basis[stage] = "declared"
+            if stats.get("n"):
+                notes.append(
+                    f"{stage}: una sola misura ({float(stats['median']):.3f} s per "
+                    "secondo di materiale), troppo poco per sostituire la costante: "
+                    "resta la dichiarata, la misura allarga il limite alto"
+                )
         parts[stage], low_parts[stage], high_parts[stage] = _part(
             rate, spread, material_sec
         )
+        if stats.get("n") and basis[stage] == "declared":
+            single = float(stats["median"]) * material_sec
+            high_parts[stage] = max(high_parts[stage], single)
 
     qc_stats = model["output"].get("qc") or {}
     if qc_stats.get("n"):
@@ -915,8 +1038,27 @@ def plan_estimate(
         f"costo {facts['effects']['cost']:g} -> {facts['effect_seconds']:g} s "
         f"pesati (densita' {facts['effect_density']:.2f}, fattore {effect_factor:.2f})"
     )
+    constant_parts = [
+        stage
+        for stage in ESTIMATE_STAGES
+        if str(basis.get(stage, "declared")).startswith("declared")
+    ]
+    measured_parts = [stage for stage in ESTIMATE_STAGES if stage not in constant_parts]
+    if model.get("unseparated"):
+        notes.append(
+            "storia senza separazione macchina/attesa per "
+            f"{model['unseparated']} valore(i) di stadio: non usati, restano "
+            "costanti (l'attesa al cancello non e' tempo di macchina)"
+        )
     notes.append(
-        "non prezzate: triage, hash, proxy, font, keyframes, deliverables"
+        "parti da costante dichiarata: "
+        + (", ".join(constant_parts) if constant_parts else "nessuna")
+        + " | misurate: "
+        + (", ".join(measured_parts) if measured_parts else "nessuna")
+    )
+    notes.append(
+        "non prezzate: triage, hash, proxy, bridge, coherence, typography, "
+        "music, verify, deliverables"
     )
 
     seconds = sum(parts.values())
@@ -931,6 +1073,8 @@ def plan_estimate(
         "high": round(max(high, seconds), 3),
         "calibrated": bool(model["n"]),
         "parts": {stage: round(parts[stage], 3) for stage in ESTIMATE_STAGES},
+        "constant_parts": constant_parts,
+        "measured_parts": measured_parts,
         "notes": notes,
         "basis": basis,
         "preset": str(preset or "medium"),
@@ -948,6 +1092,15 @@ def plan_estimate(
         },
         "timings_rows": int(model["n"]),
         "render_history_rows": int(hist.get("n") or 0),
+        # Le assunzioni non sono decorazione: dicono a cosa si riferisce il
+        # numero. Senza, "25 s" sembra una promessa anche quando la macchina
+        # sta compilando qualcos'altro.
+        "assumptions": [
+            "macchina libera: il carico di altri processi non e' prevedibile",
+            "attese ai cancelli escluse: sono tempo della persona, non della macchina",
+            "sorgenti pesanti (1080p+ da telefono) possono costare piu' di quanto "
+            "dica la costante: la storia lo corregge dopo due giri",
+        ],
     }
 
 
@@ -1340,6 +1493,61 @@ def plan_gate(
 # ------------------------------------------------- recording the timings
 
 
+def _number_or_none(value: Any, *, allow_zero: bool = False) -> Optional[float]:
+    """Un numero dal report, o ``None``: un booleano non e' un tempo."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number != number or number < 0 or (number == 0 and not allow_zero):
+        return None
+    return number
+
+
+def gate_waits(
+    report: Mapping[str, Any], timings: Mapping[str, Any]
+) -> Dict[str, float]:
+    """Quanti secondi di attesa umana stanno **dentro** il cronometro di uno stadio.
+
+    ``auto`` tiene l'attesa al cancello dentro lo stadio che la contiene
+    (``font`` 183.1 s erano 180.0 s di cancello e 3.1 s di macchina). Il report
+    la dichiara in ``gates.items[*].waited_sec``: qui si riporta sullo stadio
+    giusto, cosi' la riga di storia puo' portare il tempo di macchina.
+    """
+    gates = report.get("gates")
+    items = gates.get("items") if isinstance(gates, Mapping) else None
+    if not isinstance(items, Mapping):
+        return {}
+    waits: Dict[str, float] = {}
+    for gate, item in items.items():
+        if not isinstance(item, Mapping):
+            continue
+        seconds = _number_or_none(item.get("waited_sec"))
+        if not seconds:
+            continue
+        stage = GATE_TIME_STAGES.get(str(gate), str(gate))
+        if stage not in timings:
+            stage = str(gate)
+        if stage in timings:
+            waits[stage] = round(waits.get(stage, 0.0) + seconds, 3)
+    return waits
+
+
+def machine_timings(
+    report: Mapping[str, Any], timings: Mapping[str, Any]
+) -> Dict[str, float]:
+    """Gli stadi senza l'attesa di una persona: quello che la stima puo' imparare."""
+    waits = gate_waits(report, timings)
+    out: Dict[str, float] = {}
+    for stage, value in timings.items():
+        if stage in ("total", "machine_total", "waiting_total", "unaccounted"):
+            continue
+        seconds = _number_or_none(value, allow_zero=True)
+        if seconds is None:
+            continue
+        out[str(stage)] = round(max(0.0, seconds - waits.get(str(stage), 0.0)), 3)
+    return out
+
+
 def record_timings(
     workdir: Any,
     report: Mapping[str, Any],
@@ -1352,6 +1560,21 @@ def record_timings(
     aggiunge le unita' di lavoro senza cui i secondi non si normalizzano. Un
     report senza ``timings`` non scrive niente: meglio nessuna riga che una
     riga finta.
+
+    Il numero che la calibrazione deve imparare e' ``seconds_machine``, non
+    ``seconds_total``: il totale di parete include le attese ai cancelli, cioe'
+    il tempo in cui la persona pensava, e impararlo vorrebbe dire stimare la
+    prossima volta quel tempo li'. ``seconds_total`` resta scritto per
+    compatibilita', ``seconds_waiting`` dice quanta parte era attesa e
+    ``source`` da dove viene la separazione:
+
+    * ``"machine_total"`` — il report porta ``timings.machine_total`` (auto
+      nuovo): ``seconds_machine + seconds_waiting`` e' il totale;
+    * ``"total"`` — report vecchio senza il campo: la macchina vale il totale
+      dichiarato e l'attesa e' zero, perche' non e' misurabile.
+
+    La riga porta anche ``timings_machine``: la stessa separazione per stadio,
+    cosi' ``font`` e ``keyframes`` non fanno imparare 180 s di cancello.
     """
     if not isinstance(report, Mapping):
         return None
@@ -1366,6 +1589,23 @@ def record_timings(
         height = int(job.get("height") or (resolution[1] if len(resolution) > 1 else 0))
     except (TypeError, ValueError, IndexError):
         width, height = 0, 0
+    total = round(float(timings.get("total") or 0.0), 3)
+    declared_machine = _number_or_none(timings.get("machine_total"), allow_zero=True)
+    declared_waiting = _number_or_none(timings.get("waiting_total"), allow_zero=True)
+    if declared_machine is not None:
+        seconds_machine = round(declared_machine, 3)
+        seconds_waiting = (
+            round(declared_waiting, 3)
+            if declared_waiting is not None
+            else round(max(0.0, total - seconds_machine), 3)
+        )
+        source = "machine_total"
+    else:
+        seconds_machine = total
+        seconds_waiting = round(declared_waiting, 3) if declared_waiting else 0.0
+        source = "total"
+    machine_per_stage = machine_timings(report, timings)
+    machine_per_stage["total"] = seconds_machine
     row = {
         "timeline_sec": round(float(report.get("timeline_sec") or 0.0), 3),
         "material_sec": round(
@@ -1377,12 +1617,16 @@ def record_timings(
         "preset": str(info.get("preset") or job.get("preset") or "medium"),
         "x264_vs_hw": _codec_class(info.get("x264_vs_hw") or job.get("x264_vs_hw")),
         "effect_cost": (info.get("effects") or {}).get("cost"),
-        "seconds_total": round(float(timings.get("total") or 0.0), 3),
+        "seconds_total": total,
+        "seconds_machine": seconds_machine,
+        "seconds_waiting": seconds_waiting,
+        "source": source,
         "timings": {
             stage: round(float(timings[stage]), 3)
             for stage in (*ESTIMATE_STAGES, "deliverables")
             if isinstance(timings.get(stage), (int, float))
         },
+        "timings_machine": machine_per_stage,
     }
     target = (
         Path(str(history_path))
