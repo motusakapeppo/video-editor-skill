@@ -41,3 +41,6 @@ tests/stock_corpus/*.mp4
 tests/stock_corpus/real/*.webm
 tests/stock_corpus/real/*.mp4
 tests/_out/
+
+# stato di lavoro deepwork (locale, non versionato)
+.slim/deepwork/
