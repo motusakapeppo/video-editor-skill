@@ -39,6 +39,7 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -8174,6 +8175,11 @@ def _run_locked(
     # La policy dei giudizi, adesso che le misure del lavoro esistono: le sue
     # soglie entrano nella verifica come le leggi del gusto, e una violazione
     # ferma la consegna con misura e soglia.
+    # Il piano-scaletta: sezioni compilate dalle misure appena scritte. Non
+    # decide niente e non spegne nessuna competenza: legge e dichiara.
+    from . import sections as sections_mod  # noqa: PLC0415 - solo qui serve
+
+    report["sections"] = sections_mod.compile_sections(report)
     report["policy"] = policy_checks(report, policy_block)
     if report["policy"].get("checks") and not report["policy"].get("ok", True):
         verification = dict(verification)
@@ -8208,6 +8214,21 @@ def _run_locked(
         degrade.note("feedback", exc)
         degrade.merge_into(report)
         _log(f"[auto] giudizio non registrato: {type(exc).__name__}: {exc}")
+    # Gli intermedi della varieta' (i PNG campionati per il pHash) hanno finito
+    # il loro lavoro quando il piano e' deciso: si tolgono, e il report dichiara
+    # quanti erano. Il resto della cache resta: i proxy costano minuti a
+    # rifarsi, e un lavoro ripreso ne ha bisogno.
+    variety_cache = workdir / "cache" / "variety"
+    if variety_cache.is_dir():
+        try:
+            frames = [path for path in variety_cache.rglob("*") if path.is_file()]
+            freed = sum(path.stat().st_size for path in frames)
+            shutil.rmtree(variety_cache, ignore_errors=True)
+            report.setdefault("cleaned", {})["variety_frames"] = len(frames)
+            report["cleaned"]["bytes"] = int(freed)
+            _log(f"[auto] intermedi: {len(frames)} fotogrammi di varieta' rimossi ({freed / 1024:.0f} KB)")
+        except OSError as exc:  # noqa: BLE001 - la pulizia non e' la consegna
+            degrade.note("cache", exc)
     log.close()
     return report
 
