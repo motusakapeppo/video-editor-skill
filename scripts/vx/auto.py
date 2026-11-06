@@ -8183,6 +8183,13 @@ def _run_locked(
     from . import sections as sections_mod  # noqa: PLC0415 - solo qui serve
 
     report["sections"] = sections_mod.compile_sections(report)
+    # Le composizioni che meritano un motore grafico (split screen, confronto,
+    # sottopancia): dichiarate, con il documento e la sua identità. Il pezzo
+    # renderizzato arriverà dopo; intanto la vista e il report sanno cosa
+    # aspettarsi invece di scoprirlo alla fine.
+    from . import scenes as scenes_mod  # noqa: PLC0415 - solo qui serve
+
+    report["scenes"] = scenes_mod.declare(getattr(args, "prompt", ""))
     # La scaletta guida: quello che la richiesta pretende deve esserci. Un hook
     # o una CTA chiesti a parole e non compilati sono un buco bloccante, con la
     # sezione e lo stato nel motivo — non un dettaglio da leggere a fine lavoro.
