@@ -44,3 +44,6 @@ tests/_out/
 
 # stato di lavoro deepwork (locale, non versionato)
 .slim/deepwork/
+
+# cache dei font scaricati: si riprende dal catalogo, non si versionano 12 MB
+assets/fonts/cache/
