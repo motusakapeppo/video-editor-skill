@@ -187,6 +187,18 @@ def compile_sections(report: Any) -> Dict[str, Any]:
             binding=None,
             why="nessun materiale da aprire",
         )
+    # L'hook può essere un **testo** (la richiesta lo chiede a parole) oppure
+    # l'apertura scelta per nitidezza. Se il testo c'è, la sezione è compilata
+    # anche quando la nitidezza non è stata misurata: prima un video con l'hook
+    # scritto veniva bocciato per "manca l'hook".
+    if texts and not any(row["id"] == "hook" and row["state"] == "filled" for row in rows):
+        rows[-1] = {
+            "id": "hook",
+            "state": "filled",
+            "capability": "typography",
+            "binding": {"texts": 1, "characters": len(str(texts[0]))},
+            "why": f"testo di apertura composto, {len(str(texts[0]))} caratteri",
+        }
 
     # beat: il corpo, con la densita' di taglio che la coerenza ha misurato.
     shots = _number((coherence.get("metrics") or {}).get("shots")) if isinstance(

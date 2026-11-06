@@ -8190,6 +8190,9 @@ def _run_locked(
     audit = sections_mod.audit(report["sections"], wanted)
     report["sections"]["expected"] = wanted
     report["sections"]["gaps"] = audit["gaps"]
+    # "ok" vuol dire che la scaletta regge: se un requisito e' scoperto, non e'
+    # ok anche quando qualche sezione e' compilata.
+    report["sections"]["ok"] = bool(report["sections"].get("ok")) and audit["ok"]
     if audit["checks"]:
         verification = dict(verification)
         verification["checks"] = list(verification.get("checks") or ()) + list(

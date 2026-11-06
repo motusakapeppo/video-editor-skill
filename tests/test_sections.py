@@ -74,6 +74,22 @@ def test_missing_is_declared() -> None:
     hook = next(row for row in block["sections"] if row["id"] == "hook")
     check("S2 hook e' missing, non filled", hook["state"] == "missing", hook["state"])
     check("S2 e dice perche'", "misurata" in hook["why"], hook["why"])
+    # Ma se il testo di apertura c'e', l'hook e' compilato: prima un video con
+    # l'hook scritto veniva bocciato per "manca l'hook".
+    with_text = sections.compile_sections(
+        {"measured": {"clips": 2}, "opening": {}, "texts": ["STASERA TUTTO CAMBIA"]}
+    )
+    hook_text = next(row for row in with_text["sections"] if row["id"] == "hook")
+    check(
+        "S2 con il testo di apertura l'hook e' compilato (typography)",
+        hook_text["state"] == "filled" and hook_text["capability"] == "typography",
+        (hook_text["state"], hook_text["capability"]),
+    )
+    check(
+        "S2 e il perche' porta un numero (i caratteri)",
+        any(char.isdigit() for char in str(hook_text["why"])),
+        hook_text["why"],
+    )
 
 
 def test_no_orphan_capabilities() -> None:
