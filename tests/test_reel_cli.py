@@ -309,6 +309,72 @@ def main() -> int:
             renamed.name if renamed else None,
         )
 
+        # -- senza titolo il contrasto non si applica, non e' un fallimento -- #
+        # Difetto vero, trovato il 2026-11-06 su un reel reale: il prompt non
+        # chiedeva testo, `measured.contrast` era null, e `vx reel` bollava il
+        # lavoro NON-PUBBLICABILE mentre il QC diceva `applicable: false` e
+        # passava. Stesso master, due verdetti opposti.
+        untitled = dict(forged)
+        untitled["text_required"] = False
+        untitled["measured"] = dict(forged["measured"], contrast=None)
+        untitled_stages = reel.measure_stages(untitled, tmp)
+        check(
+            "nessun titolo richiesto: deliver firma e lo dichiara",
+            untitled_stages["deliver"]["ok"] is True
+            and "non applicabile" in untitled_stages["deliver"]["why"]
+            and untitled_stages["deliver"]["value"] == "n/a",
+            untitled_stages["deliver"]["why"],
+        )
+        titled = dict(untitled, text_required=True)
+        check(
+            "titolo richiesto ma non misurato: deliver non firma",
+            reel.measure_stages(titled, tmp)["deliver"]["ok"] is False,
+            reel.measure_stages(titled, tmp)["deliver"]["why"],
+        )
+
+        # -- la durata e' quella del contenitore, come la misura il QC ------ #
+        # Difetto vero, stesso giorno: `probe` legge la traccia video (9.937 s)
+        # e il QC il contenitore (9.984 s). Costruisco un file in cui i due
+        # numeri differono davvero: video da 4 s, audio da 6 s.
+        divergent = tmp / "divergent.mp4"
+        subprocess.run(
+            [
+                FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=size=1080x1920:rate=30:duration=4",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                str(divergent),
+            ],
+            check=False,
+            capture_output=True,
+        )
+        stream = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=duration", "-of", "csv=p=0", str(divergent)],
+            check=False, capture_output=True, text=True,
+        )
+        container = reel._container_duration(divergent)
+        check(
+            "il file di prova ha davvero due durate diverse",
+            container is not None and container > 5.0,
+            f"contenitore {container} · traccia {stream.stdout.strip()!r}",
+        )
+        mixed = dict(
+            forged,
+            fps=30.0,
+            duration_requested_sec=6.0,
+            measured={**forged["measured"], "duration_sec": 4.0,
+                      "requested_duration_sec": 6.0},
+            master=str(divergent),
+        )
+        mixed_render = reel.measure_stages(mixed, tmp)["render"]
+        check(
+            "render legge il contenitore: 6 s richiesti, 6 s firmati",
+            mixed_render["ok"] is True
+            and abs(float(mixed_render["value"]) - float(container)) < 1e-3,
+            f"{mixed_render['value']} vs contenitore {container}",
+        )
+
     elapsed = time.time() - started
     print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP  ({elapsed:.1f}s)")
     return 0 if FAIL == 0 else 1

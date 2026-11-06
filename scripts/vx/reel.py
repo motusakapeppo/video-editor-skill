@@ -23,7 +23,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from . import auto, doctor, probe, runlog
+from . import auto, doctor, runlog
+from . import ffmpeg as ff
 from .contract import VxError
 
 __all__ = ["STAGES", "run", "resolve_workdir", "measure_stages"]
@@ -52,6 +53,33 @@ def _num(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _container_duration(master: Path) -> Optional[float]:
+    """Durata del file consegnato come la misura il QC: ``format=duration``.
+
+    Non e' un doppione di ``probe``: ``probe`` legge ``stream.duration`` (la
+    traccia video) e sul verticale da 10 s dava 9.937 s, mentre il contenitore
+    dura 9.984 s. Due numeri veri e diversi; il contratto deve usare quello con
+    cui il QC dichiara la consegna, o lo stesso master e' buono per uno e fuori
+    tolleranza per l'altro.
+    """
+    try:
+        done = ff.run_fp(
+            ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(master)]
+        )
+    except Exception:  # noqa: BLE001 - una misura mancante e' uno stadio fallito
+        return None
+    if not done.ok:
+        return None
+    return _num(_to_float(done.stdout))
+
+
+def _to_float(text: str) -> Optional[float]:
+    try:
+        return float(str(text).strip().splitlines()[0])
+    except (IndexError, TypeError, ValueError):
+        return None
 
 
 def _fmt(value: float, digits: int = 3) -> str:
@@ -135,10 +163,14 @@ def measure_stages(
     master = _master_of(report)
     duration = _num((data or {}).get("duration_sec"))
     if master is not None:
-        try:
-            duration = float(probe.probe(master).duration)
-        except Exception:  # noqa: BLE001 - a missing measure is a failed stage
-            pass
+        # Il contratto e il QC devono leggere lo *stesso* numero: `probe` misura
+        # la traccia video (9.937 s su un master da 10 s), il QC misura il
+        # contenitore (9.984 s). Con due fonti diverse lo stesso file era dentro
+        # tolleranza per il QC e fuori per il contratto, e ogni reel finiva
+        # `NON-PUBBLICABILE`. Qui si misura il contenitore, come il QC.
+        measured_container = _container_duration(master)
+        if measured_container is not None:
+            duration = measured_container
     requested = _num(data.get("requested_duration_sec"))
     fps = _num(report.get("fps")) or 30.0
     frame = 1.0 / fps if fps > 0 else 0.0
@@ -278,13 +310,29 @@ def measure_stages(
         ),
     }
 
-    deliver_ok = contrast is not None and contrast >= CONTRAST_MIN
+    # Un lavoro senza titolo non ha un contrasto da misurare: non e' un fallimento,
+    # e' una soglia che non si applica. Prima il reel finiva `NON-PUBBLICABILE`
+    # ogni volta che il prompt non chiedeva testo, mentre il QC dichiarava
+    # `applicable: false` e passava: due verdetti opposti sullo stesso master.
+    text_required = bool(report.get("text_required"))
+    if contrast is not None:
+        deliver_ok = contrast >= CONTRAST_MIN
+        deliver_value: Any = round(contrast, 3)
+        deliver_why = _contrast_reason(contrast)
+    elif not text_required:
+        deliver_ok = True
+        deliver_value = "n/a"
+        deliver_why = "nessun titolo richiesto: contrasto non applicabile"
+    else:
+        deliver_ok = False
+        deliver_value = "n/d"
+        deliver_why = _contrast_reason(None)
     events["deliver"] = {
-        "contract": f"contrasto >= {CONTRAST_MIN:.1f}",
-        "value": round(contrast, 3) if contrast is not None else "n/d",
-        "threshold": CONTRAST_MIN,
+        "contract": f"contrasto >= {CONTRAST_MIN:.1f} (se c'e' un titolo)",
+        "value": deliver_value,
+        "threshold": CONTRAST_MIN if text_required else None,
         "ok": deliver_ok,
-        "why": _contrast_reason(contrast),
+        "why": deliver_why,
     }
     return events
 
