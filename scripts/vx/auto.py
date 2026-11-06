@@ -3335,6 +3335,25 @@ def _source_proxies(
     return proxies, notes
 
 
+def subs_requested(args: Any) -> bool:
+    """I sottotitoli si chiedono col flag **o** a parole nel prompt.
+
+    `--no-subs` vince sempre (è un rifiuto esplicito); `--subs` accende; altrimenti
+    conta la richiesta scritta: "con sottotitoli", "sottotitolato", "subtitles".
+    Prima il prompt non veniva letto e il lavoro usciva senza testo dichiarando
+    "no speech", che era falso: lo stadio del parlato non era mai partito.
+    """
+    if bool(getattr(args, "no_subs", False)):
+        return False
+    if bool(getattr(args, "subs", False)):
+        return True
+    prompt = str(getattr(args, "prompt", "") or "").lower()
+    return any(
+        needle in prompt
+        for needle in ("sottotitol", "subtitl", "subtitle", "didascal")
+    )
+
+
 def _bridge_plan(
     plan: Any,
     *,
@@ -7237,8 +7256,11 @@ def _run_locked(
     bridge_report: Any = None
     if not bool(getattr(args, "no_bridge", False)):
         _notify(progress, 22.0, "bridge", log=log, status="start")
-        # Un testo sopra il video non si scrive se nessuno l'ha chiesto.
-        subs_enabled = bool(getattr(args, "subs", False))
+        # Un testo sopra il video non si scrive se nessuno l'ha chiesto: ma se la
+        # richiesta lo dice a parole ("con sottotitoli"), quella e' una richiesta
+        # e va onorata. Prima si guardava solo il flag, e il prompt veniva perso
+        # in silenzio: il report diceva "no speech" mentre lo stadio non partiva.
+        subs_enabled = subs_requested(args)
         plan, bridge_report, analyses, motion = _bridge_plan(
             plan,
             captions=subs_enabled,
