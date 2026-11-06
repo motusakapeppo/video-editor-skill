@@ -23,8 +23,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
-from . import auto, doctor, runlog
-from . import ffmpeg as ff
+from . import auto, doctor, probe, runlog
 from .contract import VxError
 
 __all__ = ["STAGES", "run", "resolve_workdir", "measure_stages"]
@@ -56,30 +55,14 @@ def _num(value: Any) -> Optional[float]:
 
 
 def _container_duration(master: Path) -> Optional[float]:
-    """Durata del file consegnato come la misura il QC: ``format=duration``.
+    """Durata del file consegnato: una sola definizione, in ``vx.probe``.
 
-    Non e' un doppione di ``probe``: ``probe`` legge ``stream.duration`` (la
-    traccia video) e sul verticale da 10 s dava 9.937 s, mentre il contenitore
-    dura 9.984 s. Due numeri veri e diversi; il contratto deve usare quello con
-    cui il QC dichiara la consegna, o lo stesso master e' buono per uno e fuori
-    tolleranza per l'altro.
+    Il perché sta la': ``ProbeResult.duration`` è la traccia video (9.937 s su un
+    master da 10 s), il contenitore è 9.984. Contratto e QC leggono lo stesso
+    numero, altrimenti lo stesso master è buono per uno e fuori tolleranza per
+    l'altro.
     """
-    try:
-        done = ff.run_fp(
-            ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(master)]
-        )
-    except Exception:  # noqa: BLE001 - una misura mancante e' uno stadio fallito
-        return None
-    if not done.ok:
-        return None
-    return _num(_to_float(done.stdout))
-
-
-def _to_float(text: str) -> Optional[float]:
-    try:
-        return float(str(text).strip().splitlines()[0])
-    except (IndexError, TypeError, ValueError):
-        return None
+    return probe.container_duration(master)
 
 
 def _fmt(value: float, digits: int = 3) -> str:

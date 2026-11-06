@@ -138,3 +138,29 @@ quanto e a che stadio — senza toccare pannello, sessione o run log. Due cartel
 diverse hanno due lease diversi: due lavori legittimi girano in parallelo. Il
 vecchio `<workdir>/.lock` resta leggibile, non più scritto.
 
+## 10. Limiti dichiarati
+
+Un limite scritto è un limite che non sorprende. Questi sono i confini veri di
+oggi, non promesse future:
+
+- **Windows prima di tutto.** Il percorso Windows è provato (rilascio del lease
+  con `msvcrt`, apertura cartella con Explorer); il ramo macOS/Linux esiste nel
+  codice (`fcntl`, `open -R`, `xdg-open`) ma **non è stato eseguito**: su quelle
+  piattaforme va riprovato prima di fidarsi.
+- **Un lavoro per cartella.** Il lease impedisce due scrittori sulla stessa
+  workdir; lavori diversi su cartelle diverse girano in parallelo. Non c'è un
+  coordinamento globale, e non serve: ogni lavoro scrive solo i suoi file.
+- **Nessuna variante per piattaforma.** Un master, un formato. Le versioni
+  9:16/1:1/16:9 si fanno come lavori separati, non come allegati.
+- **Una macchina.** Niente render distribuito: la stima parla del tempo di
+  questa macchina a macchina libera, e lo dichiara in `assumptions`.
+- **La vista è locale.** Il daemon ascolta su `127.0.0.1`; non c'è accesso
+  remoto, e il percorso del file non arriva mai dal client.
+- **Rete solo dove è dichiarata.** Whisper usa la cache del modello, i font si
+  scaricano dal catalogo solo con `allow_network`; senza rete il lavoro degrada
+  e lo dice (`degraded`), non si blocca.
+- **Le prove pesanti non sono prove sotto carico.** `tests/run_all.py --heavy`
+  è l'unico modo di eseguirle; i test di crash misurano la velocità della
+  macchina e sotto carico danno falsi negativi, dichiarati come tali.
+
+

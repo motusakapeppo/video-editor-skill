@@ -211,7 +211,12 @@ def _apply_update(
     updates: Mapping[str, Any],
 ) -> Dict[str, Any]:
     now = time.time()
-    new = dict(record)
+    # La base e' la riga **fresca**, non quella che il chiamante aveva in mano:
+    # tra la sua lettura e questa scrittura il worker puo' aver scritto
+    # "completed", e aggiornare la copia vecchia lo riporterebbe indietro (e' il
+    # falso "worker died" visto sotto carico il 6 novembre).
+    fresh = _read_record(base, job_id)
+    new = dict(fresh if isinstance(fresh, dict) else record)
 
     if "status" in updates:
         status = updates["status"]
@@ -338,9 +343,17 @@ def read_job(
     if reap and record.get("status") == "running":
         pid = record.get("pid")
         if pid is not None and not is_alive(pid):
-            record = _apply_update(
-                base, job_id, record, {"status": "failed", "error": "worker died"}
-            )
+            # Il pid puo' essere sparito **dopo** che il worker ha scritto il suo
+            # esito: si rilegge prima di dichiararlo morto, e se nel frattempo ha
+            # chiuso il lavoro si restituisce quello.
+            fresh = _read_record(base, job_id)
+            if isinstance(fresh, dict) and fresh.get("status") != "running":
+                record = fresh
+            else:
+                record = _apply_update(
+                    base, job_id, fresh if isinstance(fresh, dict) else record,
+                    {"status": "failed", "error": "worker died"},
+                )
     if reap and record.get("status") == "queued":
         updated = float(record.get("updated_at") or 0.0)
         if (time.time() - updated) > QUEUED_STALE_SEC:

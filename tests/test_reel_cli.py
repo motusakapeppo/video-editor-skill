@@ -353,7 +353,7 @@ def main() -> int:
              "-show_entries", "stream=duration", "-of", "csv=p=0", str(divergent)],
             check=False, capture_output=True, text=True,
         )
-        container = reel._container_duration(divergent)
+        container = reel._container_duration(Path(divergent))
         check(
             "il file di prova ha davvero due durate diverse",
             container is not None and container > 5.0,
@@ -373,6 +373,14 @@ def main() -> int:
             mixed_render["ok"] is True
             and abs(float(mixed_render["value"]) - float(container)) < 1e-3,
             f"{mixed_render['value']} vs contenitore {container}",
+        )
+        # Una sola definizione: contratto e QC devono leggere lo stesso numero.
+        from vx import verify as verify_mod  # noqa: PLC0415 - solo per questa prova
+
+        check(
+            "reel e verify misurano la stessa durata",
+            reel._container_duration(Path(divergent)) == verify_mod._duration_of(Path(divergent)),
+            (reel._container_duration(Path(divergent)), verify_mod._duration_of(Path(divergent))),
         )
 
     elapsed = time.time() - started

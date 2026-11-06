@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import ffmpeg as ff
+from . import probe
 
 __all__ = [
     "BLACK_LUMA",
@@ -185,8 +186,8 @@ def _probe_value(master: Any, entries: str, stream: bool = False) -> str:
 
 
 def _duration_of(master: Any) -> Optional[float]:
-    value = _probe_value(master, "format=duration")
-    return _num(value)
+    """La durata del contenitore: la stessa funzione che usa il contratto."""
+    return probe.container_duration(master)
 
 
 def _fps_of(master: Any) -> Optional[float]:

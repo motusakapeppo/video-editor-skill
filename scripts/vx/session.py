@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import time
@@ -39,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from . import degrade
+from . import contract, degrade
 
 SCHEMA = "vx.session/1"
 EVENTS_NAME = "events.jsonl"
@@ -896,6 +897,87 @@ def begin(
 ) -> Session:
     """Scorciatoia per :meth:`Session.begin`."""
     return Session.begin(kind, argv, cwd, **kwargs)
+
+
+def prune_sessions(
+    *,
+    root: Optional[Any] = None,
+    days: float = 7.0,
+    dry_run: bool = False,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """Toglie le sessioni piu' vecchie di ``days`` giorni, dichiarando cosa fa.
+
+    Le prove ne lasciano centinaia (492 al 6 novembre 2026) e nessuno le guarda
+    piu'. Le regole sono quelle di un file system condiviso con l'utente:
+
+    - la radice **vera** (``~/.vx/session``) si tocca solo con ``--force``,
+      perche' li' ci sono le sessioni che la vista mostra;
+    - una cartella senza ``state.json`` ne' ``events*.jsonl`` non e' una
+      sessione e resta dov'e' (potrebbe essere altro);
+    - ``dry_run`` non cancella niente e dice cosa cancellerebbe;
+    - l'eta' e' quella del file piu' recente dentro la sessione.
+    """
+    base = Path(root) if root is not None else default_root()
+    target = base.resolve() if base.exists() else base
+    real = default_root().resolve() if default_root().exists() else default_root()
+    if target == real and not force:
+        raise contract.VxError(
+            "session prune: questa e' la radice vera delle sessioni "
+            f"({real}): serve --force, oppure --root su una cartella di prova"
+        )
+    cutoff = time.time() - max(0.0, float(days)) * 86400.0
+    removed: List[str] = []
+    kept = 0
+    foreign = 0
+    freed = 0
+    if not base.is_dir():
+        # Una cartella che non c'e' non e' un errore: non c'e' niente da potare.
+        return {
+            "root": str(base),
+            "days": float(days),
+            "dry_run": bool(dry_run),
+            "removed": [],
+            "removed_count": 0,
+            "kept_count": 0,
+            "foreign_count": 0,
+            "freed_bytes": 0,
+        }
+    try:
+        folders = sorted(path for path in base.iterdir() if path.is_dir())
+    except OSError as exc:
+        raise contract.VxError(f"session prune: cartella non leggibile: {exc}") from exc
+    for folder in folders:
+        if not (_event_files(folder) or (folder / STATE_NAME).is_file()):
+            foreign += 1
+            continue
+        try:
+            stamp = max(
+                (path.stat().st_mtime for path in folder.rglob("*") if path.is_file()),
+                default=0.0,
+            )
+        except OSError:
+            stamp = 0.0
+        if stamp >= cutoff:
+            kept += 1
+            continue
+        size = sum(
+            path.stat().st_size for path in folder.rglob("*") if path.is_file()
+        ) if not dry_run else 0
+        removed.append(folder.name)
+        if not dry_run:
+            shutil.rmtree(folder, ignore_errors=True)
+        freed += size
+    return {
+        "root": str(base),
+        "days": float(days),
+        "dry_run": bool(dry_run),
+        "removed": removed,
+        "removed_count": len(removed),
+        "kept_count": kept,
+        "foreign_count": foreign,
+        "freed_bytes": freed,
+    }
 
 
 def list_sessions(*, root: Optional[Any] = None) -> List[str]:

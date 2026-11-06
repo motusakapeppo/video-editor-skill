@@ -3807,6 +3807,40 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return mcp_server.main([])
 
 
+def cmd_session(args: argparse.Namespace) -> int:
+    """Pota le sessioni vecchie: un comando, non una cartella cancellata a mano."""
+    from . import session as session_mod
+
+    data = session_mod.prune_sessions(
+        root=getattr(args, "root", None),
+        days=float(getattr(args, "days", 7.0)),
+        dry_run=bool(getattr(args, "dry_run", False)),
+        force=bool(getattr(args, "force", False)),
+    )
+    if getattr(args, "json", False):
+        _out(data)
+        return EXIT_OK
+    megabytes = 1024 * 1024
+    print(f"Sessioni: {data['root']} (piu' vecchie di {data['days']:g} giorni)")
+    if data["dry_run"]:
+        print(
+            f"  da rimuovere: {data['removed_count']} | "
+            f"tenute: {data['kept_count']} | non sessioni: {data['foreign_count']}"
+        )
+        for name in data["removed"][:20]:
+            print(f"    {name}")
+        if data["removed_count"] > 20:
+            print(f"    ... e altre {data['removed_count'] - 20}")
+        print("  --dry-run: non ho cancellato niente")
+        return EXIT_OK
+    print(
+        f"  rimosse: {data['removed_count']} | tenute: {data['kept_count']} | "
+        f"non sessioni: {data['foreign_count']} | "
+        f"liberati {data['freed_bytes'] / megabytes:.1f} MB"
+    )
+    return EXIT_OK
+
+
 def cmd_guard(args: argparse.Namespace) -> int:
     """Audit a work folder: was the job really done through vx? Exit 2 if not."""
     from . import guard
@@ -4721,6 +4755,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="server MCP su stdio (JSON-RPC per agenti)")
     p.set_defaults(func=cmd_mcp)
+
+    p = add(
+        "session",
+        "le sessioni della vista: elencale e pota quelle vecchie (le prove ne lasciano molte)",
+    )
+    session_sub = p.add_subparsers(dest="session_cmd", required=True)
+    a = session_sub.add_parser(
+        "prune",
+        help="rimuove le sessioni piu' vecchie di N giorni (default 7); senza --force non tocca la radice vera",
+    )
+    a.add_argument("--root", default=None, help="cartella delle sessioni (default: la radice vera)")
+    a.add_argument("--days", type=float, default=7.0, help="eta' minima in giorni (default 7)")
+    a.add_argument("--dry-run", action="store_true", help="elenca e basta, non cancella")
+    a.add_argument(
+        "--force",
+        action="store_true",
+        help="necessario per la radice vera delle sessioni (~/.vx/session)",
+    )
+    a.add_argument("--json", action="store_true", help="referto macchina")
+    a.set_defaults(func=cmd_session)
 
     p = add("fonts", "licenze dei font: audit cache -> fetched.json -> matrice")
     fonts_sub = p.add_subparsers(dest="fonts_cmd", required=True)

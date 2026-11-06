@@ -147,6 +147,10 @@ pipeline, niente UI nuove. `vx guard <dir>` dice se un lavoro è passato davvero
 di qui. All'inizio si dichiara se si lavora in autonomia o con le scelte
 dell'utente; in autonomia ogni scelta va motivata con l'alternativa scartata.
 
+I **limiti** (piattaforma, un lavoro per cartella, nessuna variante per
+piattaforma, una macchina sola) stanno in un posto solo:
+`references/31-protocollo.md`, sezione 10. Qui non si ripetono.
+
 ### Exit codes
 
 `0` ok · `exit 2` usage error · `3` needs input (briefing e fermati) · `4`

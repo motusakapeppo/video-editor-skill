@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from . import ffmpeg as ff
 from .contract import MissingDependency, ProbeResult
@@ -32,6 +32,29 @@ STILL_SUFFIXES = frozenset(
         ".exr",
     }
 )
+
+
+def container_duration(path: Any) -> Optional[float]:
+    """La durata del **contenitore** (``format=duration``), o ``None``.
+
+    E' l'unica definizione di "quanto dura il file consegnato": ``ProbeResult``
+    porta ``stream.duration``, che e' la traccia video e su un master da 10 s
+    puo' dire 9.937 mentre il contenitore dice 9.984. Il contratto e il QC
+    devono leggere lo stesso numero, o lo stesso master e' buono per uno e fuori
+    tolleranza per l'altro (e' successo: ogni reel finiva NON-PUBBLICABILE).
+    """
+    try:
+        done = ff.run_fp(
+            ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)]
+        )
+    except Exception:  # noqa: BLE001 - una misura mancante non e' un'eccezione
+        return None
+    if not done.ok:
+        return None
+    try:
+        return float(str(done.stdout).strip().splitlines()[0])
+    except (IndexError, TypeError, ValueError):
+        return None
 
 
 def _fraction(value: str) -> float:
