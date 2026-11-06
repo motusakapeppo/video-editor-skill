@@ -104,6 +104,22 @@ Regole non negoziabili:
 4. Il brief dell'utente vince sempre sulla rilevazione automatica. Se dice
    "lascia il rumore, è ambientale", il denoise non si applica.
 
+## La scaletta
+
+Ogni lavoro compila sei sezioni — `hook`, `beat`, `payoff`, `cta`, `proof`,
+`broll` — dalle misure già prese. Ognuna porta la **competenza** che l'ha
+prodotta, il **materiale** su cui poggia e il **numero** che la giustifica: senza
+numero non è compilata, è `missing` o `absent` col motivo. La scaletta non spegne
+nessuna competenza e non inventa sezioni: le sei sono chiuse.
+
+I sottotitoli si chiedono col flag **o a parole** («con sottotitoli»). Se il
+parlato non c'è il report dice `no speech`; se nessuno li aveva chiesti dice
+`sottotitoli non richiesti` — sono due cose diverse.
+
+Se il reel esce più corto perché ha tolto i silenzi, si tollera fino al **20%
+(max 3 s)** e il report lo scrive con i due numeri; oltre quella soglia non si
+consegna.
+
 ## Come si giudica
 
 I numeri dicono se il lavoro è **corretto**, non se è **buono**. Queste sono le
