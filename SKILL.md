@@ -112,6 +112,10 @@ prodotta, il **materiale** su cui poggia e il **numero** che la giustifica: senz
 numero non è compilata, è `missing` o `absent` col motivo. La scaletta non spegne
 nessuna competenza e non inventa sezioni: le sei sono chiuse.
 
+Se la richiesta nomina un hook o una CTA, quella sezione è **obbligatoria**: se
+resta scoperta il lavoro **non si consegna**, e il buco sta in
+`report["sections"]["gaps"]`.
+
 I sottotitoli si chiedono col flag **o a parole** («con sottotitoli»). Se il
 parlato non c'è il report dice `no speech`; se nessuno li aveva chiesti dice
 `sottotitoli non richiesti` — sono due cose diverse.
