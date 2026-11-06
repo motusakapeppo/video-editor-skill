@@ -8183,6 +8183,20 @@ def _run_locked(
     from . import sections as sections_mod  # noqa: PLC0415 - solo qui serve
 
     report["sections"] = sections_mod.compile_sections(report)
+    # La scaletta guida: quello che la richiesta pretende deve esserci. Un hook
+    # o una CTA chiesti a parole e non compilati sono un buco bloccante, con la
+    # sezione e lo stato nel motivo — non un dettaglio da leggere a fine lavoro.
+    wanted = sections_mod.expectations(getattr(args, "prompt", ""))
+    audit = sections_mod.audit(report["sections"], wanted)
+    report["sections"]["expected"] = wanted
+    report["sections"]["gaps"] = audit["gaps"]
+    if audit["checks"]:
+        verification = dict(verification)
+        verification["checks"] = list(verification.get("checks") or ()) + list(
+            audit["checks"]
+        )
+        verification["ok"] = False
+        report["verification"] = verification
     report["policy"] = policy_checks(report, policy_block)
     if report["policy"].get("checks") and not report["policy"].get("ok", True):
         verification = dict(verification)

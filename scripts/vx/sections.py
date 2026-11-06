@@ -51,6 +51,75 @@ def _block(report: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def expectations(request: Any) -> Dict[str, Dict[str, Any]]:
+    """Cosa la richiesta **pretende** dalla scaletta, prima di montare.
+
+    Il prompt non è solo un testo: se dice "hook: ..." o "cta: ..." sta chiedendo
+    una sezione. Qui la richiesta diventa un requisito verificabile, così una
+    scaletta compilata a metà non passa per buona. Solo ciò che l'utente ha
+    scritto diventa obbligatorio: niente requisiti inventati.
+    """
+    text = str(request or "").lower()
+    wanted: Dict[str, Dict[str, Any]] = {}
+
+    def require(section: str, needles: tuple, why: str) -> None:
+        if any(needle in text for needle in needles):
+            wanted[section] = {"required": True, "why": why}
+
+    require("hook", ("hook:", "hook ", "aggancio"), "la richiesta nomina un hook")
+    require("cta", ("cta:", "cta ", "call to action"), "la richiesta nomina una cta")
+    require(
+        "proof",
+        ("testimoni", "intervista", "racconto", "documentario"),
+        "la richiesta chiede una testimonianza",
+    )
+    return wanted
+
+
+def audit(
+    compiled: Mapping[str, Any], wanted: Mapping[str, Mapping[str, Any]]
+) -> Dict[str, Any]:
+    """Confronta ciò che la richiesta pretende con ciò che la scaletta ha compilato.
+
+    Un requisito senza sezione compilata è un **buco**, non un dettaglio: diventa
+    un check bloccante nel report, e la consegna si ferma. È la parte in cui la
+    scaletta guida il lavoro invece di limitarsi a descriverlo.
+    """
+    rows = compiled.get("sections") if isinstance(compiled.get("sections"), list) else []
+    states = {
+        str(row.get("id")): str(row.get("state"))
+        for row in rows
+        if isinstance(row, Mapping)
+    }
+    gaps: List[Dict[str, Any]] = []
+    for section, spec in (wanted or {}).items():
+        if not isinstance(spec, Mapping) or not spec.get("required"):
+            continue
+        state = states.get(section, "absent")
+        if state == "filled":
+            continue
+        gaps.append(
+            {
+                "section": section,
+                "state": state,
+                "why": (
+                    f"la richiesta chiede {section} ({spec.get('why')}) ma la "
+                    f"sezione e' {state}: il video non la contiene"
+                ),
+            }
+        )
+    checks = [
+        {
+            "id": f"section_{gap['section']}",
+            "passed": False,
+            "measured": {"state": gap["state"]},
+            "expected": {"required": True},
+            "why": gap["why"],
+        }
+        for gap in gaps
+    ]
+    return {"gaps": gaps, "checks": checks, "ok": not gaps}
+
 def compile_sections(report: Any) -> Dict[str, Any]:
     """Compila le sezioni dalle misure gia' presenti nel report.
 

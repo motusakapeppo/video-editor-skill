@@ -116,6 +116,40 @@ def test_sections_are_the_declared_six() -> None:
     )
 
 
+def test_expectations_come_from_the_request() -> None:
+    print("\n7. la richiesta diventa requisito, e solo quello che ha scritto")
+    wanted = sections.expectations("reel 15s, hook: Stasera tutto cambia, cta: Scrivici")
+    check("S7 hook richiesto", wanted.get("hook", {}).get("required") is True, wanted)
+    check("S7 cta richiesta", wanted.get("cta", {}).get("required") is True, wanted)
+    check(
+        "S7 nessun requisito inventato su un prompt neutro",
+        sections.expectations("un reel di dieci secondi") == {},
+        sections.expectations("un reel di dieci secondi"),
+    )
+
+
+def test_gaps_block_the_delivery() -> None:
+    print("\n8. un hook chiesto e non compilato e' un buco bloccante")
+    empty = sections.compile_sections({})
+    wanted = sections.expectations("reel, hook: prova, cta: scrivici")
+    audit = sections.audit(empty, wanted)
+    check("S8 due buchi (hook e cta)", len(audit["gaps"]) == 2, audit["gaps"])
+    check("S8 diventano altrettanti check falliti", len(audit["checks"]) == 2, audit["checks"])
+    check("S8 e il blocco non e' ok", audit["ok"] is False, audit["ok"])
+
+    full = sections.compile_sections(
+        {
+            "measured": {"duration_sec": 12.0, "clips": 3},
+            "opening": {"chosen": {"asset_id": "a", "sharpness": 80.0}, "threshold": 50.0},
+            "texts": ["STASERA", "SCRIVICI"],
+            "coherence": {"metrics": {"shots": 5}},
+        }
+    )
+    clean = sections.audit(full, wanted)
+    check("S8 con le sezioni compilate non ci sono buchi", clean["gaps"] == [], clean["gaps"])
+    check("S8 e il blocco e' ok", clean["ok"] is True, clean["ok"])
+
+
 def main() -> int:
     test_filled_sections_have_number_and_capability()
     test_missing_is_declared()
@@ -123,6 +157,8 @@ def main() -> int:
     test_capabilities_are_the_real_ones()
     test_empty_report_does_not_raise()
     test_sections_are_the_declared_six()
+    test_expectations_come_from_the_request()
+    test_gaps_block_the_delivery()
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 
