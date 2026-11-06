@@ -2856,10 +2856,10 @@ def reveal_native(path: Path) -> None:
     """Apre la cartella col file selezionato, senza toccare il file.
 
     Su Windows il percorso **non** si passa come voce di lista: ``subprocess``
-    quota un argomento che contiene spazi, quindi Explorer riceve
-    ``"/select,C:\\...\\sp ace\\file.mp4"``, non riconosce piu' lo switch e apre
-    la cartella predefinita (Documenti). Riprodotto: un lavoro in
-    ``D:\\VOX POPULI - ALBUM\\...`` apriva ``Documenti``. Serve **una stringa
+    quota un argomento che contiene spazi, quindi Explorer riceve un unico
+    argomento con le virgolette in testa, non riconosce piu' lo switch
+    ``/select,`` e apre la cartella predefinita. Riprodotto su un lavoro vero:
+    un percorso con spazi apriva la cartella dei documenti. Serve **una stringa
     sola**, con le virgolette gia' dentro.
     """
     path = Path(path)

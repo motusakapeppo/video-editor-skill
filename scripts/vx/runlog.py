@@ -13,10 +13,10 @@ reader never sees a half line; the tolerant read still drops a truncated
 
     python - <<'PY'
     from vx import runlog
-    runlog.append(r"D:\work", stage="doctor", event="sign",
+    runlog.append(workdir, stage="doctor", event="sign",
                   contract="verdict != broken", value="ready",
                   threshold=None, ok=True, why="ambiente pronto")
-    print(runlog.verify(r"D:\work"))
+    print(runlog.verify(workdir))
     PY
 """
 
