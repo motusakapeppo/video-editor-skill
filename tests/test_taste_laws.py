@@ -12,12 +12,13 @@ e sotto il minimo dichiarabile il lavoro non si consegna.
 
 Gli scenari S1-S4 del verbale sono qui sotto, misurati: niente mock delle
 misure, solo piani e fotogrammi veri (PNG generati, e il materiale reale di
-``D:\\video_work\\recipe_accept\\src`` quando c'e').
+``<workdir>/recipe_accept/src`` quando c'e').
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -246,7 +247,7 @@ def main() -> int:
         )
 
         print("\n4. S2: materiale vario -> il piano non cambia")
-        real_src = Path(r"D:\video_work\recipe_accept\src")
+        real_src = Path(os.environ.get("VX_TASTE_SRC", "") or (Path(tempfile.gettempdir()) / "vx-taste-src"))
         if real_src.is_dir():
             videos = sorted(
                 path
@@ -294,9 +295,9 @@ def main() -> int:
                 else:
                     skip("S2", "sample_frames non ha letto il materiale reale")
             else:
-                skip("S2", "meno di due video in D:\\video_work\\recipe_accept\\src")
+                skip("S2", "meno di due video in <workdir>/recipe_accept/src")
         else:
-            skip("S2", "D:\\video_work\\recipe_accept\\src assente")
+            skip("S2", "<workdir>/recipe_accept/src assente")
 
         print("\n5. legge B: sotto il minimo dichiarabile non si consegna")
         tiny = _plan(
@@ -436,8 +437,9 @@ def main() -> int:
         )
         delivered_a = all(stages_a[stage]["ok"] for stage in reel.STAGES)
         check(
-            "S4/reel: lo stadio deliver firma fallito (contrasto non firmato)",
-            stages_a["deliver"]["ok"] is False,
+            "S4/reel: lo stadio deliver firma fallito (legge violata)",
+            stages_a["deliver"]["ok"] is False
+            and "legge" in str(stages_a["deliver"]["why"]),
             stages_a["deliver"]["why"],
         )
         check("S4/reel legge A: delivered == False", delivered_a is False, delivered_a)

@@ -310,14 +310,34 @@ def measure_stages(
         ),
     }
 
+    # Le due leggi del gusto non passano dal contrasto: una violazione (effetto
+    # senza prova, troppe ripetizioni, sotto la durata minima) e' un fallimento
+    # suo, e deve fermare la consegna anche quando il lavoro non ha titolo.
+    laws_block = report.get("laws") if isinstance(report.get("laws"), Mapping) else {}
+    law_violations: List[Mapping[str, Any]] = []
+    for key in ("law_a", "law_b"):
+        part = laws_block.get(key)
+        if isinstance(part, Mapping):
+            law_violations.extend(
+                item for item in (part.get("violations") or ()) if isinstance(item, Mapping)
+            )
     # Un lavoro senza titolo non ha un contrasto da misurare: non e' un fallimento,
     # e' una soglia che non si applica. Prima il reel finiva `NON-PUBBLICABILE`
     # ogni volta che il prompt non chiedeva testo, mentre il QC dichiarava
     # `applicable: false` e passava: due verdetti opposti sullo stesso master.
     text_required = bool(report.get("text_required"))
-    if contrast is not None:
+    if law_violations:
+        first = law_violations[0]
+        deliver_ok = False
+        deliver_value: Any = len(law_violations)
+        deliver_why = "legge del gusto violata: " + str(
+            first.get("why") or first.get("code") or "motivo non dichiarato"
+        )
+        if len(law_violations) > 1:
+            deliver_why += f" (e altre {len(law_violations) - 1})"
+    elif contrast is not None:
         deliver_ok = contrast >= CONTRAST_MIN
-        deliver_value: Any = round(contrast, 3)
+        deliver_value = round(contrast, 3)
         deliver_why = _contrast_reason(contrast)
     elif not text_required:
         deliver_ok = True
@@ -328,9 +348,12 @@ def measure_stages(
         deliver_value = "n/d"
         deliver_why = _contrast_reason(None)
     events["deliver"] = {
-        "contract": f"contrasto >= {CONTRAST_MIN:.1f} (se c'e' un titolo)",
+        "contract": (
+            f"nessuna legge del gusto violata; contrasto >= {CONTRAST_MIN:.1f} "
+            "se c'e' un titolo"
+        ),
         "value": deliver_value,
-        "threshold": CONTRAST_MIN if text_required else None,
+        "threshold": 0 if law_violations else (CONTRAST_MIN if text_required else None),
         "ok": deliver_ok,
         "why": deliver_why,
     }
