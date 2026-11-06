@@ -68,7 +68,7 @@ Declared workdir layout
 -----------------------
 The allowlist below is the layout a run actually produces, read off disk:
 
-    <workdir>/.lock                          run lock (stale after a kill)
+    <workdir>/.vx/lock                       run lease (stale after a kill)
     <workdir>/events.jsonl                   vx.events append log
     <workdir>/plan.json                      the payload plan
     <workdir>/auto_report.json               the final report
@@ -174,6 +174,7 @@ ALLOWED_TOP_DIRS = {
     "render",
     "quarantine",
     ".quarantine",
+    ".vx",
     "checkpoints",
     "cache",
     "coherence",
@@ -379,7 +380,7 @@ def phase_guess(workdir: str | Path) -> str:
         ("render", ("render/edl_graph.txt", "render/edl_render.json")),
         ("planning", ("plan.json",)),
         ("staging", ("stage_00",)),
-        ("lock", (".lock",)),
+        ("lock", (".vx/lock", ".lock")),
         ("events", ("events.jsonl",)),
     )
     for label, relatives in markers:

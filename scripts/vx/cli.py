@@ -42,6 +42,7 @@ from .contract import (
     VxError,
 )
 from . import ffmpeg as ff
+from . import lock as lock_mod
 from . import winpath
 
 
@@ -3106,6 +3107,9 @@ def cmd_reel(args: argparse.Namespace) -> int:
     from . import reel
 
     workdir = reel.resolve_workdir(args)
+    # Prima di toccare pannello, sessione o run log: se un altro processo tiene
+    # il lease della cartella si esce 2 e non si scrive niente.
+    lock_mod.assert_free(workdir)
     session = _session_of(args)
     if session is not None:
         try:
@@ -3152,6 +3156,9 @@ def cmd_auto(args: argparse.Namespace) -> int:
     from .grammar import GrammarError
 
     workdir = auto._resolve_workdir(args)
+    # Stesso cancello di `reel`: il secondo scrittore esce 2 prima di scrivere
+    # progress.html, sessione o qualunque stadio.
+    lock_mod.assert_free(workdir)
     session = _session_of(args)
     if session is not None:
         try:
