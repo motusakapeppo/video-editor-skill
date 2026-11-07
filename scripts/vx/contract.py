@@ -131,6 +131,14 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "composition_hook_tail_sec": 0.5,
     "composition_hook_strong_ratio": 1.5,
     "composition_hook_weak_ratio": 1.0,
+    # I b-roll entrano sul taglio più vicino allo slot uniforme, ma solo se il
+    # taglio è dentro questa tolleranza: su un piano con inquadrature lunghe non
+    # si sposta niente (un overlay a metà di un shot da 6 s è normale), su un
+    # piano fitto il b-roll comincia dove il video taglia già.
+    "composition_broll_snap_sec": 0.75,
+    # La coda che resta libera quando la richiesta chiede una CTA o una
+    # testimonianza: un b-roll che sfuma sopra il messaggio finale lo copre.
+    "composition_tail_sec": 1.5,
     # C8 -- legge A: nessun effetto senza prova, e mai piu' di
     # ``max_creative_treatments`` trattamenti creativi distinti per reel. Le
     # soglie sotto sono le misure che rendono una spec ammissibile: movimento
@@ -1576,11 +1584,34 @@ def payload_to_edl_plan(
     b_clips: List[Any] = []
     any_anchor = False
     n_broll = len(b_entries)
+    # La coda protetta e la politica degli slot vengono dalla composizione, se
+    # c'è: un b-roll che entra su un taglio misurabile non sembra un errore di
+    # montaggio, e la coda di una CTA non si copre. Senza blocco, tutto come
+    # prima (slot uniformi, nessuna coda).
+    placement = str(proposed.get("broll_placement") or "")
+    tail_sec = 0.0
+    raw_tail = proposed.get("tail_seconds")
+    if isinstance(raw_tail, (int, float)) and not isinstance(raw_tail, bool):
+        if math.isfinite(float(raw_tail)) and float(raw_tail) > 0:
+            tail_sec = float(raw_tail)
+    usable_end = max(0.0, duration - tail_sec)
     # One b-roll per slot: the pool cannot overlap on layer 1, so an overlay is
-    # never longer than the gap between two placements. On a long timeline this
-    # changes nothing (the target is already shorter than the gap); on a short
-    # one it is the difference between a plan and a validation error.
-    b_slot = (duration / float(n_broll + 1)) if n_broll else duration
+    # never longer than the gap between two placements. Con una coda protetta la
+    # distribuzione usa lo spazio che resta: due b-roll su 6 s con 1,5 s di coda
+    # stanno in 4,5 s, non in 6.
+    b_slot = (usable_end / float(n_broll + 1)) if n_broll else duration
+    snap_tolerance = float(THRESHOLDS.get("composition_broll_snap_sec") or 0.75)
+    cuts = sorted(
+        {
+            round(float(clip.dst_in), 6)
+            for clip in a_clips
+            if float(clip.dst_in) > 1e-6
+        }
+    )
+    previous_end = 0.0
+    raw_slots = [
+        usable_end * (index + 1) / (n_broll + 1) for index in range(n_broll)
+    ]
     for index, entry in enumerate(b_entries):
         asset_id = entry.get("asset_id")
         if not isinstance(asset_id, str) or not asset_id:
@@ -1590,6 +1621,7 @@ def payload_to_edl_plan(
         length = min(_target(entry, asset_id), media_duration, duration, b_slot)
         if length <= 0:
             raise VxError(f"asset {asset_id!r} has no usable duration")
+        computed = False
         if asset_id in anchor_map:
             at = anchor_map[asset_id]
             any_anchor = True
@@ -1600,9 +1632,29 @@ def payload_to_edl_plan(
                 raise VxError(f"asset {asset_id!r} has a non-numeric at_sec") from exc
             any_anchor = True
         else:
-            at = duration * (index + 1) / (n_broll + 1)
-        max_start = max(0.0, duration - length)
+            at = raw_slots[index]
+            computed = True
+        if computed and placement == "nearest_cut" and cuts:
+            room = max(0.0, duration - length - tail_sec)
+            # Lo slot successivo resta dove sarebbe stato: uno snap che gli
+            # ruba lo spazio creerebbe una sovrapposizione su layer 1.
+            next_start = (
+                raw_slots[index + 1] if index + 1 < n_broll else usable_end
+            )
+            near = [
+                cut
+                for cut in cuts
+                if cut <= room + 1e-9
+                and cut >= previous_end - 1e-9
+                and cut + length <= next_start + 1e-9
+            ]
+            if near:
+                candidate = min(near, key=lambda cut: abs(cut - at))
+                if abs(candidate - at) <= snap_tolerance + 1e-9:
+                    at = candidate
+        max_start = max(0.0, duration - length - tail_sec)
         dst_in = clamp(at, 0.0, max_start)
+        previous_end = dst_in + length
         fade = float(THRESHOLDS["broll_fade_sec"])
         if fade > length:
             fade = length

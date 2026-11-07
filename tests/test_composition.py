@@ -157,29 +157,26 @@ def test_hook_strong_and_weak() -> None:
     )
 
 
-def test_grid_defers() -> None:
-    print("\n3. C4 con la griglia accesa il gancio declina")
-    facts = _facts(beat={"enabled": True, "bpm": 120.0, "source": "music"})
+def test_grid_declares() -> None:
+    print("\n3. C4 con la griglia il gancio e' dichiarato, non declinato")
+    facts = _facts(
+        beat={"enabled": True, "bpm": 120.0, "source": "music", "subdivision": 1}
+    )
     block = sections.compose(facts)
     check(
-        "C4 nessun hook proposto",
-        "hook_seconds" not in block["proposed"],
+        "C4 hook = passo della griglia (120 BPM, 1/1)",
+        abs(float(block["proposed"].get("hook_seconds") or 0.0) - 0.5) <= 1e-6,
         block["proposed"],
     )
     check(
-        "C4 il declino nomina il BPM",
-        any("120.00" in item["why"] for item in block["declined"]),
-        block["declined"],
+        "C4 la fonte e' la griglia",
+        (block["rules"].get("hook") or {}).get("source") == "beat_grid",
+        block["rules"].get("hook"),
     )
-    payload = _payload()
-    baseline = _build(payload)
-    payload["composition"] = block
-    composed = _build(payload)
     check(
-        "C4 il piano non cambia (stesse durate e stesse sorgenti)",
-        [(c.source_id, c.src_in, c.src_out) for c in baseline.video_tracks[0].clips]
-        == [(c.source_id, c.src_in, c.src_out) for c in composed.video_tracks[0].clips],
-        [c.clip_id for c in composed.video_tracks[0].clips],
+        "C4 nessun declino del gancio",
+        not any(item["id"] == "hook" for item in block["declined"]),
+        block["declined"],
     )
 
 
@@ -469,6 +466,180 @@ def test_capabilities_unchanged() -> None:
     )
 
 
+def _multi():
+    """Due a_roll (due tagli in timeline) e due b-roll: serve per gli slot."""
+    pool = [
+        asset_triage.AssetInfo(
+            "a1.mp4", "video", "a1.mp4", 1080, 1920, 6.0, True, role="a_roll"
+        ),
+        asset_triage.AssetInfo(
+            "a2.mp4", "video", "a2.mp4", 1080, 1920, 6.0, True, role="a_roll"
+        ),
+        asset_triage.AssetInfo(
+            "b1.png", "image", "b1.png", 1080, 1920, 0.0, False, role="b_roll"
+        ),
+        asset_triage.AssetInfo(
+            "b2.png", "image", "b2.png", 1080, 1920, 0.0, False, role="b_roll"
+        ),
+    ]
+    payload = decide.parse_and_decide("un reel di 11 secondi", asset_pool=pool)
+    payload["asset_triage"] = asset_triage.triage_assets(
+        pool, (1080, 1920), measure=lambda asset: {}
+    ).payload_block()
+    payload["beat_grid"] = {
+        "mode": "on",
+        "enabled": True,
+        "bpm": 120.0,
+        "source": "flag",
+        "subdivision": 1,
+    }
+    sources = {
+        "a1.mp4": edl_plan.SourceRef(path="a1.mp4", sha256="a" * 64, duration=6.0),
+        "a2.mp4": edl_plan.SourceRef(path="a2.mp4", sha256="d" * 64, duration=6.0),
+        "b1.png": edl_plan.SourceRef(path="b1.png", sha256="b" * 64, duration=3.0),
+        "b2.png": edl_plan.SourceRef(path="b2.png", sha256="c" * 64, duration=3.0),
+    }
+    media = {
+        "a1.mp4": contract.ProbeResult(path="a1.mp4", duration=6.0),
+        "a2.mp4": contract.ProbeResult(path="a2.mp4", duration=6.0),
+        "b1.png": contract.ProbeResult(path="b1.png", duration=3.0),
+        "b2.png": contract.ProbeResult(path="b2.png", duration=3.0),
+    }
+    return payload, sources, media
+
+
+def _build_multi(payload):
+    _payload_block, sources, media = _multi()
+    return contract.payload_to_edl_plan(payload, sources, media, fps=30.0, quality={})
+
+
+def test_broll_on_measured_cuts() -> None:
+    print("\n11. B1 i b-roll entrano sul taglio misurato")
+    payload, _sources_block, _media_block = _multi()
+    baseline = _build_multi(payload)
+    cuts = {
+        round(float(clip.dst_in), 6)
+        for clip in baseline.video_tracks[0].clips
+        if float(clip.dst_in) > 1e-6
+    }
+    check("B1 la baseline ha tagli veri", len(cuts) >= 4, sorted(cuts)[:6])
+
+    payload["composition"] = {
+        "schema": "vx.composition/1",
+        "proposed": {
+            "broll_order": ["b2.png", "b1.png"],
+            "broll_placement": "nearest_cut",
+        },
+    }
+    plan = _build_multi(payload)
+    check("B1 il piano valida", plan.validate() == [], plan.validate())
+    slots_before = [round(float(c.dst_in), 3) for c in baseline.video_tracks[1].clips]
+    slots_after = [round(float(c.dst_in), 3) for c in plan.video_tracks[1].clips]
+    check(
+        "B1 ogni ingresso cade su un taglio",
+        all(any(abs(float(c.dst_in) - cut) <= 1e-6 for cut in cuts) for c in plan.video_tracks[1].clips),
+        slots_after,
+    )
+    check("B1 e gli slot sono cambiati", slots_before != slots_after, (slots_before, slots_after))
+    ordered = sorted(plan.video_tracks[1].clips, key=lambda c: c.dst_in)
+    check(
+        "B1 nessuna sovrapposizione",
+        all(a.dst_out <= b.dst_in + 1e-6 for a, b in zip(ordered, ordered[1:])),
+        [(c.dst_in, c.dst_out) for c in ordered],
+    )
+
+    plain = _payload()
+    plain_baseline = _build(plain)
+    plain["composition"] = {
+        "schema": "vx.composition/1",
+        "proposed": {"broll_placement": "nearest_cut"},
+    }
+    plain_plan = _build(plain)
+    check(
+        "B1 senza tagli non si sposta niente",
+        [round(c.dst_in, 3) for c in plain_baseline.video_tracks[1].clips]
+        == [round(c.dst_in, 3) for c in plain_plan.video_tracks[1].clips],
+        [round(c.dst_in, 3) for c in plain_plan.video_tracks[1].clips],
+    )
+
+
+def test_hook_declared_on_grid() -> None:
+    print("\n12. B2 con la griglia il gancio si dichiara")
+    facts = _facts(beat={"enabled": True, "bpm": 120.0, "source": "flag", "subdivision": 1})
+    block = sections.compose(facts)
+    check(
+        "B2 hook proposto = passo della griglia",
+        abs(float(block["proposed"].get("hook_seconds") or 0.0) - 0.5) <= 1e-6,
+        block["proposed"].get("hook_seconds"),
+    )
+    check(
+        "B2 e la fonte e' la griglia",
+        block["rules"]["hook"].get("source") == "beat_grid",
+        block["rules"]["hook"],
+    )
+    check(
+        "B2 nessun declino del gancio",
+        not any(item["id"] == "hook" for item in block["declined"]),
+        block["declined"],
+    )
+
+    payload, _sources_block, _media_block = _multi()
+    baseline = _build_multi(payload)
+    payload["composition"] = block
+    plan = _build_multi(payload)
+    first = plan.video_tracks[0].clips[0]
+    check(
+        "B2 il primo clip dura il passo della griglia",
+        abs(first.duration - 0.5) <= 1e-6,
+        first.duration,
+    )
+    check(
+        "B2 e non aggiunge tagli: stesse clip della baseline",
+        len(plan.video_tracks[0].clips) == len(baseline.video_tracks[0].clips),
+        (len(baseline.video_tracks[0].clips), len(plan.video_tracks[0].clips)),
+    )
+
+
+def test_tail_protected() -> None:
+    print("\n13. B3 con la CTA la coda resta libera")
+    facts = _facts(expectations={"cta": {"required": True, "why": "la richiesta nomina una cta"}})
+    block = sections.compose(facts)
+    check(
+        "B3 la coda e' riservata",
+        float(block["proposed"].get("tail_seconds") or 0.0) > 0.0,
+        block["proposed"].get("tail_seconds"),
+    )
+    payload, _sources_block, _media_block = _multi()
+    payload["composition"] = {
+        "schema": "vx.composition/1",
+        "proposed": {
+            "broll_placement": "nearest_cut",
+            "tail_seconds": float(block["proposed"].get("tail_seconds") or 0.0),
+        },
+    }
+    plan = _build_multi(payload)
+    tail = float(block["proposed"].get("tail_seconds") or 0.0)
+    last = max((c.dst_out for c in plan.video_tracks[1].clips), default=0.0)
+    check(
+        "B3 nessun b-roll entra nella coda",
+        last <= plan.duration_sec - tail + 1e-6,
+        (round(last, 3), round(plan.duration_sec, 3), tail),
+    )
+    ordered = sorted(plan.video_tracks[1].clips, key=lambda c: c.dst_in)
+    check(
+        "B3 e la coda non schiaccia i b-roll uno sull'altro",
+        all(a.dst_out <= b.dst_in + 1e-6 for a, b in zip(ordered, ordered[1:])),
+        [(round(c.dst_in, 3), round(c.dst_out, 3)) for c in ordered],
+    )
+
+    no_cta = sections.compose(_facts())
+    check(
+        "B3 senza CTA la coda non si riserva",
+        float(no_cta["proposed"].get("tail_seconds") or 0.0) == 0.0,
+        no_cta["proposed"].get("tail_seconds"),
+    )
+
+
 def test_latency() -> None:
     print("\n10. C11 la composizione non costa latenza")
     facts = _facts(
@@ -516,7 +687,7 @@ def test_latency() -> None:
 def main() -> int:
     test_deterministic()
     test_hook_strong_and_weak()
-    test_grid_defers()
+    test_grid_declares()
     test_material_limits()
     test_share_limit()
     test_broll_order()
@@ -524,6 +695,9 @@ def main() -> int:
     test_measurement_not_promise()
     test_survival_on_final_plan()
     test_capabilities_unchanged()
+    test_broll_on_measured_cuts()
+    test_hook_declared_on_grid()
+    test_tail_protected()
     test_latency()
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

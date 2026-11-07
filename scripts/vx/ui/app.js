@@ -1143,11 +1143,16 @@
       .filter(Boolean);
     const brollMoved =
       applied.broll_moved === true ? true : applied.broll_moved === false ? false : null;
+    const brollOrderChanged =
+      applied.broll_order_changed === true ? true : null;
     const brollSlots = Array.isArray(applied.broll_slots_after)
       ? applied.broll_slots_after.length
       : null;
+    const brollTail = numberOrNull(applied.tail_sec);
     const brollKnown = order.length > 0 || brollMoved !== null || brollSlots !== null;
-    const broll = brollKnown ? { order, moved: brollMoved } : null;
+    const broll = brollKnown
+      ? { order, moved: brollMoved, orderChanged: brollOrderChanged, tail: brollTail }
+      : null;
 
     return {
       hook,
@@ -1390,14 +1395,14 @@
     if (model.broll) {
       const nodes = scalRows.get('broll');
       scalBroll(nodes.value, model.broll);
-      setScalLine(
-        nodes.sub,
-        model.broll.moved === false
-          ? 'slot invariati'
-          : model.broll.moved === true
-            ? 'slot spostati'
-            : ''
-      );
+      const parts = [];
+      if (model.broll.orderChanged === true) parts.push('ordine cambiato');
+      if (model.broll.moved === false) parts.push('slot invariati');
+      else if (model.broll.moved === true) parts.push('slot sui tagli');
+      if (model.broll.tail !== null && model.broll.tail > 0) {
+        parts.push('coda ' + num(model.broll.tail, 2) + ' s libera');
+      }
+      setScalLine(nodes.sub, parts.join(' · '));
       setScalLine(nodes.note, '');
       setScalStatus(nodes.status, '', '');
       nodes.row.classList.toggle('is-declined', declinedIds.has('broll'));

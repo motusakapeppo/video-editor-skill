@@ -1639,12 +1639,20 @@ def _composition_facts(
     requested_sec: Any,
     fps: float,
     media_info_map: Mapping[str, Any],
+    *,
+    beat_block: Optional[Mapping[str, Any]] = None,
+    expectations: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Le misure che la composizione può leggere, prima del piano.
 
     Niente stime: durate dal probe, nitidezza dal profilo per-frame (a_roll) o
     dal campione del triage (b_roll), corse utili dichiarate dal probe, BPM dalla
     traccia. Un valore assente resta assente — ``compose`` declinerà la leva.
+
+    L'apertura ha due misure possibili: quella del triage (mediana di 5 frame) e
+    quella del profilo per-frame. Se il triage non è affidabile — succede sui
+    girati scuri — si usa la seconda, con la **sua** soglia preferita, e il
+    report dice quale delle due ha deciso.
     """
 
     def number(value: Any) -> Optional[float]:
@@ -1667,6 +1675,14 @@ def _composition_facts(
     section = opening if isinstance(opening, Mapping) else {}
     chosen = section.get("chosen") if isinstance(section.get("chosen"), Mapping) else {}
     opening_asset = str((chosen or {}).get("asset_id") or "")
+    if not opening_asset:
+        # Il triage non ha potuto scegliere: l'apertura è la prima a_roll
+        # nell'ordine dichiarato, e la sua misura viene dal profilo per-frame.
+        first_entry = next(
+            (item for item in selected if item.get("role") == "a_roll"), None
+        )
+        if first_entry is not None:
+            opening_asset = str(first_entry.get("asset_id") or "")
     for entry in selected:
         asset_id = str(entry.get("asset_id") or "")
         if not asset_id:
@@ -1719,14 +1735,39 @@ def _composition_facts(
             )
 
     beat = beat_provenance if isinstance(beat_provenance, Mapping) else {}
+    subdivision = 1
+    if isinstance(beat_block, Mapping):
+        raw_subdivision = beat_block.get("subdivision")
+        if (
+            isinstance(raw_subdivision, int)
+            and not isinstance(raw_subdivision, bool)
+            and raw_subdivision in (1, 2, 4)
+        ):
+            subdivision = raw_subdivision
     requested = number(requested_sec) or 0.0
+
+    # L'apertura: se il triage l'ha scelta, la sua misura è quella; altrimenti
+    # conta la misura del profilo per-frame, con la sua soglia preferita.
+    opening_sharpness = number(chosen.get("sharpness"))
+    opening_threshold = number(section.get("threshold"))
+    opening_measure = "triage"
+    if not str(chosen.get("asset_id") or ""):
+        fallback = next(
+            (item for item in a_roll if item["asset_id"] == opening_asset), None
+        )
+        if fallback is not None:
+            opening_sharpness = number(fallback.get("sharpness"))
+            opening_threshold = number(fallback.get("preferred"))
+            opening_measure = "profile"
+
     return {
         "fps": float(fps),
         "duration_sec": round(requested, 3),
         "opening": {
-            "asset_id": str(chosen.get("asset_id") or ""),
-            "sharpness": number(chosen.get("sharpness")),
-            "threshold": number(section.get("threshold")),
+            "asset_id": opening_asset,
+            "sharpness": opening_sharpness,
+            "threshold": opening_threshold,
+            "measure": opening_measure,
             "quality": str(section.get("quality") or ""),
         },
         "a_roll": a_roll,
@@ -1735,7 +1776,9 @@ def _composition_facts(
             "enabled": bool(beat.get("enabled")),
             "bpm": number(beat.get("bpm")),
             "source": str(beat.get("source") or ""),
+            "subdivision": subdivision,
         },
+        "expectations": dict(expectations or {}),
     }
 
 
@@ -7324,6 +7367,8 @@ def _run_locked(
             scene_requested,
             fps,
             media_info_map,
+            beat_block=payload.get("beat_grid") if isinstance(payload.get("beat_grid"), Mapping) else None,
+            expectations=sections_mod.expectations(getattr(args, "prompt", "")),
         )
         composition = sections_mod.compose(facts)
         # Il punto di presa può spostarsi **per il gancio**, e solo allora: la
@@ -8131,9 +8176,22 @@ def _run_locked(
                 "timeline: " + str(timeline_block["tail"]["note"])
             )
     if isinstance(opening, dict):
-        opening["in_point"] = opening_in_point(
-            in_points, (opening.get("chosen") or {}).get("asset_id")
-        )
+        # Se il triage non ha scelto (girato scuro), l'apertura è la prima a_roll:
+        # il punto di presa che conta è il suo, misurato dal profilo per-frame.
+        # Senza questo fallback il report diceva "non misurato" mentre il piano
+        # aveva una misura e la composizione la usava.
+        opening_asset_id = (opening.get("chosen") or {}).get("asset_id")
+        if not opening_asset_id:
+            first_roll = next(
+                (
+                    str(entry.get("asset_id") or "")
+                    for entry in selected
+                    if entry.get("role") == "a_roll" and entry.get("asset_id")
+                ),
+                "",
+            )
+            opening_asset_id = first_roll or None
+        opening["in_point"] = opening_in_point(in_points, opening_asset_id)
         report["opening"] = opening
     excluded_plan = [
         item for item in report["plan"].get("excluded") or () if isinstance(item, Mapping)

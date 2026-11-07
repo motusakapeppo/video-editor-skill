@@ -196,11 +196,20 @@ Regole:
   input, stesso JSON, niente orologio né random;
 - se manca la misura la leva **declina** col motivo e il piano resta quello di
   prima (nessun surrogato, nessuna competenza spenta);
-- con la griglia BPM attiva il gancio declina: i tagli li decide il tempo;
+- con la griglia BPM il gancio **è** il primo shot: la composizione dichiara il
+  passo della griglia (`60/BPM/subdivision`) e il builder non aggiunge tagli;
 - se il picco di nitidezza lascia poco materiale, il punto di presa si sposta
   **indietro** nella stessa corsa, su un campione sopra la soglia preferita già
   misurata; quando il piano deve usare la corsa intera lo spostamento non viene
   applicato e il report lo dice (`hook_take_honored: false`);
+- se il triage non è affidabile (girato scuro), l'apertura si misura col
+  profilo per-frame e la sua soglia preferita: il report dice quale misura ha
+  deciso (`opening.measure`);
+- i b-roll entrano sul **taglio più vicino** allo slot uniforme entro
+  `composition_broll_snap_sec` (0,75 s), mai sopra il b-roll precedente e mai
+  rubando lo spazio dello slot successivo; senza tagli vicini restano dove sono;
+- quando la richiesta chiede una CTA o una testimonianza, gli ultimi
+  `composition_tail_sec` (1,5 s) restano **liberi da b-roll**;
 - `report["composition"]` porta `proposed`, `rules`, `declined` e `applied`:
   la proposta e il fatto misurato stanno separati, e `survived` è ricalcolato sul
   piano finale dopo `plan_choice` e `creative`;

@@ -257,10 +257,29 @@ def _hook_proposal(
 
     bpm = _number(beat.get("bpm")) or 0.0
     if bool(beat.get("enabled")) and bpm > 0:
+        try:
+            subdivision = int(beat.get("subdivision") or 1)
+        except (TypeError, ValueError):
+            subdivision = 1
+        if subdivision not in (1, 2, 4):
+            subdivision = 1
+        step = 60.0 / bpm / subdivision
+        step = _quantize(step, fps)
+        if step <= 0:
+            return None, {}, "griglia accesa ma passo non calcolabile"
         return (
+            step,
+            {
+                "source": "beat_grid",
+                "bpm": round(bpm, 3),
+                "subdivision": subdivision,
+                "step": round(step, 4),
+                "why": (
+                    f"griglia {bpm:.2f} BPM (1/{subdivision}): i tagli cadono ogni "
+                    f"{step:.2f} s, quindi il gancio è il primo shot"
+                ),
+            },
             None,
-            {"bpm": round(bpm, 3)},
-            f"griglia di battuta attiva: i tagli li decide il BPM {bpm:.2f}",
         )
 
     sharp = _number(opening.get("sharpness"))
@@ -338,6 +357,11 @@ def _hook_proposal(
     run = _opening_run(opening, a_roll)
     material_limit = None if run is None else run["end"] - take_point - tail
     parts = [base_why]
+    if str(opening.get("measure") or "") == "profile":
+        parts.insert(
+            0,
+            "apertura misurata dal profilo per-frame (il triage non era affidabile)",
+        )
     if beat_rule and beat_rule.get("beats"):
         parts.append(
             f"griglia {bpm:.2f} BPM: {beat_rule['beats']} battute = {seconds:.2f} s"
@@ -470,12 +494,45 @@ def compose(facts: Any) -> Dict[str, Any]:
     else:
         rules["broll"] = broll_rule
         declined.append({"id": "broll", "why": str(broll_declined or "non applicabile")})
+    if b_roll:
+        # La convenzione non è un numero: un overlay che entra su un taglio non
+        # sembra un errore di montaggio. Il builder conosce i tagli veri e sposta
+        # solo se ce n'è uno entro la tolleranza; qui si chiede la politica.
+        proposed["broll_placement"] = "nearest_cut"
+        rules.setdefault("broll", {})["placement"] = {
+            "policy": "nearest_cut",
+            "why": (
+                "i b-roll entrano sul taglio più vicino allo slot uniforme: "
+                "un taglio misurabile, non una posizione qualunque"
+            ),
+        }
+
+    # La coda: quando la richiesta nomina una CTA (o una testimonianza), gli
+    # ultimi secondi non si coprono con un b-roll che sfuma sopra il messaggio.
+    wanted = data.get("expectations")
+    wanted = wanted if isinstance(wanted, Mapping) else {}
+    tail = 0.0
+    if wanted.get("cta") or wanted.get("proof"):
+        tail = _limit("composition_tail_sec", 1.5)
+        proposed["tail_seconds"] = round(tail, 3)
+        rules["tail"] = {
+            "seconds": round(tail, 3),
+            "why": (
+                "la richiesta chiede una "
+                + ("cta" if wanted.get("cta") else "testimonianza")
+                + f": gli ultimi {tail:.2f} s restano liberi da b-roll"
+            ),
+        }
 
     parts: List[str] = []
     if "hook_seconds" in proposed:
         parts.append(f"hook {proposed['hook_seconds']:.2f} s su {proposed['hook_asset']}")
     if "broll_order" in proposed:
         parts.append("b-roll in ordine " + ", ".join(proposed["broll_order"]))
+    if "broll_placement" in proposed:
+        parts.append("b-roll sui tagli")
+    if tail:
+        parts.append(f"coda {tail:.2f} s libera")
     return {
         "schema": COMPOSITION_SCHEMA,
         "proposed": proposed,
@@ -523,6 +580,14 @@ def measure_application(
     )
     slots_before = [round(float(clip.dst_in), 3) for clip in _clips(baseline, 1)]
     slots_after = [round(float(clip.dst_in), 3) for clip in _clips(plan, 1)]
+    order_before = [str(clip.source_id) for clip in _clips(baseline, 1)]
+    order_after = [str(clip.source_id) for clip in _clips(plan, 1)]
+    tail = _number(proposed.get("tail_seconds")) or 0.0
+    broll_after = _clips(plan, 1)
+    last_out = max((float(clip.dst_out) for clip in broll_after), default=None)
+    respects_tail = True if last_out is None or tail <= 0 else (
+        last_out <= float(plan.duration_sec) + tolerance - tail
+    )
     rules = block.get("rules") if isinstance(block.get("rules"), Mapping) else {}
     hook_rules = rules.get("hook") if isinstance(rules.get("hook"), Mapping) else {}
     take = hook_rules.get("take") if isinstance(hook_rules.get("take"), Mapping) else {}
@@ -548,7 +613,19 @@ def measure_application(
         "delta": len(after) - len(before),
         "broll_slots_before": slots_before,
         "broll_slots_after": slots_after,
+        "broll_order_before": order_before,
+        "broll_order_after": order_after,
+        "broll_order_changed": order_before != order_after,
         "broll_moved": slots_before != slots_after,
+        "broll_moved_count": sum(
+            1
+            for old, new in zip(slots_before, slots_after)
+            if abs(old - new) > 1e-6
+        ),
+        "broll_placement": str(proposed.get("broll_placement") or "") or None,
+        "tail_sec": round(tail, 3),
+        "broll_last_out": None if last_out is None else round(last_out, 3),
+        "broll_respects_tail": bool(respects_tail),
         "survived": bool(applied_hook) if proposed_hook is not None else True,
     }
     return block
@@ -647,6 +724,11 @@ def describe(composition: Any) -> str:
         parts.append(f"b-roll in ordine {order}" + (f" ({detail})" if detail else ""))
     elif "broll" in declined:
         parts.append(f"b-roll invariati ({declined['broll']})")
+    moved = applied.get("broll_moved_count")
+    if isinstance(moved, int) and moved > 0:
+        parts.append(f"{moved} b-roll entrati su un taglio")
+    if isinstance(applied.get("tail_sec"), (int, float)) and float(applied["tail_sec"]) > 0:
+        parts.append(f"coda {float(applied['tail_sec']):.2f} s libera da b-roll")
 
     if applied:
         parts.append(
@@ -968,6 +1050,16 @@ def compile_sections(report: Any) -> Dict[str, Any]:
                     f"{row['why']}; ordine per nitidezza: "
                     + ", ".join(str(item) for item in proposed["broll_order"])
                 )
+            elif row["id"] == "cta" and isinstance(applied.get("tail_sec"), (int, float)):
+                if float(applied["tail_sec"]) > 0:
+                    row["composed"] = {
+                        "reserved_tail_sec": applied.get("tail_sec"),
+                        "broll_respects_tail": applied.get("broll_respects_tail"),
+                    }
+                    row["why"] = (
+                        f"{row['why']}; composizione: coda di "
+                        f"{float(applied['tail_sec']):.2f} s libera da b-roll"
+                    )
     return {
         "sections": rows,
         "filled": len(filled),

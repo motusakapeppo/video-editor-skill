@@ -329,6 +329,50 @@ def main() -> int:
         check("auto_report ok", on_disk.get("ok") is True, on_disk.get("ok"))
         check("report su disco == stdout", on_disk == report, "identici")
 
+        # La composizione e' un blocco del report, non una promessa: schema,
+        # proposta, declini e misure sui due piani devono esserci, e le cifre
+        # devono venire dai piani (shots_after >= shots_before, survived booleano).
+        composition = report.get("composition") or {}
+        check(
+            "report.composition: schema e blocchi",
+            composition.get("schema") == "vx.composition/1"
+            and isinstance(composition.get("proposed"), dict)
+            and isinstance(composition.get("declined"), list)
+            and isinstance(composition.get("applied"), dict),
+            sorted(composition),
+        )
+        applied = composition.get("applied") or {}
+        check(
+            "composition: le cifre vengono dai due piani",
+            isinstance(applied.get("shots_before"), int)
+            and isinstance(applied.get("shots_after"), int)
+            and applied["shots_after"] >= applied["shots_before"]
+            and isinstance(applied.get("survived"), bool),
+            {key: applied.get(key) for key in ("shots_before", "shots_after", "survived")},
+        )
+        check(
+            "composition: la sopravvivenza e' ricontrollata sul piano finale",
+            isinstance((composition.get("survival") or {}).get("preserved"), bool)
+            and isinstance((composition.get("survival") or {}).get("why"), str),
+            composition.get("survival"),
+        )
+        sections_block = report.get("sections") or {}
+        hook_row = next(
+            (
+                row
+                for row in sections_block.get("sections") or []
+                if isinstance(row, dict) and row.get("id") == "hook"
+            ),
+            {},
+        )
+        check(
+            "sections: sei sezioni, gancio compilato con un numero",
+            sections_block.get("total") == 6
+            and hook_row.get("state") == "filled"
+            and any(char.isdigit() for char in str(hook_row.get("why") or "")),
+            (sections_block.get("filled"), hook_row.get("why")),
+        )
+
         # Il profilo e' parte del referto: senza i tempi per stadio non si sa
         # dove va il muro, e un'ottimizzazione diventa un'opinione.
         timings = on_disk.get("timings") or {}
