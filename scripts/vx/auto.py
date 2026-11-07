@@ -7992,6 +7992,19 @@ def _run_locked(
         degrade.note("policy", exc)
         policy_block = None
 
+    # La composizione, misurata quando il piano è nato e **ricontrollata** sul
+    # piano che si rende: `applied` dice cosa ha fatto la composizione (baseline
+    # contro piano composto, prima di varietà e scelta creativa), `survival` dice
+    # se il gancio è ancora in testa dopo quelle scelte.
+    composition_survival = sections_mod.measure_survival(composition, plan)
+    composition_report = dict(composition_applied)
+    composition_report["applied"] = {
+        **(composition_applied.get("applied") or {}),
+        "survived": bool(composition_survival.get("preserved")),
+        "shots_final": composition_survival.get("shots_final"),
+    }
+    composition_report["survival"] = composition_survival
+
     report: Dict[str, Any] = {
         "ok": True,
         "payload_version": str(payload.get("contract_version") or contract.VERSION),
@@ -8070,9 +8083,7 @@ def _run_locked(
         },
         "opening": opening,
         "plan_notes": list(getattr(plan, "notes", ()) or ()),
-        "composition": sections_mod.measure_application(
-            composition, composition_baseline, plan
-        ),
+        "composition": composition_report,
         "plan": plan_declaration(
             in_points,
             segments=segment_rows,

@@ -398,6 +398,31 @@ def test_measurement_not_promise() -> None:
     )
 
 
+def test_survival_on_final_plan() -> None:
+    print("\n9. C9 bis il gancio si ricontrolla sul piano finale")
+    payload = _payload()
+    baseline = _build(payload)
+    proposed = {
+        "schema": "vx.composition/1",
+        "proposed": {"hook_seconds": 2.0, "hook_asset": "a.mp4"},
+    }
+    payload["composition"] = proposed
+    plan = _build(payload)
+    alive = sections.measure_survival(proposed, plan)
+    check("C9b il gancio e' ancora in testa", alive["preserved"] is True, alive)
+    check(
+        "C9b e la ragione porta i numeri",
+        "2.000" in alive["why"] or "2.0" in alive["why"],
+        alive["why"],
+    )
+    gone = sections.measure_survival(proposed, baseline)
+    check(
+        "C9b se il piano finale cambia, lo dichiara",
+        gone["preserved"] is False and "invece" in gone["why"],
+        gone["why"],
+    )
+
+
 def test_capabilities_unchanged() -> None:
     print("\n9. C10 nessuna competenza spenta dalla composizione")
     report = {
@@ -497,6 +522,7 @@ def main() -> int:
     test_broll_order()
     test_builder_applies()
     test_measurement_not_promise()
+    test_survival_on_final_plan()
     test_capabilities_unchanged()
     test_latency()
     print(f"\n{PASS} PASS / {FAIL} FAIL")

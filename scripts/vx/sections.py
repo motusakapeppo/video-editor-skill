@@ -31,6 +31,7 @@ __all__ = [
     "compose",
     "describe",
     "measure_application",
+    "measure_survival",
 ]
 
 #: La composizione non è un piano nuovo: è la stessa scaletta che dice *quanto*
@@ -551,6 +552,48 @@ def measure_application(
         "survived": bool(applied_hook) if proposed_hook is not None else True,
     }
     return block
+
+
+def measure_survival(composition: Any, plan: Any) -> Dict[str, Any]:
+    """Il gancio composto è ancora nel **piano finale**?
+
+    La composizione si misura quando il piano nasce; dopo `plan_choice` e
+    `creative` il piano può cambiare (uno scambio, un accorciamento). Qui si
+    ricontrolla sul piano che si rende davvero: se il primo clip non dura più
+    l'hook proposto, il report lo dice invece di lasciar credere che sia ancora
+    in testa.
+    """
+    block = composition if isinstance(composition, Mapping) else {}
+    proposed = block.get("proposed") if isinstance(block.get("proposed"), Mapping) else {}
+    expected = _number(proposed.get("hook_seconds"))
+    clips = _clips(plan, 0)
+    first = _number(clips[0].duration) if clips else None
+    fps = _number(getattr(plan, "fps", None)) or 0.0
+    tolerance = (1.0 / fps + 1e-6) if fps else 0.002
+    if expected is None:
+        return {
+            "hook_seconds": first,
+            "expected": None,
+            "preserved": True,
+            "shots_final": len(clips),
+            "why": "nessun gancio proposto: niente da preservare",
+        }
+    preserved = first is not None and abs(first - expected) <= tolerance
+    return {
+        "hook_seconds": None if first is None else round(first, 3),
+        "expected": round(expected, 3),
+        "preserved": bool(preserved),
+        "shots_final": len(clips),
+        "why": (
+            f"il primo clip dura {first:.3f}s come l'hook proposto"
+            if preserved
+            else (
+                "il piano finale apre con "
+                + ("nessun clip" if first is None else f"{first:.3f}s")
+                + f" invece dell'hook di {expected:.3f}s"
+            )
+        ),
+    }
 
 
 def describe(composition: Any) -> str:
