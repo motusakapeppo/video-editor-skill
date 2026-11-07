@@ -138,7 +138,35 @@ quanto e a che stadio — senza toccare pannello, sessione o run log. Due cartel
 diverse hanno due lease diversi: due lavori legittimi girano in parallelo. Il
 vecchio `<workdir>/.lock` resta leggibile, non più scritto.
 
-## 10. Limiti dichiarati
+## 11. Composizioni complesse (Chromium)
+
+Quando la richiesta chiede una composizione che un grafo di filtri non sa dire
+(split screen, confronto prima/dopo, sottopancia), la scena si **dichiara** e il
+motore grafico la costruisce:
+
+```powershell
+& $PY vx.py scene --request "sottopancia con nome e ruolo" --workdir "<dir>" --frames 12
+```
+
+- `scenes.wants` riconosce la composizione e cita le parole che l'hanno decisa;
+- `render_frames` rasterizza il documento con il **Chrome/Edge di sistema**
+  (Playwright) e a ogni fotogramma avanza `--vx-progress` da 0 a 1 — la scena si
+  vede costruire;
+- ogni fotogramma pubblicato finisce in `<workdir>/live/chromium/` con indice,
+  tempo, byte e sha256 (`livepub`: campionamento, finestra anello, manifesto
+  atomico);
+- la vista lo mostra: `GET /api/scene` e `GET /scene/chromium/frame_000003.jpg`.
+  Solo i nomi dichiarati sono serviti (`frame_\d{6}\.jpg`, `manifest.json`).
+
+Confine dichiarato: il browser fa **grafica sopra il video** (testo impaginato,
+sottopancia, card, maschere). La composizione di **flussi video** (split screen
+con due sorgenti, picture-in-picture, griglie) resta a ffmpeg, che è più veloce e
+deterministico. Se Playwright o Chrome mancano, `render_frames` restituisce
+`engine: "absent"` col motivo.
+
+
+
+## 12. Limiti dichiarati
 
 Un limite scritto è un limite che non sorprende. Questi sono i confini veri di
 oggi, non promesse future:

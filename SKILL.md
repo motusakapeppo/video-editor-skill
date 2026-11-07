@@ -116,6 +116,11 @@ Se la richiesta nomina un hook o una CTA, quella sezione è **obbligatoria**: se
 resta scoperta il lavoro **non si consegna**, e il buco sta in
 `report["sections"]["gaps"]`.
 
+Le composizioni che un grafo di filtri non sa dire — split screen, confronto,
+sottopancia — si dichiarano e le rende **Chromium** (`vx scene`), un fotogramma
+alla volta, pubblicate in `live/` mentre si costruiscono. La grafica sta al
+browser, il montaggio dei flussi video a ffmpeg.
+
 I sottotitoli si chiedono col flag **o a parole** («con sottotitoli»). Se il
 parlato non c'è il report dice `no speech`; se nessuno li aveva chiesti dice
 `sottotitoli non richiesti` — sono due cose diverse.
