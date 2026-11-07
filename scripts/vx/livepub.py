@@ -51,16 +51,41 @@ def _write_atomic(path: Path, payload: bytes) -> None:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(tmp, path)
+    # Su Windows un lettore (la pagina) puo' tenere aperto il file per qualche
+    # millisecondo: os.replace fallisce con PermissionError. Si riprova, invece
+    # di far cadere il rendering per una lettura in corso.
+    last: Optional[OSError] = None
+    for _ in range(40):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:  # noqa: PERF203 - un retry breve e dichiarato
+            last = exc
+            time.sleep(0.01)
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+    raise last if last is not None else OSError("replace non riuscito")
 
 
 def read_manifest(workdir: Any, engine: str) -> Optional[Dict[str, Any]]:
     """Il manifesto corrente, o ``None`` se il motore non ha ancora pubblicato."""
     target = _root(workdir, engine) / MANIFEST_NAME
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    data: Any = None
+    for _ in range(20):
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            break
+        except FileNotFoundError:
+            return None
+        except ValueError:
+            # Un replace in corso: si riprova invece di dichiarare "nessuna scena".
+            time.sleep(0.01)
+            continue
+        except OSError:
+            time.sleep(0.01)
+            continue
     return data if isinstance(data, dict) else None
 
 

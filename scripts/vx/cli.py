@@ -3819,7 +3819,13 @@ def cmd_scene(args: argparse.Namespace) -> int:
         )
     info = scenes_mod.render_frames(
         Path(str(args.workdir)),
-        wanted,
+        {
+            **wanted,
+            "name": str(getattr(args, "name", "") or ""),
+            "role": str(getattr(args, "role", "") or ""),
+            "left": str(getattr(args, "left", "PRIMA") or "PRIMA"),
+            "right": str(getattr(args, "right", "DOPO") or "DOPO"),
+        },
         frames=int(getattr(args, "frames", 12)),
         width=int(getattr(args, "width", 540)),
         height=int(getattr(args, "height", 960)),
@@ -4795,6 +4801,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--frames", type=int, default=12, help="quanti fotogrammi costruire (default 12)")
     p.add_argument("--width", type=int, default=540, help="larghezza di rendering (default 540)")
     p.add_argument("--height", type=int, default=960, help="altezza di rendering (default 960)")
+    p.add_argument("--name", default="", help="nome per il sottopancia")
+    p.add_argument("--role", default="", help="ruolo per il sottopancia")
+    p.add_argument("--left", default="PRIMA", help="etichetta sinistra (confronto)")
+    p.add_argument("--right", default="DOPO", help="etichetta destra (confronto)")
     p.add_argument("--json", action="store_true", help="referto macchina")
     p.set_defaults(func=cmd_scene)
 
