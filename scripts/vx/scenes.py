@@ -33,16 +33,16 @@ SCENES: Dict[str, Dict[str, Any]] = {
     "split_screen": {
         "words": ("split screen", "splitscreen", "due riquadri", "affiancato",
                   "side by side", "metà e metà", "meta e meta"),
-        "why": "due sorgenti affiancate: layout, non un filtro",
+        "why": "due sorgenti affiancate: layout, non un filtro", "engine": "ffmpeg",
     },
     "compare": {
         "words": ("prima e dopo", "prima/dopo", "confronto", "before after",
                   "before/after", "paragone"),
-        "why": "confronto prima/dopo con etichette: layout e testo insieme",
+        "why": "confronto prima/dopo con etichette: layout e testo insieme", "engine": "ffmpeg",
     },
     "lower_third": {
         "words": ("lower third", "sottopancia", "nome e ruolo", "titolo in basso"),
-        "why": "sottopancia con nome e ruolo: tipografia impaginata",
+        "why": "sottopancia con nome e ruolo: tipografia impaginata", "engine": "chromium",
     },
 }
 
@@ -61,7 +61,7 @@ def wants(request: Any) -> Optional[Dict[str, Any]]:
                 "id": scene_id,
                 "signals": hits,
                 "why": spec["why"],
-                "engine": "chromium",
+                "engine": str(spec.get("engine") or "chromium"),
             }
     return None
 
@@ -162,7 +162,22 @@ def render_frames(
     """
     from . import livepub  # noqa: PLC0415 - chi non renderizza non lo carica
 
+    engine = str(scene.get("engine") or "chromium")
     html = build_html(scene, width=width, height=height)
+    if engine != "chromium":
+        # Confine dichiarato: la composizione di flussi video (split screen,
+        # confronto) la fa ffmpeg con hstack, non il browser. Non si finge un
+        # rendering con due riquadri neri.
+        return {
+            "engine": engine,
+            "reason": (
+                "composizione di flussi video: si fa con ffmpeg (hstack), "
+                "non con il browser; il comando non e' ancora collegato"
+            ),
+            "frames": 0,
+            "declared_frames": 0,
+            "document_sha256": document_sha256(html),
+        }
     total = max(1, int(frames))
     livepub.reset(workdir, "chromium")
     try:

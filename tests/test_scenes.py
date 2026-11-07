@@ -32,7 +32,16 @@ def check(label: str, ok: object, detail: object = "") -> None:
 def main() -> int:
     split = scenes.wants("reel con split screen, 10 secondi")
     check("S1 split screen riconosciuto", (split or {}).get("id") == "split_screen", split)
-    check("S1 il motore dichiarato e' chromium", (split or {}).get("engine") == "chromium", split)
+    check(
+        "S1 lo split screen lo fa ffmpeg (flussi video, non grafica)",
+        (split or {}).get("engine") == "ffmpeg",
+        split,
+    )
+    check(
+        "S1 il sottopancia lo fa Chromium (grafica)",
+        (scenes.wants("sottopancia con nome e ruolo") or {}).get("engine") == "chromium",
+        scenes.wants("sottopancia con nome e ruolo"),
+    )
     check(
         "S1 le parole che l'hanno deciso sono citate",
         "split screen" in (split or {}).get("signals", []),
