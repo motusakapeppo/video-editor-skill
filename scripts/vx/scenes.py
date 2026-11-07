@@ -22,6 +22,8 @@ restituisce ``None`` e il lavoro resta sulla pipeline normale.
 from __future__ import annotations
 
 import hashlib
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 __all__ = ["SCENES", "wants", "build_html", "document_sha256", "declare"]
@@ -90,17 +92,25 @@ def build_html(scene: Mapping[str, Any], *, width: int = 1080, height: int = 192
     role = _escape(scene.get("role") or "")
     style = (
         "html,body{margin:0;padding:0;background:#000;}"
+        ":root{--vx-progress:1;}"
         f".stage{{width:{int(width)}px;height:{int(height)}px;position:relative;"
         "font-family:'Segoe UI',system-ui,-apple-system,Arial,sans-serif;color:#fff;}"
-        ".pane{position:absolute;top:0;height:100%;width:50%;}"
-        ".pane.left{left:0;}.pane.right{right:0;}"
-        ".seam{position:absolute;left:50%;top:0;width:6px;height:100%;"
+        ".pane{position:absolute;top:0;height:100%;width:50%;"
+        "transition:none;}"
+        # La scena si costruisce: il divisorio cresce e i riquadri entrano con la
+        # variabile --vx-progress (0..1). Nessun orologio, nessun random: il
+        # fotogramma dipende solo dal numero che gli passi.
+        ".pane.left{left:0;transform:translateX(calc(-100% * (1 - var(--vx-progress))));}"
+        ".pane.right{right:0;transform:translateX(calc(100% * (1 - var(--vx-progress))));}"
+        ".seam{position:absolute;left:50%;top:0;width:6px;height:calc(100% * var(--vx-progress));"
         "transform:translateX(-3px);background:#fff;opacity:.9;}"
         ".tag{position:absolute;bottom:120px;left:50%;transform:translateX(-50%);"
-        "font-size:44px;font-weight:700;letter-spacing:.06em;"
+        "font-size:44px;font-weight:700;letter-spacing:.06em;opacity:var(--vx-progress);"
         "background:rgba(0,0,0,.55);padding:10px 22px;border-radius:8px;}"
         ".third{position:absolute;left:60px;bottom:180px;max-width:60%;padding:18px 26px;"
-        "background:rgba(0,0,0,.62);border-left:6px solid #fff;}"
+        "background:rgba(0,0,0,.62);border-left:6px solid #fff;"
+        "transform:translateX(calc(-30% * (1 - var(--vx-progress))));"
+        "opacity:var(--vx-progress);}"
         ".name{font-size:46px;font-weight:700;line-height:1.1;}"
         ".role{font-size:30px;opacity:.85;margin-top:6px;}"
     )
@@ -128,6 +138,105 @@ def build_html(scene: Mapping[str, Any], *, width: int = 1080, height: int = 192
 def document_sha256(html: str) -> str:
     """L'identità del documento: se cambia, cambia la scena (e il golden)."""
     return hashlib.sha256(str(html).encode("utf-8")).hexdigest()
+
+
+def render_frames(
+    workdir: Any,
+    scene: Mapping[str, Any],
+    *,
+    frames: int = 12,
+    width: int = 540,
+    height: int = 960,
+    thumb_width: int = 270,
+    stride: int = 1,
+    keep: int = 40,
+    timeout_ms: int = 20000,
+) -> Dict[str, Any]:
+    """Rasterizza la scena con Chromium e pubblica i fotogrammi mentre li fa.
+
+    Il browser è il Chrome/Edge di sistema via Playwright (la stessa strada del
+    motion engine). Ogni fotogramma avanza ``--vx-progress`` da 0 a 1: la scena si
+    **costruisce** davanti alla vista, e ogni pezzo pubblicato porta indice,
+    tempo, byte e hash. Se Playwright o Chrome mancano, si restituisce
+    ``engine: "absent"`` col motivo — non si finge un rendering.
+    """
+    from . import livepub  # noqa: PLC0415 - chi non renderizza non lo carica
+
+    html = build_html(scene, width=width, height=height)
+    total = max(1, int(frames))
+    livepub.reset(workdir, "chromium")
+    try:
+        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    except Exception as exc:  # noqa: BLE001 - un motore assente si dichiara
+        return {
+            "engine": "absent",
+            "reason": f"playwright non disponibile: {exc}",
+            "frames": 0,
+            "document_sha256": document_sha256(html),
+        }
+    published = 0
+    started = time.perf_counter()
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(channel="chrome", headless=True, timeout=timeout_ms)
+            page = browser.new_page(viewport={"width": width, "height": height}, device_scale_factor=1)
+            page.set_content(html, wait_until="load")
+            for index in range(total):
+                progress = 1.0 if total == 1 else index / (total - 1)
+                page.evaluate(
+                    "(p) => document.documentElement.style.setProperty('--vx-progress', String(p))",
+                    progress,
+                )
+                png = page.screenshot(type="png")
+                if index % max(1, int(stride)) == 0 or index == total - 1:
+                    thumb = _thumbnail(png, thumb_width)
+                    if thumb is not None:
+                        livepub.publish(
+                            workdir,
+                            engine="chromium",
+                            frame_index=index,
+                            t=progress,
+                            image=thumb,
+                            total=total,
+                            stride=stride,
+                            keep=keep,
+                            suffix=".jpg",
+                        )
+                        published += 1
+            browser.close()
+    except Exception as exc:  # noqa: BLE001 - un browser che cade e' dichiarato
+        return {
+            "engine": "error",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "frames": published,
+            "document_sha256": document_sha256(html),
+        }
+    return {
+        "engine": "chromium",
+        "frames": published,
+        "declared_frames": total,
+        "seconds": round(time.perf_counter() - started, 3),
+        "document_sha256": document_sha256(html),
+        "live": str(Path(str(workdir)) / "live" / "chromium"),
+    }
+
+
+def _thumbnail(png: bytes, width: int) -> Optional[bytes]:
+    """Miniatura JPEG dal PNG del browser: la vista non deve scaricare 2 MB."""
+    try:
+        from io import BytesIO  # noqa: PLC0415
+
+        from PIL import Image  # noqa: PLC0415
+
+        image = Image.open(BytesIO(png)).convert("RGB")
+        if image.width > width:
+            height = max(1, int(round(image.height * width / image.width)))
+            image = image.resize((width, height), Image.LANCZOS)
+        out = BytesIO()
+        image.save(out, format="JPEG", quality=72)
+        return out.getvalue()
+    except Exception:  # noqa: BLE001 - senza miniatura si pubblica il PNG
+        return png if png else None
 
 
 def declare(request: Any) -> List[Dict[str, Any]]:

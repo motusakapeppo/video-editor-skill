@@ -3807,6 +3807,36 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return mcp_server.main([])
 
 
+def cmd_scene(args: argparse.Namespace) -> int:
+    """Rende una scena con Chromium e pubblica i fotogrammi mentre la costruisce."""
+    from . import scenes as scenes_mod
+
+    wanted = scenes_mod.wants(getattr(args, "request", ""))
+    if wanted is None:
+        raise contract.VxError(
+            "scene: la richiesta non nomina una composizione nota "
+            "(split screen, confronto prima/dopo, sottopancia)"
+        )
+    info = scenes_mod.render_frames(
+        Path(str(args.workdir)),
+        wanted,
+        frames=int(getattr(args, "frames", 12)),
+        width=int(getattr(args, "width", 540)),
+        height=int(getattr(args, "height", 960)),
+    )
+    if getattr(args, "json", False):
+        _out(info)
+        return EXIT_OK if info.get("engine") == "chromium" else 5
+    print(f"Scena: {wanted['id']} ({info.get('engine')})")
+    print(f"  fotogrammi: {info.get('frames')} su {info.get('declared_frames')}")
+    print(f"  documento : {str(info.get('document_sha256'))[:16]}")
+    if info.get("reason"):
+        print(f"  motivo    : {info['reason']}")
+    elif info.get("live"):
+        print(f"  live      : {info['live']}")
+    return EXIT_OK if info.get("engine") == "chromium" else 5
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     """Pota le sessioni vecchie: un comando, non una cartella cancellata a mano."""
     from . import session as session_mod
@@ -4755,6 +4785,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="server MCP su stdio (JSON-RPC per agenti)")
     p.set_defaults(func=cmd_mcp)
+
+    p = add(
+        "scene",
+        "una composizione complessa (split screen, confronto, sottopancia) resa da Chromium",
+    )
+    p.add_argument("--request", required=True, help="la richiesta: decide quale scena serve")
+    p.add_argument("--workdir", required=True, help="dove pubblicare i fotogrammi (live/chromium)")
+    p.add_argument("--frames", type=int, default=12, help="quanti fotogrammi costruire (default 12)")
+    p.add_argument("--width", type=int, default=540, help="larghezza di rendering (default 540)")
+    p.add_argument("--height", type=int, default=960, help="altezza di rendering (default 960)")
+    p.add_argument("--json", action="store_true", help="referto macchina")
+    p.set_defaults(func=cmd_scene)
 
     p = add(
         "session",

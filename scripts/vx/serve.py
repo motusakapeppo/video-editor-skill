@@ -119,6 +119,9 @@ LIVE_MANIFEST = "manifest.json"
 LIVE_NAME = re.compile(r"^chunk_(\d{3,})\.mp4$")
 LIVE_PREFIX = "/live/"
 
+#: I fotogrammi pubblicati dal motore grafico (``vx scene``): JPEG, indice fisso.
+SCENE_FRAME = re.compile(r"^frame_\d{6}\.jpg$")
+
 #: I file ``-progress`` di ffmpeg: uno per ``auto``, uno per il worker.
 RENDER_PROGRESS_FILES = (
     ("render", "ffmpeg-progress.txt"),
@@ -3053,6 +3056,51 @@ def _safe_job_state(directory: Path) -> Dict[str, Any]:
         return payload
 
 
+def scene_live(root: Path) -> Dict[str, Any]:
+    """I fotogrammi che il motore grafico sta costruendo, per la vista.
+
+    Legge ``<root>/live/chromium/manifest.json`` (scritto da ``vx.livepub``) e
+    restituisce l'ultimo fotogramma con indice, tempo, byte e hash. Se il motore
+    non ha ancora pubblicato, ``engine`` è ``None`` e la pagina non mostra nulla:
+    meglio niente che una striscia vuota che sembra un guasto.
+    """
+    from . import livepub  # noqa: PLC0415 - solo quando la vista lo chiede
+
+    manifest = livepub.read_manifest(root, "chromium")
+    if not isinstance(manifest, Mapping):
+        return {"engine": None, "frames": [], "last": None}
+    frames = list(manifest.get("frames") or [])
+    last = manifest.get("last") if isinstance(manifest.get("last"), Mapping) else None
+    return {
+        "engine": "chromium",
+        "total": manifest.get("total"),
+        "stride": manifest.get("stride"),
+        "updated_utc": manifest.get("updated_utc"),
+        "frames": [
+            {
+                "i": item.get("i"),
+                "t": item.get("t"),
+                "file": item.get("file"),
+                "url": f"/scene/chromium/{item.get('file')}",
+                "sha256": item.get("sha256"),
+            }
+            for item in frames
+            if isinstance(item, Mapping)
+        ],
+        "last": (
+            {
+                "i": last.get("i"),
+                "t": last.get("t"),
+                "file": last.get("file"),
+                "url": f"/scene/chromium/{last.get('file')}",
+                "sha256": last.get("sha256"),
+            }
+            if last
+            else None
+        ),
+    }
+
+
 def state(root: Path, index: Optional[int] = None) -> Dict[str, Any]:
     """Lo stato del lavoro scelto, piu' l'elenco di tutti quelli scoperti.
 
@@ -3486,6 +3534,17 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
             if path in ("/result", "/result.mp4"):
                 self._result(index)
                 return
+            if path == "/api/scene":
+                try:
+                    payload = scene_live(self._root())
+                except Exception as exc:  # noqa: BLE001 - la vista legge zeri
+                    degrade.note("serve", exc)
+                    payload = {"engine": None, "frames": [], "last": None, "error": str(exc)}
+                self._send_json(payload)
+                return
+            if path.startswith("/scene/"):
+                self._scene_frame(path[len("/scene/"):])
+                return
             if path.startswith("/frames/"):
                 self._frame(path[len("/frames/"):], index)
                 return
@@ -3499,6 +3558,28 @@ def make_handler(root: Optional[Path], session_mode: bool = False):
                 self._font_sample(path[len(FONT_SAMPLE_PREFIX):], index)
                 return
             self._send(b"not found", "text/plain", status=404)
+
+        def _scene_frame(self, raw: str) -> None:
+            """Un fotogramma della scena: solo dal manifesto, mai un percorso scelto dal client."""
+            parts = [piece for piece in str(raw).split("/") if piece]
+            if len(parts) != 2 or parts[0] != "chromium":
+                self._send(b"not found", "text/plain", status=404)
+                return
+            name = parts[1]
+            if not (name == "manifest.json" or SCENE_FRAME.fullmatch(name)):
+                self._send(b"not found", "text/plain", status=404)
+                return
+            target = self._root() / LIVE_DIR / "chromium" / name
+            if not target.is_file():
+                self._send(b"not found", "text/plain", status=404)
+                return
+            try:
+                body = target.read_bytes()
+            except OSError:
+                self._send(b"not found", "text/plain", status=404)
+                return
+            kind = "application/json" if name.endswith(".json") else "image/jpeg"
+            self._send(body, kind, extra=NO_STORE)
 
         def _font_sample(self, raw: str, index: Optional[int]) -> None:
             """Il PNG del campione, solo dalla cartella ``fonts`` del lavoro.
