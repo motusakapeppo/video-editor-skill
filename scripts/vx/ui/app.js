@@ -52,6 +52,14 @@
     contractNote: $('contractNote'),
     contractCorrupt: $('contractCorrupt'),
     contractList: $('contractList'),
+    motore: $('motore'),
+    motoreSentinel: $('motoreSentinel'),
+    motoreImg: $('motoreImg'),
+    motoreState: $('motoreState'),
+    motoreHash: $('motoreHash'),
+    motoreBadge: $('motoreBadge'),
+    motoreFill: $('motoreFill'),
+    motoreStrip: $('motoreStrip'),
     fontGate: $('fontGate'),
     fontCards: $('fontCards'),
     fontReq: $('fontReq'),
@@ -4129,6 +4137,9 @@
       el.nowNote.hidden = true;
     } finally {
       inflight = false;
+      // Il lavoro scelto può essere cambiato da questa lettura: è qui che il
+      // motore riparte (o resta zitto) senza un secondo orologio per lo stato.
+      sceneSync();
     }
   }
 
@@ -4167,6 +4178,435 @@
       card.style.setProperty('--rx', '0deg');
       card.style.setProperty('--ry', '0deg');
     });
+  });
+
+  /* ------------------------------------------------------------------ motore */
+
+  // La scena si guarda entrare. `/api/scene` si chiede solo a sezione scoperta,
+  // scheda in primo piano e lavoro vivo; dopo tre letture vuote di fila la
+  // domanda smette, e riprende quando cambia il lavoro scelto. Niente gusci
+  // vuoti: se il motore non ha pubblicato, la sezione non esiste.
+  const SCENE_EVERY_MS = 1000;
+  const SCENE_EMPTY_LIMIT = 3;
+
+  const motore = {
+    key: null, // lavoro selezionato: cambiarlo riarma la domanda
+    timer: null,
+    inflight: false,
+    ticket: 0,
+    inView: false,
+    nulls: 0,
+    stopped: false,
+    engine: '',
+    frames: [],
+    last: null,
+    total: null,
+    sha: '',
+    bytes: null,
+    nondet: false,
+    meta: false,
+    stamp: '',
+    quiet: 0,
+    stalled: false,
+    byteTries: 0,
+    finalRead: false,
+  };
+
+  // Il peso esatto è quello che il browser ha già scaricato: la riga lo legge
+  // dalla voce di rete, senza chiedere di nuovo il fotogramma. Il manifesto si
+  // legge una volta per scena, solo per il campo che l'API non porta.
+  function sceneBytes() {
+    if (motore.bytes !== null && Number(motore.bytes) > 0) return Number(motore.bytes);
+    const url = motore.last && motore.last.url ? String(motore.last.url) : '';
+    if (!url || typeof performance === 'undefined') return null;
+    const entries = performance.getEntriesByType('resource');
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      const entry = entries[i];
+      if (!entry || entry.name.indexOf(url) === -1) continue;
+      const size = Number(entry.encodedBodySize);
+      if (Number.isFinite(size) && size > 0) {
+        motore.bytes = size;
+        return size;
+      }
+    }
+    return null;
+  }
+
+  function sceneManifest() {
+    const engine = motore.engine;
+    if (!engine || motore.meta) return;
+    motore.meta = true;
+    const url = '/scene/' + encodeURIComponent(engine) + '/manifest.json';
+    fetch(scoped(url), { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!data || !motore.engine) return;
+        if (data.nondeterministic === true) motore.nondet = true;
+        sceneBadge();
+      })
+      .catch(() => {
+        // Il manifesto è un di più: la striscia vive anche senza.
+      });
+  }
+
+  // A scena finita il manifesto non è più in scrittura: è il momento giusto
+  // per leggere il peso esatto dell'ultimo fotogramma, senza rischi di contesa.
+  function sceneFinalBytes() {
+    if (motore.bytes !== null || motore.finalRead) return;
+    motore.finalRead = true;
+    const engine = motore.engine;
+    if (!engine) return;
+    fetch(scoped('/scene/' + encodeURIComponent(engine) + '/manifest.json'), {
+      cache: 'no-store',
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!data || !motore.last) return;
+        const rows = Array.isArray(data.frames) ? data.frames : [];
+        const row = rows.find((item) => item && item.sha256 === motore.last.sha256);
+        const size = row ? Number(row.bytes) : 0;
+        if (size > 0) {
+          motore.bytes = size;
+          sceneStatus();
+        }
+      })
+      .catch(() => {
+        // Resta la voce di rete, se c'è.
+      });
+  }
+
+  function sceneBadge() {
+    el.motoreBadge.hidden = !motore.nondet;
+  }
+
+  // La voce di rete compare qualche istante dopo il load: si riguarda, senza
+  // rileggere niente, così la riga non resta senza il peso sull'ultimo frame.
+  function sceneByteRetry() {
+    if (motore.bytes !== null || motore.byteTries >= 3) return;
+    motore.byteTries += 1;
+    window.setTimeout(() => {
+      sceneStatus();
+      if (motore.bytes === null) sceneByteRetry();
+    }, 260);
+  }
+
+  function sceneStatus() {
+    const last = motore.last;
+    if (!last) return;
+    const total = Number(motore.total) || motore.frames.length;
+    const index = Number(last.i);
+    const shown = Number.isFinite(index) ? index + 1 : motore.frames.length;
+    const whole = Number(last.t) || 0;
+    const t = Number.isInteger(whole) ? String(whole) : num(whole, 2).replace(/0$/, '');
+    // Lo spazio duro tiene insieme numero e unità: su schermo stretto la riga
+    // va a capo, ma non lascia un «B» da solo.
+    let line =
+      'frame ' + shown + '/' + total + ' · t\u00a0' + t + ' · ' + motore.engine;
+    const bytes = Number(sceneBytes());
+    if (Number.isFinite(bytes) && bytes > 0) line += ' · ' + bytes + '\u00a0B';
+    if (el.motoreState.textContent !== line) el.motoreState.textContent = line;
+    el.motoreFill.style.width =
+      (total > 0 ? clamp((shown / total) * 100, 0, 100) : 0).toFixed(1) + '%';
+  }
+
+  function sceneHash() {
+    const sha = String((motore.last && motore.last.sha256) || '');
+    if (!sha) {
+      el.motoreHash.textContent = '';
+      el.motoreHash.removeAttribute('title');
+      el.motoreHash.hidden = true;
+      return;
+    }
+    const short = sha.slice(0, 12);
+    el.motoreHash.textContent = 'impronta ' + short;
+    el.motoreHash.title = 'sha256 ' + sha;
+    el.motoreHash.hidden = false;
+  }
+
+  function sceneBig() {
+    const last = motore.last;
+    if (!last || !last.url) return;
+    const url = String(last.url);
+    if (el.motoreImg.getAttribute('src') === url) return;
+    const index = Number(last.i);
+    const shown = Number.isFinite(index) ? index + 1 : motore.frames.length;
+    el.motoreImg.classList.remove('is-loaded');
+    el.motoreImg.alt = 'Fotogramma ' + shown + ' di ' + (Number(motore.total) || motore.frames.length);
+    el.motoreImg.src = url;
+  }
+
+  el.motoreImg.addEventListener('load', () => {
+    el.motoreImg.classList.add('is-loaded');
+    if (el.motoreImg.naturalWidth > 0 && el.motoreImg.naturalHeight > 0) {
+      el.motore.style.setProperty(
+        '--motore-aspect',
+        el.motoreImg.naturalWidth + ' / ' + el.motoreImg.naturalHeight
+      );
+    }
+    sceneStatus(); // il peso esatto arriva con la voce di rete dell'immagine
+    sceneByteRetry();
+  });
+
+  el.motoreImg.addEventListener('error', () => {
+    el.motoreImg.classList.remove('is-loaded');
+  });
+
+  // La striscia si aggiorna per differenza: il fotogramma che c'era resta
+  // dov'è, quello nuovo si aggiunge in fondo. Ricostruire tutto a ogni poll
+  // vorrebbe dire riscaricare quaranta miniature al secondo.
+  function sceneCell(frame, shown, total) {
+    const item = document.createElement('li');
+    item.className = 'mframe';
+
+    const img = document.createElement('img');
+    img.alt = 'Fotogramma ' + shown + ' di ' + total;
+    img.decoding = 'async';
+    img.addEventListener('load', () => img.classList.add('is-loaded'));
+    // L'anello del manifesto butta i fotogrammi vecchi: una miniatura può
+    // sparire mentre la si chiede. Il riquadro resta, non l'icona rotta.
+    img.addEventListener('error', () => item.classList.add('is-missing'));
+    img.src = String(frame.url);
+
+    const idx = document.createElement('span');
+    idx.className = 'mframe-idx num';
+    idx.setAttribute('aria-hidden', 'true');
+    idx.textContent = pad2(shown);
+
+    item.append(img, idx);
+    return item;
+  }
+
+  function sceneStrip() {
+    const signature = motore.frames.map((frame) => frame.i + ':' + frame.sha256).join(',');
+    if (el.motoreStrip.dataset.signature === signature) return;
+    el.motoreStrip.dataset.signature = signature;
+
+    const total = Number(motore.total) || motore.frames.length;
+    const newest = String((motore.last && motore.last.file) || '');
+    const known = new Map();
+    el.motoreStrip.querySelectorAll('.mframe').forEach((node) => {
+      known.set(node.dataset.key, node);
+    });
+
+    let recent = null;
+    const order = [];
+
+    motore.frames.forEach((frame, position) => {
+      // Nome + hash: una scena nuova riusa i nomi dei file ma non le immagini.
+      const key = String(frame.file || frame.url) + ':' + String(frame.sha256 || '');
+      const index = Number(frame.i);
+      const shown = Number.isFinite(index) ? index + 1 : position + 1;
+      const isNow =
+        (newest && String(frame.file) === newest) ||
+        (!newest && position === motore.frames.length - 1);
+
+      let item = known.get(key);
+      if (item) {
+        known.delete(key);
+      } else {
+        item = sceneCell(frame, shown, total);
+        item.dataset.key = key;
+      }
+
+      item.title =
+        'frame ' + shown + ' · t ' + num(Number(frame.t) || 0, 2).replace(/0$/, '');
+      const idx = item.querySelector('.mframe-idx');
+      if (idx) idx.textContent = pad2(shown);
+      const img = item.querySelector('img');
+      if (img) img.alt = 'Fotogramma ' + shown + ' di ' + total;
+      item.classList.toggle('is-now', Boolean(isNow));
+      if (isNow) {
+        item.setAttribute('aria-current', 'true');
+        recent = item;
+      } else {
+        item.removeAttribute('aria-current');
+      }
+      order.push(item);
+    });
+
+    known.forEach((node) => node.remove());
+
+    const current = Array.from(el.motoreStrip.children);
+    const same =
+      current.length === order.length && current.every((node, i) => node === order[i]);
+    if (!same) order.forEach((node) => el.motoreStrip.append(node));
+
+    // La striscia si legge da sinistra: il fotogramma nuovo è in fondo. Si
+    // salta subito, senza scorrimento animato: il poll è di un secondo e una
+    // corsa che non finisce mai sembrerebbe un guasto.
+    if (recent) el.motoreStrip.scrollLeft = el.motoreStrip.scrollWidth;
+  }
+
+  function sceneHide() {
+    el.motore.hidden = true;
+    el.motoreImg.removeAttribute('src');
+    el.motoreImg.classList.remove('is-loaded');
+    el.motoreStrip.textContent = '';
+    el.motoreStrip.dataset.signature = '';
+    el.motoreState.textContent = '—';
+    el.motoreFill.style.width = '0%';
+    el.motoreHash.textContent = '';
+    el.motoreHash.removeAttribute('title');
+    el.motoreHash.hidden = true;
+    el.motoreBadge.hidden = true;
+    motore.engine = '';
+    motore.frames = [];
+    motore.last = null;
+    motore.total = null;
+    motore.sha = '';
+    motore.bytes = null;
+    motore.nondet = false;
+    motore.meta = false;
+    motore.stamp = '';
+    motore.quiet = 0;
+    motore.stalled = false;
+    motore.byteTries = 0;
+    motore.finalRead = false;
+  }
+
+  function scenePaint(data) {
+    const engine = data && data.engine ? String(data.engine) : '';
+    const frames =
+      data && Array.isArray(data.frames) ? data.frames.filter((item) => item && item.url) : [];
+    const last =
+      data && data.last && data.last.url
+        ? data.last
+        : frames.length
+          ? frames[frames.length - 1]
+          : null;
+
+    if (!engine || !last) {
+      motore.nulls += 1;
+      if (motore.nulls >= SCENE_EMPTY_LIMIT) motore.stopped = true;
+      sceneHide();
+      return;
+    }
+
+    motore.nulls = 0;
+    motore.engine = engine;
+    motore.frames = frames;
+    motore.total = Number(data.total) || frames.length;
+    motore.last = last;
+
+    // Una scena che non pubblica più niente non è un lavoro vivo: dopo dodici
+    // giri identici la domanda si ferma, senza spegnere la striscia.
+    const stamp = String(data.updated_utc || '') + '|' + String(last.sha256 || last.file || '');
+    if (stamp === motore.stamp) motore.quiet += 1;
+    else {
+      motore.stamp = stamp;
+      motore.quiet = 0;
+    }
+    if (motore.quiet >= 12 && sceneBusy()) motore.stalled = true;
+
+    const sha = String(last.sha256 || last.file || '');
+    if (sha !== motore.sha) {
+      motore.sha = sha;
+      motore.bytes = null;
+      motore.byteTries = 0;
+      if (data.nondeterministic === true) motore.nondet = true;
+      sceneManifest();
+    }
+
+    el.motore.hidden = false;
+    sceneBadge();
+    sceneBig();
+    sceneStatus();
+    sceneHash();
+    sceneStrip();
+
+    if (sceneBusy()) motore.finalRead = false;
+    else sceneFinalBytes();
+  }
+
+  // La scena è ancora in costruzione finché il manifesto non è arrivato in
+  // fondo: è questo, non la percentuale, a tenere viva la domanda.
+  function sceneBusy() {
+    const last = motore.last;
+    if (!last) return false;
+    const index = Number(last.i);
+    const total = Number(motore.total);
+    if (!Number.isFinite(index) || !Number.isFinite(total) || total <= 0) return false;
+    return index + 1 < total;
+  }
+
+  function sceneWants() {
+    if (document.visibilityState !== 'visible') return false;
+    if (!motore.inView) return false;
+    if (motore.stopped || motore.stalled) return false;
+    if (motore.engine) return sceneBusy() || jobRunning(lastState);
+    return motore.nulls < SCENE_EMPTY_LIMIT;
+  }
+
+  function sceneTimer(delay) {
+    if (motore.timer !== null) {
+      window.clearTimeout(motore.timer);
+      motore.timer = null;
+    }
+    if (!sceneWants()) return;
+    motore.timer = window.setTimeout(scenePoll, delay);
+  }
+
+  async function scenePoll(force) {
+    motore.timer = null;
+    // Una lettura è ancora in volo: si riprova tra poco, invece di perdere il giro.
+    if (motore.inflight) {
+      sceneTimer(250);
+      return;
+    }
+    if (!force && !sceneWants()) return;
+    if (document.visibilityState !== 'visible') return;
+    motore.inflight = true;
+    const ticket = motore.ticket;
+    try {
+      const response = await fetch(scoped('/api/scene'), { cache: 'no-store' });
+      if (!response.ok) throw new Error('scena ' + response.status);
+      const data = await response.json();
+      if (ticket === motore.ticket) scenePaint(data);
+    } catch (error) {
+      // Silenzio: la sezione non racconta un guasto che non sa.
+    } finally {
+      motore.inflight = false;
+      if (ticket === motore.ticket) sceneTimer(SCENE_EVERY_MS);
+    }
+  }
+
+  function sceneReset() {
+    motore.ticket += 1;
+    if (motore.timer !== null) {
+      window.clearTimeout(motore.timer);
+      motore.timer = null;
+    }
+    motore.nulls = 0;
+    motore.stopped = false;
+    sceneHide();
+  }
+
+  // Il lavoro scelto è l'identità del polling: se cambia, la domanda riparte.
+  function sceneSync() {
+    const key = String(jobIndex) + '|' + String(sessionParam || '');
+    if (motore.key === key) return;
+    motore.key = key;
+    sceneReset();
+    // Una sonda sola, anche a sezione sotto la piega: serve a sapere se c'è
+    // qualcosa da mostrare. Il polling vero comincia quando la sezione si vede.
+    if (document.visibilityState === 'visible') scenePoll(true);
+  }
+
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        motore.inView = entries.some((entry) => entry.isIntersecting);
+        sceneTimer(SCENE_EVERY_MS);
+      },
+      { threshold: 0 }
+    );
+    observer.observe(el.motoreSentinel);
+  } else {
+    motore.inView = true;
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    sceneTimer(SCENE_EVERY_MS);
   });
 
   tick();

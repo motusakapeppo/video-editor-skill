@@ -455,6 +455,8 @@ body.is-stamped .brand-dot {
 
 .col-work > .stage { order: 1; }
 .col-work > .contract { order: 2; }
+/* Il motore sta sotto il contratto: la prova del lavoro, poi la scena che entra. */
+.col-work > .motore-slot { order: 2; }
 .col-work > .vote-card { order: 3; }
 .col-work > .live { order: 4; }
 .col-work > .journal { order: 5; }
@@ -4284,6 +4286,295 @@ html.has-view body { overflow: hidden; }
 }
 
 /* ---------------------------------------------------------------- responsivo */
+
+/* --------------------------------------------------------------------- motore */
+
+/* Il motore non è un avanzamento: è la scena che si vede arrivare. Un fotogramma
+   in evidenza, la riga che lo misura, la striscia di quelli già passati. Senza
+   manifesto la sezione resta nascosta — non c'è un guscio da riempire. */
+.motore-slot { position: relative; }
+
+/* Un punto in pagina che esiste anche a sezione chiusa: è lì che il polling
+   guarda per sapere se la sezione è a schermo. Non occupa spazio. */
+.motore-sentinel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.motore {
+  position: relative;
+  padding: 18px 22px 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(520px 200px at 100% -20%, rgba(78, 161, 255, .11), transparent 72%),
+    linear-gradient(180deg, #0f141a 0%, #0a0e13 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .045) inset,
+    0 20px 44px -34px rgba(0, 0, 0, .9);
+  overflow: hidden;
+  animation: rise 560ms var(--ease-out) 60ms backwards;
+}
+
+.motore::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(142, 200, 255, .85), rgba(78, 161, 255, .04) 80%);
+}
+
+.motore-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.motore-titles { min-width: 0; }
+
+.motore-head h2 {
+  margin: 0;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.motore-sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+/* Il solo segno che il manifesto può dare, e solo quando lo dà. */
+.motore-badge {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 143, 143, .5);
+  border-radius: 999px;
+  background: rgba(255, 92, 92, .12);
+  box-shadow: 0 0 18px -6px rgba(255, 120, 120, .8);
+  font: 700 9px/1 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: #ffb3b3;
+  white-space: nowrap;
+}
+
+.motore-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.motore-fig { margin: 0; min-width: 0; }
+
+.motore-frame {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 320px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: #05070b;
+  overflow: hidden;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .05) inset,
+    0 26px 46px -32px rgba(0, 0, 0, .95);
+}
+
+/* Due angoli di mirino: dicono che è un fotogramma guardato, non un poster. */
+.motore-frame::before,
+.motore-frame::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(142, 200, 255, .42);
+  pointer-events: none;
+}
+
+.motore-frame::before {
+  top: 6px;
+  left: 6px;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 2px 0 0 0;
+}
+
+.motore-frame::after {
+  right: 6px;
+  bottom: 6px;
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0 0 2px 0;
+}
+
+.motore-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 318px;
+  max-height: 400px;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 260ms var(--ease-soft);
+}
+
+.motore-img.is-loaded { opacity: 1; }
+
+.motore-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* La riga di stato: indice, tempo, motore, peso — in quest'ordine. */
+.motore-state {
+  margin: 0;
+  font: 600 14px/1.35 var(--mono);
+  letter-spacing: .01em;
+  color: #e8eef6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.motore-hash {
+  margin: 6px 0 0;
+  font: 500 10.5px/1.3 var(--mono);
+  letter-spacing: .1em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
+/* Una riga sola: quanto è entrata la scena, senza un numero che la ripeta. */
+.motore-track {
+  width: min(100%, 340px);
+  height: 3px;
+  margin-top: 16px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, .07);
+  overflow: hidden;
+}
+
+.motore-fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(78, 161, 255, .5), var(--accent-2));
+  box-shadow: 0 0 12px -2px rgba(78, 161, 255, .8);
+  transition: width var(--t-move) var(--e-in);
+}
+
+/* La striscia è un corpo a sé: il monitor sopra, i fotogrammi sotto. */
+.motore-strip-wrap {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.motore-strip-wrap .zone-label { margin: 0 0 9px; }
+
+.motore-strip {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 2px 2px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .16) transparent;
+}
+
+.mframe {
+  position: relative;
+  flex: 0 0 auto;
+  width: 64px;
+  aspect-ratio: var(--motore-aspect, 9 / 16);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: linear-gradient(180deg, #121820, #0a0e13);
+  overflow: hidden;
+  opacity: .6;
+  transition:
+    opacity 220ms ease,
+    border-color 220ms ease,
+    box-shadow 220ms ease;
+}
+
+.mframe img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.mframe img.is-loaded { opacity: 1; }
+
+/* Il più recente è quello che si sta guardando: è l'unico acceso. */
+/* L'anello scarta i fotogrammi vecchi: se uno sparisce mentre lo si chiede,
+   resta il posto, non l'icona di un'immagine rotta. */
+.mframe.is-missing {
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, .05) 0 6px, transparent 6px 12px),
+    #0b1016;
+}
+
+.mframe.is-missing img { visibility: hidden; }
+
+.mframe.is-now {
+  opacity: 1;
+  border-color: rgba(78, 161, 255, .8);
+  box-shadow:
+    0 0 0 1px rgba(78, 161, 255, .32),
+    0 10px 22px -12px rgba(78, 161, 255, .85);
+}
+
+.mframe-idx {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(4, 7, 11, .74);
+  font: 600 8.5px/1.15 var(--mono);
+  letter-spacing: .04em;
+  color: var(--ink-2);
+}
+
+.mframe.is-now .mframe-idx {
+  color: #d6e9ff;
+  background: rgba(20, 54, 90, .85);
+}
+
+@media (max-width: 720px) {
+  .motore { padding: 16px 15px 18px 17px; }
+  .motore-body { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .motore-frame { margin-inline: auto; max-width: 100%; }
+  .motore-img { max-width: 100%; max-height: 320px; }
+  .motore-state { white-space: normal; overflow: visible; font-size: 13px; }
+}
 
 @media (max-width: 1040px) {
   .board { grid-template-columns: minmax(0, 1fr); gap: 24px; }

@@ -150,6 +150,46 @@
           <ol class="contract-list" id="contractList" aria-label="Gli otto stadi del contratto"></ol>
         </section>
 
+        <!-- Il motore: i fotogrammi che Chromium pubblica mentre costruisce la
+             scena. La sezione non ha un guscio vuoto: o c'è un fotogramma da
+             mostrare, o resta nascosta. La sentinella serve al polling: si
+             chiede `/api/scene` solo quando questa zona è a schermo. -->
+        <div class="motore-slot" id="motoreSlot">
+          <span class="motore-sentinel" id="motoreSentinel" aria-hidden="true"></span>
+          <section class="motore" id="motore" aria-labelledby="motoreTitle" hidden>
+            <div class="motore-head">
+              <div class="motore-titles">
+                <h2 id="motoreTitle">Motore</h2>
+                <p class="motore-sub" id="motoreSub">la scena entra un fotogramma alla volta</p>
+              </div>
+              <p class="motore-badge" id="motoreBadge" hidden
+                 title="Il manifesto dichiara che due render della stessa scena possono differire.">Non deterministico</p>
+            </div>
+
+            <div class="motore-body">
+              <figure class="motore-fig">
+                <span class="motore-frame" id="motoreFrame">
+                  <img class="motore-img" id="motoreImg" alt="" decoding="async">
+                </span>
+              </figure>
+
+              <div class="motore-side">
+                <p class="motore-state num" id="motoreState" aria-live="polite">—</p>
+                <p class="motore-hash num" id="motoreHash" hidden></p>
+                <div class="motore-track" id="motoreTrack" aria-hidden="true">
+                  <i class="motore-fill" id="motoreFill"></i>
+                </div>
+              </div>
+            </div>
+
+            <div class="motore-strip-wrap">
+              <p class="zone-label">Ultimi fotogrammi</p>
+              <ol class="motore-strip" id="motoreStrip"
+                  aria-label="Fotogrammi pubblicati dal motore, dal più vecchio al più recente"></ol>
+            </div>
+          </section>
+        </div>
+
         <section class="vote-card" id="voteCard" hidden aria-labelledby="voteTitle">
           <div class="vote-veil" id="voteVeil" aria-hidden="true"></div>
 
