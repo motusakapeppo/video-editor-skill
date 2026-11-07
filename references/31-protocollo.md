@@ -160,8 +160,15 @@ motore grafico la costruisce:
 
 Confine dichiarato: il browser fa **grafica sopra il video** (testo impaginato,
 sottopancia, card, maschere). La composizione di **flussi video** (split screen
-con due sorgenti, picture-in-picture, griglie) resta a ffmpeg, che è più veloce e
-deterministico. Se Playwright o Chrome mancano, `render_frames` restituisce
+con due sorgenti, picture-in-picture, griglie) la fa ffmpeg:
+
+```powershell
+& $PY vx.py stack --left "<a.mp4>" --right "<b.mp4>" --out "<split.mp4>" [--duration 10]
+```
+
+Ogni lato è ritagliato al centro e scalato all'altezza d'uscita, poi affiancato
+con `hstack`; la durata è la più corta delle due (o quella chiesta) e l'audio è
+dichiarato assente. Se Playwright o Chrome mancano, `render_frames` restituisce
 `engine: "absent"` col motivo.
 
 

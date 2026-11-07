@@ -172,7 +172,7 @@ def render_frames(
             "engine": engine,
             "reason": (
                 "composizione di flussi video: si fa con ffmpeg (hstack), "
-                "non con il browser; il comando non e' ancora collegato"
+                "non con il browser; il comando e' 'vx stack --left ... --right ...'"
             ),
             "frames": 0,
             "declared_frames": 0,

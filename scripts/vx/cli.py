@@ -3807,6 +3807,30 @@ def cmd_mcp(args: argparse.Namespace) -> int:
     return mcp_server.main([])
 
 
+def cmd_stack(args: argparse.Namespace) -> int:
+    """Due flussi video affiancati: il caso che al browser non conviene."""
+    from . import stack as stack_mod
+
+    info = stack_mod.stack(
+        args.left,
+        args.right,
+        args.out,
+        width=int(getattr(args, "width", 1080)),
+        height=int(getattr(args, "height", 1920)),
+        duration=getattr(args, "duration", None),
+    )
+    if getattr(args, "json", False):
+        _out(info)
+        return EXIT_OK
+    print(f"Affiancati: {info['path']}")
+    print(
+        f"  {info['width']}x{info['height']} · {info['duration_sec']}s · "
+        f"{info['engine']} ({info['filter']})"
+    )
+    print(f"  audio: {info['audio']}")
+    return EXIT_OK
+
+
 def cmd_scene(args: argparse.Namespace) -> int:
     """Rende una scena con Chromium e pubblica i fotogrammi mentre la costruisce."""
     from . import scenes as scenes_mod
@@ -4791,6 +4815,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="server MCP su stdio (JSON-RPC per agenti)")
     p.set_defaults(func=cmd_mcp)
+
+    p = add(
+        "stack",
+        "due video affiancati (split screen, confronto): lo fa ffmpeg, non il browser",
+    )
+    p.add_argument("--left", required=True, help="video di sinistra")
+    p.add_argument("--right", required=True, help="video di destra")
+    p.add_argument("--out", required=True, help="file di uscita")
+    p.add_argument("--duration", type=float, default=None, help="durata (default: la piu' corta)")
+    p.add_argument("--width", type=int, default=1080, help="larghezza totale (pari)")
+    p.add_argument("--height", type=int, default=1920, help="altezza (default 1920)")
+    p.add_argument("--json", action="store_true", help="referto macchina")
+    p.set_defaults(func=cmd_stack)
 
     p = add(
         "scene",
