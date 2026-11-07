@@ -8210,16 +8210,27 @@ def _run_locked(
             "plan: {count} segmenti sotto la qualita' preferita (non sotto il "
             "pavimento): tenuti e dichiarati".format(count=len(below_plan))
         )
-    retained = report["plan"].get("duration_retained")
+    # La quota si misura sul materiale che il piano **poteva** usare per la
+    # durata chiesta, non su tutta la sorgente: con una richiesta da 12 s e 95 s
+    # di girato, 12 su 95 non è scarto, è la richiesta. Il taglio dei silenzi
+    # non entra qui: quello lo dichiara il ponte col suo riempimento.
+    material_used = float(report["plan"].get("material_sec") or 0.0)
+    timeline_now = float(report["plan"].get("timeline_sec") or 0.0)
+    if declared_sec:
+        try:
+            material_used = min(material_used, float(declared_sec))
+        except (TypeError, ValueError):
+            pass
+    retained = (timeline_now / material_used) if material_used > 0 else None
     retained_floor = 1.0 - float(IN_POINT_MAX_REMOVAL)
-    if isinstance(retained, (int, float)) and float(retained) < retained_floor - 1e-9:
+    if retained is not None and retained < retained_floor - 1e-9:
         report.setdefault("warnings", []).append(
-            "plan: la timeline tiene il {pct:.0f}% del materiale utilizzabile "
+            "plan: la timeline tiene il {pct:.0f}% del materiale che poteva usare "
             "({timeline:.2f}s su {material:.2f}s), sotto il minimo dichiarato "
             "{floor:.0%}: il resto e' scarto oltre la quota ammessa".format(
-                pct=float(retained) * 100.0,
-                timeline=float(report["plan"].get("timeline_sec") or 0.0),
-                material=float(report["plan"].get("material_sec") or 0.0),
+                pct=retained * 100.0,
+                timeline=timeline_now,
+                material=material_used,
                 floor=retained_floor,
             )
         )

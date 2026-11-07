@@ -1333,6 +1333,7 @@ def _fill_tail(
     deficit: float,
     record_rows: Dict[Tuple[str, float, float], List[Dict[str, Any]]],
     fragments: Dict[str, List[Tuple[float, float, float, float]]],
+    key: Optional[Tuple[str, float, float]] = None,
 ) -> Tuple[float, Any]:
     """Allunga l'ultimo frammento nel materiale che segue, senza rimettere silenzio.
 
@@ -1372,8 +1373,9 @@ def _fill_tail(
         src_out=round(current + extra, 6),
         dst_out=round(float(clip.dst_out) + extra, 6),
     )
-    key = (source_id, round(float(clip.dst_in), 6), round(float(clip.dst_out), 6))
-    rows = record_rows.get(key)
+    # La chiave è quella della clip **originale** (dal chiamante): dopo i tagli
+    # i tempi della clip creata non coincidono più con quelli del mirror.
+    rows = record_rows.get(key) if key is not None else None
     if rows:
         rows[-1]["src_out"] = round(float(rows[-1]["src_out"]) + extra, 6)
         rows[-1]["dst_out"] = round(float(rows[-1]["dst_out"]) + extra, 6)
@@ -1382,6 +1384,160 @@ def _fill_tail(
         first, last, dst_in, dst_out = spans[-1]
         spans[-1] = (first, round(last + extra, 6), dst_in, round(dst_out + extra, 6))
     return extra, new_clip
+
+
+def _debug_fill() -> bool:
+    """Solo per diagnosi: ``VX_DEBUG_FILL=1`` accende i numeri del riempimento."""
+    import os  # noqa: PLC0415 - non serve nel percorso caldo
+
+    return bool(os.environ.get("VX_DEBUG_FILL"))
+
+
+def _speech_spans_after(
+    analysis: Any, start: float, limit: float
+) -> List[Tuple[float, float]]:
+    """I tratti di parlato nella sorgente dopo ``start``, entro ``limit``.
+
+    ``speech_regions`` è la misura del VAD; senza, i tratti sono il complemento
+    del ``dead_air`` entro la durata della sorgente. Un'analisi senza nessuna
+    delle due non inventa parlato: la coda resta corta e lo dice il report.
+    """
+    speech = _spans(_analysis_field(analysis, "speech_regions"))
+    if not speech:
+        dead = _spans(_analysis_field(analysis, "dead_air"))
+        if not dead:
+            return []
+        speech = _complement(0.0, float(limit), dead)
+    out: List[Tuple[float, float]] = []
+    for first, last in sorted(speech):
+        begin = max(float(first), float(start))
+        end = min(float(last), float(limit))
+        if end - begin > 1e-6:
+            out.append((begin, end))
+    return out
+
+
+def _append_speech(
+    *,
+    last: Any,
+    key: Optional[Tuple[str, float, float]],
+    analysis: Any,
+    media_duration: float,
+    target: float,
+    cursor: float,
+    min_fragment: float,
+    record_rows: Dict[Tuple[str, float, float], List[Dict[str, Any]]],
+    fragments: Dict[str, List[Tuple[float, float, float, float]]],
+    track_rows: Sequence[Optional[List[Any]]],
+    created: List[Any],
+) -> Tuple[float, int, List[Tuple[float, float]]]:
+    """Riempe la coda col **parlato che segue**, saltando la pausa.
+
+    Il taglio dei silenzi accorcia la catena; :func:`_fill_tail` recupera solo
+    il materiale contiguo. Quando dopo c'è una pausa, questa funzione aggiunge i
+    tratti di parlato successivi — video, riga del mirror audio e frammento —
+    finché la durata torna quella del piano o il materiale finisce. Ogni pezzo
+    aggiunto è parlato misurato: nessun secondo di morto rientra.
+    """
+    if key is None or not _finite(target) or target <= cursor + 1e-6:
+        return 0.0, 0, []
+    rows = record_rows.get(key)
+    if rows is None:
+        return 0.0, 0, []
+    series = next(
+        (item for item in track_rows if item and item[-1] is last), None
+    )
+    if series is None:
+        return 0.0, 0, []
+    added = 0.0
+    made = 0
+    appended: List[Tuple[float, float]] = []
+    current = last
+    for first, last_s in _speech_spans_after(
+        analysis, float(last.src_out), media_duration
+    ):
+        remaining = target - cursor
+        if remaining <= 1e-6:
+            break
+        take = min(last_s - first, remaining)
+        if take <= 1e-6:
+            continue
+        # Un pezzo più corto del minimo non è un'inquadratura: si salta, e i
+        # tratti successivi restano disponibili.
+        if take < min_fragment and remaining - take > 1e-6:
+            continue
+        new_clip = edl_plan.ClipSegment(
+            clip_id=f"{current.clip_id}_t{made}",
+            source_id=current.source_id,
+            src_in=round(first, 6),
+            src_out=round(first + take, 6),
+            dst_in=round(cursor, 6),
+            dst_out=round(cursor + take, 6),
+            layer=0,
+            role=current.role,
+            provenance=tuple(getattr(current, "provenance", ()) or ()),
+        )
+        created.append(new_clip)
+        series.append(new_clip)
+        fragments.setdefault(str(current.source_id), []).append(
+            (
+                float(first),
+                round(first + take, 6),
+                round(cursor, 6),
+                round(cursor + take, 6),
+            )
+        )
+        rows.append(
+            {
+                "src_in": round(first, 6),
+                "src_out": round(first + take, 6),
+                "dst_in": round(cursor, 6),
+                "dst_out": round(cursor + take, 6),
+            }
+        )
+        cursor = round(cursor + take, 6)
+        added += take
+        made += 1
+        appended.append((round(first, 6), round(first + take, 6)))
+        current = new_clip
+    return added, made, appended
+
+
+def _uncaptioned_seconds(
+    transcript: Any, spans: Sequence[Tuple[float, float]]
+) -> float:
+    """Quanta parte dei tratti aggiunti non ha parole trascritte.
+
+    Il parlato che riempie la coda può stare **oltre** la finestra che il
+    trascrittore aveva letto: il report lo dichiara invece di lasciare un pezzo
+    di parlato senza sottotitoli senza dirlo.
+    """
+    total_span = sum(max(0.0, float(b) - float(a)) for a, b in spans)
+    words = getattr(transcript, "words", None)
+    if not isinstance(words, (list, tuple)) or not words:
+        return round(total_span, 6)
+    ranges: List[Tuple[float, float]] = []
+    for word in words:
+        if not isinstance(word, Mapping):
+            continue
+        try:
+            start = float(word.get("start"))
+            end = float(word.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if end > start:
+            ranges.append((start, end))
+    if not ranges:
+        return round(total_span, 6)
+    missing = 0.0
+    for begin, end in spans:
+        covered = 0.0
+        for start, stop in ranges:
+            lo, hi = max(float(begin), start), min(float(end), stop)
+            if hi > lo:
+                covered += hi - lo
+        missing += max(0.0, (float(end) - float(begin)) - covered)
+    return round(missing, 6)
 
 
 def build(
@@ -1465,6 +1621,10 @@ def build(
 
     failed_sources: set = set()
     mirror: Dict[Tuple[str, float, float], List[Dict[str, Any]]] = {}
+    #: clip creato -> chiave del mirror audio: il riempimento della coda deve
+    #: aggiornare le righe della **clip originale** che lo ha generato, non una
+    #: chiave indovinata dai tempi (che dopo i tagli non coincide piu').
+    record_key_by_clip: Dict[str, Tuple[str, float, float]] = {}
     layer0_by_track: Dict[int, List[edl_plan.ClipSegment]] = {}
     fragments_by_source: Dict[str, List[Tuple[float, float, float, float]]] = {}
     anchor_dst: Dict[str, List[Tuple[float, float]]] = {}
@@ -1624,13 +1784,14 @@ def build(
                 }
             )
             cursor = round(cursor + length, 6)
-        mirror[
-            (
-                clip.source_id,
-                round(float(clip.dst_in), 6),
-                round(float(clip.dst_out), 6),
-            )
-        ] = records
+        mirror_key = (
+            clip.source_id,
+            round(float(clip.dst_in), 6),
+            round(float(clip.dst_out), 6),
+        )
+        mirror[mirror_key] = records
+        for made in created:
+            record_key_by_clip[str(made.clip_id)] = mirror_key
         fragments_by_source.setdefault(clip.source_id, []).extend(clip_fragments)
         if clip.source_id not in source_order:
             source_order.append(clip.source_id)
@@ -1679,9 +1840,11 @@ def build(
     duration = cursor
     # cut_silence accorcia la catena e nessuno la rimpiazza: un parlato con pause
     # consegnava meno del chiesto (15 s chiesti, 12.508 resi, con 32.4 s di
-    # materiale). Qui l'ultimo frammento si allunga nel materiale che segue,
-    # fermandosi prima del prossimo silenzio: la durata torna quella chiesta
-    # senza rimettere il morto che si era tolto.
+    # materiale). Due passi: prima l'ultimo frammento si allunga nel materiale
+    # contiguo che segue (fermandosi prima del prossimo silenzio), poi — se la
+    # pausa è subito dopo — si aggiungono i tratti di **parlato successivi**,
+    # saltando la pausa, finché la durata del piano non è raggiunta. Il morto
+    # tolto non torna, e il rapporto resta quello chiesto.
     if created:
         deficit = float(plan.duration_sec) - duration
         if deficit > 1e-6:
@@ -1693,6 +1856,7 @@ def build(
                 deficit=deficit,
                 record_rows=mirror,
                 fragments=fragments_by_source,
+                key=record_key_by_clip.get(str(created[-1].clip_id)),
             )
             if filled > 1e-6 and replacement is not None:
                 stale = created[-1]
@@ -1709,6 +1873,71 @@ def build(
                         "seconds": round(filled, 3),
                     }
                 )
+        if duration < float(plan.duration_sec) - 1e-6:
+            if _debug_fill():
+                import os  # noqa: PLC0415 - solo quando si debugga
+
+                _sid = str(created[-1].source_id)
+                _key = record_key_by_clip.get(str(created[-1].clip_id))
+                _an = analysis_by_source.get(_sid)
+                print(
+                    "[debug-fill] deficit=%.3f key=%s rows=%s series=%s "
+                    "src_out=%.3f speech_after=%s"
+                    % (
+                        float(plan.duration_sec) - duration,
+                        _key is not None,
+                        _key in mirror if _key else False,
+                        any(item and item[-1] is created[-1] for item in layer0_by_track.values()),
+                        float(created[-1].src_out),
+                        _speech_spans_after(
+                            _an,
+                            float(created[-1].src_out),
+                            _media_duration(plan, _sid, 0.0),
+                        )[:4],
+                    ),
+                    flush=True,
+                )
+            added, made, appended = _append_speech(
+                last=created[-1],
+                key=record_key_by_clip.get(str(created[-1].clip_id)),
+                analysis=analysis_by_source.get(str(created[-1].source_id)),
+                media_duration=_media_duration(plan, str(created[-1].source_id), 0.0),
+                target=float(plan.duration_sec),
+                cursor=duration,
+                min_fragment=min_fragment,
+                record_rows=mirror,
+                fragments=fragments_by_source,
+                track_rows=list(layer0_by_track.values()),
+                created=created,
+            )
+            if added > 1e-6:
+                duration = round(duration + added, 6)
+                cursor = duration
+                report.not_applied.append(
+                    {
+                        "anchor_id": None,
+                        "reason": "tail_filled_with_speech",
+                        "seconds": round(added, 3),
+                        "fragments": made,
+                    }
+                )
+                if transcripts:
+                    source_id = str(created[-1].source_id)
+                    uncovered = _uncaptioned_seconds(
+                        transcripts.get(source_id), appended
+                    )
+                    if uncovered > 0.05:
+                        report.not_applied.append(
+                            {
+                                "anchor_id": None,
+                                "reason": "captions_tail_uncovered",
+                                "seconds": uncovered,
+                                "detail": (
+                                    "il parlato che riempie la coda sta oltre la "
+                                    "finestra trascritta: resta senza sottotitoli"
+                                ),
+                            }
+                        )
     if duration <= 1e-6:
         raise VxError("bridge: the a_roll chain is empty after the cuts")
 

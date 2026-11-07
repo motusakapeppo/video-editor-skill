@@ -96,6 +96,14 @@ in un colpo. `--montage` monta ogni video che passa i gate come `a_roll`;
 monta sul brano; `--recipe NAME` applica una composizione. Scrive `plan.json`,
 `auto_report.json` e `<workdir>/out`. Exit 0/2/5/6.
 
+La durata chiesta è quella del **master**, non del piano: il ponte taglia i
+silenzi e poi riempie la coda — prima col materiale contiguo, poi con i tratti di
+parlato che seguono, saltando la pausa — finché il piano non torna alla durata
+chiesta. Ogni pezzo aggiunto è parlato misurato (nessun morto rientra). Se il
+parlato aggiunto sta oltre la finestra trascritta, il report dichiara
+`captions_tail_uncovered` con i secondi: meglio un pezzo senza sottotitoli
+dichiarato che un buco senza spiegazione.
+
 ## 6. EDL3 (effetti, transizioni, testo)
 
 ```powershell
