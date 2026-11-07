@@ -116,6 +116,21 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     "hook_window": 4.0,
     "max_creative_treatments": 3,
     "cut_fade_ms": 12,
+    # La composizione della scaletta (sections.compose): quanto dura il gancio e
+    # in che ordine entrano i b-roll. Sono le uniche tre leve misurate prima del
+    # piano; i numeri stanno qui come ogni altra soglia, non sparsi nei moduli.
+    # ``hook_share_max`` impedisce che un hook da 2,4 s su un reel da 6 s sia
+    # metà video; ``hook_tail_sec`` è la coda che deve restare nella corsa
+    # dell'apertura perché il corpo abbia materiale.
+    "composition_hook_min_sec": 1.0,
+    "composition_hook_base_sec": 2.0,
+    "composition_hook_strong_sec": 2.4,
+    "composition_hook_weak_sec": 1.2,
+    "composition_hook_max_sec": 3.0,
+    "composition_hook_share_max": 0.35,
+    "composition_hook_tail_sec": 0.5,
+    "composition_hook_strong_ratio": 1.5,
+    "composition_hook_weak_ratio": 1.0,
     # C8 -- legge A: nessun effetto senza prova, e mai piu' di
     # ``max_creative_treatments`` trattamenti creativi distinti per reel. Le
     # soglie sotto sono le misure che rendono una spec ammissibile: movimento
@@ -1056,6 +1071,33 @@ def payload_to_edl_plan(
     b_entries = [entry for entry in selected if entry.get("role") == "b_roll"]
     music_entries = [entry for entry in selected if entry.get("role") == "music"]
 
+    # -- composizione della scaletta (vx.composition/1) ---------------------- #
+    # Il payload porta una proposta, non un ordine: ``sections.compose`` ha
+    # letto solo misure già prese (nitidezza dell'apertura, corse utili, BPM) e
+    # qui si applica quello che il materiale permette. Senza blocco il piano è
+    # byte-identico a prima: la composizione non cambia il default di nessuno.
+    composition = payload.get("composition")
+    composition = composition if isinstance(composition, Mapping) else {}
+    proposed = composition.get("proposed")
+    proposed = proposed if isinstance(proposed, Mapping) else {}
+    hook_seconds: Optional[float] = None
+    raw_hook = proposed.get("hook_seconds")
+    if isinstance(raw_hook, (int, float)) and not isinstance(raw_hook, bool):
+        if math.isfinite(float(raw_hook)) and float(raw_hook) > 0:
+            hook_seconds = float(raw_hook)
+    broll_order = proposed.get("broll_order")
+    if isinstance(broll_order, (list, tuple)) and b_entries:
+        rank = {str(asset): position for position, asset in enumerate(broll_order)}
+        payload_order = {id(entry): position for position, entry in enumerate(b_entries)}
+        if rank:
+            b_entries = sorted(
+                b_entries,
+                key=lambda entry: (
+                    rank.get(str(entry.get("asset_id")), len(rank)),
+                    payload_order.get(id(entry), 0),
+                ),
+            )
+
     # -- punto di presa misurato -------------------------------------------- #
     # ``quality`` arriva dal probe dei fotogrammi. Non e' un permesso: e' una
     # misura. Una clip senza istanti sopra il pavimento non entra nel piano (se
@@ -1378,6 +1420,7 @@ def payload_to_edl_plan(
             method=f"beat-grid:{beat_block.get('source') or 'auto'}",
         )
 
+    hook_split = False
     if beat_plan is not None and beat_plan.shots:
         cursors: Dict[int, float] = {}
         for index, shot in enumerate(beat_plan.shots):
@@ -1447,6 +1490,16 @@ def payload_to_edl_plan(
         # dal punto di presa preferito (l'hook), le successive proseguono in
         # ordine. Ogni ``src_in`` cade dentro una corsa dichiarata: mai nel
         # nero, nel freeze o sotto il pavimento.
+        #
+        # La composizione aggiunge **un** taglio, e solo se è stata misurata:
+        # il primo pezzo dell'apertura si spezza in hook + corpo. Con la griglia
+        # BPM accesa non si tocca niente: lì i tagli li decide il tempo.
+        hook_left = hook_seconds
+        hook_split = False
+        min_tail = max(
+            float(THRESHOLDS.get("composition_hook_tail_sec") or 0.5),
+            2.0 / float(fps),
+        )
         for index, entry in enumerate(a_entries[: len(lengths)]):
             asset_id = entry.get("asset_id")
             if not isinstance(asset_id, str) or not asset_id:
@@ -1463,37 +1516,45 @@ def payload_to_edl_plan(
                 take = min(run_end - run_start, remaining)
                 if take <= 1e-9:
                     continue
-                src_in = round(run_start, 6)
-                src_out = round(run_start + take, 6)
-                referenced[_source_id(asset_id)] = ref
-                a_clips.append(
-                    edl_plan.ClipSegment(
-                        clip_id=f"v0_{index}_{sub}",
-                        source_id=_source_id(asset_id),
-                        src_in=src_in,
-                        src_out=src_out,
-                        dst_in=cursor,
-                        dst_out=cursor + take,
-                        layer=0,
-                        role="main_talking_head",
+                chunks = [take]
+                if hook_left is not None and take > hook_left + min_tail:
+                    chunks = [hook_left, take - hook_left]
+                    hook_split = True
+                hook_left = None
+                offset = run_start
+                for chunk in chunks:
+                    src_in = round(offset, 6)
+                    src_out = round(offset + chunk, 6)
+                    referenced[_source_id(asset_id)] = ref
+                    a_clips.append(
+                        edl_plan.ClipSegment(
+                            clip_id=f"v0_{index}_{sub}",
+                            source_id=_source_id(asset_id),
+                            src_in=src_in,
+                            src_out=src_out,
+                            dst_in=cursor,
+                            dst_out=cursor + chunk,
+                            layer=0,
+                            role="main_talking_head",
+                        )
                     )
-                )
-                dialogue_clips.append(
-                    edl_plan.ClipSegment(
-                        clip_id=f"a0_{index}_{sub}",
-                        source_id=_source_id(asset_id),
-                        src_in=src_in,
-                        src_out=src_out,
-                        dst_in=cursor,
-                        dst_out=cursor + take,
-                        layer=0,
-                        role="dialogue",
-                        gain_db=0.0,
+                    dialogue_clips.append(
+                        edl_plan.ClipSegment(
+                            clip_id=f"a0_{index}_{sub}",
+                            source_id=_source_id(asset_id),
+                            src_in=src_in,
+                            src_out=src_out,
+                            dst_in=cursor,
+                            dst_out=cursor + chunk,
+                            layer=0,
+                            role="dialogue",
+                            gain_db=0.0,
+                        )
                     )
-                )
-                cursor += take
-                remaining -= take
-                sub += 1
+                    cursor += chunk
+                    remaining -= chunk
+                    sub += 1
+                    offset = src_out
     duration = cursor
     if duration <= 0:
         raise VxError("a_roll total duration is zero")
@@ -1619,6 +1680,19 @@ def payload_to_edl_plan(
     notes: List[str] = []
     payload_version = payload.get("contract_version") or "?"
     notes.append(f"payload v{payload_version} -> EDL v{edl_plan.EDL_CONTRACT_VERSION}")
+    if hook_split and hook_seconds is not None:
+        notes.append(
+            "composizione: hook di {seconds:.3f}s sull'apertura {asset}"
+            " (spezzato dal corpo, stesso punto di presa)".format(
+                seconds=hook_seconds,
+                asset=str(proposed.get("hook_asset") or "?"),
+            )
+        )
+    if proposed.get("broll_order"):
+        notes.append(
+            "composizione: b-roll in ordine "
+            + ", ".join(str(item) for item in proposed["broll_order"])
+        )
     notes.extend(beat_notes)
     notes.extend(quality_notes)
     for index, entry in enumerate(a_entries[: len(lengths)]):

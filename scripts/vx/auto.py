@@ -1630,6 +1630,115 @@ def apply_opening(
     return merged, section
 
 
+def _composition_facts(
+    selected: Sequence[Mapping[str, Any]],
+    assets_by_id: Mapping[str, asset_triage.AssetInfo],
+    in_points: Mapping[str, Mapping[str, Any]],
+    opening: Optional[Mapping[str, Any]],
+    beat_provenance: Mapping[str, Any],
+    requested_sec: Any,
+    fps: float,
+    media_info_map: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Le misure che la composizione può leggere, prima del piano.
+
+    Niente stime: durate dal probe, nitidezza dal profilo per-frame (a_roll) o
+    dal campione del triage (b_roll), corse utili dichiarate dal probe, BPM dalla
+    traccia. Un valore assente resta assente — ``compose`` declinerà la leva.
+    """
+
+    def number(value: Any) -> Optional[float]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
+
+    def seconds_of(entry: Mapping[str, Any], asset_id: str) -> Optional[float]:
+        info = media_info_map.get(asset_id)
+        value = getattr(info, "duration", None) if info is not None else None
+        if value is None and isinstance(info, Mapping):
+            value = info.get("duration")
+        if value is None:
+            value = entry.get("target_duration_sec")
+        measured = number(value)
+        return None if measured is None else round(measured, 3)
+
+    a_roll: List[Dict[str, Any]] = []
+    b_roll: List[Dict[str, Any]] = []
+    section = opening if isinstance(opening, Mapping) else {}
+    chosen = section.get("chosen") if isinstance(section.get("chosen"), Mapping) else {}
+    opening_asset = str((chosen or {}).get("asset_id") or "")
+    for entry in selected:
+        asset_id = str(entry.get("asset_id") or "")
+        if not asset_id:
+            continue
+        role = str(entry.get("role") or "")
+        if role == "a_roll":
+            row = in_points.get(asset_id) or {}
+            runs = []
+            for item in row.get("usable_runs") or ():
+                if not isinstance(item, Mapping):
+                    continue
+                start, end = number(item.get("start")), number(item.get("end"))
+                if start is None or end is None or end - start <= 1e-9:
+                    continue
+                runs.append({"start": round(start, 3), "end": round(end, 3)})
+            profile = row.get("profile") if isinstance(row.get("profile"), Mapping) else {}
+            thresholds = row.get("thresholds") if isinstance(row.get("thresholds"), Mapping) else {}
+            samples = []
+            if asset_id == opening_asset:
+                # Solo l'apertura porta la curva: serve a spostare il punto di
+                # presa quando il gancio non ha spazio dopo il picco.
+                for item in row.get("samples") or ():
+                    if not isinstance(item, Mapping):
+                        continue
+                    at, value = number(item.get("t")), number(item.get("sharpness"))
+                    if at is None or value is None:
+                        continue
+                    samples.append([round(at, 3), round(value, 3)])
+            a_roll.append(
+                {
+                    "asset_id": asset_id,
+                    "seconds": seconds_of(entry, asset_id),
+                    "sharpness": number(row.get("sharpness")),
+                    "src_in": number(row.get("src_in")),
+                    "usable_runs": runs,
+                    "samples": samples,
+                    "preferred": number(profile.get("threshold_preferred"))
+                    or number(thresholds.get("preferred")),
+                }
+            )
+        elif role == "b_roll":
+            asset = assets_by_id.get(asset_id)
+            measured = _clip_sharpness(asset) if asset is not None else None
+            b_roll.append(
+                {
+                    "asset_id": asset_id,
+                    "seconds": seconds_of(entry, asset_id),
+                    "sharpness": number((measured or {}).get("sharpness")),
+                }
+            )
+
+    beat = beat_provenance if isinstance(beat_provenance, Mapping) else {}
+    requested = number(requested_sec) or 0.0
+    return {
+        "fps": float(fps),
+        "duration_sec": round(requested, 3),
+        "opening": {
+            "asset_id": str(chosen.get("asset_id") or ""),
+            "sharpness": number(chosen.get("sharpness")),
+            "threshold": number(section.get("threshold")),
+            "quality": str(section.get("quality") or ""),
+        },
+        "a_roll": a_roll,
+        "b_roll": b_roll,
+        "beat": {
+            "enabled": bool(beat.get("enabled")),
+            "bpm": number(beat.get("bpm")),
+            "source": str(beat.get("source") or ""),
+        },
+    }
+
+
 #: Frames sampled inside the opening shot when looking for the cover. The first
 #: second of a phone clip is often a slow zoom out of a blur; the cover must not
 #: be that frame if a sharp one exists in the same shot.
@@ -7198,12 +7307,87 @@ def _run_locked(
             _say(f"Punto di presa: {asset_id} non misurato (piano invariato)")
 
     with clock.time("plan"):
+        # La composizione della scaletta: prima di montare, le misure che il
+        # lavoro ha già preso (nitidezza dell'apertura e dei b-roll, corse utili
+        # del probe, BPM della traccia) diventano tre proposte. Il piano si
+        # costruisce due volte — senza e con la proposta — perché il numero di
+        # inquadrature che il report dichiara deve essere **contato**, non
+        # promesso. Il costo è dati puri, nessun render.
+        from . import sections as sections_mod  # noqa: PLC0415
+
+        facts = _composition_facts(
+            selected,
+            assets_by_id,
+            in_points,
+            opening,
+            beat_provenance,
+            scene_requested,
+            fps,
+            media_info_map,
+        )
+        composition = sections_mod.compose(facts)
+        # Il punto di presa può spostarsi **per il gancio**, e solo allora: la
+        # baseline resta quella misurata dal probe, così il report conta il
+        # prima/dopo invece di raccontarlo.
+        in_points_baseline = {key: dict(value) for key, value in in_points.items()}
+        take = {}
+        rules_block = composition.get("rules") if isinstance(composition.get("rules"), Mapping) else {}
+        hook_rules = rules_block.get("hook") if isinstance(rules_block.get("hook"), Mapping) else {}
+        if isinstance(hook_rules.get("take"), Mapping):
+            take = hook_rules["take"]
+        moved_asset = str((composition.get("proposed") or {}).get("hook_asset") or "")
+        if take.get("moved") and moved_asset in in_points:
+            row = in_points[moved_asset]
+            row["src_in"] = float(take.get("to") or 0.0)
+            row["in_point"] = float(take.get("to") or 0.0)
+            row["moved"] = True
+            row["why"] = (
+                f"{str(row.get('why') or '').strip().rstrip(';')}; composizione: punto "
+                f"di presa spostato a {float(take.get('to') or 0.0):.2f}s "
+                f"(nitidezza {float(take.get('sharpness') or 0.0):.1f} ≥ soglia "
+                f"preferita {float(take.get('preferred') or 0.0):.2f}) per un gancio "
+                f"di {float(hook_rules.get('seconds') or 0.0):.2f}s"
+            ).lstrip("; ")
+        if composition.get("proposed"):
+            payload["composition"] = composition
+        composition_baseline = contract.payload_to_edl_plan(
+            {key: value for key, value in payload.items() if key != "composition"},
+            source_refs,
+            media_info_map,
+            fps=fps,
+            quality=in_points_baseline,
+        )
         plan = contract.payload_to_edl_plan(
             payload, source_refs, media_info_map, fps=fps, quality=in_points
         )
         errors = plan.validate()
         if errors:
             raise contract.VxError("EDL non valido: " + "; ".join(errors))
+        composition_applied = sections_mod.measure_application(
+            composition, composition_baseline, plan
+        )
+        take_applied = composition_applied.get("applied") or {}
+        if (
+            take_applied.get("hook_take_moved")
+            and take_applied.get("hook_take_honored") is False
+            and moved_asset in in_points_baseline
+        ):
+            # Il piano ha dovuto usare la corsa intera per arrivare alla durata
+            # chiesta: il punto di presa spostato non è servito, quindi il
+            # report torna a quello vero invece di dichiarare un numero che il
+            # piano non usa.
+            in_points[moved_asset].update(in_points_baseline[moved_asset])
+            note = (
+                "il piano usa la corsa intera per la durata chiesta: il punto di "
+                "presa non serve al gancio"
+            )
+            rules_hook = (composition.get("rules") or {}).get("hook")
+            if isinstance(rules_hook, dict) and isinstance(rules_hook.get("take"), dict):
+                rules_hook["take"]["honored"] = False
+                rules_hook["take"]["note"] = note
+            take_applied["hook_take_note"] = note
+            composition_applied["applied"] = take_applied
+        _say(sections_mod.describe(composition_applied))
 
     # C8, legge B: prima del ponte si tolgono le inquadrature ripetute. Il
     # ponte costruisce caption, reframe e bus audio sul piano che riceve:
@@ -7886,6 +8070,9 @@ def _run_locked(
         },
         "opening": opening,
         "plan_notes": list(getattr(plan, "notes", ()) or ()),
+        "composition": sections_mod.measure_application(
+            composition, composition_baseline, plan
+        ),
         "plan": plan_declaration(
             in_points,
             segments=segment_rows,

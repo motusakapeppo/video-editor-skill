@@ -173,7 +173,35 @@ dichiarato assente. Se Playwright o Chrome mancano, `render_frames` restituisce
 
 
 
-## 12. Limiti dichiarati
+## 12. Composizione della scaletta
+
+La scaletta compila le sezioni e, con le stesse misure, **compone** il montaggio.
+Tre leve, tutte numeriche, nessun LLM nel percorso caldo:
+
+| leva | misura | effetto |
+|---|---|---|
+| durata del `hook` | nitidezza dell'apertura contro la soglia del triage, BPM misurato, corsa utile dell'apertura, quota della durata chiesta | il primo pezzo dell'a_roll si spezza in gancio + corpo (`v0_…_0`, `v0_…_1`), con i frame che tornano |
+| numero di clip in timeline | conseguenza delle due leve e delle corse utili del probe | contato **sui due piani** (baseline senza composizione, piano composto): `applied.shots_before/after`. Le *inquadrature* di `coherence` sono un'altra misura (tagli visivi), non vanno confuse |
+| ordine dei b-roll | nitidezza misurata di ogni b-roll | l'ordine entra anche negli slot `duration*(i+1)/(n+1)` |
+
+Regole:
+
+- la proposta è **pura e deterministica** (`sections.compose(facts)`): stesso
+  input, stesso JSON, niente orologio né random;
+- se manca la misura la leva **declina** col motivo e il piano resta quello di
+  prima (nessun surrogato, nessuna competenza spenta);
+- con la griglia BPM attiva il gancio declina: i tagli li decide il tempo;
+- se il picco di nitidezza lascia poco materiale, il punto di presa si sposta
+  **indietro** nella stessa corsa, su un campione sopra la soglia preferita già
+  misurata; quando il piano deve usare la corsa intera lo spostamento non viene
+  applicato e il report lo dice (`hook_take_honored: false`);
+- `report["composition"]` porta `proposed`, `rules`, `declined` e `applied`:
+  la proposta e il fatto misurato stanno separati, e `survived` è ricalcolato sul
+  piano finale dopo `plan_choice` e `creative`;
+- le soglie stanno in `contract.THRESHOLDS` (`composition_hook_*`), come ogni
+  altro limite: si sovrascrivono con `settings`, non si riscrivono nei moduli.
+
+## 13. Limiti dichiarati
 
 Un limite scritto è un limite che non sorprende. Questi sono i confini veri di
 oggi, non promesse future:

@@ -116,6 +116,13 @@ Se la richiesta nomina un hook o una CTA, quella sezione è **obbligatoria**: se
 resta scoperta il lavoro **non si consegna**, e il buco sta in
 `report["sections"]["gaps"]`.
 
+La scaletta **compone** il montaggio con tre leve misurate: la durata del gancio
+(nitidezza dell'apertura, BPM, corsa utile, quota della durata), il numero di
+clip in timeline (contato sui due piani: baseline e composto) e l'ordine dei
+b-roll (nitidezza misurata). Se una misura manca la leva **declina col motivo** e
+il piano resta quello di prima; il report porta `proposed` e `applied` separati,
+così si vede cosa è stato proposto e cosa il piano mostra davvero.
+
 Le composizioni che un grafo di filtri non sa dire — split screen, confronto,
 sottopancia — si dichiarano e le rende **Chromium** (`vx scene`), un fotogramma
 alla volta, pubblicate in `live/` mentre si costruiscono. La grafica sta al
