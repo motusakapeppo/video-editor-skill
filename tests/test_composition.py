@@ -11,7 +11,7 @@ C6  quota: su un reel da 6 s il gancio non supera il 35% della durata.
 C7  b-roll: ordine per nitidezza misurata; una sola misura -> nessun riordino.
 C8  applicazione: due clip contigue della stessa sorgente, frame totali invariati,
     `plan.validate()` vuoto, i b-roll nell'ordine proposto.
-C9  le cifre del report sono contate sui piani: inquadrature prima/dopo, durata
+C9  le cifre del report sono contate sui piani: clip prima/dopo, durata
     reale del primo clip, e coincidono quando la composizione non si applica.
 C10 nessuna competenza spenta: le capability della scaletta non cambiano.
 C11 latenza: `compose` resta sotto i 5 ms (p50) e il piano composto non aggiunge
@@ -371,7 +371,7 @@ def test_measurement_not_promise() -> None:
     plan = _build(payload)
     block = sections.measure_application(proposed, baseline, plan)
     applied = block["applied"]
-    check("C9 inquadrature 1 -> 2", (applied["shots_before"], applied["shots_after"]) == (1, 2), applied)
+    check("C9 clip 1 -> 2", (applied["shots_before"], applied["shots_after"]) == (1, 2), applied)
     check(
         "C9 la durata del gancio e' quella del piano",
         applied["hook_seconds"] == 2.0 and applied["hook_applied"] is True,
