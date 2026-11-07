@@ -1149,9 +1149,19 @@
       ? applied.broll_slots_after.length
       : null;
     const brollTail = numberOrNull(applied.tail_sec);
+    const brollMovedCount = numberOrNull(applied.broll_moved_count);
+    const brollPlacement =
+      typeof applied.broll_placement === 'string' ? applied.broll_placement : '';
     const brollKnown = order.length > 0 || brollMoved !== null || brollSlots !== null;
     const broll = brollKnown
-      ? { order, moved: brollMoved, orderChanged: brollOrderChanged, tail: brollTail }
+      ? {
+          order,
+          moved: brollMoved,
+          orderChanged: brollOrderChanged,
+          tail: brollTail,
+          movedCount: brollMovedCount,
+          placement: brollPlacement,
+        }
       : null;
 
     return {
@@ -1397,8 +1407,13 @@
       scalBroll(nodes.value, model.broll);
       const parts = [];
       if (model.broll.orderChanged === true) parts.push('ordine cambiato');
-      if (model.broll.moved === false) parts.push('slot invariati');
-      else if (model.broll.moved === true) parts.push('slot sui tagli');
+      if (model.broll.placement === 'nearest_cut' && model.broll.movedCount > 0) {
+        parts.push('slot sui tagli');
+      } else if (model.broll.moved === true) {
+        parts.push('slot spostati');
+      } else if (model.broll.moved === false) {
+        parts.push('slot invariati');
+      }
       if (model.broll.tail !== null && model.broll.tail > 0) {
         parts.push('coda ' + num(model.broll.tail, 2) + ' s libera');
       }
