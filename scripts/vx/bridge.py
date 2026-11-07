@@ -1386,13 +1386,6 @@ def _fill_tail(
     return extra, new_clip
 
 
-def _debug_fill() -> bool:
-    """Solo per diagnosi: ``VX_DEBUG_FILL=1`` accende i numeri del riempimento."""
-    import os  # noqa: PLC0415 - non serve nel percorso caldo
-
-    return bool(os.environ.get("VX_DEBUG_FILL"))
-
-
 def _speech_spans_after(
     analysis: Any, start: float, limit: float
 ) -> List[Tuple[float, float]]:
@@ -1874,29 +1867,6 @@ def build(
                     }
                 )
         if duration < float(plan.duration_sec) - 1e-6:
-            if _debug_fill():
-                import os  # noqa: PLC0415 - solo quando si debugga
-
-                _sid = str(created[-1].source_id)
-                _key = record_key_by_clip.get(str(created[-1].clip_id))
-                _an = analysis_by_source.get(_sid)
-                print(
-                    "[debug-fill] deficit=%.3f key=%s rows=%s series=%s "
-                    "src_out=%.3f speech_after=%s"
-                    % (
-                        float(plan.duration_sec) - duration,
-                        _key is not None,
-                        _key in mirror if _key else False,
-                        any(item and item[-1] is created[-1] for item in layer0_by_track.values()),
-                        float(created[-1].src_out),
-                        _speech_spans_after(
-                            _an,
-                            float(created[-1].src_out),
-                            _media_duration(plan, _sid, 0.0),
-                        )[:4],
-                    ),
-                    flush=True,
-                )
             added, made, appended = _append_speech(
                 last=created[-1],
                 key=record_key_by_clip.get(str(created[-1].clip_id)),
