@@ -8218,6 +8218,23 @@ def _run_locked(
     apply_verification(report, verification)
     if not report.get("delivered", True):
         _log("[auto] " + str((report.get("failures") or [""])[-1]))
+    # Gli intermedi della varieta' (i PNG campionati per il pHash) hanno finito
+    # il loro lavoro quando il piano e' deciso: si tolgono **prima** di scrivere
+    # il report, cosi' il file su disco e quello restituito sono identici.
+    variety_cache = workdir / "cache" / "variety"
+    if variety_cache.is_dir():
+        try:
+            frames = [path for path in variety_cache.rglob("*") if path.is_file()]
+            freed = sum(path.stat().st_size for path in frames)
+            shutil.rmtree(variety_cache, ignore_errors=True)
+            report.setdefault("cleaned", {})["variety_frames"] = len(frames)
+            report["cleaned"]["bytes"] = int(freed)
+            _log(
+                f"[auto] intermedi: {len(frames)} fotogrammi di varieta' rimossi "
+                f"({freed / 1024:.0f} KB)"
+            )
+        except OSError as exc:  # noqa: BLE001 - la pulizia non e' la consegna
+            degrade.note("cache", exc)
     # L'esito e' sempre valorizzato, e viene dai fatti: master + verifiche verdi
     # -> ``delivered``; consegna fermata -> ``failed``; lavoro interrotto prima
     # della decisione -> ``incomplete``. Nessun report esce senza questa riga.
@@ -8241,21 +8258,6 @@ def _run_locked(
         degrade.note("feedback", exc)
         degrade.merge_into(report)
         _log(f"[auto] giudizio non registrato: {type(exc).__name__}: {exc}")
-    # Gli intermedi della varieta' (i PNG campionati per il pHash) hanno finito
-    # il loro lavoro quando il piano e' deciso: si tolgono, e il report dichiara
-    # quanti erano. Il resto della cache resta: i proxy costano minuti a
-    # rifarsi, e un lavoro ripreso ne ha bisogno.
-    variety_cache = workdir / "cache" / "variety"
-    if variety_cache.is_dir():
-        try:
-            frames = [path for path in variety_cache.rglob("*") if path.is_file()]
-            freed = sum(path.stat().st_size for path in frames)
-            shutil.rmtree(variety_cache, ignore_errors=True)
-            report.setdefault("cleaned", {})["variety_frames"] = len(frames)
-            report["cleaned"]["bytes"] = int(freed)
-            _log(f"[auto] intermedi: {len(frames)} fotogrammi di varieta' rimossi ({freed / 1024:.0f} KB)")
-        except OSError as exc:  # noqa: BLE001 - la pulizia non e' la consegna
-            degrade.note("cache", exc)
     log.close()
     return report
 

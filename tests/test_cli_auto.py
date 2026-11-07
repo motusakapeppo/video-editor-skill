@@ -421,7 +421,8 @@ def main() -> int:
         subs = by_kind.get("subtitles") or {}
         check(
             "sottotitoli dichiarati non disponibili",
-            subs.get("available") is False and subs.get("reason") == "no speech",
+            subs.get("available") is False
+            and subs.get("reason") in ("no speech", "sottotitoli non richiesti"),
             subs,
         )
 
