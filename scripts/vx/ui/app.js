@@ -52,6 +52,13 @@
     contractNote: $('contractNote'),
     contractCorrupt: $('contractCorrupt'),
     contractList: $('contractList'),
+    scaletta: $('scaletta'),
+    scalettaMeta: $('scalettaMeta'),
+    scalettaWarn: $('scalettaWarn'),
+    scalettaWarnText: $('scalettaWarnText'),
+    scalettaList: $('scalettaList'),
+    scalettaDeclined: $('scalettaDeclined'),
+    scalettaDeclinedList: $('scalettaDeclinedList'),
     motore: $('motore'),
     motoreSentinel: $('motoreSentinel'),
     motoreImg: $('motoreImg'),
@@ -1032,6 +1039,394 @@
         'rilancia il lavoro da capo in una cartella nuova.';
 
       el.contractCorrupt.append(title, line, say, hint);
+    }
+  }
+
+  /* ------------------------------------------------------- scaletta del montaggio */
+
+  // Le tre leve della composizione. La proposta e il fatto non sono la stessa
+  // riga: il numero grande è quello che il piano ha montato davvero, la riga
+  // piccola dice da dove si veniva o cosa la misura voleva. Tutto arriva dal
+  // blocco `composition` del report: se il blocco non c'è, la sezione non c'è.
+  const SCAL_LEVERS = [
+    { id: 'hook', label: 'Gancio' },
+    { id: 'shots', label: 'Clip' },
+    { id: 'broll', label: 'B-roll' },
+  ];
+  const SCAL_DECLINED_LABEL = {
+    hook: 'Gancio',
+    shots: 'Clip',
+    beat: 'Clip',
+    broll: 'B-roll',
+    payoff: 'Chiusura',
+    cta: 'Chiusura',
+    proof: 'Prova',
+  };
+
+  let scalJob = null;
+  const scalRows = new Map();
+
+  const objectOf = (value) =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+
+  // Un campo assente non è uno zero: torna `null` e la pagina scrive «—».
+  function numberOrNull(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function secText(value) {
+    const n = numberOrNull(value);
+    return n === null ? '—' : num(n, 2) + ' s';
+  }
+
+  function compositionOf(state) {
+    const direct = objectOf(state && state.composition);
+    if (Object.keys(direct).length) return direct;
+    const nested = objectOf(objectOf(state && state.report).composition);
+    return Object.keys(nested).length ? nested : null;
+  }
+
+  function scalettaModel(state) {
+    const composition = compositionOf(state);
+    if (!composition) return null;
+
+    const proposed = objectOf(composition.proposed);
+    const applied = objectOf(composition.applied);
+    const declined = (Array.isArray(composition.declined) ? composition.declined : [])
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        id: String(item.id || '').trim(),
+        why: String(item.why || '').trim(),
+      }))
+      .filter((item) => item.id || item.why);
+
+    const appliedFlag =
+      applied.hook_applied === true ? true : applied.hook_applied === false ? false : null;
+    const hookSeconds = numberOrNull(applied.hook_seconds);
+    const hookProposed = numberOrNull(proposed.hook_seconds);
+    const hookBase = numberOrNull(applied.hook_baseline_seconds);
+    const hookSrcIn = numberOrNull(applied.hook_src_in);
+    const hookMoved = applied.hook_take_moved === true;
+    const hookHonored = applied.hook_take_honored === true;
+    const hookKnown =
+      hookSeconds !== null || hookProposed !== null || hookBase !== null || appliedFlag !== null;
+    const hook = hookKnown
+      ? {
+          // Con la scelta non applicata il numero resta quello composto: il
+          // fatto che non sia entrato nel piano lo dice lo stato, non un altro
+          // numero.
+          value: hookSeconds !== null ? hookSeconds : hookProposed,
+          proposal: hookProposed,
+          baseline: hookBase,
+          applied: appliedFlag,
+          note:
+            hookMoved && !hookHonored
+              ? 'il piano usa la corsa intera' +
+                (hookSrcIn !== null ? ': si entra da ' + num(hookSrcIn, 2) + ' s' : '')
+              : '',
+        }
+      : null;
+
+    const shotsBefore = numberOrNull(applied.shots_before);
+    const shotsAfter = numberOrNull(applied.shots_after);
+    const shotsDelta = numberOrNull(applied.delta);
+    const shotsKnown =
+      shotsBefore !== null || shotsAfter !== null || shotsDelta !== null;
+    const shots = shotsKnown
+      ? { before: shotsBefore, after: shotsAfter, delta: shotsDelta }
+      : null;
+
+    const order = (Array.isArray(proposed.broll_order) ? proposed.broll_order : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    const brollMoved =
+      applied.broll_moved === true ? true : applied.broll_moved === false ? false : null;
+    const brollSlots = Array.isArray(applied.broll_slots_after)
+      ? applied.broll_slots_after.length
+      : null;
+    const brollKnown = order.length > 0 || brollMoved !== null || brollSlots !== null;
+    const broll = brollKnown ? { order, moved: brollMoved } : null;
+
+    return {
+      hook,
+      shots,
+      broll,
+      declined,
+      // La creatività può spostare il blocco: è un fatto da dire, non un guasto.
+      warn: applied.survived === false && appliedFlag === true,
+    };
+  }
+
+  function scalRowNode(lever) {
+    const row = document.createElement('li');
+    row.className = 'scal-row';
+    row.dataset.lever = lever.id;
+
+    const kicker = document.createElement('p');
+    kicker.className = 'scal-kicker';
+    const name = document.createElement('span');
+    name.textContent = lever.label;
+    const status = document.createElement('span');
+    status.className = 'scal-status';
+    status.hidden = true;
+    kicker.append(name, status);
+
+    // La riga che cambia: è questa la zona che uno screen reader annuncia.
+    const value = document.createElement('p');
+    value.className = 'scal-value';
+    value.setAttribute('aria-live', 'polite');
+
+    const sub = document.createElement('p');
+    sub.className = 'scal-sub';
+    sub.hidden = true;
+
+    const note = document.createElement('p');
+    note.className = 'scal-note';
+    note.hidden = true;
+
+    row.append(kicker, value, sub, note);
+    return { row, status, value, sub, note };
+  }
+
+  function setScalStatus(node, text, tone) {
+    const label = String(text || '').trim();
+    node.textContent = label;
+    node.hidden = !label;
+    node.className = 'scal-status' + (tone ? ' is-' + tone : '');
+  }
+
+  function setScalLine(node, text) {
+    const label = String(text || '').trim();
+    node.textContent = label;
+    node.hidden = !label;
+  }
+
+  function scalEmpty(node) {
+    node.textContent = '—';
+    node.classList.add('is-empty');
+  }
+
+  function scalSeconds(node, value) {
+    const n = numberOrNull(value);
+    node.textContent = '';
+    node.classList.toggle('is-empty', n === null);
+    if (n === null) {
+      scalEmpty(node);
+      return;
+    }
+    const amount = document.createElement('span');
+    amount.textContent = num(n, 2);
+    const unit = document.createElement('span');
+    unit.className = 'scal-unit';
+    unit.textContent = 's';
+    node.append(amount, unit);
+  }
+
+  function scalDelta(delta) {
+    const value = Math.round(Number(delta) || 0);
+    const badge = document.createElement('span');
+    badge.className = 'scal-delta' + (value === 0 ? ' is-zero' : '');
+    badge.textContent = value > 0 ? '+' + value : String(value);
+    return badge;
+  }
+
+  function scalShots(node, shots) {
+    node.textContent = '';
+    node.classList.remove('is-empty');
+    const before = shots.before;
+    const after = shots.after;
+
+    // Senza le due misure non c'è una freccia da disegnare: il delta da solo
+    // non è un numero di clip.
+    if (before === null && after === null) {
+      scalEmpty(node);
+      return;
+    }
+
+    // Delta zero: niente freccia, la parola basta.
+    if (shots.delta === 0) {
+      const amount = document.createElement('span');
+      amount.textContent = String(Math.round(before !== null ? before : after));
+      const hold = document.createElement('span');
+      hold.className = 'scal-hold';
+      hold.textContent = '(invariate)';
+      node.append(amount, hold);
+      return;
+    }
+
+    const from = document.createElement('span');
+    from.textContent = before === null ? '—' : String(Math.round(before));
+    const to = document.createElement('span');
+    to.textContent = after === null ? '—' : String(Math.round(after));
+    if (after !== null) {
+      const arrow = document.createElement('span');
+      arrow.className = 'scal-arrow';
+      arrow.setAttribute('aria-hidden', 'true');
+      arrow.textContent = '→';
+      node.append(from, arrow, to);
+    } else {
+      node.append(from);
+    }
+
+    if (shots.delta !== null) node.append(scalDelta(shots.delta));
+  }
+
+  function scalBroll(node, broll) {
+    node.textContent = '';
+    node.classList.toggle('is-empty', broll.order.length === 0);
+    if (!broll.order.length) {
+      scalEmpty(node);
+      return;
+    }
+    const chain = document.createElement('span');
+    chain.className = 'scal-chain';
+    broll.order.forEach((name, index) => {
+      if (index) {
+        const arrow = document.createElement('span');
+        arrow.className = 'scal-chain-arrow';
+        arrow.setAttribute('aria-hidden', 'true');
+        arrow.textContent = '→';
+        chain.append(arrow);
+      }
+      const chip = document.createElement('span');
+      chip.className = 'scal-chain-item';
+      chip.textContent = name;
+      chip.title = name;
+      chain.append(chip);
+    });
+    node.append(chain);
+  }
+
+  function paintScaletta(state) {
+    if (!el.scaletta) return;
+    const model = scalettaModel(state);
+
+    if (!model) {
+      // Nessun guscio vuoto: senza il blocco `composition` la sezione sparisce.
+      el.scaletta.hidden = true;
+      el.scalettaList.textContent = '';
+      el.scalettaList.dataset.levers = '';
+      el.scalettaDeclined.hidden = true;
+      el.scalettaDeclinedList.textContent = '';
+      el.scalettaDeclined.dataset.signature = '';
+      el.scalettaWarn.hidden = true;
+      scalRows.clear();
+      scalJob = null;
+      return;
+    }
+
+    const present = [];
+    if (model.hook) present.push('hook');
+    if (model.shots) present.push('shots');
+    if (model.broll) present.push('broll');
+    if (!present.length && !model.declined.length) {
+      el.scaletta.hidden = true;
+      return;
+    }
+
+    el.scaletta.hidden = false;
+
+    if (scalJob !== jobIndex) {
+      scalRows.clear();
+      el.scalettaList.textContent = '';
+      el.scalettaList.dataset.levers = '';
+      el.scalettaDeclinedList.textContent = '';
+      el.scalettaDeclined.dataset.signature = '';
+      scalJob = jobIndex;
+    }
+
+    el.scalettaMeta.textContent =
+      present.length === 0 ? '' : present.length === 1 ? '1 leva' : present.length + ' leve';
+
+    const levers = present.join(',');
+    if (el.scalettaList.dataset.levers !== levers) {
+      el.scalettaList.dataset.levers = levers;
+      el.scalettaList.textContent = '';
+      present.forEach((id) => {
+        let nodes = scalRows.get(id);
+        if (!nodes) {
+          nodes = scalRowNode(SCAL_LEVERS.find((lever) => lever.id === id));
+          scalRows.set(id, nodes);
+        }
+        el.scalettaList.append(nodes.row);
+      });
+    }
+
+    const declinedIds = new Set(model.declined.map((item) => item.id));
+
+    if (model.hook) {
+      const nodes = scalRows.get('hook');
+      const hook = model.hook;
+      scalSeconds(nodes.value, hook.value);
+      const sub = [];
+      if (hook.baseline !== null) sub.push('prima ' + secText(hook.baseline));
+      if (
+        hook.proposal !== null &&
+        hook.value !== null &&
+        Math.abs(hook.proposal - hook.value) >= 0.005
+      ) {
+        sub.push('proposta ' + secText(hook.proposal));
+      }
+      setScalLine(nodes.sub, sub.join(' · '));
+      setScalLine(nodes.note, hook.note);
+      setScalStatus(
+        nodes.status,
+        hook.applied === false ? 'non applicato' : '',
+        hook.applied === false ? 'warn' : ''
+      );
+    }
+
+    if (model.shots) {
+      const nodes = scalRows.get('shots');
+      scalShots(nodes.value, model.shots);
+      // Il delta è già nel distintivo accanto al numero: ripeterlo sarebbe rumore.
+      setScalLine(nodes.sub, '');
+      setScalLine(nodes.note, '');
+      setScalStatus(nodes.status, '', '');
+    }
+
+    if (model.broll) {
+      const nodes = scalRows.get('broll');
+      scalBroll(nodes.value, model.broll);
+      setScalLine(
+        nodes.sub,
+        model.broll.moved === false
+          ? 'slot invariati'
+          : model.broll.moved === true
+            ? 'slot spostati'
+            : ''
+      );
+      setScalLine(nodes.note, '');
+      setScalStatus(nodes.status, '', '');
+      nodes.row.classList.toggle('is-declined', declinedIds.has('broll'));
+    }
+
+    el.scalettaWarn.hidden = !model.warn;
+
+    el.scalettaDeclined.hidden = model.declined.length === 0;
+    const declinedSignature = JSON.stringify(model.declined);
+    if (el.scalettaDeclined.dataset.signature !== declinedSignature) {
+      el.scalettaDeclined.dataset.signature = declinedSignature;
+      el.scalettaDeclinedList.textContent = '';
+      model.declined.forEach((item) => {
+        const row = document.createElement('li');
+        row.className = 'scal-declined-row';
+
+        const label = document.createElement('p');
+        label.className = 'scal-declined-label';
+        label.textContent =
+          SCAL_DECLINED_LABEL[item.id] ||
+          (item.id ? item.id.replace(/_/g, ' ') : 'voce');
+
+        const why = document.createElement('p');
+        why.className = 'scal-declined-why';
+        why.textContent = item.why || '—';
+
+        row.append(label, why);
+        el.scalettaDeclinedList.append(row);
+      });
     }
   }
 
@@ -3876,6 +4271,7 @@
 
     // Senza un lavoro non c'è un contratto da mostrare né un timbro da esibire.
     el.contract.hidden = true;
+    el.scaletta.hidden = true;
     el.jobStamp.hidden = true;
   }
 
@@ -3937,6 +4333,7 @@
     paintDecisions(state);
     paintStamp(state);
     paintContract(state);
+    paintScaletta(state);
 
     const finished = !state.current && percent >= 99.9;
     const ready = state.master_ready === true;

@@ -150,6 +150,33 @@
           <ol class="contract-list" id="contractList" aria-label="Gli otto stadi del contratto"></ol>
         </section>
 
+        <!-- La scaletta: le tre leve della composizione, con la proposta e il
+             fatto tenuti separati. Quello che la misura voleva e quello che il
+             piano ha davvero montato non sono la stessa riga; le voci scartate
+             restano visibili, attenuate, con il loro motivo. Senza il blocco
+             `composition` la sezione non esiste: nessun guscio vuoto. -->
+        <section class="scaletta" id="scaletta" aria-labelledby="scalettaTitle" hidden>
+          <div class="scaletta-head">
+            <div class="scaletta-titles">
+              <h2 id="scalettaTitle">Scaletta</h2>
+              <p class="scaletta-sub" id="scalettaSub">gancio, clip, b-roll · proposta e fatto</p>
+            </div>
+            <p class="scaletta-meta num" id="scalettaMeta"></p>
+          </div>
+
+          <p class="scal-warn" id="scalettaWarn" hidden>
+            <span class="scal-warn-mark" aria-hidden="true">↪</span>
+            <span id="scalettaWarnText">l'ordine creativo ha spostato il gancio</span>
+          </p>
+
+          <ol class="scaletta-list" id="scalettaList" aria-label="Le leve della scaletta: proposta e fatto"></ol>
+
+          <div class="scaletta-declined" id="scalettaDeclined" hidden>
+            <p class="zone-label">Non composte</p>
+            <ul class="scal-declined-list" id="scalettaDeclinedList"></ul>
+          </div>
+        </section>
+
         <!-- Il motore: i fotogrammi che Chromium pubblica mentre costruisce la
              scena. La sezione non ha un guscio vuoto: o c'è un fotogramma da
              mostrare, o resta nascosta. La sentinella serve al polling: si

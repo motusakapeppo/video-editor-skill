@@ -52,6 +52,12 @@ restano disponibili come strumenti di livello più basso.
   possibili. Con log corrotto dichiara la riga e nessuno stadio è verde.
   Il blocco viaggia in `/api/state` (`run = {stages, complete, failed, log,
   corrupt, signed, missing, tail_truncated, master}`) con cache su mtime.
+- La sezione **SCALETTA** mostra le tre leve della composizione con **proposta
+  e fatto separati**: il numero grande è quello che il piano ha montato, la riga
+  piccola dice da dove si veniva (o che il punto di presa non è servito), e le
+  leve non applicate stanno sotto `NON COMPOSTE` col loro motivo. Arriva da
+  `/api/state` (`composition`, `sections`), cioè dal report: niente endpoint
+  nuovi. Se il blocco manca, la sezione non compare.
 
 ## 3. Ingest e triage (livello basso)
 

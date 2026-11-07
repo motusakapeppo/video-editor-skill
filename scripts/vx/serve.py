@@ -2505,6 +2505,19 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         "progress": progress_block,
         "progress_source": "derived" if derived else "json",
         "run": contract,
+        # La scaletta composta: il blocco che la pagina mostra (proposta, fatto
+        # misurato, declini) e le sezioni con il loro `composed`. Sono blocchi
+        # piccoli e già presenti nel report: la vista non deve rileggere il file.
+        "composition": (
+            dict(report["composition"])
+            if isinstance(report.get("composition"), Mapping)
+            else None
+        ),
+        "sections": (
+            dict(report["sections"])
+            if isinstance(report.get("sections"), Mapping)
+            else None
+        ),
     }
 
 

@@ -455,6 +455,9 @@ body.is-stamped .brand-dot {
 
 .col-work > .stage { order: 1; }
 .col-work > .contract { order: 2; }
+/* La scaletta sta sotto il contratto: la prova del lavoro, poi le scelte del
+   montaggio, poi la scena che entra. */
+.col-work > .scaletta { order: 2; }
 /* Il motore sta sotto il contratto: la prova del lavoro, poi la scena che entra. */
 .col-work > .motore-slot { order: 2; }
 .col-work > .vote-card { order: 3; }
@@ -957,6 +960,303 @@ body.is-offline .eyebrow { color: var(--warn); }
   font-size: 12.5px;
   line-height: 1.5;
   color: #e6cbcb;
+}
+
+/* --------------------------------------------------------------- scaletta */
+
+/* Le tre leve del montaggio: la proposta sta accanto al fatto, non al posto
+   suo. Il valore grande è quello che il piano ha davvero montato; la riga
+   piccola dice da dove veniva (prima) o cosa la misura voleva (proposta). Le
+   voci scartate restano, attenuate, con il motivo — non spariscono. */
+.scaletta {
+  position: relative;
+  padding: 18px 22px 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(520px 210px at 94% -22%, rgba(142, 200, 255, .08), transparent 72%),
+    linear-gradient(180deg, #0f141a 0%, #0a0e13 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .045) inset,
+    0 20px 44px -34px rgba(0, 0, 0, .9);
+  overflow: hidden;
+  animation: rise 560ms var(--ease-out) 80ms backwards;
+}
+
+.scaletta::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(142, 200, 255, .6), rgba(142, 200, 255, .03) 74%);
+}
+
+.scaletta-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.scaletta-titles { min-width: 0; }
+
+.scaletta-head h2 {
+  margin: 0;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.scaletta-sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.scaletta-meta {
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* Un avviso, non un errore: la scelta creativa ha spostato il gancio. */
+.scal-warn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 8px 11px 9px;
+  border: 1px solid rgba(255, 196, 107, .24);
+  border-radius: 9px;
+  background: rgba(255, 196, 107, .055);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #ecd6b3;
+}
+
+.scal-warn-mark {
+  flex: 0 0 auto;
+  font: 600 12px/1.4 var(--mono);
+  color: var(--warn);
+}
+
+.scaletta-list {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+}
+
+.scal-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "kick value"
+    "sub  value"
+    "note note";
+  align-items: center;
+  gap: 2px 18px;
+  padding: 13px 4px 14px;
+}
+
+.scal-row + .scal-row { box-shadow: 0 -1px 0 rgba(255, 255, 255, .045); }
+
+.scal-row.is-declined .scal-kicker { color: var(--ink-3); }
+
+.scal-kicker {
+  grid-area: kick;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  font: 600 10.5px/1.4 var(--mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.scal-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font: 600 9px/1 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.scal-status.is-warn {
+  border-color: rgba(255, 196, 107, .38);
+  background: rgba(255, 196, 107, .08);
+  color: var(--warn);
+}
+
+.scal-value {
+  grid-area: value;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  text-align: right;
+  font: 600 26px/1.05 var(--mono);
+  letter-spacing: -.015em;
+  color: #eef4fb;
+  white-space: nowrap;
+}
+
+.scal-value.is-empty {
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.scal-value .scal-unit {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: .02em;
+  color: var(--ink-2);
+}
+
+.scal-value .scal-arrow {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.scal-value .scal-hold {
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: .01em;
+  color: var(--ink-3);
+}
+
+.scal-delta {
+  align-self: center;
+  padding: 2px 6px 3px;
+  border: 1px solid rgba(111, 224, 164, .32);
+  border-radius: 999px;
+  background: rgba(111, 224, 164, .07);
+  font: 600 10px/1.2 var(--mono);
+  letter-spacing: .06em;
+  color: var(--ok);
+}
+
+.scal-delta.is-zero {
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--ink-3);
+}
+
+.scal-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.scal-chain-item {
+  max-width: 24ch;
+  overflow: hidden;
+  padding: 4px 8px 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .03);
+  font: 500 12px/1.25 var(--mono);
+  letter-spacing: .01em;
+  color: #dbe6f2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.scal-chain-arrow {
+  font: 600 12px/1 var(--mono);
+  color: var(--accent-2);
+}
+
+.scal-sub {
+  grid-area: sub;
+  margin: 0;
+  font: 500 11px/1.45 var(--mono);
+  letter-spacing: .01em;
+  color: var(--ink-3);
+}
+
+.scal-note {
+  grid-area: note;
+  margin: 5px 0 0;
+  max-width: 64ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.scaletta-declined {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(255, 255, 255, .09);
+}
+
+.scal-declined-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.scal-declined-row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  gap: 3px 12px;
+  opacity: .64;
+}
+
+.scal-declined-label {
+  margin: 0;
+  font: 600 10px/1.6 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.scal-declined-why {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+@media (max-width: 760px) {
+  .scal-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "kick"
+      "value"
+      "sub"
+      "note";
+    gap: 4px;
+  }
+
+  .scal-value { justify-content: flex-start; text-align: left; }
+  .scal-chain { justify-content: flex-start; }
+  .scal-declined-row { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ------------------------------------------------------------- stato vuoto */
