@@ -2190,6 +2190,15 @@ def measure_frame_profile(
     Laplaciano sul grigio), campionata ogni ``step`` secondi. Senza OpenCV o
     senza frame leggibili non si inventa niente: ``None``, e il piano prosegue
     col comportamento di sempre dichiarando ``in_point: not_measured``.
+
+    **Una sola passata sequenziale.** Prima si faceva un ``set(POS_MSEC)`` per
+    ogni campione: ogni seek riparte dal keyframe, e su un girato di 32 s
+    costava 54 s (7,5× più lento) con un difetto serio — il frame restituito
+    non era sempre quello del tempo chiesto (coda di B-frame), quindi il profilo
+    misurava *un altro* fotogramma e lo etichettava col tempo sbagliato. Qui si
+    decodifica una volta sola, si prende il frame più vicino a ogni istante
+    chiesto e si calcolano le stesse tre misure. Stesso input, stesse misure,
+    stessi campioni: solo senza seek.
     """
     try:
         import cv2
@@ -2211,33 +2220,50 @@ def measure_frame_profile(
         duration = (frames / fps) if fps > 0.0 and frames > 0.0 else 0.0
         if duration <= 0.0:
             return None
+        targets: List[float] = []
         at = 0.0
         while at < duration - 1e-6:
-            capture.set(cv2.CAP_PROP_POS_MSEC, at * 1000.0)
+            targets.append(round(at, 4))
+            at += float(step)
+        if not targets:
+            return None
+        # Il frame che "sta" a un istante è quello più vicino: si accetta mezzo
+        # frame di tolleranza, così un 25 fps campionato a 0,15 s non salta mai
+        # un campione per un arrotondamento.
+        half = 0.5 / fps if fps > 0.0 else 1e-6
+        next_target = 0
+        index = 0
+        while next_target < len(targets):
             ok, frame = capture.read()
             if not ok or frame is None:
-                at += float(step)
-                continue
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-            luma = float(gray.mean()) / 255.0
-            small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA)
-            small = small.astype("float32")
-            diff = (
-                255.0
-                if previous is None
-                else float(np.mean(np.abs(small - previous)))
-            )
-            previous = small
-            samples.append(
-                {
-                    "t": round(at, 4),
-                    "sharpness": round(sharpness, 3),
-                    "luma": round(luma, 5),
-                    "diff": round(diff, 3),
-                }
-            )
-            at += float(step)
+                break
+            moment = index / fps if fps > 0.0 else 0.0
+            while (
+                next_target < len(targets)
+                and targets[next_target] <= moment + half
+            ):
+                current = targets[next_target]
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+                luma = float(gray.mean()) / 255.0
+                small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA)
+                small = small.astype("float32")
+                diff = (
+                    255.0
+                    if previous is None
+                    else float(np.mean(np.abs(small - previous)))
+                )
+                previous = small
+                samples.append(
+                    {
+                        "t": current,
+                        "sharpness": round(sharpness, 3),
+                        "luma": round(luma, 5),
+                        "diff": round(diff, 3),
+                    }
+                )
+                next_target += 1
+            index += 1
     except Exception:  # noqa: BLE001 - una decodifica rotta non inventa un profilo
         return None
     finally:
