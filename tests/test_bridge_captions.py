@@ -301,18 +301,42 @@ def main() -> int:
         loudness_spans=loudness,
         transcripts={"c01": FakeTranscript(WORDS)},
     )
-    empty = [
+    shifted = [
         item
         for item in lonely.not_applied
+        if item.get("reason") == "broll_shifted_to_speech"
+    ]
+    check(
+        "b-roll senza ancora: si sposta sul parlato invece di restare muto",
+        bool(lonely.broll)
+        and bool(lonely.broll[0].get("anchor_ids"))
+        and len(shifted) == 1
+        and shifted[0].get("score") is not None,
+        (lonely.broll[0].get("anchor_ids") if lonely.broll else None, shifted),
+    )
+
+    # -- un b-roll lontano da ogni parola resta senza ancora e lo dichiara -- #
+    _, far = bridge.build(
+        plan(broll_at=4.60, broll_length=0.20),
+        {"c01": analysis()},
+        target_lufs=-14.0,
+        loudness_spans=loudness,
+        transcripts={
+            "c01": FakeTranscript([(0.10, 0.30, "Ciao", 0.95), (0.35, 0.55, "a", 0.90)])
+        },
+    )
+    empty = [
+        item
+        for item in far.not_applied
         if item.get("reason") == "broll_without_anchor"
     ]
     check(
-        "b-roll senza ancora dichiarato",
-        lonely.broll
-        and lonely.broll[0].get("anchor_ids") == []
+        "b-roll lontano da ogni parola: senza ancora, dichiarato",
+        bool(far.broll)
+        and far.broll[0].get("anchor_ids") == []
         and len(empty) == 1
         and empty[0].get("asset_id") == "c01",
-        (lonely.broll[0].get("anchor_ids"), empty),
+        (far.broll[0].get("anchor_ids") if far.broll else None, empty),
     )
 
     # -- ASS -------------------------------------------------------------- #

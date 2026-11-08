@@ -3183,6 +3183,15 @@ def _assert_sources_unchanged(
         )
 
 
+#: Fino a questa durata la finestra di trascrizione legge **tutta** la sorgente.
+#: Il ponte può riempire la coda con parlato che sta oltre il piano (l'ultimo
+#: tratto utile dopo una pausa): senza il testo quel parlato resterebbe senza
+#: sottotitoli. Su una sorgente corta — un reel — il costo è qualche secondo; su
+#: una lunga si resta alla finestra del piano e il report dichiara
+#: ``captions_tail_uncovered``.
+CAPTION_FULL_READ_SEC = 60.0
+
+
 def _caption_window(plan: Any, source_id: str) -> Optional[float]:
     """How far into `source_id` the plan actually reads.
 
@@ -3190,6 +3199,10 @@ def _caption_window(plan: Any, source_id: str) -> Optional[float]:
     first eight seconds does not need the other 171 transcribed. The bound is
     the largest ``src_out`` the plan cites for that source; ``None`` means the
     plan does not use it at all and the caller keeps today's full read.
+
+    Su una sorgente entro :data:`CAPTION_FULL_READ_SEC` si legge tutto: la coda
+    che il ponte riempie col parlato successivo deve poter avere i suoi
+    sottotitoli, e quel parlato non era nel piano.
     """
     latest: Optional[float] = None
     for tracks in (
@@ -3205,6 +3218,16 @@ def _caption_window(plan: Any, source_id: str) -> Optional[float]:
                 except (TypeError, ValueError):
                     continue
                 latest = value if latest is None else max(latest, value)
+    ref = None
+    sources = getattr(plan, "sources", None)
+    if isinstance(sources, Mapping):
+        ref = sources.get(source_id)
+    try:
+        total = float(getattr(ref, "duration", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        total = 0.0
+    if total and total <= CAPTION_FULL_READ_SEC:
+        return total
     return latest
 
 

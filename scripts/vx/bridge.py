@@ -561,6 +561,8 @@ class _BrollSlot:
     confidence: Optional[float]
     fade: Any
     fade_clamped: bool
+    #: ``(da, a)`` quando la finestra è stata spostata sul parlato più vicino.
+    shift: Optional[Tuple[float, float]] = None
 
     def overlaps(self, other: "_BrollSlot") -> bool:
         return (
@@ -1499,37 +1501,32 @@ def _append_speech(
 def _uncaptioned_seconds(
     transcript: Any, spans: Sequence[Tuple[float, float]]
 ) -> float:
-    """Quanta parte dei tratti aggiunti non ha parole trascritte.
+    """Quanta parte dei tratti aggiunti sta **oltre** le parole trascritte.
 
-    Il parlato che riempie la coda può stare **oltre** la finestra che il
-    trascrittore aveva letto: il report lo dichiara invece di lasciare un pezzo
-    di parlato senza sottotitoli senza dirlo.
+    Dentro la finestra trascritta i vuoti tra una parola e l'altra sono normali
+    (respiro, consonanti): contano come scoperto solo i secondi che stanno dopo
+    l'ultima parola letta. È la parte che il trascrittore non ha mai visto —
+    quella che il ponte aggiunge prendendo materiale oltre il piano.
     """
-    total_span = sum(max(0.0, float(b) - float(a)) for a, b in spans)
     words = getattr(transcript, "words", None)
     if not isinstance(words, (list, tuple)) or not words:
-        return round(total_span, 6)
-    ranges: List[Tuple[float, float]] = []
+        return round(sum(max(0.0, float(b) - float(a)) for a, b in spans), 6)
+    last_word = 0.0
     for word in words:
         if not isinstance(word, Mapping):
             continue
         try:
-            start = float(word.get("start"))
             end = float(word.get("end"))
         except (TypeError, ValueError):
             continue
-        if end > start:
-            ranges.append((start, end))
-    if not ranges:
-        return round(total_span, 6)
+        if end > last_word:
+            last_word = end
     missing = 0.0
     for begin, end in spans:
-        covered = 0.0
-        for start, stop in ranges:
-            lo, hi = max(float(begin), start), min(float(end), stop)
-            if hi > lo:
-                covered += hi - lo
-        missing += max(0.0, (float(end) - float(begin)) - covered)
+        stop = float(end)
+        start = max(float(begin), last_word)
+        if stop > start:
+            missing += stop - start
     return round(missing, 6)
 
 
@@ -2464,6 +2461,78 @@ def _rebuild_broll(
         for slot in slots
         if slot.score is not None and slot.score < min_score - _EPS
     ]
+    # Una finestra che non copre parlato verrebbe scartata (o resterebbe senza
+    # punteggio): prima di perderla si prova a **spostarla sul parlato**, cioè a
+    # farla cominciare dove comincia una frase (un inizio di parola misurato).
+    # Non si sposta un b-roll che già sta sopra le parole, e non si sposta sopra
+    # un altro b-roll. Si prova **ogni** inizio entro la finestra e si tiene il
+    # migliore: il più vicino non è sempre quello che copre più parlato. Se
+    # nessuno migliora, la finestra resta dov'è (e la politica di prima decide).
+    starts = sorted(
+        {
+            round(float(lo), 6)
+            for ranges in spans.values()
+            for lo, _hi in ranges
+        }
+    )
+    window = float(THRESHOLDS.get("bridge_broll_semantic_window_sec") or 2.5)
+    weak = [
+        slot
+        for slot in slots
+        if slot.score is None or slot.score < min_score - _EPS
+    ]
+    if starts and weak:
+        position = {id(slot): index for index, slot in enumerate(slots)}
+        settled = [
+            slot
+            for slot in slots
+            if slot.score is not None and slot.score >= min_score - _EPS
+        ]
+        for slot in sorted(weak, key=lambda item: (item.dst_in, item.index)):
+            base = slot.score if slot.score is not None else 0.0
+            best_score = base
+            best: Optional[Tuple[float, float, float, float]] = None
+            for start in starts:
+                if abs(start - slot.dst_in) > window:
+                    continue
+                candidate = _clamp(start, 0.0, max(0.0, duration - slot.length))
+                if abs(candidate - slot.dst_in) <= 1e-6:
+                    continue
+                if any(
+                    candidate < other.dst_in + other.length - 1e-6
+                    and other.dst_in < candidate + slot.length - 1e-6
+                    for other in settled
+                    if other is not slot
+                ):
+                    continue
+                new_score, new_cov, new_conf = _broll_score(
+                    candidate, candidate + slot.length, spans, anchors_by_id
+                )
+                if new_score is None or new_score <= best_score + _EPS:
+                    continue
+                best_score = new_score
+                best = (float(candidate), new_score, new_cov, new_conf)
+            if best is None:
+                continue
+            candidate, new_score, new_cov, new_conf = best
+            updated = replace(
+                slot,
+                shift=(float(slot.dst_in), candidate),
+                dst_in=candidate,
+                score=new_score,
+                coverage=new_cov,
+                confidence=new_conf,
+                anchor_ids=tuple(
+                    _anchor_ids_for(candidate, candidate + slot.length, spans)
+                ),
+            )
+            slots[position[id(slot)]] = updated
+            settled.append(updated)
+        below = [
+            slot
+            for slot in slots
+            if slot.score is not None and slot.score < min_score - _EPS
+        ]
     candidates = [
         slot for slot in slots if slot.score is None or slot.score >= min_score - _EPS
     ]
@@ -2520,9 +2589,23 @@ def _rebuild_broll(
         if slot.score is not None:
             entry["score_coverage"] = slot.coverage
             entry["score_confidence"] = slot.confidence
+        if slot.shift is not None:
+            entry["shifted_from"] = round(float(slot.shift[0]), 3)
         report.broll.append(entry)
         if not accepted:
             continue
+        if slot.shift is not None:
+            report.not_applied.append(
+                {
+                    "anchor_id": slot.anchor_ids[0] if slot.anchor_ids else None,
+                    "clip_id": slot.clip.clip_id,
+                    "asset_id": slot.clip.source_id,
+                    "reason": "broll_shifted_to_speech",
+                    "from": round(float(slot.shift[0]), 3),
+                    "to": round(float(slot.dst_in), 3),
+                    "score": slot.score,
+                }
+            )
         if slot.fade_clamped:
             report.not_applied.append(
                 {

@@ -99,10 +99,13 @@ monta sul brano; `--recipe NAME` applica una composizione. Scrive `plan.json`,
 La durata chiesta è quella del **master**, non del piano: il ponte taglia i
 silenzi e poi riempie la coda — prima col materiale contiguo, poi con i tratti di
 parlato che seguono, saltando la pausa — finché il piano non torna alla durata
-chiesta. Ogni pezzo aggiunto è parlato misurato (nessun morto rientra). Se il
-parlato aggiunto sta oltre la finestra trascritta, il report dichiara
-`captions_tail_uncovered` con i secondi: meglio un pezzo senza sottotitoli
-dichiarato che un buco senza spiegazione.
+chiesta. Ogni pezzo aggiunto è parlato misurato (nessun morto rientra).
+
+Con i sottotitoli, una sorgente entro **60 s** si trascrive tutta
+(`CAPTION_FULL_READ_SEC`): la coda che il ponte aggiunge sta oltre il piano, e
+senza il testo resterebbe muta. Oltre i 60 s resta la finestra del piano e il
+report dichiara `captions_tail_uncovered` coi secondi che stanno oltre l'ultima
+parola letta — un pezzo senza sottotitoli dichiarato, non un buco muto.
 
 ## 6. EDL3 (effetti, transizioni, testo)
 
@@ -216,6 +219,11 @@ Regole:
 - i b-roll entrano sul **taglio più vicino** allo slot uniforme entro
   `composition_broll_snap_sec` (0,75 s), mai sopra il b-roll precedente e mai
   rubando lo spazio dello slot successivo; senza tagli vicini restano dove sono;
+- un b-roll che coprirebbe **poco parlato** (score sotto `broll_min_score`) non
+  si scarta subito: il ponte prova a spostarlo su un inizio di parola entro
+  `bridge_broll_semantic_window_sec` (2,5 s) e tiene la posizione col punteggio
+  migliore; se nessuna migliora, resta dov'è e si scarta come prima. Ogni
+  spostamento è dichiarato (`broll_shifted_to_speech`, da/a, score);
 - quando la richiesta chiede una CTA o una testimonianza, gli ultimi
   `composition_tail_sec` (1,5 s) restano **liberi da b-roll**;
 - `report["composition"]` porta `proposed`, `rules`, `declined` e `applied`:

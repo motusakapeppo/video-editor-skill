@@ -167,6 +167,10 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     # of the shot illustrates speech we recognised with confidence": lower than
     # that the picture is decoration, not evidence.
     "broll_min_score": 0.35,
+    # Un b-roll sotto soglia verrebbe scartato: prima si prova a spostarlo sul
+    # parlato più vicino entro questa finestra (secondi). Oltre, lo spostamento
+    # cambierebbe il senso del montaggio e la clip resta dov'è (e si scarta).
+    "bridge_broll_semantic_window_sec": 2.5,
     # asset triage (Fase 4)
     "triage_max_upscale": 1.5,
     # Adaptation, declared. The triage refuses a canvas that would need more than

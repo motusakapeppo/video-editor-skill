@@ -90,6 +90,29 @@ def inside(t0: float, t1: float, spans) -> bool:
     return all(any(start - 1e-6 <= t <= end + 1e-6 for start, end in spans) for t in (t0, t1))
 
 
+def test_caption_shortfall() -> None:
+    print("\n3. F6 la coda senza sottotitoli si misura oltre l'ultima parola")
+
+    class Words:
+        words = [{"start": 5.0, "end": 9.8, "word": "parola"}]
+
+    check(
+        "F6 dentro la finestra non c'e' scoperto",
+        bridge._uncaptioned_seconds(Words(), [(5.2, 9.5)]) == 0.0,
+        bridge._uncaptioned_seconds(Words(), [(5.2, 9.5)]),
+    )
+    check(
+        "F6 oltre l'ultima parola conta solo la coda",
+        abs(bridge._uncaptioned_seconds(Words(), [(9.0, 10.5)]) - 0.7) <= 1e-6,
+        bridge._uncaptioned_seconds(Words(), [(9.0, 10.5)]),
+    )
+    check(
+        "F6 senza parole tutto il tratto e' scoperto",
+        abs(bridge._uncaptioned_seconds(None, [(1.0, 2.0)]) - 1.0) <= 1e-6,
+        bridge._uncaptioned_seconds(None, [(1.0, 2.0)]),
+    )
+
+
 def main() -> int:
     print("\n1. F1/F2/F3 il ponte riempie la coda col parlato che segue")
     original = plan()
@@ -187,6 +210,8 @@ def main() -> int:
             len(short_plan.audio_tracks[0].clips),
         ),
     )
+
+    test_caption_shortfall()
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

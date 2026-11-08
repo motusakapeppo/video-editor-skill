@@ -172,22 +172,46 @@ def main() -> int:
         top,
     )
 
-    # -- A8: score below threshold drops it, with the number -------------- #
-    low_plan, low = build(plan([("v1_0", 1.44, 0.60)]), [(2.00, 2.10, "parola", 0.60)])
-    dropped = reasons(low, "broll_below_threshold")
+    # -- A8/A13: score sotto soglia ma parlato vicino: si sposta, non si butta -
+    near_words = [(start, start + 0.1, "parola", 1.0) for start in [3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8]]
+    low_plan, low = build(plan([("v1_0", 1.44, 0.60)]), near_words)
+    shifted = reasons(low, "broll_shifted_to_speech")
+    moved = broll_clips(low_plan)
     check(
-        "score sotto soglia: clip scartato con il numero",
-        broll_clips(low_plan) == []
+        "score sotto soglia con parlato vicino: il b-roll si sposta",
+        len(moved) == 1 and len(shifted) == 1,
+        [item.get("reason") for item in low.not_applied],
+    )
+    check(
+        "e il referto dice da dove a dove, col punteggio nuovo",
+        bool(shifted)
+        and shifted[0].get("from") is not None
+        and abs(float(shifted[0].get("to")) - float(shifted[0].get("from"))) > 1e-6
+        and float(shifted[0].get("score") or 0.0) >= threshold,
+        shifted,
+    )
+    check(
+        "il clip spostato comincia sul parlato",
+        bool(moved) and moved[0].dst_in >= 2.0 and moved[0].dst_in <= 3.4,
+        moved[0].dst_in if moved else None,
+    )
+
+    # -- A8: parlato già sotto la finestra, nessun inizio migliore: si scarta - #
+    far_plan, far = build(plan([("v1_0", 1.44, 0.60)]), [(2.00, 2.10, "parola", 0.60)])
+    dropped = reasons(far, "broll_below_threshold")
+    check(
+        "nessun inizio migliore entro la finestra: clip scartato col numero",
+        broll_clips(far_plan) == []
         and len(dropped) == 1
         and dropped[0].get("score") == 0.1
         and dropped[0].get("threshold") == threshold,
         dropped,
     )
     check(
-        "score sotto soglia: ancora citata nel referto",
+        "e la finestra scartata cita le sue ancore",
         len(dropped) == 1
-        and dropped[0].get("anchor_ids")
-        and dropped[0].get("anchor_id") == dropped[0]["anchor_ids"][0],
+        and dropped[0].get("anchor_ids") is not None
+        and dropped[0].get("anchor_id") == (dropped[0]["anchor_ids"] or [None])[0],
         dropped[0] if dropped else None,
     )
 
