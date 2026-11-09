@@ -3801,6 +3801,50 @@ def _merge_transcripts(base: Any, extra: Any, offset: float) -> Any:
     )
 
 
+def _merge_clock(target: "_Clock", source: "_Clock") -> None:
+    """Somma i tempi di un profilo in un altro (misure partite in un thread)."""
+    for stage, seconds in source.stages.items():
+        target.add(stage, seconds)
+    for key, value in source.facts.items():
+        target.facts.setdefault(key, value)
+
+
+def _start_measurements(
+    sources: Sequence[str],
+    paths: Mapping[str, str],
+    media: Optional[Mapping[str, Any]],
+    workdir: Any,
+) -> Dict[str, Any]:
+    """Avvia proxy e misure in un thread, mentre il piano sceglie il punto di presa.
+
+    La misura non dipende dal piano: aspettarla in fila significa pagare
+    ``in_point`` e le misure una dopo l'altra. Il thread usa un profilo suo, fuso
+    in quello del lavoro quando i risultati si raccolgono; un errore non è
+    fatale (il ponte rimisura in fila).
+    """
+    holder: Dict[str, Any] = {
+        "data": None,
+        "error": None,
+        "clock": _Clock(),
+        "done": threading.Event(),
+    }
+
+    def run() -> None:
+        try:
+            holder["data"] = _measure_sources(
+                sources, paths, media, workdir, holder["clock"]
+            )
+        except Exception as exc:  # noqa: BLE001 - si ricade sulla via in fila
+            holder["error"] = exc
+        finally:
+            holder["done"].set()
+
+    thread = threading.Thread(target=run, name="vx-measure", daemon=True)
+    holder["thread"] = thread
+    thread.start()
+    return holder
+
+
 def _bridge_plan(
     plan: Any,
     *,
@@ -3809,6 +3853,7 @@ def _bridge_plan(
     target_lufs: float = TARGET_LUFS,
     clock: Optional[_Clock] = None,
     workdir: Any = "",
+    prepared: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     """Run the bridge: analyses, transcripts, faces and motion per a_roll source.
 
@@ -3841,7 +3886,30 @@ def _bridge_plan(
     }
     # Le tre misure partono qui: la politica (proxy, parallelismo, thread) vive in
     # `_measure_sources`, separata dal piano perché non ne ha bisogno.
-    data = _measure_sources(sources, paths, media, workdir, prof)
+    data: Optional[Mapping[str, Any]] = None
+    if prepared is not None:
+        done = prepared.get("done")
+        if done is not None:
+            done.wait()
+        candidate = prepared.get("data")
+        if isinstance(candidate, Mapping):
+            covered = (
+                set(candidate.get("analyses") or {})
+                | set(candidate.get("motion") or {})
+                | set(candidate.get("face_tracks") or {})
+            )
+            if set(sources) <= covered:
+                data = candidate
+                _merge_clock(prof, prepared["clock"])
+                prof.facts["overlap"] = (
+                    "misure avviate prima del piano: in_point e misure hanno "
+                    "lavorato insieme, la somma degli stadi supera il muro"
+                )
+                notes = candidate.get("notes") or {}
+                if notes:
+                    prof.facts["proxies"] = notes
+    if data is None:
+        data = _measure_sources(sources, paths, media, workdir, prof)
     analyses: Dict[str, Any] = dict(data.get("analyses") or {})
     motion: Dict[str, Any] = dict(data.get("motion") or {})
     face_tracks: Dict[str, Any] = dict(data.get("face_tracks") or {})
@@ -7621,6 +7689,34 @@ def _run_locked(
             source_refs, media_info_map = _source_refs(staged)
     _notify(progress, 20.0, "ingest", log=log)
 
+    # Le misure non dipendono dal piano: partono qui e corrono mentre si sceglie
+    # il punto di presa, che è l'altro blocco lungo. Il ponte le raccoglie; se non
+    # coprono le sorgenti del piano, le rifà in fila. Misurato: 146–164 s contro
+    # 184–180 s sul girato da 97,8 s, stesso piano (sha identico). `VX_NO_PREFETCH=1`
+    # spegne l'esperimento e torna alla via in fila.
+    prepared_measurements: Optional[Dict[str, Any]] = None
+    if not os.environ.get("VX_NO_PREFETCH") and not bool(
+        getattr(args, "no_bridge", False)
+    ):
+        try:
+            mapping = contract.edl_source_ids(list(block.get("selected_assets") or []))
+            early_paths: Dict[str, str] = {}
+            early_media: Dict[str, Dict[str, Any]] = {}
+            for asset_id, slug in mapping.items():
+                result = staged.get(asset_id)
+                info = media_info_map.get(asset_id)
+                if result is None or not isinstance(info, Mapping):
+                    continue
+                early_paths[slug] = str(_staged_path(result))
+                early_media[slug] = dict(info)
+            if early_paths:
+                prepared_measurements = _start_measurements(
+                    list(early_paths), early_paths, early_media, workdir
+                )
+        except Exception as exc:  # noqa: BLE001 - la via in fila resta
+            degrade.note("measure", exc)
+            prepared_measurements = None
+
     # Il punto di presa si sceglie per misura, non per caso: la clip si guarda
     # fotogramma per fotogramma (profilo di nitidezza), e il piano monta da
     # li'. Senza profilo non si inventa niente: si usa il comportamento di
@@ -7793,6 +7889,7 @@ def _run_locked(
             target_lufs=target_lufs,
             clock=clock,
             workdir=workdir,
+            prepared=prepared_measurements,
         )
         reframe_map, restore_map = _render_effects(bridge_report)
         bridge_gains_applied = any("gain_db" in item for item in bridge_report.audio)
