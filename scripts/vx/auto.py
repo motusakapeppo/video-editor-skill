@@ -3556,6 +3556,93 @@ def subs_requested(args: Any) -> bool:
     )
 
 
+def _measure_sources(
+    sources: Sequence[str],
+    paths: Mapping[str, str],
+    media: Optional[Mapping[str, Any]],
+    workdir: Any,
+    clock: "_Clock",
+) -> Dict[str, Any]:
+    """Proxy e tre misure per sorgente: la parte che non ha bisogno del piano.
+
+    Estratta da :func:`_bridge_plan` perché può partire **prima** del piano
+    (mentre si sceglie il punto di presa) e i risultati si riusano qui: stesse
+    funzioni, stesso ordine, stesse soglie. Restituisce i tre dizionari per
+    sorgente e le note dei proxy.
+    """
+    analyses: Dict[str, Any] = {}
+    face_tracks: Dict[str, Any] = {}
+    motion: Dict[str, Any] = {}
+    blob = _settings_blob()
+    proxies, proxy_notes = _source_proxies(paths, media, workdir, clock)
+    if proxy_notes:
+        clock.facts["proxies"] = proxy_notes
+    keys: List[tuple] = [
+        (kind, source_id)
+        for source_id in sources
+        for kind in MEASURE_KINDS
+        if paths[source_id]
+    ]
+    jobs = [
+        (
+            kind,
+            paths[source_id],
+            blob,
+            proxies.get(source_id),
+            _threads_for(kind, _source_width(media, source_id)),
+        )
+        for kind, source_id in keys
+    ]
+    for source_id in sources:
+        if not paths[source_id]:
+            # Senza un file non c'e' misura: la sorgente resta una dichiarazione.
+            reason = RuntimeError(f"source {source_id!r}: nessun percorso")
+            analyses[source_id] = reason
+            motion[source_id] = reason
+            face_tracks[source_id] = reason
+    measured = _measure_all(
+        jobs,
+        parallel=_measure_seconds(sources, media) >= PARALLEL_MIN_SECONDS,
+        clock=clock,
+        workdir=workdir,
+    )
+    by_key: Dict[tuple, Dict[str, Any]] = {
+        key: item for key, item in zip(keys, measured)
+    }
+    for source_id in sources:
+        if not paths[source_id]:
+            continue
+        for kind, bucket in (
+            ("audio", analyses),
+            ("analysis", motion),
+            ("faces", face_tracks),
+        ):
+            item = by_key.get((kind, source_id))
+            if item is None:
+                bucket[source_id] = RuntimeError(f"nessuna misura {kind}")
+            elif "error" in item:
+                bucket[source_id] = RuntimeError(str(item["error"]))
+            else:
+                bucket[source_id] = item["value"]
+        tracked = face_tracks.get(source_id)
+        if not isinstance(tracked, BaseException):
+            info = (media or {}).get(source_id) or {}
+            payload: Dict[str, Any] = dict(tracked.to_dict())
+            payload["width"] = info.get("width")
+            payload["height"] = info.get("height")
+            cuts = getattr(motion.get(source_id), "scene_cuts", None)
+            if cuts:
+                payload["scene_cuts"] = list(cuts)
+            face_tracks[source_id] = payload
+    return {
+        "analyses": analyses,
+        "motion": motion,
+        "face_tracks": face_tracks,
+        "proxies": proxies,
+        "notes": proxy_notes,
+    }
+
+
 def _bridge_plan(
     plan: Any,
     *,
@@ -3588,76 +3675,19 @@ def _bridge_plan(
     from . import audio, bridge, subs
 
     prof = clock or _Clock()
-    analyses: Dict[str, Any] = {}
     transcripts: Dict[str, Any] = {}
-    face_tracks: Dict[str, Any] = {}
-    motion: Dict[str, Any] = {}
     sources = _a_roll_sources(plan)
     paths = {
         source_id: str(getattr(plan.sources.get(source_id), "path", "") or "")
         for source_id in sources
     }
-    blob = _settings_blob()
-    proxies, proxy_notes = _source_proxies(paths, media, workdir, prof)
-    if proxy_notes:
-        prof.facts["proxies"] = proxy_notes
-    keys: List[tuple] = [
-        (kind, source_id)
-        for source_id in sources
-        for kind in MEASURE_KINDS
-        if paths[source_id]
-    ]
-    jobs = [
-        (
-            kind,
-            paths[source_id],
-            blob,
-            proxies.get(source_id),
-            _threads_for(kind, _source_width(media, source_id)),
-        )
-        for kind, source_id in keys
-    ]
+    # Le tre misure partono qui: la politica (proxy, parallelismo, thread) vive in
+    # `_measure_sources`, separata dal piano perché non ne ha bisogno.
+    data = _measure_sources(sources, paths, media, workdir, prof)
+    analyses: Dict[str, Any] = dict(data.get("analyses") or {})
+    motion: Dict[str, Any] = dict(data.get("motion") or {})
+    face_tracks: Dict[str, Any] = dict(data.get("face_tracks") or {})
     for source_id in sources:
-        if not paths[source_id]:
-            # Senza un file non c'e' misura: la sorgente resta una dichiarazione.
-            reason = RuntimeError(f"source {source_id!r}: nessun percorso")
-            analyses[source_id] = reason
-            motion[source_id] = reason
-            face_tracks[source_id] = reason
-    measured = _measure_all(
-        jobs,
-        parallel=_measure_seconds(sources, media) >= PARALLEL_MIN_SECONDS,
-        clock=prof,
-        workdir=workdir,
-    )
-    by_key: Dict[tuple, Dict[str, Any]] = {
-        key: item for key, item in zip(keys, measured)
-    }
-    for source_id in sources:
-        if not paths[source_id]:
-            continue
-        for kind, bucket in (
-            ("audio", analyses),
-            ("analysis", motion),
-            ("faces", face_tracks),
-        ):
-            item = by_key.get((kind, source_id))
-            if item is None:
-                bucket[source_id] = RuntimeError(f"nessuna misura {kind}")
-            elif "error" in item:
-                bucket[source_id] = RuntimeError(str(item["error"]))
-            else:
-                bucket[source_id] = item["value"]
-        tracked = face_tracks.get(source_id)
-        if not isinstance(tracked, BaseException):
-            info = (media or {}).get(source_id) or {}
-            payload: Dict[str, Any] = dict(tracked.to_dict())
-            payload["width"] = info.get("width")
-            payload["height"] = info.get("height")
-            cuts = getattr(motion.get(source_id), "scene_cuts", None)
-            if cuts:
-                payload["scene_cuts"] = list(cuts)
-            face_tracks[source_id] = payload
         if not captions:
             continue
         try:
@@ -8178,6 +8208,7 @@ def _run_locked(
         "opening": opening,
         "plan_notes": list(getattr(plan, "notes", ()) or ()),
         "composition": composition_report,
+        "movements": sections_mod.movements(plan),
         "plan": plan_declaration(
             in_points,
             segments=segment_rows,

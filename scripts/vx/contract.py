@@ -139,6 +139,11 @@ _THRESHOLDS_DATA: Dict[str, Any] = {
     # La coda che resta libera quando la richiesta chiede una CTA o una
     # testimonianza: un b-roll che sfuma sopra il messaggio finale lo copre.
     "composition_tail_sec": 1.5,
+    # I movimenti del corpo (1-3) si leggono dalla densità di taglio misurata:
+    # sopra 0,50 inquadrature/s il montaggio è fitto e si racconta in tre
+    # movimenti; tra 0,25 e 0,50 in due; sotto, uno solo.
+    "movement_density_fast": 0.5,
+    "movement_density_medium": 0.25,
     # C8 -- legge A: nessun effetto senza prova, e mai piu' di
     # ``max_creative_treatments`` trattamenti creativi distinti per reel. Le
     # soglie sotto sono le misure che rendono una spec ammissibile: movimento
@@ -974,6 +979,26 @@ def payload_to_edit_plan(
     return decide.payload_to_edit_plan(payload, media_info)
 
 
+def edl_source_ids(selected: Sequence[Mapping[str, Any]]) -> Dict[str, str]:
+    """``asset_id -> source_id`` con la stessa regola del piano, prima del piano.
+
+    La proiezione è una sola: chi deve misurare i sorgenti *prima* che il piano
+    esista (per farlo in parallelo) usa questa funzione, e il piano usa questa
+    funzione. Un secondo elenco di slug, scritto altrove, sarebbe una seconda
+    verità.
+    """
+    source_ids: Dict[str, str] = {}
+    taken_keys: Set[str] = set()
+    for entry in selected:
+        asset_id = entry.get("asset_id")
+        if not isinstance(asset_id, str) or not asset_id or asset_id in source_ids:
+            continue
+        key = source_key(asset_id, taken_keys)
+        source_ids[asset_id] = key
+        taken_keys.add(key)
+    return source_ids
+
+
 def payload_to_edl_plan(
     payload: Mapping[str, Any],
     sources: Mapping[str, Any],
@@ -1254,15 +1279,7 @@ def payload_to_edl_plan(
     # ONE projection asset_id -> EDL key, in the payload's own order. The asset
     # id is never rewritten: the report, the triage block and dedup keep the
     # human-readable name, only the EDL carries a slug.
-    source_ids: Dict[str, str] = {}
-    taken_keys: Set[str] = set()
-    for entry in selected:
-        asset_id = entry.get("asset_id")
-        if not isinstance(asset_id, str) or not asset_id or asset_id in source_ids:
-            continue
-        key = source_key(asset_id, taken_keys)
-        source_ids[asset_id] = key
-        taken_keys.add(key)
+    source_ids = edl_source_ids(selected)
 
     def _source_id(asset_id: str) -> str:
         key = source_ids.get(asset_id)

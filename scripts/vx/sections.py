@@ -32,6 +32,7 @@ __all__ = [
     "describe",
     "measure_application",
     "measure_survival",
+    "movements",
 ]
 
 #: La composizione non è un piano nuovo: è la stessa scaletta che dice *quanto*
@@ -812,6 +813,58 @@ def _block(report: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def movements(plan: Any) -> List[Dict[str, Any]]:
+    """Il corpo in 1-3 movimenti, tagliati su tagli veri.
+
+    Non è un secondo montaggio: è la **lettura** della struttura che il piano ha.
+    Il numero viene dalla densità di taglio misurata (inquadrature al secondo):
+    un montaggio fitto si racconta in tre movimenti, uno rado in uno solo. I
+    confini cadono su un taglio — mai dentro un'inquadratura — e ogni movimento
+    porta le inquadrature e i secondi che contiene.
+    """
+    clips = _clips(plan, 0)
+    if not clips:
+        return []
+    ordered = sorted(clips, key=lambda clip: float(clip.dst_in))
+    total = sum(float(clip.duration) for clip in ordered)
+    if total <= 0:
+        return []
+    density = len(ordered) / total
+    fast = _limit("movement_density_fast", 0.5)
+    medium = _limit("movement_density_medium", 0.25)
+    count = 3 if density >= fast else 2 if density >= medium else 1
+    count = max(1, min(count, len(ordered)))
+    target = total / count
+    groups: List[List[Any]] = [[] for _ in range(count)]
+    index = 0
+    elapsed = 0.0
+    for clip in ordered:
+        groups[index].append(clip)
+        elapsed += float(clip.duration)
+        if index < count - 1 and elapsed >= target * (index + 1) - 1e-9:
+            index += 1
+    # Ogni movimento ha almeno un'inquadratura: un gruppo vuoto prende l'ultima
+    # clip del precedente, così la lettura non inventa un movimento senza tagli.
+    for position in range(count - 1, 0, -1):
+        if not groups[position]:
+            groups[position].append(groups[position - 1].pop())
+    rows: List[Dict[str, Any]] = []
+    for group in groups:
+        if not group:
+            continue
+        seconds = sum(float(clip.duration) for clip in group)
+        rows.append(
+            {
+                "from": round(float(group[0].dst_in), 3),
+                "to": round(float(group[-1].dst_out), 3),
+                "shots": len(group),
+                "seconds": round(seconds, 3),
+                "density": round(len(group) / seconds, 4) if seconds > 0 else 0.0,
+            }
+        )
+    return rows
+
+
 def compile_sections(report: Any) -> Dict[str, Any]:
     """Compila le sezioni dalle misure gia' presenti nel report.
 
@@ -1011,6 +1064,22 @@ def compile_sections(report: Any) -> Dict[str, Any]:
     filled = [row for row in rows if row["state"] == "filled"]
     used = sorted({row["capability"] for row in rows if row["state"] == "filled"})
     unknown = sorted(set(used) - set(CAPABILITIES))
+    # I movimenti del corpo: la lettura della struttura del piano, non un secondo
+    # montaggio. Se ci sono, la sezione `beat` li porta accanto alle inquadrature.
+    movements = data.get("movements") if isinstance(data.get("movements"), list) else []
+    if movements:
+        beat = next((row for row in rows if row["id"] == "beat"), None)
+        if beat is not None and isinstance(beat.get("binding"), Mapping):
+            beat["binding"] = {**beat["binding"], "movements": movements}
+            shots_list = "/".join(
+                str(int(item.get("shots") or 0)) for item in movements
+            )
+            density = float(movements[0].get("density") or 0.0)
+            beat["why"] = (
+                str(beat["why"]).rstrip("; ")
+                + f"; {len(movements)} movimenti ({shots_list} inquadrature, "
+                + f"densità {density:.2f}/s)"
+            )
     # La composizione, se c'è, si vede **nella sezione che ha toccato**: la
     # durata vera del gancio sul piano, non quella proposta. Un blocco senza
     # ``applied`` (composizione assente o non misurata) non aggiunge niente.
