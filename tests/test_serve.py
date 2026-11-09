@@ -32,6 +32,11 @@ from vx import keygate, serve, subs  # noqa: E402
 PASS = 0
 FAIL = 0
 
+#: I movimenti del corpo che il report di prova dichiara: lo stato deve portarli.
+MOVEMENTS = [
+    {"from": 0.0, "to": 1.5, "shots": 2, "seconds": 1.5, "density": 1.3333},
+]
+
 
 def check(label: str, ok: bool, detail: object = "") -> None:
     global PASS, FAIL
@@ -1072,6 +1077,29 @@ def main() -> int:
             encoding="utf-8",
         )
         (job / "keyframes" / "kf0.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 40)
+        # Il report di un lavoro con la scaletta composta: `/api/state` deve
+        # portarla, perché la pagina legge solo quello.
+        (job / "auto_report.json").write_text(
+            json.dumps(
+                {
+                    "ok": True,
+                    "composition": {
+                        "schema": "vx.composition/1",
+                        "proposed": {},
+                        "rules": {},
+                        "declined": [],
+                        "applied": {},
+                    },
+                    "sections": {
+                        "total": 6,
+                        "filled": 1,
+                        "sections": [{"id": f"s{index}"} for index in range(6)],
+                    },
+                    "movements": MOVEMENTS,
+                }
+            ),
+            encoding="utf-8",
+        )
         digest = "a" * 64
         timeline_digest = "b" * 64
         (job / "keyframes" / "pending.json").write_text(
@@ -1107,6 +1135,16 @@ def main() -> int:
                 and data["approval"]["approved"] is False
                 and bool(data["approval"]["reason"]),
                 data["approval"],
+            )
+            # La scaletta composta viaggia con lo stato: la pagina non ha un
+            # endpoint suo, e se queste tre chiavi sparissero la sezione si
+            # svuoterebbe senza un test rosso.
+            check(
+                "S1c lo stato porta composition, sections e movements",
+                (data.get("composition") or {}).get("schema") == "vx.composition/1"
+                and len((data.get("sections") or {}).get("sections") or []) == 6
+                and data.get("movements") == MOVEMENTS,
+                ((data.get("composition") or {}).get("schema"), data.get("movements")),
             )
 
             journal = data.get("journal")

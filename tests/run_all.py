@@ -99,6 +99,7 @@ HEAVY = (
     "test_motion_slice.py",
     "test_motion_cache.py",
     "test_motion_fallback.py",
+    "test_scaletta_view.py",
     "test_temp_hygiene.py",
 )
 

@@ -1088,6 +1088,36 @@
     return Object.keys(nested).length ? nested : null;
   }
 
+  // I movimenti del corpo arrivano da una fonte sola: `state.movements` quando
+  // c'è; altrimenti quelli che la sezione `beat` porta nel suo `binding`. Così
+  // il numero non si conta due volte, e senza movimenti non si inventa niente.
+  function movementRows(value) {
+    return Array.isArray(value)
+      ? value.filter((item) => item && typeof item === 'object')
+      : [];
+  }
+
+  function movementsOf(state) {
+    const direct = movementRows(state && state.movements);
+    if (direct.length) return direct;
+
+    const block = state && state.sections;
+    const rows = Array.isArray(block) ? block : objectOf(block).sections;
+    const list = Array.isArray(rows) ? rows : [];
+    const beat = list.find((row) => row && String(row.id || '') === 'beat');
+    return movementRows(objectOf(beat && beat.binding).movements);
+  }
+
+  function movementShotsText(movements) {
+    const shots = movements.shots.map((value) => {
+      const n = numberOrNull(value);
+      return n === null || n === 0 ? '—' : String(Math.round(n));
+    });
+    const count = movements.count;
+    const head = count === 1 ? '1 movimento' : String(count) + ' movimenti';
+    return head + ' · ' + shots.join('/') + ' inquadrature';
+  }
+
   function scalettaModel(state) {
     const composition = compositionOf(state);
     if (!composition) return null;
@@ -1164,10 +1194,21 @@
         }
       : null;
 
+    // Solo la lettura che serve alla riga CLIP: quante parti e quante
+    // inquadrature ognuna. Il resto del movimento non è un numero da mostrare.
+    const moves = movementsOf(state);
+    const movements = moves.length
+      ? {
+          count: moves.length,
+          shots: moves.map((item) => item.shots),
+        }
+      : null;
+
     return {
       hook,
       shots,
       broll,
+      movements,
       declined,
       // La creatività può spostare il blocco: è un fatto da dire, non un guasto.
       warn: applied.survived === false && appliedFlag === true,
@@ -1334,7 +1375,9 @@
 
     const present = [];
     if (model.hook) present.push('hook');
-    if (model.shots) present.push('shots');
+    // La riga CLIP esiste anche quando la misura delle clip manca ma i
+    // movimenti del corpo ci sono: il valore resta «—», la riga piccola parla.
+    if (model.shots || model.movements) present.push('shots');
     if (model.broll) present.push('broll');
     if (!present.length && !model.declined.length) {
       el.scaletta.hidden = true;
@@ -1393,11 +1436,16 @@
       );
     }
 
-    if (model.shots) {
+    if (model.shots || model.movements) {
       const nodes = scalRows.get('shots');
-      scalShots(nodes.value, model.shots);
-      // Il delta è già nel distintivo accanto al numero: ripeterlo sarebbe rumore.
-      setScalLine(nodes.sub, '');
+      if (model.shots) {
+        scalShots(nodes.value, model.shots);
+      } else {
+        scalEmpty(nodes.value);
+      }
+      // Sotto il valore, i movimenti del corpo: quanti sono e quante
+      // inquadrature contengono. Il delta resta nel distintivo accanto.
+      setScalLine(nodes.sub, model.movements ? movementShotsText(model.movements) : '');
       setScalLine(nodes.note, '');
       setScalStatus(nodes.status, '', '');
     }

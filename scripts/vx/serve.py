@@ -2518,6 +2518,13 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
             if isinstance(report.get("sections"), Mapping)
             else None
         ),
+        # I movimenti del corpo: la lettura della struttura (1-3 gruppi), accanto
+        # alle sezioni. La pagina li mostra nella riga CLIP.
+        "movements": (
+            list(report["movements"])
+            if isinstance(report.get("movements"), list)
+            else None
+        ),
     }
 
 
