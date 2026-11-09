@@ -7699,10 +7699,22 @@ def _run_locked(
         getattr(args, "no_bridge", False)
     ):
         try:
-            mapping = contract.edl_source_ids(list(block.get("selected_assets") or []))
+            chosen = list(block.get("selected_assets") or [])
+            mapping = contract.edl_source_ids(chosen)
+            # Si misurano solo gli a_roll: un'immagine o una traccia musicale non
+            # hanno volti né movimento, e misurarle sarebbe lavoro buttato (e un
+            # falso errore nel referto). La mappa però si costruisce su **tutti**
+            # i selezionati, perché è la stessa che usa il piano.
+            a_roll_ids = {
+                str(entry.get("asset_id") or "")
+                for entry in chosen
+                if str(entry.get("role") or "") == "a_roll"
+            }
             early_paths: Dict[str, str] = {}
             early_media: Dict[str, Dict[str, Any]] = {}
             for asset_id, slug in mapping.items():
+                if asset_id not in a_roll_ids:
+                    continue
                 result = staged.get(asset_id)
                 info = media_info_map.get(asset_id)
                 if result is None or not isinstance(info, Mapping):
