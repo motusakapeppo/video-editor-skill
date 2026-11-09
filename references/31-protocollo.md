@@ -103,9 +103,14 @@ chiesta. Ogni pezzo aggiunto è parlato misurato (nessun morto rientra).
 
 Con i sottotitoli, una sorgente entro **60 s** si trascrive tutta
 (`CAPTION_FULL_READ_SEC`): la coda che il ponte aggiunge sta oltre il piano, e
-senza il testo resterebbe muta. Oltre i 60 s resta la finestra del piano e il
-report dichiara `captions_tail_uncovered` coi secondi che stanno oltre l'ultima
-parola letta — un pezzo senza sottotitoli dichiarato, non un buco muto.
+senza il testo resterebbe muta. Oltre i 60 s il ponte dichiara i tratti aggiunti
+e `auto` li trascrive **a parte** (un estratto di pochi secondi, riportato al
+tempo sorgente) e ricostruisce il ponte: `captions_tail_completed`.
+
+Le misure (proxy, audio, analysis, faces) non dipendono dal piano: partono subito
+dopo lo staging, in un thread, e il ponte le raccoglie. `in_point` lavora nella
+stessa finestra, quindi la somma degli stadi supera il muro dichiarato (il report
+lo dice in `resources.overlap`). `VX_NO_PREFETCH=1` torna alla via in fila.
 
 ## 6. EDL3 (effetti, transizioni, testo)
 
