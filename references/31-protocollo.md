@@ -226,6 +226,10 @@ Regole:
   spostamento è dichiarato (`broll_shifted_to_speech`, da/a, score);
 - quando la richiesta chiede una CTA o una testimonianza, gli ultimi
   `composition_tail_sec` (1,5 s) restano **liberi da b-roll**;
+- il corpo si legge in **1-3 movimenti** (`sections.movements`): il numero viene
+  dalla densità di taglio misurata (≥ 0,50 inquadrature/s tre, ≥ 0,25 due, sotto
+  uno), i confini cadono su un taglio. È una lettura della struttura, non un
+  secondo montaggio: il piano non cambia;
 - `report["composition"]` porta `proposed`, `rules`, `declined` e `applied`:
   la proposta e il fatto misurato stanno separati, e `survived` è ricalcolato sul
   piano finale dopo `plan_choice` e `creative`;
