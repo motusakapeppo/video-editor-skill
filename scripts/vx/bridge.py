@@ -1880,25 +1880,31 @@ def build(
             if added > 1e-6:
                 duration = round(duration + added, 6)
                 cursor = duration
+                tail_source = str(created[-1].source_id)
                 report.not_applied.append(
                     {
                         "anchor_id": None,
                         "reason": "tail_filled_with_speech",
+                        "source_id": tail_source,
                         "seconds": round(added, 3),
                         "fragments": made,
+                        "spans": [[round(a, 6), round(b, 6)] for a, b in appended],
                     }
                 )
                 if transcripts:
-                    source_id = str(created[-1].source_id)
                     uncovered = _uncaptioned_seconds(
-                        transcripts.get(source_id), appended
+                        transcripts.get(tail_source), appended
                     )
                     if uncovered > 0.05:
                         report.not_applied.append(
                             {
                                 "anchor_id": None,
                                 "reason": "captions_tail_uncovered",
+                                "source_id": tail_source,
                                 "seconds": uncovered,
+                                "spans": [
+                                    [round(a, 6), round(b, 6)] for a, b in appended
+                                ],
                                 "detail": (
                                     "il parlato che riempie la coda sta oltre la "
                                     "finestra trascritta: resta senza sottotitoli"

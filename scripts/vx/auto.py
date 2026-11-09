@@ -3643,6 +3643,164 @@ def _measure_sources(
     }
 
 
+def _tail_caption_spans(report: Any) -> Dict[str, List[Tuple[float, float]]]:
+    """``source_id -> tratti`` che il ponte ha aggiunto in coda e il testo non copre."""
+    out: Dict[str, List[Tuple[float, float]]] = {}
+    for row in getattr(report, "not_applied", ()) or ():
+        if not isinstance(row, Mapping):
+            continue
+        if row.get("reason") != "captions_tail_uncovered":
+            continue
+        source_id = str(row.get("source_id") or "")
+        raw = row.get("spans")
+        if not source_id or not isinstance(raw, (list, tuple)):
+            continue
+        for item in raw:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            try:
+                begin, end = float(item[0]), float(item[1])
+            except (TypeError, ValueError):
+                continue
+            if end > begin:
+                out.setdefault(source_id, []).append((begin, end))
+    return out
+
+
+def _transcribe_spans(
+    source_id: str,
+    path: str,
+    spans: Sequence[Tuple[float, float]],
+    workdir: Any,
+    clock: "_Clock",
+) -> Optional[Tuple[Any, float]]:
+    """Trascrive solo la finestra dei tratti aggiunti, riportandola al tempo sorgente.
+
+    Un estratto di ``[min, max]`` secondi costa pochi secondi di whisper e copre
+    esattamente ciò che il ponte ha aggiunto; le parole tornano indietro con
+    l'offset della finestra.
+    """
+    from . import subs
+
+    if not spans or not path:
+        return None
+    begin = min(item[0] for item in spans)
+    end = max(item[1] for item in spans)
+    if end - begin <= 0.05:
+        return None
+    root = Path(str(workdir)) / "cache" / "speech-tail"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    target = root / f"tail-{contract.source_key(source_id)}.wav"
+    info = ff.run_ff(
+        [
+            "-ss",
+            f"{begin:.3f}",
+            "-to",
+            f"{end:.3f}",
+            "-i",
+            path,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            str(target),
+        ],
+        loglevel="error",
+        step="speech",
+    )
+    if not getattr(info, "ok", False) or not target.is_file():
+        return None
+    try:
+        with clock.time("speech"):
+            lowered = resources.set_current_priority(True)
+            try:
+                transcript = subs.transcribe(str(target))
+            finally:
+                resources.set_current_priority(False)
+        if lowered:
+            clock.facts["priority"] = "below_normal"
+        if str(getattr(transcript, "skipped_reason", "") or ""):
+            return None
+        return transcript, begin
+    finally:
+        try:
+            target.unlink()
+        except OSError:
+            pass
+
+
+def _merge_transcripts(base: Any, extra: Any, offset: float) -> Any:
+    """Fonde le parole dell'estratto (tempi relativi) in quelle assolute."""
+    words = [
+        dict(item)
+        for item in (getattr(base, "words", ()) or ())
+        if isinstance(item, Mapping)
+    ]
+    seen = {
+        (round(float(item.get("start") or 0.0), 3), str(item.get("word") or ""))
+        for item in words
+    }
+    for item in getattr(extra, "words", ()) or ():
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            start = float(item.get("start"))
+            end = float(item.get("end"))
+        except (TypeError, ValueError):
+            continue
+        key = (round(start + offset, 3), str(item.get("word") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        words.append(
+            {**item, "start": round(start + offset, 6), "end": round(end + offset, 6)}
+        )
+    words.sort(key=lambda item: float(item.get("start") or 0.0))
+    segments = [
+        dict(item)
+        for item in (getattr(base, "segments", ()) or ())
+        if isinstance(item, Mapping)
+    ]
+    for item in getattr(extra, "segments", ()) or ():
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            start = float(item.get("start"))
+            end = float(item.get("end"))
+        except (TypeError, ValueError):
+            continue
+        segments.append(
+            {**item, "start": round(start + offset, 6), "end": round(end + offset, 6)}
+        )
+    segments.sort(key=lambda item: float(item.get("start") or 0.0))
+    text = " ".join(
+        part
+        for part in (
+            str(getattr(base, "text", "") or ""),
+            str(getattr(extra, "text", "") or ""),
+        )
+        if part.strip()
+    )
+    duration = max(
+        float(getattr(base, "duration", 0.0) or 0.0),
+        offset + float(getattr(extra, "duration", 0.0) or 0.0),
+    )
+    return contract.Transcript(
+        language=str(getattr(base, "language", "") or ""),
+        words=words,
+        segments=segments,
+        text=text,
+        duration=round(duration, 6),
+        wpm=float(getattr(base, "wpm", 0.0) or 0.0),
+        model=str(getattr(base, "model", "") or ""),
+        device=str(getattr(base, "device", "") or "cpu"),
+    )
+
+
 def _bridge_plan(
     plan: Any,
     *,
@@ -3724,6 +3882,64 @@ def _bridge_plan(
             faces=face_tracks,
             motion=motion,
         )
+    # Il ponte può aver aggiunto in coda parlato che sta oltre la finestra
+    # trascritta. Invece di lasciarlo muto, si trascrivono **solo quei tratti**
+    # (un estratto di pochi secondi) e il ponte si ricostruisce con il testo
+    # completo: la seconda passata costa secondi, non un'altra trascrizione.
+    if captions:
+        uncovered = _tail_caption_spans(report)
+        completed = dict(transcripts)
+        completed_seconds = 0.0
+        merged_sources: List[str] = []
+        for source_id, spans in uncovered.items():
+            base = transcripts.get(source_id)
+            if not isinstance(base, contract.Transcript):
+                continue
+            extracted = _transcribe_spans(
+                source_id, paths.get(source_id) or "", spans, workdir, prof
+            )
+            if extracted is None:
+                continue
+            extra, offset = extracted
+            completed[source_id] = _merge_transcripts(base, extra, offset)
+            completed_seconds += sum(float(b) - float(a) for a, b in spans)
+            merged_sources.append(source_id)
+        if completed_seconds > 1e-6:
+            with prof.time("bridge"):
+                new_plan, report = bridge.build(
+                    plan,
+                    analyses,
+                    target_lufs=float(target_lufs),
+                    loudness_spans=audio.loudness_spans,
+                    transcripts=completed,
+                    faces=face_tracks,
+                    motion=motion,
+                )
+            # La coda di quei sorgenti è stata trascritta davvero: la riga
+            # "scoperta" del primo giro è superata (l'eventuale resto è audio
+            # finale senza parole, non testo mancante).
+            report.not_applied = [
+                row
+                for row in report.not_applied
+                if not (
+                    isinstance(row, Mapping)
+                    and row.get("reason") == "captions_tail_uncovered"
+                    and str(row.get("source_id") or "") in merged_sources
+                )
+            ]
+            report.not_applied.append(
+                {
+                    "anchor_id": None,
+                    "reason": "captions_tail_completed",
+                    "seconds": round(completed_seconds, 3),
+                    "sources": merged_sources,
+                    "detail": (
+                        "la coda aggiunta è stata trascritta a parte e il ponte "
+                        "ricostruito: ora ha i sottotitoli"
+                    ),
+                }
+            )
+            transcripts = completed
     return new_plan, report, analyses, motion
 
 

@@ -33,7 +33,10 @@ SETTINGS_SCHEMA = "vx.settings/1.0"
 # Values are clamped to PROCESS_TIMEOUT_RANGE where they are used, so a bad
 # profile cannot disable the watchdog or make it expire instantly.
 PROCESS_TIMEOUTS: Dict[str, int] = {
-    "probe": 120,
+    # La sonda legge solo l'intestazione, ma su un disco lento (o mentre un
+    # antivirus scansiona il file) 120 s si esauriscono: un timeout qui sarebbe
+    # un falso guasto, non un lavoro lungo. Il render tiene il suo tetto.
+    "probe": 300,
     "render": 3600,
 }
 PROCESS_TIMEOUT_RANGE: tuple[int, int] = (1, 86400)
