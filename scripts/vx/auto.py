@@ -6579,6 +6579,11 @@ def _resource_report(clock: _Clock) -> Dict[str, Any]:
             "ram_per_worker_mb": resources.RAM_PER_WORKER_MB,
         },
         "reasons": list(budget.get("reasons") or []),
+        **(
+            {"overlap": str(clock.facts["overlap"])}
+            if clock.facts.get("overlap")
+            else {}
+        ),
     }
 
 
