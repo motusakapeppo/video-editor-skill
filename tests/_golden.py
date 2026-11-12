@@ -1,4 +1,4 @@
-﻿"""Confronto di immagini golden con tolleranza: portabile, non indulgente.
+"""Confronto di immagini golden con tolleranza: portabile, non indulgente.
 
 Perche' esiste: le golden nascono su **una** macchina (ffmpeg, x264, CPU,
 rasterizzazione dei font). Su un runner GitHub gli stessi pixel non escono byte

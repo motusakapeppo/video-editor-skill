@@ -1,4 +1,4 @@
-﻿"""F25-T06: la ruota delle otto emozioni, versionata e citata.
+"""F25-T06: la ruota delle otto emozioni, versionata e citata.
 
 Scenario:
 

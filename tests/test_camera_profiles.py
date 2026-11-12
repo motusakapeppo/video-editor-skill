@@ -1,4 +1,4 @@
-﻿"""F25-T03: profili di camera con dominio, seme deterministico e un frame per profilo.
+"""F25-T03: profili di camera con dominio, seme deterministico e un frame per profilo.
 
 Scenario:
 

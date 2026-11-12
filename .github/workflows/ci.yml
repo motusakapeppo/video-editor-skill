@@ -1,4 +1,4 @@
-﻿name: ci
+name: ci
 
 # Il gate e' Windows: e' la piattaforma che la skill supporta (macOS e Linux
 # sono fuori scope per ora, vedi references/31-protocollo.md sezione 10). I

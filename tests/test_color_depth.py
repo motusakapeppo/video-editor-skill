@@ -1,4 +1,4 @@
-﻿"""F26-T05 gate -- a profile's declared colour reaches the delivered file.
+"""F26-T05 gate -- a profile's declared colour reaches the delivered file.
 
 The registry declares ``bit_depth`` and ``transfer`` per profile
 (:mod:`vx.profiles`); this file proves the renderer honours that declaration in

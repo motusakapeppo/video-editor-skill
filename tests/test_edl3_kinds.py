@@ -1,4 +1,4 @@
-﻿"""F4-T09 gate — one proof frame for every kind in the effect library.
+"""F4-T09 gate — one proof frame for every kind in the effect library.
 
 The golden harness in :mod:`tests.golden_edl3` proves the fifteen contract
 effects; this file proves the *library*: every kind in

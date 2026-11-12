@@ -1,4 +1,4 @@
-﻿"""F25-T02: every camera move has a reference strip, and it cannot drift.
+"""F25-T02: every camera move has a reference strip, and it cannot drift.
 
 For each of the 41 moves the test renders one 2 s clip built with that move, takes
 three instants (15%, 50%, 85% of the shot), and stores their sha256 in

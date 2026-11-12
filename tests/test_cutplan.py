@@ -1,4 +1,4 @@
-﻿"""Test del cut plan: il taglio si sposta solo dentro un silenzio misurato.
+"""Test del cut plan: il taglio si sposta solo dentro un silenzio misurato.
 
 Le asserzioni sono sul contratto: i confini si muovono solo se l'onset cade
 dentro un silenzio, l'input non viene mutato, l'aritmetica dei frame resta

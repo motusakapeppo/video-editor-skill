@@ -1,4 +1,4 @@
-﻿"""Benchmark riproducibile della misura di ``vx auto``.
+"""Benchmark riproducibile della misura di ``vx auto``.
 
 Non e' un test della suite: e' lo strumento che dice, su questa macchina, quanto
 costano le quattro scorciatoie e se il totale scende.

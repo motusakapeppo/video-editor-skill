@@ -1,4 +1,4 @@
-﻿"""F26-T03 gate — every canvas and rate the corpus needs, proven by rendering.
+"""F26-T03 gate — every canvas and rate the corpus needs, proven by rendering.
 
 The engine declares no format of its own (D033): it accepts any canvas and any
 rate a camera or an editor delivers. This file proves it for the five aspects

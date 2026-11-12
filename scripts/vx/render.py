@@ -1,4 +1,4 @@
-﻿"""vx.render — filtergraph construction and the render pipeline.
+"""vx.render — filtergraph construction and the render pipeline.
 
 Invariants this module is built on (measured, not guessed):
 
