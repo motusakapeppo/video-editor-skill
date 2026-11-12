@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from vx import camera, edl3, edl3_render  # noqa: E402
 from vx import ffmpeg as ff  # noqa: E402
+from _golden import compare_images as golden_compare  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures" / "camera_golden"
 FPS = 12
@@ -212,8 +213,20 @@ def main() -> int:
                 check(f"{name}: has a reference strip", False, "missing")
                 continue
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            same = manifest.get("sha256") == hashes
-            check(f"{name}: strip byte-identical", same, hashes[0][:12])
+            # Confronto per pixel con tolleranza, non per byte: le golden sono
+            # catturate su una macchina e rigirate su un'altra (ffmpeg, x264,
+            # rasterizzazione). Un'immagine sbagliata sfora subito; un
+            # arrotondamento di compositing no. Lo sha resta nel manifest come
+            # record, non come verdetto.
+            ok_all, detail = True, ""
+            for index, png in enumerate(frames):
+                ok, why = golden_compare(target / f"instant-{index:02d}.png", png)
+                if not ok:
+                    ok_all = False
+                    detail = f"instant-{index:02d}: {why}"
+                    break
+                detail = detail or why
+            check(f"{name}: strip entro la tolleranza", ok_all, detail)
             moved = any(
                 hashes[index] != base_hashes[index] for index in range(len(hashes))
             )

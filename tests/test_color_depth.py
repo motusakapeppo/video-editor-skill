@@ -1,4 +1,4 @@
-"""F26-T05 gate -- a profile's declared colour reaches the delivered file.
+﻿"""F26-T05 gate -- a profile's declared colour reaches the delivered file.
 
 The registry declares ``bit_depth`` and ``transfer`` per profile
 (:mod:`vx.profiles`); this file proves the renderer honours that declaration in
@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -71,7 +72,13 @@ def ffprobe_path() -> Path:
 
 def ffmpeg_path() -> Path:
     declared = os.environ.get("VX_FFMPEG")
-    return Path(declared) if declared else Path(ffmpeg())
+    if declared:
+        # "ffmpeg" e' un nome, non un percorso: senza risolverlo, `with_name`
+        # costruisce un parente relativo che non esiste (su un runner il
+        # binario sta in una cartella di sistema, non nella cwd).
+        found = shutil.which(declared)
+        return Path(found or declared)
+    return Path(ffmpeg())
 
 
 def encoder_pixel_formats() -> str:
@@ -263,5 +270,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 

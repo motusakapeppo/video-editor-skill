@@ -73,12 +73,22 @@ def main() -> int:
 
     print("\nclip reale con volto: place chiamato, crop restituito")
     face_at = None
+    if not STREET.is_file():
+        print(f"    [SKIP] clip reale non versionata: {STREET}")
+        face_at = None
+        real_clip_missing = True
+    else:
+        real_clip_missing = False
     for at in (1.5, 2.0, 2.5, 3.0):
+        if real_clip_missing:
+            break
         probe = aesthetics.place(STREET, at, src_w=1280, src_h=720)
         if probe.face_found:
             face_at = at
             break
-    if face_at is None:
+    if real_clip_missing:
+        pass
+    elif face_at is None:
         check("volto trovato nella clip reale", False, "nessun volto in 1.5-3.0 s")
     else:
         real, proxy = run_with_proxy(

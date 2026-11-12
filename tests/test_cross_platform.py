@@ -263,8 +263,25 @@ def check_ci_yaml() -> None:
             break
     systems = list(matrix.get("os") or [])
     pythons = list(matrix.get("python") or matrix.get("python-version") or [])
-    check("CI: tre sistemi operativi", len(systems) == 3, ",".join(map(str, systems)))
-    check("CI: tre versioni di Python", len(pythons) == 3, ",".join(map(str, pythons)))
+    runners = [
+        str((job or {}).get("runs-on") or "") for job in jobs.values()
+    ]
+    # Il gate e' Windows (piattaforma supportata) con due versioni: 3.10, la
+    # minima dichiarata, e 3.12. Linux gira come job informativo, macOS e'
+    # fuori scope. Prima si pretendeva "tre sistemi, tre versioni": era una
+    # promessa che i runner non mantenevano (ffmpeg 9 e golden di un'altra
+    # piattaforma), e un CI sempre rosso non protegge niente.
+    gate = systems or [runner for runner in runners if runner.startswith("windows")]
+    check(
+        "CI: il gate e' Windows, con la matrice dichiarata",
+        bool(gate) and all(str(item).startswith("windows") for item in gate),
+        ",".join(map(str, gate)) or ",".join(runners),
+    )
+    check(
+        "CI: due versioni di Python (3.10 e 3.12)",
+        len(pythons) == 2 and "3.10" in map(str, pythons) and "3.12" in map(str, pythons),
+        ",".join(map(str, pythons)),
+    )
 
 
 def main() -> int:

@@ -1,4 +1,4 @@
-"""F25-T03: profili di camera con dominio, seme deterministico e un frame per profilo.
+﻿"""F25-T03: profili di camera con dominio, seme deterministico e un frame per profilo.
 
 Scenario:
 
@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from vx import camera_profiles as cp, edl3, edl3_render  # noqa: E402
 from vx import ffmpeg as ff  # noqa: E402
+from _golden import compare_images as golden_compare  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures" / "camera_profiles"
 FPS = 12
@@ -176,11 +177,11 @@ def main() -> int:
                 check(f"S4 {name}: written", True, digest(png)[:12])
                 continue
             stored = FIXTURES / f"{name}.png"
-            check(
-                f"S4 {name}: the frame is byte-identical to its reference",
-                stored.is_file() and digest(stored) == digest(png),
-                digest(png)[:12],
-            )
+            # Pixel con tolleranza, non byte: la stessa golden rigirata su un
+            # altro ffmpeg/CPU non e' binariamente identica, ma resta la stessa
+            # immagine. Un profilo sbagliato (colore, vignettatura) sfora.
+            same, detail = golden_compare(stored, png)
+            check(f"S4 {name}: the frame matches its reference", same, detail)
             check(
                 f"S4 {name}: the profile reaches the pixels",
                 digest(png) != plain,
@@ -201,3 +202,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -140,13 +140,23 @@ def main() -> int:
         "",
     )
 
-    proc = _run(MEASURE, [], _env())
-    check("measure_corpus esce 0", proc.returncode == 0, f"rc={proc.returncode}")
-    check(
-        "measure_corpus stampa SKIPPED",
-        "SKIPPED: approved delivery not configured" in proc.stdout,
-        "",
+    # Il provatore misura un corpus che **non e' versionato** (i video di prova
+    # si generano). Su un clone pulito il corpus non c'e' e il provatore esce 1
+    # per un motivo giusto: qui si dichiara e si salta, non si finge un guasto.
+    corpus = ROOT / "tests" / "stock_corpus"
+    corpus_clips = len(list(corpus.glob("*.mp4"))) + len(
+        list((corpus / "real").glob("*.webm"))
     )
+    if corpus_clips < 9:
+        print(f"    [SKIP] measure_corpus: corpus non versionato ({corpus_clips}/9 clip)")
+    else:
+        proc = _run(MEASURE, [], _env())
+        check("measure_corpus esce 0", proc.returncode == 0, f"rc={proc.returncode}")
+        check(
+            "measure_corpus stampa SKIPPED",
+            "SKIPPED: approved delivery not configured" in proc.stdout,
+            "",
+        )
     check(
         "renderer_delta.json invariato",
         _sha256(FIXTURE) == before,

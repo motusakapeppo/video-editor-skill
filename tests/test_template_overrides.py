@@ -408,14 +408,14 @@ def run(work: Path) -> None:
     validation_checks()
 
     probe = motion.available()
-    check(
-        "0. a system browser is available",
-        bool(probe["available"]),
-        f"engine={probe.get('engine')} reason={probe.get('reason')}",
-    )
+    # Senza browser la meta' render non esiste: si dichiara, non si finge.
     if not probe["available"]:
-        skip("the render half", "no Chromium channel to capture with")
+        skip(
+            "the render half",
+            f"nessun Chromium: engine={probe.get('engine')} reason={probe.get('reason')}",
+        )
         return
+    check("0. a system browser is available", True, f"engine={probe.get('engine')}")
 
     report_a, dir_a = render_case(
         work, "warm", {"exposed_params": {"accent": "#FF4D4D"}}

@@ -132,7 +132,9 @@ def test_quarantine_move(tmp: Path) -> None:
         destination.is_file(),
         str(destination),
     )
-    rel = destination.relative_to(root).as_posix()
+    # `%TEMP%` sui runner Windows e' un percorso 8.3 (`RUNNER~1`): senza
+    # risolvere, `relative_to` confronta stringhe diverse e solleva ValueError.
+    rel = destination.resolve().relative_to(root.resolve()).as_posix()
     check(
         "destination lives under .quarantine/<date>/",
         rel.startswith(".quarantine/"),

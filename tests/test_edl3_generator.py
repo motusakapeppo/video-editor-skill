@@ -370,14 +370,15 @@ def write_fixtures(
 
 def run(work: Path) -> None:
     probe = motion.available()
-    check(
-        "0. a system browser is available",
-        bool(probe["available"]),
-        f"engine={probe.get('engine')} reason={probe.get('reason')}",
-    )
+    # Senza browser non c'e' cattura: non e' un difetto del codice, e' un
+    # ambiente che non offre il motore. Si dichiara e si esce.
     if not probe["available"]:
-        skip("the whole gate", "no Chromium channel to capture with")
+        skip(
+            "the whole gate",
+            f"nessun Chromium: engine={probe.get('engine')} reason={probe.get('reason')}",
+        )
         return
+    check("0. a system browser is available", True, f"engine={probe.get('engine')}")
 
     base = build_base(work)
     check(

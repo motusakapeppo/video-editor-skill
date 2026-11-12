@@ -1,4 +1,4 @@
-"""F4-T09 gate — one proof frame for every kind in the effect library.
+﻿"""F4-T09 gate — one proof frame for every kind in the effect library.
 
 The golden harness in :mod:`tests.golden_edl3` proves the fifteen contract
 effects; this file proves the *library*: every kind in
@@ -53,6 +53,7 @@ from vx import edl3  # noqa: E402
 from vx.ffmpeg import run_ff  # noqa: E402
 
 import golden_edl3  # noqa: E402
+from _golden import compare_images as golden_compare  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures" / "edl3_kinds"
 FRAME_TIME = 0.5
@@ -216,14 +217,13 @@ def verify(sources: Mapping[str, Path], work: Path) -> None:
                 f"re-bless with `{REBLESS}`",
             )
             continue
-        expected = _sha256(target)
+        # Pixel con tolleranza: la stessa scena rigirata con un altro ffmpeg o
+        # su un'altra CPU non e' binariamente identica. Un filtro rotto sfora.
+        same, detail = golden_compare(target, frame)
         check(
             f"{kind}: frame matches {kind}.png",
-            expected == actual,
-            ""
-            if expected == actual
-            else f"expected sha256 {expected} actual sha256 {actual}; "
-            f"re-bless with `{REBLESS}`",
+            same,
+            detail if not same else "",
         )
         problem = png_problem(target)
         check(
@@ -328,3 +328,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -104,9 +104,15 @@ def make_proxy(
         before = source_fingerprint(src_p)
 
         choice = _proxy_encoder(int(crf), str(preset))
-        args: List[Any] = [
-            "-i",
-            str(src_p),
+        # `-threads` e' un'opzione, non un input: inserirla dopo "-i" faceva
+        # leggere "-threads" come nome del file da aprire ("Error opening input
+        # file -threads"). Su questa macchina non si vedeva perche' c'e' NVENC e
+        # il ramo software non girava; sui runner (e su ogni macchina senza
+        # GPU) il proxy non partiva affatto.
+        args: List[Any] = ["-i", str(src_p)]
+        if choice["software"]:
+            args += ["-threads", str(PROXY_THREADS)]
+        args += [
             "-vf",
             f"scale={out_w}:{out_h}:flags={SCALE_FLAGS}",
             *choice["args"],
@@ -114,7 +120,6 @@ def make_proxy(
             "yuv420p",
         ]
         if choice["software"]:
-            args[1:1] = ["-threads", str(PROXY_THREADS)]
             args += ["-x264-params", X264_PROXY_PARAMS]
         if info.has_audio:
             args += ["-c:a", "aac", "-b:a", "96k", "-ac", "2"]

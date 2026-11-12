@@ -1,4 +1,4 @@
-"""F25-T06: la ruota delle otto emozioni, versionata e citata.
+﻿"""F25-T06: la ruota delle otto emozioni, versionata e citata.
 
 Scenario:
 
@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from vx import brief, edl3, emotions, lut  # noqa: E402
 from vx import ffmpeg as ff  # noqa: E402
+from _golden import compare_images as golden_compare  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures" / "emotions"
 FPS = 12
@@ -206,11 +207,8 @@ def main() -> int:
             )
             check("S4 the sheet is written with its manifest", True, digest(sheet)[:12])
         else:
-            check(
-                "S4 the sheet is byte-identical to its reference",
-                stored.is_file() and digest(stored) == digest(sheet),
-                digest(sheet)[:12],
-            )
+            same, detail = golden_compare(stored, sheet)
+            check("S4 the sheet matches its reference", same, detail)
 
     print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP")
     return 0 if FAIL == 0 else 1
@@ -218,3 +216,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
