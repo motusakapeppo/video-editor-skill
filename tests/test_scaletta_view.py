@@ -139,6 +139,22 @@ def report_block() -> dict:
         "timeline": {"tail": {"requested": 12.0, "actual": 11.6, "reachable": False}},
         "plan": {"excluded": [{"clip_id": "c9", "why": "sotto la soglia di nitidezza"}]},
         "resources": {"mode": "balanced", "workers": 4, "ffmpeg_threads": 8},
+        # Le misure e i controlli: la pagina li mostra in MISURE.
+        "verification": {
+            "ok": True,
+            "checks": [
+                {
+                    "id": "duration",
+                    "ok": True,
+                    "measured": {"value": 12.0},
+                    "expected": 12.0,
+                    "why": "tolleranza un frame",
+                }
+            ],
+        },
+        "guard": {"ok": True, "violations": [], "warnings": ["upscale 1.4x"]},
+        "beat": {"bpm": 120.0, "clips": 4, "cuts": 3, "density_per_sec": 0.25},
+        "timings": {"triage": 1.2, "render": 18.4},
         "sections": {
             "ok": True,
             "total": 6,
@@ -219,6 +235,12 @@ def main() -> int:
                 and (state.get("out_of_frame") or {}).get("cuts") == 2,
                 (state.get("out_of_frame") or {}).get("empty"),
             )
+            check(
+                "V1 e le misure",
+                (state.get("measures") or {}).get("empty") is False
+                and (state.get("measures") or {}).get("beat", {}).get("bpm") == 120.0,
+                sorted(state.get("measures") or {}),
+            )
 
             try:
                 from playwright.sync_api import sync_playwright
@@ -281,6 +303,24 @@ def main() -> int:
                                 "V5 dice i tagli e i secondi tolti",
                                 "1,4" in fuori_text or "1.4" in fuori_text,
                                 fuori_text[:200],
+                            )
+                            misure = page.locator("#misure").first
+                            check(
+                                "V6 il blocco MISURE è in pagina",
+                                misure.count() > 0 and misure.is_visible(),
+                            )
+                            misure_text = misure.inner_text() if misure.count() else ""
+                            check(
+                                "V6 mostra la verifica con misurato e atteso",
+                                "duration" in misure_text
+                                and "12" in misure_text
+                                and ("atteso" in misure_text.lower() or "attesa" in misure_text.lower()),
+                                misure_text[:200],
+                            )
+                            check(
+                                "V6 e il battito con i suoi numeri",
+                                "120" in misure_text and "bpm" in misure_text.lower(),
+                                misure_text[:200],
                             )
                             browser.close()
                 except Exception as exc:  # noqa: BLE001 - il browser non è il soggetto

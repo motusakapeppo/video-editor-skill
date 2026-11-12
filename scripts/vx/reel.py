@@ -525,7 +525,9 @@ def run(args: Any) -> Dict[str, Any]:
                 progress=None,
                 progress_file=str(auto.progress_path(auto_args)),
                 view_url="",
-                view_active=False,
+                # ``None``: decide la prova, non la costante. La vista ora parte
+                # da sola, quindi "nessuno guarda" non e' piu' un dato di fatto.
+                view_active=None,
             )
         except BaseException:
             # Whatever the engine raises, the log must not pretend later stages

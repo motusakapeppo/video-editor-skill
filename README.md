@@ -217,10 +217,20 @@ non era disponibile, quindi non c'è silenzio misurato e nulla viene tagliato.
 
 ## Cosa la vista mostra, e cosa resta nel report
 
+**La vista non si chiede: parte da sola.** `vx reel`, `vx auto` e il tool MCP
+`vx_auto` chiamano `auto.autostart_view` → `cli.ensure_view`: il daemon si
+accende (o si riusa, se già vivo) e la pagina si apre **prima** che il girato
+venga toccato. `vx up` resta per aprirla a mano, `vx down` per chiuderla;
+`--no-view` o `VX_NO_VIEW=1` è l'unico modo per non accenderla (CI, macchine
+senza browser). Dopo l'apertura il lavoro aspetta qualche secondo il primo
+giro di `/api/state`: senza quell'attesa i cancelli userebbero i default mentre
+l'utente sta ancora caricando la pagina.
+
 La pagina non è un riassunto a sentimento: legge `/api/state` e disegna quello che
 il lavoro ha misurato. Accanto alla SCALETTA (hook, clip, b-roll, movimenti) e al
-CONTRATTO (gli otto stadi con valore e soglia), c'è il blocco **FUORI**, che
-dichiara quello che è stato scartato:
+CONTRATTO (gli otto stadi con valore e soglia), ci sono due blocchi: **FUORI**,
+che dichiara quello che è stato scartato, e **MISURE**, che mostra quello che è
+stato misurato e deciso.
 
 | voce (`out_of_frame`) | cosa dice |
 |---|---|
@@ -234,7 +244,11 @@ dichiara quello che è stato scartato:
 | `cuts` · `cuts_removed_sec` | quanti tagli di silenzio e quanti secondi hanno tolto |
 | `resources` | modo di calcolo, worker, thread ffmpeg, whisper, GPU, sovrapposizione |
 
-Se il blocco è vuoto non si disegna: niente cornici senza contenuto.
+`measures` porta il resto del report senza inventare niente: `verification`
+(ogni controllo con misurato e atteso), `policy`, `guard`, `beat`, `variety`,
+`coherence`, `laws`, `audio`, `opening`, `triage`, `estimate`, `measured`,
+`scenes`, `features`, `assets`, `timings`, `deliverable`. Le liste si fermano a
+60 voci e le stringhe a 400 caratteri — è l'unico taglio, e non tocca i numeri.
 
 Uno stadio saltato (per `--no-bridge`, cache o guardia non richiesta) è uno stadio
 **saltato**, con il suo motivo: il log lo scriveva e la pagina lo chiamava

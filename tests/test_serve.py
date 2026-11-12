@@ -1176,6 +1176,22 @@ def main() -> int:
                         "tail": {"requested": 20.0, "actual": 19.6, "reachable": False}
                     },
                     "plan": {"excluded": [{"clip_id": "c9", "why": "sotto la soglia"}]},
+                    # Le misure e i controlli: la pagina li mostra in MISURE.
+                    "verification": {
+                        "ok": True,
+                        "checks": [
+                            {
+                                "id": "duration",
+                                "ok": True,
+                                "measured": {"value": 19.6},
+                                "expected": 20.0,
+                                "why": "tolleranza 1 frame",
+                            }
+                        ],
+                    },
+                    "guard": {"ok": True, "violations": [], "warnings": ["upscale 1.4x"]},
+                    "beat": {"bpm": 120.0, "clips": 4, "cuts": 3, "density_per_sec": 0.25},
+                    "timings": {"triage": 1.2, "render": 18.4},
                 }
             ),
             encoding="utf-8",
@@ -1239,6 +1255,20 @@ def main() -> int:
                 and out.get("cuts") == 2
                 and out.get("cuts_removed_sec") == 1.4,
                 out,
+            )
+            measures = data.get("measures") or {}
+            check(
+                "S1e lo stato porta anche le misure e i controlli",
+                measures.get("empty") is False
+                and measures.get("verification", {})
+                .get("checks", [{}])[0]
+                .get("id")
+                == "duration"
+                and measures.get("guard", {}).get("warnings") == ["upscale 1.4x"]
+                and measures.get("beat", {}).get("bpm") == 120.0
+                and measures.get("timings", {}).get("render") == 18.4
+                and "composition" not in measures,
+                sorted(measures),
             )
 
             journal = data.get("journal")

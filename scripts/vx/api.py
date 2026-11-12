@@ -47,6 +47,9 @@ def run_auto(
     # una chiamata precedente nello stesso processo, scriverebbe li'.
     previous = getattr(auto, "_NARRATING", False)
     reserved = getattr(auto, "_STDOUT_RESERVED", False)
+    # "La vista parte da sola" vale anche per l'MCP: `vx_auto` non e' un
+    # percorso di seconda classe. Un daemon che non parte non ferma il lavoro.
+    auto.autostart_view(namespace)
     auto._NARRATING = False
     auto._STDOUT_RESERVED = True
     try:

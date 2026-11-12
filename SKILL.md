@@ -47,11 +47,18 @@ il risultato è pubblicabile. Non si compone la pipeline a mano: se una capacit�
 manca si dichiara e ci si ferma, non si improvvisa (`vx auto`, `edl3`, `run`
 restano strumenti di livello più basso, non il percorso normale).
 
-La vista non è un optional: `vx up` accende il daemon che resta vivo, `/reel`
-apre la pagina prima di ogni altra cosa. Una vista promessa e non aperta è un
-difetto, non una distrazione. La pagina mostra il **contratto**, non solo la
-percentuale: otto stadi con valore e soglia, e il timbro `NON PUBBLICABILE` col
-nome vero del file quando il contratto non ha firmato.
+**Prima azione, appena la skill viene caricata**: `& $PY $VX up --open`. La vista
+parte da sola anche da `vx reel`, `vx auto` e `vx_auto` (`autostart_view`); se è
+chiusa si ripara l'autostart, non si chiama a mano. Unico interruttore:
+`--no-view` / `VX_NO_VIEW=1` (CI, macchine senza browser). L'URL va dato in una
+riga («Lo guardi qui: …»).
+
+La pagina mostra tutto: **contratto**, **scaletta** (proposta e fatto separati,
+declini), **cosa è rimasto fuori** (avvisi, file non-media, scarti col motivo,
+coda, clip escluse, sezioni vuote, secondi tolti) e **cosa ha misurato**
+(verifiche, policy, guardia, battito, varietà, coerenza, audio, stima, tempi).
+Blocco vuoto non si disegna; il resto resta nel report. Dettagli in
+`references/31-protocollo.md` §2.
 
 Due lavori sulla stessa cartella non convivono: `<workdir>/.vx/lock` è un lease
 con battito fuori banda, e chi arriva secondo esce `2` dicendo chi lo tiene. Su
@@ -107,38 +114,31 @@ Regole non negoziabili:
 ## La scaletta
 
 Ogni lavoro compila sei sezioni — `hook`, `beat`, `payoff`, `cta`, `proof`,
-`broll` — dalle misure già prese. Ognuna porta la **competenza** che l'ha
-prodotta, il **materiale** su cui poggia e il **numero** che la giustifica: senza
-numero non è compilata, è `missing` o `absent` col motivo. La scaletta non spegne
-nessuna competenza e non inventa sezioni: le sei sono chiuse.
+`broll` — dalle misure prese. Ognuna porta **competenza**, **materiale** e
+**numero**: senza numero è `missing` o `absent` col motivo. Le sei sono chiuse,
+e nessuna competenza si spegne.
 
 Se la richiesta nomina un hook o una CTA, quella sezione è **obbligatoria**: se
 resta scoperta il lavoro **non si consegna**, e il buco sta in
 `report["sections"]["gaps"]`.
 
-La scaletta **compone** il montaggio con leve misurate: la durata del gancio
-(nitidezza dell'apertura — triage, o profilo per-frame quando il triage è cieco —,
-BPM, corsa utile, quota della durata), il numero di clip in timeline (contato sui
-due piani: baseline e composto), l'ordine dei b-roll (nitidezza) e i loro
-ingressi (sul taglio più vicino, non a metà frase), più una **coda libera**
-quando la richiesta chiede una CTA. Con la griglia BPM il gancio è il primo
-shot: si dichiara, non si inventa. Se una misura manca la leva **declina col
-motivo** e il piano resta quello di prima; il report porta `proposed` e
-`applied` separati, così si vede cosa è stato proposto e cosa il piano mostra
-davvero.
+La scaletta **compone** il montaggio con leve misurate: durata del gancio
+(nitidezza dell'apertura — triage, o profilo per-frame se il triage è cieco —,
+BPM, corsa utile, quota della durata), numero di clip (contato su baseline e
+composto), ordine dei b-roll e loro ingressi (sul taglio più vicino, non a metà
+frase), più una **coda libera** quando serve una CTA. Con la griglia BPM il
+gancio è il primo shot: si dichiara, non si inventa. Se una misura manca la leva
+**declina col motivo** e il piano resta quello di prima; il report porta
+`proposed` e `applied` separati.
 
 Le composizioni che un grafo di filtri non sa dire — split screen, confronto,
-sottopancia — si dichiarano e le rende **Chromium** (`vx scene`), un fotogramma
-alla volta, pubblicate in `live/` mentre si costruiscono. La grafica sta al
-browser, il montaggio dei flussi video a ffmpeg.
+sottopancia — le rende **Chromium** (`vx scene`), un fotogramma alla volta,
+pubblicate in `live/`; la grafica al browser, i flussi video a ffmpeg.
 
 I sottotitoli si chiedono col flag **o a parole** («con sottotitoli»). Se il
 parlato non c'è il report dice `no speech`; se nessuno li aveva chiesti dice
-`sottotitoli non richiesti` — sono due cose diverse.
-
-Se il reel esce più corto perché ha tolto i silenzi, si tollera fino al **20%
-(max 3 s)** e il report lo scrive con i due numeri; oltre quella soglia non si
-consegna.
+`sottotitoli non richiesti` — due cose diverse. Se il reel accorcia per i
+silenzi tolti, si tollera il **20% (max 3 s)** col numero nel report; oltre no.
 
 ## Come si giudica
 
@@ -158,8 +158,8 @@ soglie che decidono; sotto, il lavoro non è pubblicabile:
   un movimento cieco; le clip inutilizzabili si escludono, gli inizi si spostano
   sul picco di nitidezza.
 
-Il gusto non si inventa: si misura ciò che è misurabile e, dove non lo è, si
-dichiara la scelta e l'alternativa scartata nel report.
+Il gusto non si inventa: ciò che è misurabile si misura, il resto si dichiara col
+motivo e con l'alternativa scartata.
 
 ## Cosa misura
 
@@ -184,8 +184,8 @@ di qui. All'inizio si dichiara se si lavora in autonomia o con le scelte
 dell'utente; in autonomia ogni scelta va motivata con l'alternativa scartata.
 
 I **limiti** (piattaforma, un lavoro per cartella, nessuna variante per
-piattaforma, una macchina sola) stanno in un posto solo:
-`references/31-protocollo.md`, sezione 10. Qui non si ripetono.
+piattaforma, una macchina sola) stanno in `references/31-protocollo.md` §10: qui
+non si ripetono.
 
 ### Exit codes
 

@@ -165,6 +165,10 @@ def child_env() -> Dict[str, str]:
     # fixture "vuota" a ogni giro). `serve.reveal_native` esce subito quando
     # questa variabile e' attiva.
     env["VX_NO_REVEAL"] = "1"
+    # La vista parte da sola a ogni `auto`/`reel`: dentro la suite sarebbero
+    # decine di daemon e decine di schede. La prova che l'autostart esiste e
+    # funziona sta in `test_view_autostart.py`, che accende e spegne il suo.
+    env["VX_NO_VIEW"] = "1"
     return env
 
 

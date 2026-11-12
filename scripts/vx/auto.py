@@ -279,6 +279,48 @@ def view_is_attached(
     return view_client_recent(workdir)
 
 
+def autostart_view(args: Any = None) -> str:
+    """Accende la vista all'avvio del lavoro, senza chiedere.
+
+    E' il patto della skill: se viene chiamata, la pagina c'e' gia'. Un solo
+    interruttore per spegnerla, ``--no-view`` o ``VX_NO_VIEW=1``: lo usano la
+    suite e le macchine senza browser. Se il daemon non parte, il montaggio
+    prosegue e ``degrade`` lo dichiara — non si finge una pagina che non c'e'.
+    """
+    if bool(getattr(args, "no_view", False)):
+        return ""
+    flag = str(os.environ.get("VX_NO_VIEW") or "").strip().lower()
+    if flag not in ("", "0", "false", "no"):
+        return ""
+    try:
+        from . import cli as cli_mod
+
+        url = cli_mod.ensure_view(open_page=True)
+    except Exception as exc:  # noqa: BLE001 - la vista non e' il montaggio
+        degrade.note("view.autostart", exc)
+        return ""
+    if not url:
+        degrade.note("view.autostart", "il daemon della vista non e' partito")
+    return url
+
+
+def wait_first_client(workdir: Any, *, timeout: float = 3.0) -> bool:
+    """Aspetta che la pagina appena aperta legga lo stato, per pochi secondi.
+
+    Aprire il browser e chiedere subito "c'e' qualcuno?" darebbe sempre no: il
+    primo giro di ``/api/state`` arriva quando la pagina ha finito di caricare.
+    Senza questa attesa i cancelli userebbero la proposta automatica mentre
+    l'utente sta guardando la pagina appena aperta.
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        if view_client_recent(workdir):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
 def _record_gate(
     workdir: Any,
     gate: str,

@@ -3121,6 +3121,7 @@ def _auto_panel_dir(args: argparse.Namespace, workdir: Path) -> Path:
 @_session_command("reel")
 def cmd_reel(args: argparse.Namespace) -> int:
     """Prompt + cartella -> auto + run log firmato -> consegna o rinomina."""
+    from . import auto
     from . import reel
 
     workdir = reel.resolve_workdir(args)
@@ -3133,6 +3134,15 @@ def cmd_reel(args: argparse.Namespace) -> int:
             session.set_job(workdir)
         except Exception:  # noqa: BLE001 - il registro non deve fermare il giro
             pass
+
+    # Anche il comando unico accende la vista da solo: se la promessa e' "una
+    # vista mostra il lavoro", non puo' essere il comando che lascia l'utente
+    # senza pagina. `--no-view` la spegne.
+    view_url = auto.autostart_view(args)
+    if view_url:
+        auto.wait_first_client(workdir)
+        if not getattr(args, "json", False):
+            print(f"Lo guardi qui: {view_url}", flush=True)
 
     report = reel.run(args)
     if getattr(args, "json", False):
@@ -3184,6 +3194,18 @@ def cmd_auto(args: argparse.Namespace) -> int:
             pass
         session.stage("triage", 0.0, "Avvio del lavoro")
 
+    # La vista si accende da sola, prima di toccare il girato: la skill promette
+    # "una vista mostra il lavoro", e una promessa che richiede un comando in
+    # piu' non e' automatica. `--no-view` (o VX_NO_VIEW=1) e' l'unico modo per
+    # non aprirla. Il client appena aperto legge lo stato entro pochi secondi:
+    # si aspetta quel giro, altrimenti i cancelli userebbero i default mentre
+    # l'utente sta guardando la pagina.
+    view_url = auto.autostart_view(args)
+    if view_url:
+        auto.wait_first_client(workdir)
+        if not getattr(args, "json", False):
+            print(f"Lo guardi qui: {view_url}", flush=True)
+
     # La narrazione e' per chi guarda, il JSON per chi legge: non convivono.
     narrator = None
     panel_dir = None
@@ -3216,15 +3238,16 @@ def cmd_auto(args: argparse.Namespace) -> int:
             if extra.resolve() != Path(panel.path).resolve():
                 panel.copy = extra
             if getattr(args, "watch", False):
-                # Il daemon e' uno solo: se e' acceso lo si usa, altrimenti si
-                # avvia. Un secondo server per lo stesso lavoro sarebbe una
-                # seconda verita' da tenere allineata.
-                url = _watch_url()
-                if url:
-                    panel.watch_url = url
-                    print(f"Lo guardi qui: {url}", flush=True)
-                else:
-                    print("La vista non si e' aperta; il lavoro prosegue.", flush=True)
+                # Il daemon e' uno solo: se l'autostart non l'ha gia' acceso, si
+                # accende qui. Un secondo server per lo stesso lavoro sarebbe
+                # una seconda verita' da tenere allineata.
+                view_url = view_url or _watch_url()
+            if view_url:
+                panel.watch_url = view_url
+                if not getattr(args, "json", False):
+                    print(f"Lo guardi qui: {view_url}", flush=True)
+            elif getattr(args, "watch", False):
+                print("La vista non si e' aperta; il lavoro prosegue.", flush=True)
             panel.write()
         narrator = narrate.Narrator(panel=panel)
         count = _media_count(getattr(args, "assets", ""))
@@ -3251,7 +3274,7 @@ def cmd_auto(args: argparse.Namespace) -> int:
             _session.stage(str(stage), float(percent))
             _narrator(percent, stage)
 
-    view_url = str(getattr(panel, "watch_url", "") or "") if panel else ""
+    view_url = str(getattr(panel, "watch_url", "") or "") or view_url
     # "C'e' qualcuno" non e' "il pannello esiste": serve un URL agganciato con
     # ``--watch`` oppure un client che ha letto lo stato da poco. Senza,
     # i cancelli usano la proposta e lo dichiarano (``by: auto``) subito.
@@ -3688,6 +3711,30 @@ def _watch_url() -> str:
     return str(_start_up(None).get("url") or "")
 
 
+def ensure_view(*, open_page: bool = True) -> str:
+    """Accende la vista: avvia il daemon (o riusa quello vivo) e apre la pagina.
+
+    Una funzione sola perche' "automatico" non deve voler dire "tre modi
+    diversi": la usa `vx up`, la chiamano `vx auto` e `vx reel` prima di toccare
+    il girato, e l'MCP passa dallo stesso punto. Un errore qui non ferma il
+    lavoro: torna stringa vuota e chi chiama lo dichiara.
+    """
+    record = _start_up(None)
+    if not record:
+        return ""
+    url = str(record.get("url") or "")
+    # Il browser si apre solo quando il daemon nasce adesso: su un daemon gia'
+    # acceso la pagina e' gia' davanti all'utente.
+    if open_page and url and not record.get("reused"):
+        try:
+            import webbrowser
+
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001 - aprire il browser e' un di piu'
+            pass
+    return url
+
+
 def _stop_pid(pid: int) -> bool:
     """Ferma **solo** il pid dato, aspettando che sparisca. True se e' andato."""
     try:
@@ -3719,6 +3766,15 @@ def _stop_pid(pid: int) -> bool:
 
 def cmd_up(args: argparse.Namespace) -> int:
     """Avvia (o riusa) il daemon della vista di sessione e stampa l'URL."""
+    if getattr(args, "port", None) is None:
+        # Stesso punto di `vx auto` / `vx reel`: una sola strada per accendere
+        # la vista, cosi' l'automatico e il manuale non divergono.
+        url = ensure_view(open_page=bool(getattr(args, "open", False)))
+        if not url:
+            _log("[up] il daemon non e' partito: la vista resta chiusa")
+            return EXIT_USAGE
+        print(url, flush=True)
+        return EXIT_OK
     record = _start_up(getattr(args, "port", None))
     if not record:
         _log("[up] il daemon non e' partito: la vista resta chiusa")
@@ -4517,6 +4573,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="non scrivere il pannello: solo le righe di testo",
     )
     p.add_argument(
+        "--no-view",
+        action="store_true",
+        help="non accendere la vista: la pagina parte da sola, questo la spegne "
+        "(per CI e macchine senza browser; vale anche VX_NO_VIEW=1)",
+    )
+    p.add_argument(
         "--watch",
         action="store_true",
         help="apre la vista del lavoro e stampa l'indirizzo PRIMA del render: "
@@ -4673,6 +4735,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--crf", type=int, default=None)
     p.add_argument("--preset", default=None)
     p.add_argument("--no-feature", action="append", default=[], metavar="NAME")
+    p.add_argument(
+        "--no-view",
+        action="store_true",
+        help="non accendere la vista (la pagina parte da sola; vale anche VX_NO_VIEW=1)",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_reel)
 

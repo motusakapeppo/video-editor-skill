@@ -459,6 +459,7 @@ body.is-stamped .brand-dot {
    scelte del montaggio, poi ciò che non ci è entrato, poi la prova del lavoro. */
 .col-work > .scaletta { order: 2; }
 .col-work > .fuori { order: 2; }
+.col-work > .misure { order: 2; }
 /* Il motore sta sotto il contratto: la prova del lavoro, poi la scena che entra. */
 .col-work > .motore-slot { order: 2; }
 .col-work > .vote-card { order: 3; }
@@ -1582,6 +1583,251 @@ body.is-offline .eyebrow { color: var(--warn); }
   .fuori-group {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
+  }
+}
+
+/* ------------------------------------------------------------ cosa ha misurato */
+
+/* L'altra metà del report: le misure. Stessa griglia di FUORI, ma l'accento è
+   il blu del lavoro, non l'ambra dello scarto. Il summary chiude un blocco che
+   per natura è lungo; le liste si fermano a otto righe. */
+.misure {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(520px 210px at 8% -20%, rgba(78, 161, 255, .09), transparent 70%),
+    linear-gradient(180deg, #0f141b 0%, #0a0d12 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .045) inset,
+    0 20px 44px -34px rgba(0, 0, 0, .9);
+  overflow: hidden;
+  animation: rise 560ms var(--ease-out) 70ms backwards;
+}
+
+.misure::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(142, 200, 255, .7), rgba(78, 161, 255, .03) 78%);
+}
+
+.misure > summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 22px 14px 24px;
+  list-style: none;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line);
+  transition: background var(--t-in) var(--e-in);
+}
+
+.misure > summary::-webkit-details-marker { display: none; }
+.misure > summary:hover { background: rgba(78, 161, 255, .035); }
+.misure > summary:focus-visible {
+  outline: 2px solid rgba(78, 161, 255, .55);
+  outline-offset: -2px;
+}
+
+.misure:not([open]) > summary { border-bottom-color: transparent; }
+
+.misure > summary::after {
+  content: "▾";
+  flex: 0 0 auto;
+  margin-left: 4px;
+  font: 600 11px/1.5 var(--mono);
+  color: var(--accent-2);
+  transition: transform var(--t-in) var(--e-in);
+}
+
+.misure:not([open]) > summary::after { transform: rotate(-90deg); }
+
+.misure-titles {
+  display: block;
+  min-width: 0;
+}
+
+.misure-title {
+  display: block;
+  margin: 0;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.misure-sub {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.misure-meta {
+  margin-left: auto;
+  padding: 3px 9px 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .025);
+  font-size: 10px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.misure-groups {
+  display: flex;
+  flex-direction: column;
+  max-height: clamp(360px, 58vh, 620px);
+  overflow-y: auto;
+  padding: 2px 22px 18px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(142, 200, 255, .42) transparent;
+}
+
+.misure-groups::-webkit-scrollbar { width: 8px; }
+.misure-groups::-webkit-scrollbar-track { background: transparent; }
+.misure-groups::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(142, 200, 255, .4);
+  background-clip: content-box;
+}
+
+.misure .fuori-label::before { background: rgba(78, 161, 255, .7); }
+
+.misure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.misure-row {
+  display: grid;
+  grid-template-columns: minmax(82px, 112px) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 12px;
+  min-width: 0;
+}
+
+.misure-key {
+  margin: 0;
+  font: 500 10.5px/1.45 var(--mono);
+  letter-spacing: .02em;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.misure-val {
+  min-width: 0;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.misure-line {
+  margin: 0;
+  max-width: 82ch;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.misure-subs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  min-width: 0;
+  padding-left: 9px;
+  border-left: 1px solid rgba(255, 255, 255, .09);
+}
+
+.misure-subrow {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.misure-subkey {
+  font: 500 9.5px/1.4 var(--mono);
+  color: var(--ink-3);
+}
+
+.misure-subval {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.misure-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  margin: 1px 0 0;
+  padding: 0;
+}
+
+.misure-item {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.misure-item + .misure-item,
+.misure-checks .misure-check + .misure-check {
+  padding-top: 5px;
+  box-shadow: 0 -1px 0 rgba(255, 255, 255, .035);
+}
+
+.misure-checks { gap: 6px; }
+
+.misure-check .fuori-why {
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.misure-more {
+  margin: 1px 0 0;
+  font: 500 9.5px/1.4 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+@media (max-width: 760px) {
+  .misure > summary {
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding: 14px 18px 12px 20px;
+  }
+
+  .misure-meta {
+    width: 100%;
+    margin-left: 0;
+    text-align: left;
+  }
+
+  .misure-groups { padding: 2px 18px 16px 20px; }
+
+  .misure-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
   }
 }
 

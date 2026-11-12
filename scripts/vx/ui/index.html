@@ -218,6 +218,22 @@
           </div>
         </section>
 
+        <!-- Cosa ha misurato: il resto del report, gruppo per gruppo. Verifiche,
+             policy, guardia, battito, audio, stime, tempi, asset. È un blocco
+             lungo per natura: il summary lo chiude in una riga, le liste si
+             fermano alle prime otto voci. Se `measures.empty` è vero, non si
+             disegna. -->
+        <details class="misure" id="misure" aria-labelledby="misureTitle" hidden open>
+          <summary class="misure-head">
+            <span class="misure-titles">
+              <span class="misure-title" role="heading" aria-level="2" id="misureTitle">Cosa ha misurato</span>
+              <span class="misure-sub">i numeri del report, gruppo per gruppo</span>
+            </span>
+            <span class="misure-meta num" id="misureMeta"></span>
+          </summary>
+          <div class="misure-groups" id="misureGroups"></div>
+        </details>
+
         <!-- Il contratto del lavoro: otto stadi, ognuno con la sua misura.
              Non è una percentuale: è quello che il log `.vx/run.jsonl` firma. -->
         <section class="contract" id="contract" aria-labelledby="contractTitle" hidden>

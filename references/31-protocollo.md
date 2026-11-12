@@ -39,7 +39,13 @@ restano disponibili come strumenti di livello più basso.
 
 ## 2. La vista
 
-- `vx up` accende il daemon (URL su stdout, resta acceso; `vx down` lo ferma).
+- La vista **parte da sola**: `vx auto`, `vx reel` e il tool MCP `vx_auto`
+  chiamano `auto.autostart_view` → `cli.ensure_view`, che accende il daemon (o
+  riusa quello vivo) e apre la pagina prima di toccare il girato. Dopo
+  l'apertura si aspetta qualche secondo il primo giro di `/api/state`, così i
+  cancelli non usano i default mentre la pagina sta caricando. `vx up` resta per
+  aprirla a mano, `vx down` la ferma; `--no-view` / `VX_NO_VIEW=1` è l'unico modo
+  per non accenderla (CI, macchine senza browser).
 - `vx serve DIR` serve un singolo lavoro; `--watch` aggancia la corsa al daemon.
 - Il comando OpenCode `/reel` apre la vista **prima** di ogni altra cosa.
 - I cancelli (font, fotogrammi, piano) aspettano una risposta **solo se c'è un
@@ -71,6 +77,12 @@ restano disponibili come strumenti di livello più basso.
   (`questions[].applied`, `questions[].why`): i sottotitoli hanno un
   interruttore, formato e hook no, e la risposta senza effetto viene anche
   stampata.
+- Accanto a FUORI c'è **MISURE** (`state.measures`): `verification`, `policy`,
+  `guard`, `beat`, `variety`, `coherence`, `laws`, `audio`, `opening`, `triage`,
+  `estimate`, `measured`, `scenes`, `features`, `assets`, `timings`,
+  `deliverable`. Sono gli stessi campi di `auto_report.json`, troncati solo
+  nella lunghezza (liste 60 voci, stringhe 400 caratteri): i numeri non si
+  arrotondano e le chiavi non si scartano.
 
 ## 3. Ingest e triage (livello basso)
 

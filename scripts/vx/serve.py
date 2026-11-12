@@ -2484,6 +2484,75 @@ def _out_of_frame(report: Mapping[str, Any]) -> Dict[str, Any]:
     return block
 
 
+#: I blocchi del report che la pagina deve poter mostrare. Non e' la lista di
+#: "cosa e' importante": e' tutto quello che il lavoro misura o decide, tolto
+#: solo il gia' mostrato altrove (composition, sections, movements, warnings,
+#: scarti, coda) e i percorsi che non aiutano a capire.
+MEASURE_KEYS = (
+    "verification",
+    "policy",
+    "guard",
+    "beat",
+    "variety",
+    "coherence",
+    "laws",
+    "audio",
+    "opening",
+    "triage",
+    "estimate",
+    "measured",
+    "scenes",
+    "features",
+    "assets",
+    "timings",
+    "deliverable",
+    "loudness_target",
+    "plan_notes",
+)
+
+
+def _cap(value: Any, *, depth: int = 0) -> Any:
+    """Tronca solo la lunghezza di liste e stringhe, mai i numeri.
+
+    Uno stato che si legge ogni secondo non puo' portarsi dietro mille righe:
+    le liste si fermano a 60 voci, le stringhe a 400 caratteri. Non si
+    arrotondano i valori, non si scartano le chiavi: quello che resta e' il
+    report, ridotto di dimensione.
+    """
+    if depth > 4:
+        return "…"
+    if isinstance(value, Mapping):
+        return {str(key): _cap(item, depth=depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        rows = [_cap(item, depth=depth + 1) for item in value[:60]]
+        if len(value) > len(rows):
+            rows.append({"": f"… e altre {len(value) - len(rows)} voci nel report"})
+        return rows
+    if isinstance(value, str) and len(value) > 400:
+        return value[:397] + "…"
+    return value
+
+
+def _measures(report: Mapping[str, Any]) -> Dict[str, Any]:
+    """Il resto del report, per la pagina: misure, controlli, stime, esiti.
+
+    Il blocco FUORI dice cosa si e' perso; questo dice cosa si e' misurato e
+    che cosa ne e' stato deciso. Sono gli stessi campi di ``auto_report.json``,
+    senza inventare una seconda verita'.
+    """
+    data = report if isinstance(report, Mapping) else {}
+    block: Dict[str, Any] = {}
+    for key in MEASURE_KEYS:
+        if key not in data:
+            continue
+        value = data.get(key)
+        if value in (None, "", {}, [], ()):
+            continue
+        block[key] = _cap(value)
+    block["empty"] = not block
+    return block
+
+
 def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Lo stato del lavoro: pubblicato se c'e' il panel, altrimenti dedotto.
 
@@ -2620,6 +2689,9 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         # ignorati, asset rifiutati col motivo, b-roll non applicati, secondi
         # persi. Il report lo sapeva, la pagina no.
         "out_of_frame": _out_of_frame(report),
+        # E quello che ha misurato e deciso: verifiche, policy, guardia, beat,
+        # varietà, coerenza, audio, stima, esiti. Stessi campi del report.
+        "measures": _measures(report),
         # I movimenti del corpo: la lettura della struttura (1-3 gruppi), accanto
         # alle sezioni. La pagina li mostra nella riga CLIP.
         "movements": (

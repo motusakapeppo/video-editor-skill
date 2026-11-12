@@ -71,6 +71,9 @@
     fuoriExcluded: $('fuoriExcluded'),
     fuoriGaps: $('fuoriGaps'),
     fuoriResources: $('fuoriResources'),
+    misure: $('misure'),
+    misureMeta: $('misureMeta'),
+    misureGroups: $('misureGroups'),
     motore: $('motore'),
     motoreSentinel: $('motoreSentinel'),
     motoreImg: $('motoreImg'),
@@ -2079,6 +2082,370 @@
     const resourceBits = ofResourceBits(resources);
     el.fuoriResources.textContent = resourceBits.join(' · ');
     ofSetGroup('resources', resourceBits.length > 0);
+  }
+
+  /* ------------------------------------------------------- cosa ha misurato */
+
+  // Il resto del report: verifiche, policy, guardia, misure, tempi. Le chiavi
+  // del server restano quelle del report; l'etichetta è solo una lente. Una
+  // chiave che non conosciamo si mostra così com'è, non si nasconde.
+  const MEASURE_LABEL = {
+    verification: 'Verifiche',
+    policy: 'Policy',
+    guard: 'Guardia',
+    beat: 'Battito',
+    variety: 'Varietà',
+    coherence: 'Coerenza',
+    laws: 'Leggi',
+    audio: 'Audio',
+    opening: 'Apertura',
+    triage: 'Triage',
+    estimate: 'Stima',
+    measured: 'Misure',
+    scenes: 'Scene',
+    features: 'Caratteristiche',
+    assets: 'Asset',
+    timings: 'Tempi',
+    deliverable: 'Consegna',
+    loudness_target: 'Loudness',
+    plan_notes: 'Note di piano',
+  };
+
+  let misureJob = null;
+
+  function isPrimitiveValue(value) {
+    return (
+      value === null ||
+      value === undefined ||
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    );
+  }
+
+  function isSecondsKey(key) {
+    const name = String(key || '').toLowerCase();
+    if (name.endsWith('_per_sec')) return false;
+    return (
+      name === 'seconds' ||
+      name === 'duration' ||
+      name === 'elapsed' ||
+      name.endsWith('_sec') ||
+      name.endsWith('_seconds')
+    );
+  }
+
+  function unitFor(key) {
+    const name = String(key || '').toLowerCase();
+    if (!name) return '';
+    if (name.endsWith('_db')) return 'dB';
+    if (name === 'lufs') return 'LUFS';
+    if (name === 'bpm') return 'BPM';
+    if (name.endsWith('_per_sec')) return '/s';
+    if (name.endsWith('_ms')) return 'ms';
+    if (name.endsWith('_percent') || name === 'percent') return '%';
+    if (name === 'fps') return 'fps';
+    return '';
+  }
+
+  function formatMeasureValue(value, key, forceSeconds) {
+    if (value === null || value === undefined || value === '') return '—';
+    if (typeof value === 'boolean') return value ? 'sì' : 'no';
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      if (forceSeconds || isSecondsKey(key)) return secText(value);
+      const text = measureValue(value);
+      const unit = unitFor(key);
+      return unit ? text + ' ' + unit : text;
+    }
+    return String(value).trim() || '—';
+  }
+
+  function compactValue(value, key, forceSeconds) {
+    if (value === null || value === undefined) return '—';
+    if (Array.isArray(value)) {
+      if (!value.length) return '—';
+      const shown = value
+        .slice(0, 8)
+        .map((item) => compactValue(item, key, forceSeconds));
+      const rest = value.length - shown.length;
+      return shown.join(' · ') + (rest > 0 ? ' · + altre ' + rest : '');
+    }
+    if (typeof value === 'object') {
+      const data = objectOf(value);
+      const keys = Object.keys(data);
+      if (!keys.length) return '—';
+      if (keys.length === 1) {
+        return compactValue(data[keys[0]], keys[0], forceSeconds);
+      }
+      const parts = keys
+        .slice(0, 3)
+        .map((name) => name + ' ' + compactValue(data[name], name, forceSeconds));
+      return parts.join(' · ') + (keys.length > 3 ? ' · …' : '');
+    }
+    return formatMeasureValue(value, key, forceSeconds);
+  }
+
+  function measureMore(count, tag) {
+    const node = document.createElement(tag || 'p');
+    node.className = 'misure-more';
+    node.textContent = '+ altre ' + count + (count === 1 ? ' voce' : ' voci');
+    return node;
+  }
+
+  function looksLikeCheck(item) {
+    return (
+      item &&
+      typeof item === 'object' &&
+      !Array.isArray(item) &&
+      'id' in item &&
+      'ok' in item &&
+      ('measured' in item || 'expected' in item || 'why' in item)
+    );
+  }
+
+  function checkValue(value, timeCheck) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const data = objectOf(value);
+      const keys = Object.keys(data);
+      if (keys.length === 1 && keys[0] === 'value') {
+        return compactValue(data.value, 'value', timeCheck);
+      }
+    }
+    return compactValue(value, 'value', timeCheck);
+  }
+
+  function measureCheckRow(item) {
+    const row = document.createElement('li');
+    row.className = 'fuori-item misure-check';
+
+    const head = document.createElement('p');
+    head.className = 'fuori-item-head';
+    const id = document.createElement('span');
+    id.className = 'fuori-id num';
+    id.textContent = String(item.id || 'controllo');
+    head.append(id);
+
+    if (typeof item.ok === 'boolean') {
+      const pill = document.createElement('span');
+      pill.className = 'fuori-state ' + (item.ok ? 'is-ok' : 'is-warn');
+      pill.textContent = item.ok ? 'ok' : 'ko';
+      head.append(pill);
+    }
+    row.append(head);
+
+    const timeCheck = /(duration|durata|timeline_sec)/i.test(String(item.id || ''));
+    const facts = [];
+    if ('measured' in item) facts.push('misurato ' + checkValue(item.measured, timeCheck));
+    if ('expected' in item) facts.push('atteso ' + checkValue(item.expected, timeCheck));
+    if (facts.length) {
+      const line = document.createElement('p');
+      line.className = 'fuori-facts num';
+      line.textContent = facts.join(' · ');
+      row.append(line);
+    }
+
+    const why = String(item.why || '').trim();
+    if (why) {
+      const say = document.createElement('p');
+      say.className = 'fuori-why';
+      say.textContent = tidyReason(why);
+      row.append(say);
+    }
+    return row;
+  }
+
+  function measureChecks(items) {
+    const list = document.createElement('ul');
+    list.className = 'misure-list misure-checks';
+    const shown = items.slice(0, 8);
+    shown.forEach((item) => list.append(measureCheckRow(item)));
+    if (items.length > shown.length) {
+      list.append(measureMore(items.length - shown.length, 'li'));
+    }
+    return list;
+  }
+
+  function compactMeasureItem(item, forceSeconds) {
+    const row = document.createElement('li');
+    row.className = 'misure-item';
+    const data = objectOf(item);
+    const keys = Object.keys(data);
+    if (!keys.length) {
+      row.textContent = '—';
+      return row;
+    }
+    const parts = keys
+      .slice(0, 3)
+      .map((key) => key + ' ' + compactValue(data[key], key, forceSeconds));
+    row.textContent =
+      parts.join(' · ') + (keys.length > 3 ? ' · + altre ' + (keys.length - 3) : '');
+    return row;
+  }
+
+  function appendMeasureValue(container, key, value, forceSeconds) {
+    if (value === null || value === undefined || value === '') {
+      container.append(document.createTextNode('—'));
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      if (!value.length) {
+        container.append(document.createTextNode('—'));
+        return;
+      }
+      if (key === 'checks' || value.every((item) => looksLikeCheck(item))) {
+        container.append(measureChecks(value));
+        return;
+      }
+      if (value.every((item) => isPrimitiveValue(item))) {
+        const shown = value
+          .slice(0, 8)
+          .map((item) => formatMeasureValue(item, key, forceSeconds));
+        const rest = value.length - shown.length;
+        container.append(
+          document.createTextNode(
+            shown.join(' · ') + (rest > 0 ? ' · + altre ' + rest : '')
+          )
+        );
+        return;
+      }
+      const list = document.createElement('ul');
+      list.className = 'misure-list';
+      value.slice(0, 8).forEach((item) => {
+        if (isPrimitiveValue(item)) {
+          const row = document.createElement('li');
+          row.className = 'misure-item';
+          row.textContent = formatMeasureValue(item, key, forceSeconds);
+          list.append(row);
+        } else if (looksLikeCheck(item)) {
+          list.append(measureCheckRow(item));
+        } else {
+          list.append(compactMeasureItem(item, forceSeconds));
+        }
+      });
+      if (value.length > 8) {
+        list.append(measureMore(value.length - 8, 'li'));
+      }
+      container.append(list);
+      return;
+    }
+
+    if (typeof value === 'object') {
+      const data = objectOf(value);
+      const keys = Object.keys(data);
+      if (!keys.length) {
+        container.append(document.createTextNode('—'));
+        return;
+      }
+      const sub = document.createElement('div');
+      sub.className = 'misure-subs';
+      keys.forEach((name) => {
+        const row = document.createElement('span');
+        row.className = 'misure-subrow';
+        const label = document.createElement('span');
+        label.className = 'misure-subkey';
+        label.textContent = name;
+        const text = document.createElement('span');
+        text.className = 'misure-subval';
+        text.textContent = compactValue(data[name], name, forceSeconds);
+        row.append(label, text);
+        sub.append(row);
+      });
+      container.append(sub);
+      return;
+    }
+
+    container.append(
+      document.createTextNode(formatMeasureValue(value, key, forceSeconds))
+    );
+  }
+
+  function measureRow(key, value, forceSeconds) {
+    const row = document.createElement('div');
+    row.className = 'misure-row';
+    const label = document.createElement('p');
+    label.className = 'misure-key';
+    label.textContent = key;
+    const body = document.createElement('div');
+    body.className = 'misure-val';
+    appendMeasureValue(body, key, value, forceSeconds);
+    row.append(label, body);
+    return row;
+  }
+
+  function measureGroup(key, value) {
+    const group = document.createElement('section');
+    group.className = 'fuori-group misure-group';
+    group.dataset.measure = key;
+
+    const label = document.createElement('p');
+    label.className = 'fuori-label';
+    label.textContent = MEASURE_LABEL[key] || key;
+
+    const body = document.createElement('div');
+    body.className = 'misure-body';
+    const forceSeconds = key === 'timings';
+
+    if (Array.isArray(value)) {
+      appendMeasureValue(body, key, value, forceSeconds);
+    } else if (value && typeof value === 'object') {
+      const data = objectOf(value);
+      const keys = Object.keys(data);
+      if (!keys.length) {
+        body.append(document.createTextNode('—'));
+      } else {
+        keys.forEach((name) => body.append(measureRow(name, data[name], forceSeconds)));
+      }
+    } else {
+      const line = document.createElement('p');
+      line.className = 'misure-line';
+      line.textContent = formatMeasureValue(value, key, false);
+      body.append(line);
+    }
+
+    group.append(label, body);
+    return group;
+  }
+
+  function clearMisure() {
+    if (!el.misure) return;
+    el.misure.hidden = true;
+    if (el.misureMeta) el.misureMeta.textContent = '';
+    if (el.misureGroups) el.misureGroups.textContent = '';
+    el.misure.dataset.signature = '';
+    misureJob = null;
+  }
+
+  function paintMisure(state) {
+    if (!el.misure || !el.misureGroups) return;
+    const block = state && state.measures;
+    if (!block || typeof block !== 'object' || block.empty === true) {
+      // Niente misure: nessun guscio vuoto, come per FUORI.
+      clearMisure();
+      return;
+    }
+
+    const keys = Object.keys(block).filter((key) => key !== 'empty');
+    if (!keys.length) {
+      clearMisure();
+      return;
+    }
+
+    if (misureJob !== jobIndex) {
+      clearMisure();
+      misureJob = jobIndex;
+    }
+
+    const signature = JSON.stringify(block);
+    if (el.misure.dataset.signature === signature) return;
+    el.misure.dataset.signature = signature;
+    el.misure.hidden = false;
+    el.misureMeta.textContent = keys.length === 1 ? '1 gruppo' : keys.length + ' gruppi';
+
+    el.misureGroups.textContent = '';
+    keys.forEach((key) => {
+      el.misureGroups.append(measureGroup(key, block[key]));
+    });
   }
 
   // Il timbro in testata: se il master si chiama NON-PUBBLICABILE-* la pagina
@@ -4924,6 +5291,7 @@
     el.contract.hidden = true;
     el.scaletta.hidden = true;
     clearFuori();
+    clearMisure();
     el.jobStamp.hidden = true;
   }
 
@@ -4987,6 +5355,7 @@
     paintContract(state);
     paintScaletta(state);
     paintFuori(state);
+    paintMisure(state);
 
     const finished = !state.current && percent >= 99.9;
     const ready = state.master_ready === true;
