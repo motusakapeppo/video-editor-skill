@@ -1,4 +1,4 @@
-"""Test del cut plan: il taglio si sposta solo dentro un silenzio misurato.
+﻿"""Test del cut plan: il taglio si sposta solo dentro un silenzio misurato.
 
 Le asserzioni sono sul contratto: i confini si muovono solo se l'onset cade
 dentro un silenzio, l'input non viene mutato, l'aritmetica dei frame resta
@@ -57,8 +57,10 @@ def build_edl(fps: float, label: str) -> edl_mod.Edl:
 
 def main() -> int:
     if not CLIP.is_file():
-        print(f"clip di corpus assente: {CLIP}")
-        return 1
+        # Il clip di corpus non e' versionato: senza, non c'e' niente da
+        # tagliare. Si dichiara e si esce 0: un file assente non e' un difetto.
+        print(f"  [SKIP] clip di corpus assente: {CLIP}")
+        return 0
 
     info = probe(str(CLIP))
     fps = float(info.fps)
@@ -175,3 +177,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

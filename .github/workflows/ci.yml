@@ -92,7 +92,7 @@ jobs:
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: "1"
           VX_FFMPEG: ffmpeg
-        run: python tests/run_all.py --jobs 1 --timeout 1800
+        run: python tests/run_all.py --jobs 1 --timeout 1800 --verbose
 
       - name: Cross-platform contract
         env:
@@ -148,5 +148,6 @@ jobs:
           PYTHONIOENCODING: utf-8
           PYTHONUTF8: "1"
           VX_FFMPEG: ffmpeg
-        run: python tests/run_all.py --jobs 1 --timeout 1800
+        run: python tests/run_all.py --jobs 1 --timeout 1800 --verbose
+
 

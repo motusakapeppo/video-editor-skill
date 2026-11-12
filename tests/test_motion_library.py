@@ -283,6 +283,12 @@ def run(work: Path) -> None:
             )
         hashes[name] = hashlib.sha256(mid.read_bytes()).hexdigest()
 
+    if not hashes:
+        # Nessun render possibile (di solito: playwright/Chromium assente).
+        # Le catture mancanti sono gia' state dichiarate una per una; qui non
+        # si accusa il codice di non aver prodotto frame che non poteva fare.
+        print("  [SKIP] nessuna cattura: motore grafico non disponibile")
+        return
     check(
         "54 distinct middle frames",
         len(set(hashes.values())) == len(hashes) and len(hashes) == len(EXPECTED),
