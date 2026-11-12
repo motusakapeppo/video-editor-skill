@@ -56,6 +56,22 @@ from . import winpath
 _NARRATING = False
 
 
+class _Silent:
+    """Uno stream che non scrive: con ``--json`` il pannello vive, la console tace.
+
+    Serve a tenere separate le due cose che prima erano una sola: il racconto a
+    schermo (che in ``--json`` non deve esistere) e la pubblicazione di
+    ``progress.json`` (che invece deve esistere sempre, altrimenti la vista non
+    ha niente da mostrare mentre il lavoro gira).
+    """
+
+    def write(self, text: str) -> int:
+        return len(text)
+
+    def flush(self) -> None:
+        return None
+
+
 def _log(msg: str) -> None:
     if _NARRATING and msg.startswith("[auto]"):
         return
@@ -3206,52 +3222,58 @@ def cmd_auto(args: argparse.Namespace) -> int:
         if not getattr(args, "json", False):
             print(f"Lo guardi qui: {view_url}", flush=True)
 
-    # La narrazione e' per chi guarda, il JSON per chi legge: non convivono.
+    # La narrazione e' per chi guarda, il JSON per chi legge: la console tace in
+    # `--json`, ma il pannello si scrive **sempre**. Prima l'intero blocco era
+    # dentro `if not json`, quindi un lavoro lanciato per leggere il report non
+    # pubblicava `progress.json` e la pagina non poteva aggiornarsi: si vedeva
+    # solo il resoconto finale.
+    from . import narrate
+
+    global _NARRATING
+    _NARRATING = not bool(getattr(args, "json", False))
     narrator = None
     panel_dir = None
     panel = None
-    if not getattr(args, "json", False):
-        from . import narrate
+    target = (
+        None
+        if getattr(args, "no_panel", False)
+        else str(_auto_panel_dir(args, workdir))
+    )
+    if target:
+        from . import panel as panel_mod
 
-        global _NARRATING
-        _NARRATING = True
-        target = (
-            None
-            if getattr(args, "no_panel", False)
-            else str(_auto_panel_dir(args, workdir))
+        panel_dir = Path(target)
+        panel = panel_mod.Panel(
+            panel_dir / "progress.html",
+            prompt=str(getattr(args, "prompt", "")),
+            clips=_media_count(getattr(args, "assets", "")),
+            phases=list(narrate.PHASES.items()),
         )
-        if target:
-            from . import panel as panel_mod
-
-            panel_dir = Path(target)
-            panel = panel_mod.Panel(
-                panel_dir / "progress.html",
-                prompt=str(getattr(args, "prompt", "")),
-                clips=_media_count(getattr(args, "assets", "")),
-                phases=list(narrate.PHASES.items()),
-            )
-            # Se il master e' fuori dalla workdir, accanto al master resta una
-            # copia del solo HTML (comodita'): il json che la vista legge e' uno
-            # solo, quello nella workdir.
-            out = Path(str(getattr(args, "out", "") or "out.mp4"))
-            extra = out.parent / f"{out.stem}-auto" / "progress.html"
-            if extra.resolve() != Path(panel.path).resolve():
-                panel.copy = extra
-            if getattr(args, "watch", False):
-                # Il daemon e' uno solo: se l'autostart non l'ha gia' acceso, si
-                # accende qui. Un secondo server per lo stesso lavoro sarebbe
-                # una seconda verita' da tenere allineata.
-                view_url = view_url or _watch_url()
-            if view_url:
-                panel.watch_url = view_url
-                if not getattr(args, "json", False):
-                    print(f"Lo guardi qui: {view_url}", flush=True)
-            elif getattr(args, "watch", False):
-                print("La vista non si e' aperta; il lavoro prosegue.", flush=True)
-            panel.write()
-        narrator = narrate.Narrator(panel=panel)
-        count = _media_count(getattr(args, "assets", ""))
-        narrator.header(str(getattr(args, "prompt", "")), count)
+        # Se il master e' fuori dalla workdir, accanto al master resta una
+        # copia del solo HTML (comodita'): il json che la vista legge e' uno
+        # solo, quello nella workdir.
+        out = Path(str(getattr(args, "out", "") or "out.mp4"))
+        extra = out.parent / f"{out.stem}-auto" / "progress.html"
+        if extra.resolve() != Path(panel.path).resolve():
+            panel.copy = extra
+        if getattr(args, "watch", False):
+            # Il daemon e' uno solo: se l'autostart non l'ha gia' acceso, si
+            # accende qui. Un secondo server per lo stesso lavoro sarebbe
+            # una seconda verita' da tenere allineata.
+            view_url = view_url or _watch_url()
+        if view_url:
+            panel.watch_url = view_url
+            if not getattr(args, "json", False):
+                print(f"Lo guardi qui: {view_url}", flush=True)
+        elif getattr(args, "watch", False):
+            print("La vista non si e' aperta; il lavoro prosegue.", flush=True)
+        panel.write()
+    narrator = narrate.Narrator(
+        stream=(_Silent() if getattr(args, "json", False) else sys.stdout),
+        panel=panel,
+    )
+    count = _media_count(getattr(args, "assets", ""))
+    narrator.header(str(getattr(args, "prompt", "")), count)
 
     # Il cancello dei font: default dalla configurazione, poi i flag vincono.
     if getattr(args, "font_network", None) is None:
@@ -3280,13 +3302,22 @@ def cmd_auto(args: argparse.Namespace) -> int:
     # i cancelli usano la proposta e lo dichiarano (``by: auto``) subito.
     view_active = auto.view_is_attached(workdir, panel=panel, view_url=view_url)
     try:
-        report = auto.run(
-            args,
-            progress=progress_target,
-            progress_file=str(auto.progress_path(args)),
-            view_url=view_url,
-            view_active=view_active,
-        )
+        # Con `--json` lo stdout e' il documento: le righe di `auto` non ci
+        # possono finire. Il pannello resta acceso (progress.json si scrive),
+        # ma il worker dichiara lo stdout riservato, esattamente come fa l'MCP.
+        reserved_before = bool(getattr(auto, "_STDOUT_RESERVED", False))
+        if getattr(args, "json", False):
+            auto._STDOUT_RESERVED = True
+        try:
+            report = auto.run(
+                args,
+                progress=progress_target,
+                progress_file=str(auto.progress_path(args)),
+                view_url=view_url,
+                view_active=view_active,
+            )
+        finally:
+            auto._STDOUT_RESERVED = reserved_before
     except GrammarError as exc:
         _out(
             {
@@ -5042,6 +5073,40 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _maybe_autostart(args: argparse.Namespace) -> None:
+    """La vista si accende per qualunque comando che fa un lavoro.
+
+    Prima l'autostart stava solo in `auto` e `reel`: chi montava con `scene`,
+    `render` o `edl3` non vedeva mai il pannello, e l'utente doveva ricordarsi
+    di `vx up`. Ora il posto e' uno solo, davanti al dispatch. `--no-view` /
+    `VX_NO_VIEW=1` restano l'unico interruttore.
+    """
+    name = str(getattr(args.func, "__name__", ""))
+    if name in _NO_AUTOSTART:
+        return
+    try:
+        from . import auto
+
+        auto.autostart_view(args)
+    except Exception:  # noqa: BLE001 - la vista non e' il lavoro
+        pass
+
+
+#: I comandi che non devono accendere la vista: chi la accende o la spegne, le
+#: letture di solo ambiente e il voto (che arriva a lavoro finito).
+_NO_AUTOSTART = frozenset(
+    {
+        "cmd_up",
+        "cmd_down",
+        "cmd_serve",
+        "cmd_version",
+        "cmd_doctor",
+        "cmd_guard",
+        "cmd_learn",
+    }
+)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     # The C++ side of OpenCV writes its own WARN lines on stderr even when the
     # work is fine; merged into a pipeline those lines look like a failure, so a
@@ -5061,6 +5126,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     _JSON_MODE = bool(getattr(args, "json", False))
     try:
         _apply_settings(args)
+        _maybe_autostart(args)
         return int(args.func(args))
     except TriageRequired as exc:
         _stop_active("fermato prima della fine: serve una risposta del triage")

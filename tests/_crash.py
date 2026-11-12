@@ -168,6 +168,12 @@ ALLOWED_TOP_FILES = {
     "font_proposal.json",
     "gate_wait.json",
     "timing_history.jsonl",
+    # La vista si pubblica dall'inizio (anche con --json): il pannello e' parte
+    # del contratto del lavoro, non un residuo. Prima non c'era perche' il
+    # blocco era dentro `if not json`, e una pagina che nasce a lavoro finito
+    # non e' una pagina.
+    "progress.html",
+    "progress.json",
 }
 ALLOWED_TOP_DIRS = {
     "out",

@@ -48,12 +48,15 @@ manca si dichiara e ci si ferma, non si improvvisa (`vx auto`, `edl3`, `run`
 restano strumenti di livello più basso, non il percorso normale).
 
 **Prima azione, appena la skill viene caricata**: `& $PY $VX up` (senza `--open`)
-e poi mostra quell'URL nel **browser interno di OpenCode** (`browser.tabs.open`),
-non in una finestra esterna: la pagina sta nel pannello, accanto al lavoro. La
-vista parte da sola anche da `vx reel`, `vx auto` e `vx_auto`; se è chiusa si
-ripara l'autostart, non si chiama a mano. Unico interruttore: `--no-view` /
-`VX_NO_VIEW=1` (CI, macchine senza browser). L'URL si dà in una riga («Lo guardi
-qui: …»); il browser di sistema resta un pulsante dentro la pagina.
+e mostra l'URL nel **browser interno**, in **una scheda sola**:
+`browser.tabs.list`, se c'è già una scheda `127.0.0.1:<porta>` navigala e
+focalizzala, altrimenti aprila (senza browser interno: `vx up --open` e lo si
+dichiara). La vista parte da sola anche da `vx reel`, `vx auto`, `vx scene` e
+`vx_auto`: se è chiusa si ripara l'autostart. Unico interruttore: `--no-view` /
+`VX_NO_VIEW=1`. L'URL si dà in una riga; il browser di sistema è il pulsante
+nella pagina.
+
+La pagina **si aggiorna mentre il lavoro gira**: `progress.json` si pubblica a ogni stadio anche con `--json`.
 
 La pagina mostra tutto: **contratto**, **scaletta** (proposta e fatto separati,
 declini), **cosa è rimasto fuori** (avvisi, file non-media, scarti col motivo,
@@ -157,9 +160,6 @@ soglie che decidono; sotto, il lavoro non è pubblicabile:
 - **l'apertura mostra qualcosa**: primo fotogramma nitido e con un soggetto, mai
   un movimento cieco; le clip inutilizzabili si escludono, gli inizi si spostano
   sul picco di nitidezza.
-
-Il gusto non si inventa: ciò che è misurabile si misura, il resto si dichiara col
-motivo e con l'alternativa scartata.
 
 ## Cosa misura
 

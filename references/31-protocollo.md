@@ -99,6 +99,17 @@ restano disponibili come strumenti di livello più basso.
   `deliverable`. Sono gli stessi campi di `auto_report.json`, troncati solo
   nella lunghezza (liste 60 voci, stringhe 400 caratteri): i numeri non si
   arrotondano e le chiavi non si scartano.
+- La pagina **si aggiorna mentre il lavoro gira**: `progress.json` si pubblica a
+  ogni stadio anche con `--json` (la console tace, il pannello no), e il
+  CONTRATTO legge `.vx/run.jsonl` riga per riga. Una pagina che si popola solo
+  alla fine è un difetto, non un limite.
+- **Una scheda sola**: l'agente guarda `browser.tabs.list` e naviga la scheda
+  `127.0.0.1:<porta>` se c'è; ne apre una nuova solo se manca. `ensure_view`
+  riusa il daemon vivo, quindi nemmeno l'URL cambia.
+- L'autostart non è solo in `auto`/`reel`: `cli.main` accende la vista prima del
+  dispatch per ogni comando che fa un lavoro (`scene`, `render`, `subs`, `edl3`,
+  `ingest`, ...). Restano fuori solo `up`/`down`/`serve`, `doctor`, `guard`,
+  `learn`.
 
 ## 3. Ingest e triage (livello basso)
 
@@ -220,6 +231,18 @@ motore grafico la costruisce:
   atomico);
 - la vista lo mostra: `GET /api/scene` e `GET /scene/chromium/frame_000003.jpg`.
   Solo i nomi dichiarati sono serviti (`frame_\d{6}\.jpg`, `manifest.json`).
+- **velocità del motore motion** (`motion_browser`): i PNG li scrive il canvas
+  con `toDataURL('image/png')`, non lo screenshot del viewport. Misurato su un
+  master vero (1080x1920, 30 fps, 72 frame): **136-157 → 86-94 ms/frame**
+  (1,5-1,6x). La cattura da sola scende da 82 a 34 ms (2,4x); decode,
+  composizione ed encoding non cambiano e diluiscono il guadagno. La differenza
+  di pixel è 88 su 2.073.600 a 1/255, sotto la tolleranza dei golden.
+  La cattura in parallelo (2 browser) è stata **provata e rifiutata**: 1,31x ma
+  0,7% dei pixel diversi (delta 43/255), perché due istanze di Chrome
+  rasterizzano il testo in modo diverso.
+- `BrowserRenderer` prova il **Chrome di sistema** (`channel="chrome"`) e solo
+  dopo il Chromium di Playwright: senza `channel` il motore moriva con
+  "Executable doesn't exist" quando il browser bundle non era installato.
 
 Confine dichiarato: il browser fa **grafica sopra il video** (testo impaginato,
 sottopancia, card, maschere). La composizione di **flussi video** (split screen

@@ -9,8 +9,14 @@ Il layout NON e' delegato al browser: le posizioni, i corpi e le scale arrivano 
 ombra gaussiana, alpha. Cosi' il confronto misura il motore di rendering e non due
 implementazioni di layout diverse.
 
-Estrazione dei pixel: screenshot PNG con `omit_background`, decodificato con
-Pillow. E' la via piu' economica che non serializzi 5,9 MB per frame su CDP.
+Estrazione dei pixel: i PNG li scrive il canvas (`toDataURL('image/png')`), non il
+viewport. Cattura da sola, 1080x1920: 82 ms/frame con `page.screenshot`, 34 ms
+con `toDataURL` (2,4x); su un master vero (72 frame, decode+composizione+encode
+inclusi) 136-157 → 86-94 ms/frame (1,5-1,6x). 88 pixel su 2.073.600 cambiano di
+1/255 (arrotondamento del compositore, sotto la tolleranza dei golden 8/255 e
+0,02%). Se il canvas non risponde si torna allo screenshot: meglio lento che
+vuoto. La cattura in parallelo e' stata misurata e scartata: 1,31x ma 0,7% dei
+pixel diversi fra due istanze di Chrome.
 """
 
 from __future__ import annotations
@@ -77,15 +83,35 @@ class BrowserRenderer:
 
         self.payload = payload
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
-            headless=headless,
-            args=[
-                "--force-color-profile=srgb",
-                "--disable-lcd-text",
-                "--font-render-hinting=none",
-                "--disable-features=PaintHolding",
-            ],
-        )
+        self._browser = None
+        self.channel = ""
+        self._launch_error: Optional[BaseException] = None
+        # Chrome di sistema per primo (e' quello che c'e' su questa macchina e
+        # quello che usa gia' `scenes`), Chromium di Playwright come ripiego:
+        # senza `channel` il motore moriva con "Executable doesn't exist" dopo
+        # un aggiornamento di Playwright, e la composizione non partiva affatto.
+        for channel in ("chrome", ""):
+            try:
+                kwargs = {"channel": channel} if channel else {}
+                self._browser = self._pw.chromium.launch(
+                    headless=headless,
+                    args=[
+                        "--force-color-profile=srgb",
+                        "--disable-lcd-text",
+                        "--font-render-hinting=none",
+                        "--disable-features=PaintHolding",
+                    ],
+                    **kwargs,
+                )
+                self.channel = channel or "playwright"
+                break
+            except Exception as exc:  # noqa: BLE001 - si prova il ripiego
+                self._launch_error = exc
+        if self._browser is None:
+            self._pw.stop()
+            raise RuntimeError(
+                f"nessun Chromium avviabile: {self._launch_error}"
+            )
         self._page = self._browser.new_page(
             viewport={"width": payload.width, "height": payload.height},
             device_scale_factor=1,
@@ -154,6 +180,27 @@ class BrowserRenderer:
                 [255, 255, 255] if False else [0, 0, 0],
             ],
         )
+        return self._capture()
+
+    def _capture(self) -> bytes:
+        """Il PNG del canvas, non della pagina.
+
+        `page.screenshot` ricompone il viewport (82 ms a 1080x1920 in questa
+        macchina); `canvas.toDataURL` legge i pixel che il canvas ha gia'
+        (34 ms, 2,4x). La differenza misurata e' 88 pixel su 2.073.600 a 1/255
+        — arrotondamento del compositore, non perdita: sotto la tolleranza dei
+        golden (8/255, 0,02%). Se il canvas non c'e' o il browser rifiuta, si
+        torna allo screenshot: meglio lento che vuoto.
+        """
+        try:
+            url = self._page.evaluate(
+                "() => { const c = document.getElementById('c');"
+                " return c ? c.toDataURL('image/png') : ''; }"
+            )
+            if isinstance(url, str) and "," in url:
+                return base64.b64decode(url.split(",", 1)[1])
+        except Exception:  # noqa: BLE001 - il ripiego e' la via vecchia
+            pass
         return self._page.screenshot(omit_background=True, type="png")
 
     def frame_rgba(self, t: float) -> Image.Image:

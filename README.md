@@ -249,6 +249,31 @@ tu») non chiede niente, decide con le misure e dichiara ogni scelta in
 Se una risposta non ha prodotto niente, il report lo dice (`applied: false` con
 il motivo): non esiste una risposta "registrata" che sembri applicata.
 
+### La pagina si guarda mentre lavora
+
+`progress.json` (e la pagina) si pubblicano a ogni stadio **anche con `--json`**:
+prima l'intero pannello era dentro `if not json`, quindi un lavoro lanciato per
+leggere il report non aggiornava niente e la vista mostrava solo il resoconto
+finale. Il contratto (`.vx/run.jsonl`) si legge riga per riga; il journal cresce
+a ogni fase. L'autostart vale per **ogni** comando che fa un lavoro (`auto`,
+`reel`, `scene`, `render`, `subs`, `edl3`, `ingest`), non solo per i due
+principali, e la pagina va tenuta in **una scheda sola** (`browser.tabs.list` →
+naviga quella, non aprirne un'altra).
+
+### Velocità del motore motion (Chromium)
+
+I fotogrammi del layer grafico si leggono dal **canvas** (`toDataURL('image/png')`),
+non dal viewport. Misurato su un master vero (1080x1920, 30 fps, 72 frame):
+**136-157 → 86-94 ms per frame** (1,5-1,6x). La cattura da sola scende da 82 a
+34 ms (2,4x), ma decode, composizione ed encoding restano e diluiscono il
+guadagno. Qualità: si legge il pixel che il canvas ha già, senza ricomposizione;
+la differenza è 88 pixel su 2.073.600 a 1/255, sotto la tolleranza dei golden
+(8/255, 0,02%) — e `test_motion_golden` resta verde.
+
+Provata e **rifiutata** la cattura in parallelo (2 browser, 1,31x): due istanze
+di Chrome rasterizzano il testo in modo leggermente diverso — 0,7% dei pixel,
+delta fino a 43/255. Velocità contro qualità, e la qualità non si tocca.
+
 La pagina non è un riassunto a sentimento: legge `/api/state` e disegna quello che
 il lavoro ha misurato. Accanto alla SCALETTA (hook, clip, b-roll, movimenti) e al
 CONTRATTO (gli otto stadi con valore e soglia), ci sono due blocchi: **FUORI**,
