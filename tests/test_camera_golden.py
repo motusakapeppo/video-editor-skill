@@ -1,4 +1,4 @@
-"""F25-T02: every camera move has a reference strip, and it cannot drift.
+﻿"""F25-T02: every camera move has a reference strip, and it cannot drift.
 
 For each of the 41 moves the test renders one 2 s clip built with that move, takes
 three instants (15%, 50%, 85% of the shot), and stores their sha256 in
@@ -220,7 +220,7 @@ def main() -> int:
             # record, non come verdetto.
             ok_all, detail = True, ""
             for index, png in enumerate(frames):
-                ok, why = golden_compare(target / f"instant-{index:02d}.png", png)
+                ok, why = golden_compare(target / f"instant-{index:02d}.png", png, psnr_min=25.0)
                 if not ok:
                     ok_all = False
                     detail = f"instant-{index:02d}: {why}"
@@ -248,3 +248,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

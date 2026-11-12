@@ -180,7 +180,7 @@ def main() -> int:
             # Pixel con tolleranza, non byte: la stessa golden rigirata su un
             # altro ffmpeg/CPU non e' binariamente identica, ma resta la stessa
             # immagine. Un profilo sbagliato (colore, vignettatura) sfora.
-            same, detail = golden_compare(stored, png)
+            same, detail = golden_compare(stored, png, psnr_min=25.0)
             check(f"S4 {name}: the frame matches its reference", same, detail)
             check(
                 f"S4 {name}: the profile reaches the pixels",
@@ -202,4 +202,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

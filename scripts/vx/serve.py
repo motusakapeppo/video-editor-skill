@@ -1597,6 +1597,14 @@ def _subdirs(directory: Path) -> List[Path]:
         return []
 
 
+def _safe_resolve(path: Path) -> Path:
+    """``resolve()`` che non esplode: un percorso che non esiste resta se stesso."""
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
 def _discover_uncached(root: Path) -> List[Path]:
     found: List[Path] = []
     if _looks_like_job(root, allow_live=True):
@@ -1608,7 +1616,12 @@ def _discover_uncached(root: Path) -> List[Path]:
         for candidate in level_dirs:
             # Dentro un lavoro gia' riconosciuto conta solo un ``progress.json``
             # esplicito: si evita di scandire le sue stage, i proxy, gli shot.
-            parent_known = any(parent in known for parent in candidate.parents)
+            # Il confronto e' sui percorsi **risolti**: su Windows `%TEMP%` e'
+            # spesso un nome 8.3 (`RUNNER~1`), e due stringhe diverse possono
+            # essere la stessa cartella.
+            parent_known = any(
+                _safe_resolve(parent) in known for parent in candidate.parents
+            )
             if parent_known and not (candidate / "progress.json").is_file():
                 continue
             is_job = _looks_like_job(candidate)

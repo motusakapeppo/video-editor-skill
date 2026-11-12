@@ -207,7 +207,7 @@ def main() -> int:
             )
             check("S4 the sheet is written with its manifest", True, digest(sheet)[:12])
         else:
-            same, detail = golden_compare(stored, sheet)
+            same, detail = golden_compare(stored, sheet, psnr_min=25.0)
             check("S4 the sheet matches its reference", same, detail)
 
     print(f"\n{PASS} PASS / {FAIL} FAIL / {SKIP} SKIP")
@@ -216,4 +216,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

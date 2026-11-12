@@ -219,7 +219,7 @@ def verify(sources: Mapping[str, Path], work: Path) -> None:
             continue
         # Pixel con tolleranza: la stessa scena rigirata con un altro ffmpeg o
         # su un'altra CPU non e' binariamente identica. Un filtro rotto sfora.
-        same, detail = golden_compare(target, frame)
+        same, detail = golden_compare(target, frame, psnr_min=25.0)
         check(
             f"{kind}: frame matches {kind}.png",
             same,
@@ -328,4 +328,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

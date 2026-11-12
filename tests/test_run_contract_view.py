@@ -306,8 +306,14 @@ def check_warm(raw: str) -> None:
     check("S6 la cache restituisce lo stesso blocco senza rileggere",
           first["stages"] is second["stages"])
     key = str(runlog.path(work))
-    check("S6 la voce di cache e' indicizzata dal log",
-          key in serve._run_cache, key)
+    # La cache indicizza il percorso come le e' arrivato; su un runner Windows
+    # quel percorso puo' contenere un nome 8.3. Si confrontano i risolti.
+    cached = {str(serve._safe_resolve(Path(item))) for item in serve._run_cache}
+    check(
+        "S6 la voce di cache e' indicizzata dal log",
+        str(Path(key).resolve()) in cached,
+        key,
+    )
 
     values = []
     for _ in range(10):

@@ -1,4 +1,4 @@
-name: ci
+﻿name: ci
 
 # Il gate e' Windows: e' la piattaforma che la skill supporta (macOS e Linux
 # sono fuori scope per ora, vedi references/31-protocollo.md sezione 10). I
@@ -37,6 +37,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -128,6 +130,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -145,3 +149,4 @@ jobs:
           PYTHONUTF8: "1"
           VX_FFMPEG: ffmpeg
         run: python tests/run_all.py --jobs 1 --timeout 1800
+
