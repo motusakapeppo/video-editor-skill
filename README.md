@@ -309,6 +309,30 @@ Il resto — tempi per stadio, risorse, punteggi dei b-roll, ogni singolo
 `not_applied`, ogni intervallo rimosso — resta in `auto_report.json` e
 `bridge_report.json`: la pagina è la superficie, il report è il registro.
 
+## Integrazione continua (CI)
+
+Ogni push lancia `.github/workflows/ci.yml`: clone pulito, **ffmpeg 8.1.2
+fissato**, `vx doctor`, poi la suite intera. Il **gate è Windows** (py3.10 e
+py3.12): è la piattaforma supportata. Linux gira come job **informativo**
+(`continue-on-error`): le golden sono catturate su Windows e l'ffmpeg di apt è
+un'altra serie, quindi lì si vede se qualcosa peggiora, senza bloccare. macOS è
+fuori scope.
+
+Perché la versione è fissata: ffmpeg 9 ha rimosso `-filter_complex_script`,
+l'opzione con cui si passano i grafi lunghi (8191 caratteri su Windows). Con
+ffmpeg 9 ogni render EDL muore con `Unrecognized option`. `vx doctor` lo
+dichiara (`ffmpeg.filter_complex_script: false` → verdetto `broken`), così
+l'aggiornamento non arriva a sorpresa.
+
+Come si legge: repo → **Actions** → il run → il job → lo step `Suite`. Un giro
+verde significa 246 file e ~7000 controlli eseguiti su una macchina che non è
+la tua.
+
+Le golden si confrontano per pixel (`tests/_golden.py`: delta ≤ 8/255 e ≤ 0,02%
+di pixel; in alternativa dichiarata `PSNR ≥ 25 dB`). Byte-identico vale solo
+sulla macchina che le ha catturate; altrove sarebbe un test che fallisce per
+l'ambiente, non per il codice.
+
 ## Cosa misura
 
 Stabilità (optical flow), esposizione (istogrammi luma, clipping), dominante colore
