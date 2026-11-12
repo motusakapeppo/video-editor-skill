@@ -62,6 +62,14 @@ class Proc:
     def tail(self, lines: int = 25) -> str:
         return "\n".join(self.stderr.strip().splitlines()[-lines:])
 
+    def head(self, lines: int = 8) -> str:
+        """Le prime righe dello stderr: e' li' che ffmpeg scrive il *perche'*.
+
+        La coda e' il banner dell'encoder: un errore raccontato solo con la coda
+        dice "libx264, options: cabac=1 ..." e niente su cosa non ha funzionato.
+        """
+        return "\n".join(self.stderr.strip().splitlines()[:lines])
+
 
 class ProcessTimeout(VxError):
     """A child process outlived its declared ceiling; it was killed and reaped."""

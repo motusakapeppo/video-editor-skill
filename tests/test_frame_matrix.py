@@ -1,4 +1,4 @@
-"""F26-T03 gate — every canvas and rate the corpus needs, proven by rendering.
+﻿"""F26-T03 gate — every canvas and rate the corpus needs, proven by rendering.
 
 The engine declares no format of its own (D033): it accepts any canvas and any
 rate a camera or an editor delivers. This file proves it for the five aspects
@@ -65,6 +65,7 @@ CEILING_SECONDS = 120.0
 
 PASS = 0
 FAIL = 0
+FAILED_LABELS: list[str] = []
 
 Row = Dict[str, Any]
 
@@ -76,6 +77,10 @@ def check(label: str, ok: object, detail: object = "") -> None:
     global PASS, FAIL
     PASS += bool(ok)
     FAIL += not ok
+    if not ok:
+        # Il log dei runner viene troncato: senza questa lista, un rosso
+        # lontano dalla coda non si sa quale sia.
+        FAILED_LABELS.append(f"{label} :: {detail}")
     print(f"  [{'PASS' if ok else 'FAIL'}] {label:58} {detail}")
 
 
@@ -291,9 +296,13 @@ def main() -> int:
         f"\n{len(small)} rendered combination(s), {len(full)} full-size render(s), "
         f"{elapsed:.1f}s"
     )
+    for label in FAILED_LABELS[:12]:
+        print(f"  fallito: {label}")
     print(f"{PASS} PASS / {FAIL} FAIL / 0 SKIP")
     return 0 if not FAIL else 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

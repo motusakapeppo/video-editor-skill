@@ -1,4 +1,4 @@
-"""vx.render — filtergraph construction and the render pipeline.
+﻿"""vx.render — filtergraph construction and the render pipeline.
 
 Invariants this module is built on (measured, not guessed):
 
@@ -2502,7 +2502,12 @@ def render(
         else:
             proc = ff.run_ff(args)
         if not proc.ok:
-            raise RenderFailure(f"stage 03 (graph) failed: {proc.tail(15)}")
+            raise RenderFailure(
+                "stage 03 (graph) failed: "
+                + proc.head(10)
+                + " ... "
+                + proc.tail(6)
+            )
         if cache is not None:
             cache.miss("03_graph", digest03, stage03, {"has_audio": has_audio})
         stage03_path = stage03
@@ -2698,3 +2703,4 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
