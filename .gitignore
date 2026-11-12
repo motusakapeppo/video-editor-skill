@@ -38,6 +38,7 @@ DOCUMENTAZIONE-COMPLETA.md
 
 # corpus di test: i binari non si versionano, si rigenerano o si riscaricano
 tests/stock_corpus/*.mp4
+tests/stock_corpus_speech/*.mp4
 tests/stock_corpus/real/*.webm
 tests/stock_corpus/real/*.mp4
 tests/_out/

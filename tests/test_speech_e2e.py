@@ -2,7 +2,7 @@
 
     python tests/test_speech_e2e.py
 
-Il girato di prova (`stock_corpus/speech_pauses_70s.mp4`) è parlato sintetizzato
+Il girato di prova (`stock_corpus_speech/speech_pauses_70s.mp4`) è parlato sintetizzato
 con pause misurate: tre periodi, 2,5 s di silenzio tra loro, tre copie (69,9 s,
 oltre la finestra di lettura piena di 60 s). Serve a provare due cose che i test
 unitari non possono:
@@ -30,7 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-FIXTURE = ROOT / "tests" / "stock_corpus" / "speech_pauses_70s.mp4"
+FIXTURE = ROOT / "tests" / "stock_corpus_speech" / "speech_pauses_70s.mp4"
 PASS = 0
 FAIL = 0
 SKIP = 0

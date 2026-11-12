@@ -26,6 +26,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 NAME = "speech_pauses_70s.mp4"
+# Casa propria: NON dentro stock_corpus, che e' il set di misura a 9 clip fisse
+# (tests/measure_corpus.py). Un decimo mp4 la' dentro fa uscire il prover con 1.
+SPEECH_DIR = ROOT / "tests" / "stock_corpus_speech"
 GAP_SEC = 2.5
 COPIES = 3
 SENTENCES = (
@@ -93,7 +96,7 @@ def synthesize(parts: Path) -> bool:
 
 def build(dest: Path | None = None, *, force: bool = False) -> bool:
     """Costruisce il girato e restituisce ``True`` se esiste e si legge."""
-    target = Path(dest) if dest is not None else Path(__file__).resolve().parent / NAME
+    target = Path(dest) if dest is not None else SPEECH_DIR / NAME
     if target.is_file() and not force:
         return True
     ff = _ffmpeg()
@@ -148,7 +151,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="girato di prova con parlato e pause")
     parser.add_argument("--force", action="store_true", help="ricostruisce anche se esiste")
     args = parser.parse_args(argv)
-    target = Path(__file__).resolve().parent / NAME
+    target = SPEECH_DIR / NAME
     if build(target, force=args.force):
         print(f"pronto: {target}")
         return 0
