@@ -123,6 +123,22 @@ def _config_block() -> Dict[str, Any]:
     return config.describe()
 
 
+def _has_option(name: str) -> bool:
+    """Il binario accetta ``-<name>``? ffmpeg 9 ha rimosso le opzioni deprecate.
+
+    Non e' pedanteria: senza ``-filter_complex_script`` i grafi lunghi non si
+    passano (su Windows il limite di riga comando e' 8191 caratteri) e ogni
+    render EDL muore con "Unrecognized option". Meglio dirlo qui che a meta'
+    lavoro.
+    """
+    try:
+        proc = ff.run_ff(["-hide_banner", "-h", "full"], loglevel="error", step="probe")
+    except Exception:  # noqa: BLE001 - un guasto non misurato non si accusa
+        return True
+    text = (proc.stdout or "") + (proc.stderr or "")
+    return ("-" + name) in text
+
+
 def _ffmpeg_block() -> Dict[str, Any]:
     path: Optional[str] = None
     version: Optional[str] = None
@@ -137,6 +153,8 @@ def _ffmpeg_block() -> Dict[str, Any]:
     except Exception as exc:  # MissingDependency or a broken build
         error = str(exc)
     block: Dict[str, Any] = {"path": path, "version": version, "capabilities": caps}
+    if path:
+        block["filter_complex_script"] = _has_option("filter_complex_script")
     if error:
         block["error"] = error
     return block
@@ -179,6 +197,10 @@ def scan() -> dict:
 
     if not ffmpeg_block["path"] or not caps.get("libx264"):
         verdict = "broken"
+    elif ffmpeg_block.get("filter_complex_script") is False:
+        # Senza quell'opzione ogni render EDL muore: non e' "degraded", e' rotto.
+        missing.append("ffmpeg:filter_complex_script")
+        verdict = "broken"
     elif missing:
         verdict = "degraded"
     else:
@@ -187,6 +209,13 @@ def scan() -> dict:
     # Required gaps are repeated in warnings so a degraded report is actionable.
     for item in missing:
         warnings.append(f"manca {item} (richiesto)")
+    if ffmpeg_block.get("filter_complex_script") is False:
+        warnings.append(
+            "ffmpeg "
+            f"{ffmpeg_block.get('version') or '?'}: '-filter_complex_script' non c'e' "
+            "(rimosso in 9.0). Serve la serie 8.x: senza quell'opzione i grafi lunghi "
+            "non si passano (8191 caratteri su Windows) e ogni render EDL fallisce."
+        )
 
     for cap in REQUIRED_CAPS:
         if cap in HARD_CAPS or cap == "libx264":

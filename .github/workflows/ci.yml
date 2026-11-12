@@ -1,5 +1,15 @@
 name: ci
 
+# Il gate e' Windows: e' la piattaforma che la skill supporta (macOS e Linux
+# sono fuori scope per ora, vedi references/31-protocollo.md sezione 10). I
+# runner Linux girano lo stesso, ma come **informativo**: le golden sono
+# catturate su Windows e ffmpeg di sistema li' e' un'altra serie.
+#
+# Perche' la versione di ffmpeg e' fissata: ffmpeg 9.0 ha rimosso
+# `-filter_complex_script`, l'opzione con cui si passano i grafi lunghi (il
+# limite di riga comando su Windows e' 8191 caratteri). Con ffmpeg 9 ogni render
+# EDL muore con "Unrecognized option 'filter_complex_script'". Doctor ora lo
+# dichiara `broken`, e qui la versione e' pinnata alla serie 8.x.
 on:
   push:
     branches: ["**"]
@@ -13,15 +23,14 @@ permissions:
   contents: read
 
 jobs:
-  tests:
-    name: ${{ matrix.os }} / py${{ matrix.python }}
-    runs-on: ${{ matrix.os }}
+  windows:
+    name: windows / py${{ matrix.python }}
+    runs-on: windows-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12"]
+        python: ["3.10", "3.12"]
     defaults:
       run:
         shell: bash
@@ -33,19 +42,17 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Install ffmpeg (Linux)
-        if: runner.os == 'Linux'
+      - name: Install ffmpeg 8.1 (the supported series)
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: Install ffmpeg (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ffmpeg
-
-      - name: Install ffmpeg (Windows)
-        if: runner.os == 'Windows'
-        run: choco install ffmpeg -y --no-progress
+          choco install ffmpeg --version=8.1.2 -y --no-progress --allow-downgrade
+          $ff = (Get-Command ffmpeg).Source
+          Write-Host "ffmpeg: $ff"
+          $line = (& $ff -version | Select-Object -First 1)
+          Write-Host $line
+          if ($line -notmatch 'version 8\.') {
+            throw "ffmpeg atteso 8.x, trovato: $line"
+          }
 
       - name: Python dependencies
         run: |
@@ -54,6 +61,29 @@ jobs:
 
       - name: ffmpeg version
         run: ffmpeg -version | head -n 1
+
+      - name: Doctor (the environment is what it claims to be)
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+          VX_FFMPEG: ffmpeg
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, sys
+          out = subprocess.run(
+              [sys.executable, "scripts/vx.py", "doctor", "--json"],
+              capture_output=True, text=True, encoding="utf-8",
+              env={**os.environ, "PYTHONPATH": os.path.join("scripts")},
+          )
+          data = json.loads(out.stdout or "{}")
+          ff = (data.get("environment") or data).get("ffmpeg") or {}
+          print("verdict:", data.get("verdict"), "| ffmpeg:", ff.get("version"),
+                "| filter_complex_script:", ff.get("filter_complex_script"))
+          if ff.get("filter_complex_script") is False:
+              raise SystemExit("ffmpeg senza -filter_complex_script: i render EDL non partono")
+          if data.get("verdict") == "broken":
+              raise SystemExit("doctor: ambiente broken")
+          PY
 
       - name: Suite (every script-style runner)
         env:
@@ -84,3 +114,34 @@ jobs:
           assert choice["device"] == "cpu", choice
           print(target, choice)
           PY
+
+  linux-informational:
+    name: linux (informational, not a gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Le golden sono catturate su Windows e l'ffmpeg di apt e' un'altra serie:
+    # qui si vede se qualcosa peggiora, ma non blocca. Quando Linux diventera'
+    # supportato, questo job diventa un gate e le golden vanno rifatte per lui.
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pillow opencv-python-headless onnxruntime pyyaml
+      - name: Suite
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+          VX_FFMPEG: ffmpeg
+        run: python tests/run_all.py --jobs 1 --timeout 1800
