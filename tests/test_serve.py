@@ -1190,6 +1190,15 @@ def main() -> int:
                         ],
                     },
                     "guard": {"ok": True, "violations": [], "warnings": ["upscale 1.4x"]},
+                    "presence": {
+                        "id": "presence",
+                        "value": "automatico",
+                        "source": "prompt",
+                        "answered_by": "prompt",
+                        "asked": False,
+                        "waited_sec": 0.0,
+                        "why": "detto nella richiesta («fai tutto tu»)",
+                    },
                     "beat": {"bpm": 120.0, "clips": 4, "cuts": 3, "density_per_sec": 0.25},
                     "timings": {"triage": 1.2, "render": 18.4},
                 }
@@ -1269,6 +1278,14 @@ def main() -> int:
                 and measures.get("timings", {}).get("render") == 18.4
                 and "composition" not in measures,
                 sorted(measures),
+            )
+            presence = data.get("presence") or {}
+            check(
+                "S1f lo stato dice chi ha deciso",
+                presence.get("value") == "automatico"
+                and presence.get("source") == "prompt"
+                and presence.get("asked") is False,
+                presence,
             )
 
             journal = data.get("journal")

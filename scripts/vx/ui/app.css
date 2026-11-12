@@ -163,6 +163,37 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Chi decide è una riga di stato, non una card: sta sotto il titolo e non
+   chiede niente. Se il server non manda `presence`, la riga non esiste. */
+.presence-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 6px;
+  max-width: 100%;
+  margin: 1px 0 0;
+  font: 500 10px/1.4 var(--mono);
+  letter-spacing: .02em;
+  color: var(--ink-3);
+}
+
+.presence-dot {
+  flex: 0 0 auto;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.presence-value {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.presence-line.is-default .presence-dot { background: var(--ink-3); }
+.presence-line.is-default .presence-value { color: var(--ink-3); }
+
 /* Sopra il titolo non c'è un altro titolo: c'è *cosa* si sta guardando. */
 .job-head {
   min-width: 0;
@@ -298,6 +329,53 @@ body.is-stamped .brand-dot {
   font-size: 13px;
   letter-spacing: .06em;
   color: var(--ink-2);
+}
+
+/* La pagina si guarda anche dentro un pannello stretto: «Apri fuori» è
+   un'azione secondaria, non una seconda testata. Testo piccolo, bordo
+   sottile, nessun colore nuovo. */
+.top-actions {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.job-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .022);
+  font: 600 9px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    color var(--t-micro) var(--e-in),
+    border-color var(--t-micro) var(--e-in),
+    background var(--t-micro) var(--e-in);
+}
+
+.job-open:hover {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, .045);
+  color: var(--ink-2);
+}
+
+.job-open:focus-visible {
+  outline: 2px solid rgba(78, 161, 255, .55);
+  outline-offset: 2px;
+}
+
+.job-open-mark {
+  font: 600 10px/1 var(--mono);
+  color: var(--accent-2);
 }
 
 /* ------------------------------------------------------- lavori in parallelo */
@@ -5477,7 +5555,7 @@ html.has-view body { overflow: hidden; }
   .job-title { grid-column: auto; grid-row: auto; text-align: left; white-space: normal; }
   .session-line { flex-wrap: wrap; justify-content: flex-start; }
   .session-say { white-space: normal; text-align: left; }
-  .job-clock { grid-column: 2; grid-row: 1; }
+  .top-actions { grid-column: 2; grid-row: 1; justify-self: end; }
   .stage { padding: 18px 16px 20px; }
   .hero { flex-direction: column; align-items: flex-start; gap: 14px; }
   .hero-side { padding-left: 0; border-left: 0; border-top: 1px solid var(--line); padding-top: 10px; width: 100%; }

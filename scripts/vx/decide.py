@@ -57,6 +57,16 @@ PLATFORMS: Dict[str, Dict[str, Any]] = {
     "carosello": {"aspect": "4:5", "w": 1080, "h": 1350, "engine": "pillow"},
 }
 
+#: Aspetto -> piattaforma che lo rappresenta. Serve quando la scelta arriva da
+#: fuori (la vista, o il materiale): il canvas, l'engine e l'etichetta devono
+#: nascere insieme, altrimenti il report direbbe "tiktok" accanto a un 16:9.
+ASPECT_PLATFORM: Dict[str, str] = {
+    "9:16": "tiktok",
+    "16:9": "youtube",
+    "1:1": "feed",
+    "4:5": "carosello",
+}
+
 # Aggettivi che non sono parametri. Ognuno ha un menu numerico: la domanda deve
 # poter essere risposta senza sapere cosa c'e' dentro il motore.
 VAGUE: Dict[str, Dict[str, Any]] = {
@@ -491,13 +501,17 @@ def parse_and_decide(
     montage: bool = False,
     beat_grid: Optional[str] = None,
     bpm: Optional[float] = None,
+    aspect: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Classify the request, then either execute (strict) or choose (autonomous).
 
     `assets` remains the font registry: names only. `asset_pool` is a sequence of
     `asset_triage.AssetInfo`; when non-empty the payload carries the triage
     verdict under `asset_triage`. `force_mode` overrides only the strict/autonomous
-    decision, never the specificity score.
+    decision, never the specificity score. `aspect` is a canvas chosen out of
+    band (a view answer, or the material when the user asked for automatic
+    choices): it wins over the prompt, and it is applied here so scene, triage
+    target and engine are born consistent.
     """
     if force_mode not in (None, "strict", "autonomous"):
         raise contract.VxError(
@@ -525,7 +539,18 @@ def parse_and_decide(
 
     platform_name = _platform(lower)
     rd_search = mode == "autonomous" and platform_name is None
-    platform = platform_name or "tiktok"
+    # L'aspetto puo' arrivare da una scelta esplicita (la vista, o il materiale
+    # quando l'utente ha detto "fai tutto tu"): in quel caso vince sul prompt e
+    # il canvas nasce gia' coerente per triage, EDL, render e sottotitoli.
+    chosen_aspect = str(aspect or "").strip()
+    if chosen_aspect:
+        platform = ASPECT_PLATFORM.get(chosen_aspect)
+        if platform is None:
+            raise contract.VxError(
+                f"aspect {chosen_aspect!r} non fra {', '.join(ASPECT_PLATFORM)}"
+            )
+    else:
+        platform = platform_name or "tiktok"
     spec = PLATFORMS[platform]
 
     font, font_note = _font_choice(text, assets)

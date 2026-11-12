@@ -2666,6 +2666,13 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
         "live": _live_state_cached(directory, data_dir),
         "font": font,
         "questions": _questions_state(directory, data_dir),
+        # Chi ha deciso questo lavoro: flag, richiesta, vista o default. La
+        # pagina lo mostra; senza, "automatico" sembrerebbe una scelta umana.
+        "presence": (
+            dict(report["presence"])
+            if isinstance(report.get("presence"), Mapping)
+            else None
+        ),
         "gates": _gates_state(directory),
         "feedback": _feedback_state(directory),
         "beat": beat,

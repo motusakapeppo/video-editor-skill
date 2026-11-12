@@ -26,12 +26,20 @@
           <span class="job-stamp-file num" id="jobStampFile"></span>
         </p>
         <h1 class="job-title" id="jobTitle">Lavoro in corso</h1>
+        <p class="presence-line" id="presenceLine" hidden>
+          <span class="presence-dot" aria-hidden="true"></span>
+          <span id="presenceText"></span>
+        </p>
         <p class="session-line" id="sessionLine" hidden>
           <span class="session-chip" id="sessionChip">ultima sessione</span>
           <span class="session-say num" id="sessionSay"></span>
         </p>
       </div>
-      <p class="job-clock num" id="jobClock" aria-label="Tempo di lavoro">0:00</p>
+      <div class="top-actions">
+        <p class="job-clock num" id="jobClock" aria-label="Tempo di lavoro">0:00</p>
+        <a class="job-open" id="openExternal" href="./" target="_blank" rel="noopener"
+           title="apre questa pagina nel browser di sistema">Apri fuori<span class="job-open-mark" aria-hidden="true">↗</span></a>
+      </div>
     </header>
 
     <nav class="jobs" id="jobs" aria-label="Lavori in corso" hidden>

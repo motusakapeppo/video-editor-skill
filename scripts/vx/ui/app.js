@@ -15,6 +15,9 @@
     jobStamp: $('jobStamp'),
     jobStampFile: $('jobStampFile'),
     jobClock: $('jobClock'),
+    openExternal: $('openExternal'),
+    presenceLine: $('presenceLine'),
+    presenceText: $('presenceText'),
     sessionLine: $('sessionLine'),
     sessionChip: $('sessionChip'),
     sessionSay: $('sessionSay'),
@@ -4168,7 +4171,9 @@
 
     el.gateStop.hidden = false;
     const gate = gates[0];
-    const key = gate.kind + '|' + gate.id + '|' + gate.text;
+    // La coda fa parte dell'identità: se arriva o sparisce una domanda, il
+    // conteggio «altre N in coda» deve cambiare anche se la prima resta la stessa.
+    const key = gate.kind + '|' + gate.id + '|' + gate.text + '|' + gates.length;
     if (key === gateKey) return;
     gateKey = key;
 
@@ -4862,6 +4867,7 @@
   const GATE_LABEL = { font: 'carattere', keyframes: 'fotogrammi', plan: 'piano' };
 
   const DECISION_QUESTION = {
+    presence: 'Chi decide',
     font: 'Quale carattere',
     typography: 'Come comporre il testo',
     subtitles: 'Sottotitoli',
@@ -4869,6 +4875,8 @@
     plan_choice: 'Versione del lavoro',
     keyframes: 'Fotogrammi chiave',
     music: 'Musica',
+    hook: 'Gancio',
+    target_format: 'Formato',
   };
 
   const stageLabel = (key) => {
@@ -5220,6 +5228,66 @@
       (session.job_path ? ' · ' + session.job_path : ' · nessuna cartella dichiarata');
   }
 
+  // Chi ha deciso il lavoro: una riga di stato sotto il titolo, non una card.
+  // `value` dà le parole, `source` la provenienza; il default dice che nessuno
+  // ha scelto. Senza `presence` la riga non esiste.
+  const PRESENCE_VALUE = {
+    presente: 'scelgo io',
+    automatico: 'fai tutto tu',
+  };
+
+  const PRESENCE_SOURCE = {
+    flag: 'flag',
+    prompt: 'prompt',
+    view: 'vista',
+    default: 'default',
+  };
+
+  function paintPresence(state) {
+    const presence =
+      state &&
+      state.presence &&
+      typeof state.presence === 'object' &&
+      !Array.isArray(state.presence)
+        ? state.presence
+        : null;
+    if (!presence) {
+      el.presenceLine.hidden = true;
+      el.presenceText.textContent = '';
+      el.presenceLine.classList.remove('is-default');
+      el.presenceLine.removeAttribute('title');
+      return;
+    }
+
+    const value = String(presence.value || '').trim();
+    const source = String(presence.source || '').trim();
+    const valueWord = PRESENCE_VALUE[value] || value || '—';
+    // Il default usa la parola del valore, non la frase scelta: la richiesta
+    // dice «nessuno ha chiesto: automatico», ed è quello che si legge.
+    const shown = source === 'default' ? value || 'automatico' : valueWord;
+    const why = String(presence.why || '').trim();
+
+    el.presenceLine.hidden = false;
+    el.presenceLine.classList.toggle('is-default', source === 'default');
+    el.presenceText.textContent = '';
+    el.presenceText.append(
+      document.createTextNode(source === 'default' ? 'nessuno ha chiesto: ' : 'modalità: ')
+    );
+
+    const strong = document.createElement('span');
+    strong.className = 'presence-value';
+    strong.textContent = shown;
+    el.presenceText.append(strong);
+
+    if (source && source !== 'default') {
+      const sourceWord = PRESENCE_SOURCE[source] || source;
+      el.presenceText.append(document.createTextNode(' (' + sourceWord + ')'));
+    }
+
+    if (why) el.presenceLine.title = tidyReason(why);
+    else el.presenceLine.removeAttribute('title');
+  }
+
   /* ----------------------------------------------------------- stato vuoto */
 
   // La pagina può non avere niente da mostrare: nessuna sessione nel registro,
@@ -5268,6 +5336,7 @@
 
     // La riga in testa dice lo stato vero: nessuna sessione, e perché.
     paintSession(state);
+    paintPresence(null);
 
     el.emptyWork.hidden = false;
     el.emptyReason.textContent = upperFirst(reason) + (/[.!?]$/.test(reason) ? '' : '.');
@@ -5348,6 +5417,7 @@
     if (Number.isFinite(Number(state.selected))) jobIndex = Number(state.selected);
     paintJobs(state);
     paintSession(state);
+    paintPresence(state);
     lastState = state;
     paintJournal(state);
     paintDecisions(state);
@@ -6027,6 +6097,10 @@
   document.addEventListener('visibilitychange', () => {
     sceneTimer(SCENE_EVERY_MS);
   });
+
+  // «Apri fuori» deve portare alla stessa pagina, query compresa. Senza JS
+  // l'href resta "./", che è già la pagina servita dal server.
+  if (el.openExternal) el.openExternal.href = window.location.href;
 
   tick();
   window.setInterval(tick, 1200);

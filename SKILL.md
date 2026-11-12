@@ -47,22 +47,22 @@ il risultato è pubblicabile. Non si compone la pipeline a mano: se una capacit�
 manca si dichiara e ci si ferma, non si improvvisa (`vx auto`, `edl3`, `run`
 restano strumenti di livello più basso, non il percorso normale).
 
-**Prima azione, appena la skill viene caricata**: `& $PY $VX up --open`. La vista
-parte da sola anche da `vx reel`, `vx auto` e `vx_auto` (`autostart_view`); se è
-chiusa si ripara l'autostart, non si chiama a mano. Unico interruttore:
-`--no-view` / `VX_NO_VIEW=1` (CI, macchine senza browser). L'URL va dato in una
-riga («Lo guardi qui: …»).
+**Prima azione, appena la skill viene caricata**: `& $PY $VX up` (senza `--open`)
+e poi mostra quell'URL nel **browser interno di OpenCode** (`browser.tabs.open`),
+non in una finestra esterna: la pagina sta nel pannello, accanto al lavoro. La
+vista parte da sola anche da `vx reel`, `vx auto` e `vx_auto`; se è chiusa si
+ripara l'autostart, non si chiama a mano. Unico interruttore: `--no-view` /
+`VX_NO_VIEW=1` (CI, macchine senza browser). L'URL si dà in una riga («Lo guardi
+qui: …»); il browser di sistema resta un pulsante dentro la pagina.
 
 La pagina mostra tutto: **contratto**, **scaletta** (proposta e fatto separati,
 declini), **cosa è rimasto fuori** (avvisi, file non-media, scarti col motivo,
 coda, clip escluse, sezioni vuote, secondi tolti) e **cosa ha misurato**
 (verifiche, policy, guardia, battito, varietà, coerenza, audio, stima, tempi).
-Blocco vuoto non si disegna; il resto resta nel report. Dettagli in
-`references/31-protocollo.md` §2.
+Blocco vuoto non si disegna; il resto è nel report (§2 di `31-protocollo.md`).
 
 Due lavori sulla stessa cartella non convivono: `<workdir>/.vx/lock` è un lease
-con battito fuori banda, e chi arriva secondo esce `2` dicendo chi lo tiene. Su
-cartelle diverse si lavora in parallelo.
+con battito, chi arriva secondo esce `2`; cartelle diverse girano in parallelo.
 
 ## Protocollo
 

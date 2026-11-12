@@ -39,6 +39,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -168,26 +169,336 @@ TRIAGE_QUESTIONS: List[Dict[str, Any]] = [
 #: stesso peso nella pipeline: solo i sottotitoli hanno un interruttore, e
 #: dirlo e' l'unico modo per non far credere che "16:9" sia stato ascoltato.
 ANSWER_EFFECTS: Dict[str, str] = {
-    "subtitles": "la risposta accende o spegne i sottotitoli (--subs)",
+    "subtitles": (
+        "la risposta accende o spegne i sottotitoli e ne sceglie lo stile "
+        "(karaoke/clean)"
+    ),
     "target_format": (
-        "il formato lo deduce `decide` dal prompt (piattaforma, 9:16 di default): "
-        "la risposta resta registrata e non cambia il canvas"
+        "nessuna scelta: il canvas esce dal prompt (piattaforma, 9:16 di default) "
+        "o dal materiale quando hai detto 'fai tutto tu'"
     ),
     "hook": (
-        "l'hook lo compone la scaletta dal girato: la risposta resta registrata "
-        "e non cambia i primi secondi"
+        "nessuna scelta: la card dell'apertura la decide il brief "
+        "('hook: ...' nella richiesta) o la trascrizione"
     ),
 }
+
+
+#: La prima domanda, una sola: chi decide? Prima si chiedevano tre dettagli
+#: (formato, hook, sottotitoli) senza sapere se l'utente volesse essere
+#: interpellato; se la risposta e' "fai tutto tu" le tre non si pongono.
+PRESENCE_QUESTION: Dict[str, Any] = {
+    "id": "presence",
+    "question": "Vuoi scegliere tu, o faccio tutto io?",
+    "options": [
+        {
+            "value": "presente",
+            "label": "scelgo io",
+            "detail": "ti fermo su formato, hook, sottotitoli, font e fotogrammi",
+        },
+        {
+            "value": "automatico",
+            "label": "fai tutto tu",
+            "detail": "nessuna attesa: decido con le misure e dichiaro ogni scelta",
+        },
+    ],
+    "default": "automatico",
+}
+
+#: Come lo si dice nella richiesta, senza flag. L'ordine conta: "voglio
+#: scegliere" contiene "voglio", quindi le frasi di presenza si provano prima.
+PRESENT_MARKERS = (
+    r"voglio sceglier",
+    r"fammi sceglier",
+    r"lasciami sceglier",
+    r"scelgo io",
+    r"decido io",
+    r"chiedimi",
+    r"chiedermi",
+    r"voglio decidere",
+    r"mostrami le opzion",
+    r"fermati e chiedi",
+)
+
+AUTO_MARKERS = (
+    r"decidi tu",
+    r"fai tutto tu",
+    r"fai tu",
+    r"tutto automatico",
+    r"in automatico",
+    r"non chiedermi",
+    r"senza chiedere",
+    r"vai da sol",
+)
+
+
+def presence_from_prompt(prompt: Any) -> Tuple[str, str]:
+    """Legge la modalita' dalla richiesta: ``(valore, frase trovata)``."""
+    text = str(prompt or "").lower()
+    for pattern in PRESENT_MARKERS:
+        match = re.search(pattern, text)
+        if match:
+            return "presente", match.group(0)
+    for pattern in AUTO_MARKERS:
+        match = re.search(pattern, text)
+        if match:
+            return "automatico", match.group(0)
+    return "", ""
+
+
+def _presence_entry(
+    value: str,
+    *,
+    source: str,
+    answered_by: str,
+    asked: bool,
+    waited_sec: float,
+    why: str,
+    matched: str = "",
+) -> Dict[str, Any]:
+    return {
+        "id": "presence",
+        "question": PRESENCE_QUESTION["question"],
+        "default": PRESENCE_QUESTION["default"],
+        "value": value,
+        "source": source,
+        "answered_by": answered_by,
+        "by": answered_by,
+        "asked": bool(asked),
+        "waited_sec": round(max(0.0, float(waited_sec)), 3),
+        "why": why,
+        "matched": matched,
+    }
+
+
+def presence_is_present(args: Any) -> bool:
+    """L'utente ha detto di voler scegliere? (modalita' gia' risolta)
+
+    Senza modalita' risolta la risposta e' "si'": chi chiama i cancelli fuori dal
+    flusso di `auto` (test, `vx run`) non deve perdere le attese che aveva. Solo
+    un "automatico" esplicito le spegne.
+    """
+    return str(getattr(args, "presence_mode", "") or "") != "automatico"
+
+
+def resolve_presence(
+    args: Any,
+    workdir: Any,
+    *,
+    watched: bool,
+    view_url: str = "",
+    wait: float = 0.0,
+    notify: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+    """Chi decide: flag, richiesta, vista, oppure automatico dichiarato.
+
+    L'ordine e' quello del buon senso: se l'utente l'ha gia' detto (flag o
+    parole nella richiesta) non si chiede; se non l'ha detto e c'e' qualcuno
+    che guarda, si chiede una volta; se nessuno guarda si sceglie automatico e
+    lo si dichiara, senza fingere che sia stata una scelta.
+    """
+    say = notify if notify is not None else _say
+    forced = str(getattr(args, "presence", "") or "").strip().lower()
+    if forced in ("presente", "automatico"):
+        return _presence_entry(
+            forced,
+            source="flag",
+            answered_by="flag",
+            asked=False,
+            waited_sec=0.0,
+            why="scelto a riga di comando",
+        )
+    said, matched = presence_from_prompt(getattr(args, "prompt", ""))
+    if said:
+        return _presence_entry(
+            said,
+            source="prompt",
+            answered_by="prompt",
+            asked=False,
+            waited_sec=0.0,
+            why=f"detto nella richiesta («{matched}»)",
+            matched=matched,
+        )
+    try:
+        limit = max(0.0, float(wait))
+    except (TypeError, ValueError):
+        limit = 0.0
+    if watched and limit > 0:
+        try:
+            result = ask.ask(
+                Path(workdir),
+                "presence",
+                PRESENCE_QUESTION["question"],
+                PRESENCE_QUESTION["options"],
+                default=PRESENCE_QUESTION["default"],
+                context={"stage": "presence", "from": "auto"},
+                timeout=limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - una domanda rotta non ferma il lavoro
+            return _presence_entry(
+                "automatico",
+                source="view",
+                answered_by="auto",
+                asked=True,
+                waited_sec=0.0,
+                why=f"domanda non posta: {type(exc).__name__}: {exc}",
+            )
+        raw = str(result.get("value") or PRESENCE_QUESTION["default"]).strip().lower()
+        value = raw if raw in ("presente", "automatico") else "automatico"
+        expired = bool(result.get("timed_out"))
+        answered_by = (
+            "user"
+            if str(result.get("answered_by") or "") == "user"
+            else ("timeout" if expired else "auto")
+        )
+        why = {
+            "user": "scelto nella vista",
+            "timeout": "nessuna risposta: automatico, dichiarato",
+            "auto": "default dichiarato",
+        }[answered_by]
+        if answered_by == "user":
+            say(f"Modalità: {'scelgo io' if value == 'presente' else 'fai tutto tu'}.")
+        return _presence_entry(
+            value,
+            source="view",
+            answered_by=answered_by,
+            asked=True,
+            waited_sec=float(result.get("waited_sec") or 0.0),
+            why=why,
+        )
+    return _presence_entry(
+        "automatico",
+        source="default",
+        answered_by="auto",
+        asked=False,
+        waited_sec=0.0,
+        why="nessuno ha chiesto di scegliere: automatico",
+    )
+
+
+def _auto_question_entries(why: str) -> List[Dict[str, Any]]:
+    """Le tre domande del triage non poste, dichiarate invece che inventate.
+
+    In modalita' automatica non si chiede formato, hook e sottotitoli: restano
+    nel report con il default e ``asked: false``, cosi' chi legge sa che nessuno
+    ha scelto e che la scelta e' della pipeline.
+    """
+    rows: List[Dict[str, Any]] = []
+    for spec in TRIAGE_QUESTIONS:
+        rows.append(
+            {
+                "id": str(spec.get("id") or ""),
+                "question": str(spec.get("question") or ""),
+                "default": spec.get("default"),
+                "value": spec.get("default"),
+                "answered_by": "auto",
+                "by": "auto",
+                "answered": False,
+                "asked": False,
+                "timed_out": False,
+                "expired": False,
+                "waited_sec": 0.0,
+                "choice": spec.get("default"),
+                "why": why,
+            }
+        )
+    return rows
+
+
+def _mark_applied(
+    questions: Sequence[Mapping[str, Any]],
+    qid: str,
+    why: str,
+    *,
+    value: Any = None,
+    applied: bool = True,
+) -> None:
+    """Registra che una risposta ha davvero cambiato qualcosa (o non ha potuto).
+
+    Sta accanto a :func:`declare_question_answers` perche' l'ordine conta: prima
+    si dichiara cosa ogni risposta *puo'* fare, poi chi la applica lo conferma o
+    lo smentisce. Una risposta applicata senza conseguenza non deve sembrare
+    applicata.
+    """
+    for item in questions:
+        if not isinstance(item, dict) or str(item.get("id") or "") != qid:
+            continue
+        item["applied"] = bool(applied)
+        item["why"] = str(why)
+        if value is not None:
+            item["applied_value"] = value
+
+
+def _material_aspect(assets: Sequence[Any]) -> tuple[str, str]:
+    """L'aspetto che il materiale suggerisce, con la misura che lo dice."""
+    landscape = portrait = square = 0
+    for asset in assets:
+        try:
+            width = int(getattr(asset, "width", 0) or 0)
+            height = int(getattr(asset, "height", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not (width and height):
+            continue
+        if width > height * 1.05:
+            landscape += 1
+        elif height > width * 1.05:
+            portrait += 1
+        else:
+            square += 1
+    total = landscape + portrait + square
+    if not total:
+        return "", "nessuna dimensione misurata"
+    if landscape * 2 > total:
+        return "16:9", f"{landscape} asset su {total} orizzontali"
+    if square * 2 > total:
+        return "1:1", f"{square} asset su {total} quadrati"
+    return "9:16", f"{portrait} asset su {total} verticali"
+
+
+def _prompt_names_platform(prompt: Any) -> bool:
+    text = str(prompt or "").lower()
+    return any(name in text for name in decide.PLATFORMS)
+
+
+def _target_format_choice(
+    questions: Sequence[Mapping[str, Any]], args: Any, assets: Sequence[Any]
+) -> Optional[Dict[str, Any]]:
+    """Il canvas deciso: la vista se ha scelto, il materiale se ha scelto io.
+
+    Solo due strade, e tutte e due portano la loro ragione: una risposta umana
+    vince sempre; in "fai tutto tu" deciso esplicitamente (flag, prompt, vista)
+    l'aspetto segue il materiale misurato, non un default. Il default implicito
+    (nessuno ha chiesto niente) resta quello della pipeline, dichiarato.
+    """
+    for item in questions:
+        if str(item.get("id") or "") != "target_format":
+            continue
+        if item.get("answered_by") != "user":
+            break
+        value = str(item.get("value") or "").strip()
+        if value in decide.ASPECT_PLATFORM:
+            return {"aspect": value, "source": "vista", "why": f"scelto nella vista: {value}"}
+        break
+    if str(getattr(args, "presence_mode", "") or "") != "automatico":
+        return None
+    if str(getattr(args, "presence_source", "") or "") not in ("flag", "prompt", "view"):
+        return None
+    if _prompt_names_platform(getattr(args, "prompt", "")):
+        return None
+    aspect, measure = _material_aspect(assets)
+    if not aspect:
+        return None
+    return {"aspect": aspect, "source": "materiale", "why": f"fai tutto tu: {measure}"}
 
 
 def declare_question_answers(questions: Sequence[Mapping[str, Any]]) -> List[str]:
     """Marca ogni risposta con ``applied`` e ``why``; torna gli id senza effetto.
 
-    Il difetto che chiude: la vista chiedeva formato e hook, il report li
-    registrava sotto ``questions``, e il montaggio usava soltanto i sottotitoli.
-    Chi rispondeva "16:9" riceveva un 9:16 senza una riga che lo spiegasse.
-    Adesso la risposta dice se e' stata applicata e con quale limite, e chi
-    legge il report (o guarda la vista) non deve indovinare.
+    Non decide: *registra*. Chi applica davvero una risposta (il canvas, la
+    card dell'hook, i sottotitoli) lo ha gia' scritto con :func:`_mark_applied`
+    e qui non si sovrascrive. Una risposta che nessuno ha chiesto (modalita'
+    automatica) non e' "senza effetto": e' una domanda non posta, e lo dice.
     """
     unapplied: List[str] = []
     for item in questions:
@@ -195,6 +506,17 @@ def declare_question_answers(questions: Sequence[Mapping[str, Any]]) -> List[str
             continue
         qid = str(item.get("id") or "")
         answered = item.get("answered_by") == "user"
+        applied_before = item.get("applied") is True
+        if not item.get("asked", True) and not answered:
+            item["applied"] = False
+            item["why"] = str(
+                item.get("why")
+                or "modalità automatica: nessuno ha chiesto di scegliere"
+            )
+            continue
+        if applied_before:
+            # Gia' applicata da chi la esegue: la sua ragione resta.
+            continue
         if qid == "subtitles":
             item["applied"] = answered
             item["why"] = (
@@ -295,7 +617,10 @@ def autostart_view(args: Any = None) -> str:
     try:
         from . import cli as cli_mod
 
-        url = cli_mod.ensure_view(open_page=True)
+        # Nessuna finestra esterna: il daemon si accende, la pagina la mostra
+        # OpenCode nel suo pannello (browser interno). L'esterno resta un
+        # pulsante nella pagina, non un effetto collaterale dell'autostart.
+        url = cli_mod.ensure_view(open_page=False)
     except Exception as exc:  # noqa: BLE001 - la vista non e' il montaggio
         degrade.note("view.autostart", exc)
         return ""
@@ -3946,6 +4271,7 @@ def _bridge_plan(
     clock: Optional[_Clock] = None,
     workdir: Any = "",
     prepared: Optional[Mapping[str, Any]] = None,
+    caption_style: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     """Run the bridge: analyses, transcripts, faces and motion per a_roll source.
 
@@ -4041,6 +4367,7 @@ def _bridge_plan(
             transcripts=transcripts if captions else None,
             faces=face_tracks,
             motion=motion,
+            caption_style=caption_style,
         )
     # Il ponte può aver aggiunto in coda parlato che sta oltre la finestra
     # trascritta. Invece di lasciarlo muto, si trascrivono **solo quei tratti**
@@ -4074,6 +4401,7 @@ def _bridge_plan(
                     transcripts=completed,
                     faces=face_tracks,
                     motion=motion,
+                    caption_style=caption_style,
                 )
             # La coda di quei sorgenti è stata trascritta davvero: la riga
             # "scoperta" del primo giro è superata (l'eventuale resto è audio
@@ -5504,8 +5832,15 @@ def _run_font_gate(
     else:
         wait = 0.0
         asked_wait = False
-    gate = (bool(view_active) or asked_wait) and not bool(
-        getattr(args, "no_font_gate", False)
+    if not presence_is_present(args):
+        # Modalità automatica: nessuna attesa e nessun cancello aperto. La
+        # proposta si usa subito e il report dichiara che nessuno ha scelto.
+        wait = 0.0
+        asked_wait = False
+    gate = (
+        (bool(view_active) or asked_wait)
+        and not bool(getattr(args, "no_font_gate", False))
+        and presence_is_present(args)
     )
     return font_gate(
         workdir,
@@ -5555,6 +5890,11 @@ def _run_plan_gate(
         wait = float(estimate.PLAN_WAIT_DEFAULT)
         gate = True
     else:
+        wait = 0.0
+        gate = False
+    if not presence_is_present(args):
+        # In automatico il piano non si ferma a chiedere: la stima si usa per
+        # scegliere e il report dice che la scelta e' della pipeline.
         wait = 0.0
         gate = False
     result = estimate.plan_gate(
@@ -6117,6 +6457,11 @@ def _run_key_gate(
         gate = bool(view_active) or asked_wait
     else:
         gate = bool(explicit)
+    if not presence_is_present(args):
+        # "Fai tutto tu" vale anche per i fotogrammi: si prende il primo e si
+        # dichiara, invece di fermarsi 180 s davanti a una pagina aperta.
+        wait = 0.0
+        gate = False
     if not gate:
         closed_reason = (
             "cancello dei fotogrammi spento (--no-key-gate)"
@@ -6324,6 +6669,39 @@ def _overlay_font(font: Mapping[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _apply_hook_answer(
+    brief: Any,
+    sources: Mapping[str, Any],
+    answer: str,
+    bridge_report: Any,
+) -> tuple[Any, Dict[str, Any]]:
+    """La risposta della vista sull'hook: testo, auto o nessuno.
+
+    - ``nessuno``: la card dell'apertura non si scrive e non si dichiara come
+      mancanza — era una scelta, non una dimenticanza.
+    - ``testo``: si forza la card; la frase viene dal brief se c'e', altrimenti
+      dalla prima riga dei sottotitoli (le parole vere), mai inventata.
+    - ``auto`` o nessuna risposta: resta quello che il brief dichiara.
+    """
+    from dataclasses import replace  # noqa: PLC0415 - solo qui
+
+    value = str(answer or "").strip()
+    out = dict(sources or {})
+    if value == "nessuno":
+        if brief.asks_hook or brief.hook_text:
+            out["hook_answer"] = "nessuno: card dell'apertura non richiesta"
+            return replace(brief, hook_text="", asks_hook=False), out
+        return brief, out
+    if value == "testo" and not brief.hook_text:
+        text = _hook_fallback_text(bridge_report) if bridge_report is not None else ""
+        if text:
+            out["hook_answer"] = "testo: prima riga dei sottotitoli"
+            return replace(brief, asks_hook=True, hook_text=text), out
+        out["hook_answer"] = "testo chiesto, nessuna frase disponibile"
+        return replace(brief, asks_hook=True), out
+    return brief, out
+
+
 def _run_typography(
     workdir: Path,
     plan: Any,
@@ -6332,6 +6710,7 @@ def _run_typography(
     captions_ass: Optional[str],
     bridge_report: Any = None,
     recipe_brief: Optional[Mapping[str, Any]] = None,
+    hook_answer: str = "",
 ) -> tuple[Dict[str, Any], Optional[str]]:
     """Piano -> ASS -> render: il ponte che mancava.
 
@@ -6345,6 +6724,7 @@ def _run_typography(
     resta esattamente quello di prima.
     """
     brief, sources = _merged_brief(prompt, recipe_brief)
+    brief, sources = _apply_hook_answer(brief, sources, hook_answer, bridge_report)
     if not brief.asks_text:
         return (
             {
@@ -6889,6 +7269,7 @@ def _decide_payload(
     section: Mapping[str, Any],
     montage_mode: bool,
     music: Optional[Mapping[str, Any]] = None,
+    aspect: Optional[str] = None,
 ) -> tuple[Dict[str, Any], str]:
     """``parse_and_decide`` coi parametri della ricetta; degrada se serve un BPM.
 
@@ -6912,6 +7293,9 @@ def _decide_payload(
         "asset_pool": assets,
         "force_mode": "autonomous" if getattr(args, "autonomous", False) else None,
         "montage": bool(montage_mode),
+        # L'aspetto deciso fuori banda (vista o materiale) viaggia qui: dentro
+        # `decide` nasce il canvas, quindi triage ed EDL restano coerenti.
+        "aspect": aspect,
     }
     try:
         payload = decide.parse_and_decide(args.prompt, beat_grid=grid, bpm=bpm, **common)
@@ -7615,19 +7999,38 @@ def _run_locked(
             question_wait = TRIAGE_WAIT_DEFAULT
         else:
             question_wait = 0.0
-        questions = collect_triage_questions(
+        # Prima si chiede chi decide, una volta sola. Se la risposta e' "fai
+        # tutto tu" le tre domande del triage non si pongono: nessuna attesa e
+        # ogni scelta resta dichiarata nel report.
+        presence = resolve_presence(
+            args,
             workdir,
-            view_active=watched,
+            watched=watched,
             view_url=str(view_url or ""),
             wait=question_wait,
-            ask_anyway=configured > 0,
             notify=_say,
         )
+        args.presence_mode = str(presence["value"])
+        args.presence_source = str(presence.get("source") or "")
+        if presence_is_present(args):
+            questions = collect_triage_questions(
+                workdir,
+                view_active=watched,
+                view_url=str(view_url or ""),
+                wait=question_wait,
+                ask_anyway=configured > 0,
+                notify=_say,
+            )
+        else:
+            questions = _auto_question_entries(
+                "modalità automatica: nessuno ha chiesto di scegliere"
+            )
     _emit(
         log,
         "questions",
         "done" if watched else "skip",
-        ", ".join(
+        f"presence={presence['value']} ({presence['answered_by']}), "
+        + ", ".join(
             f"{item['id']}={item['value']} ({item['answered_by']})"
             for item in questions
         ),
@@ -7638,19 +8041,24 @@ def _run_locked(
         # L'unica risposta che ha gia' un interruttore nella pipeline: la vista
         # ha scelto, non si finge che il default sia una scelta.
         args.subs = str(subtitles_answer.get("value") or "") != "nessuno"
+    hook_answer = str((answers.get("hook") or {}).get("value") or "")
+    # Lo stile delle caption: la risposta dice karaoke *o* clean, non solo
+    # acceso/spento. Vale solo se l'ha scelta l'utente: un default non deve
+    # cambiare il ponte di nascosto.
+    subs_answer = answers.get("subtitles") or {}
+    subs_style = ""
+    if subs_answer.get("answered_by") == "user":
+        candidate = str(subs_answer.get("value") or "")
+        if candidate in ("karaoke", "clean"):
+            subs_style = candidate
 
     # Ogni risposta registrata dichiara se ha cambiato qualcosa. Prima solo i
     # sottotitoli avevano un interruttore: chi rispondeva "16:9" o "testo"
     # vedeva la scelta nel report e poi un master 9:16 senza card, senza che
     # niente lo dicesse. Ora il report porta `applied` e `why` per ogni
     # domanda, e le risposte senza effetto vengono anche dette in console.
-    unapplied = declare_question_answers(questions)
-    if unapplied:
-        _say(
-            "Risposte registrate ma senza interruttore nella pipeline: "
-            + ", ".join(unapplied)
-        )
-
+    # La dichiarazione arriva **dopo** che canvas e card sono stati scritti:
+    # chi applica una risposta lo conferma, e nessuno si autoproclama.
     with clock.time("music"):
         # La traccia si legge prima del triage: il suo BPM decide la griglia, e
         # il file inesistente deve fermare il lavoro prima di scrivere un master.
@@ -7677,11 +8085,27 @@ def _run_locked(
         montage_mode = bool(montage)
 
         try:
+            # Il canvas: risposta della vista, oppure il materiale quando
+            # l'utente ha detto "fai tutto tu". Passa da `decide`, cosi'
+            # triage, EDL, render e sottotitoli nascono sullo stesso aspetto.
+            target_aspect = _target_format_choice(questions, args, assets)
             payload, recipe_decide_note = _decide_payload(
-                args, assets, recipe_section, montage_mode, music=music_section
+                args,
+                assets,
+                recipe_section,
+                montage_mode,
+                music=music_section,
+                aspect=(target_aspect or {}).get("aspect"),
             )
         except decide.AmbiguousContractError as exc:
             raise contract.VxError(f"prompt ambiguo in STRICT: {exc}") from exc
+        if target_aspect:
+            _mark_applied(
+                questions,
+                "target_format",
+                str(target_aspect["why"]),
+                value=str(target_aspect["aspect"]),
+            )
 
     block = payload.get("asset_triage")
     if not isinstance(block, Mapping) or not block:
@@ -8012,6 +8436,7 @@ def _run_locked(
             clock=clock,
             workdir=workdir,
             prepared=prepared_measurements,
+            caption_style={"style": subs_style} if subs_style else None,
         )
         reframe_map, restore_map = _render_effects(bridge_report)
         bridge_gains_applied = any("gain_db" in item for item in bridge_report.audio)
@@ -8083,6 +8508,35 @@ def _run_locked(
         "done" if bridge_summary["enabled"] else "skip",
         "eseguito" if bridge_summary["enabled"] else "--no-bridge",
     )
+    # La risposta sui sottotitoli ha una conseguenza verificabile: spenti, oppure
+    # scritti con lo stile scelto. Se il parlato non c'e' non si finge che la
+    # scelta abbia prodotto qualcosa.
+    subs_answer_entry = answers.get("subtitles") or {}
+    if subs_answer_entry.get("answered_by") == "user":
+        chosen = str(subs_answer_entry.get("value") or "")
+        written = int(bridge_summary.get("captions") or 0)
+        if chosen == "nessuno":
+            _mark_applied(
+                questions,
+                "subtitles",
+                "sottotitoli spenti: nessuna caption scritta",
+                value=chosen,
+            )
+        elif written:
+            _mark_applied(
+                questions,
+                "subtitles",
+                f"sottotitoli {chosen}: {written} battute scritte",
+                value=chosen,
+            )
+        else:
+            _mark_applied(
+                questions,
+                "subtitles",
+                f"sottotitoli {chosen} chiesti ma nessuna battuta scritta (parlato assente)",
+                value=chosen,
+                applied=False,
+            )
 
     with clock.time("plan"):
         (workdir / "plan.json").write_text(
@@ -8261,6 +8715,7 @@ def _run_locked(
                 captions_ass,
                 bridge_report,
                 recipe_brief=_recipe_text_brief(recipe_section),
+                hook_answer=hook_answer,
             )
     except Exception as exc:  # noqa: BLE001 - la scrittura del testo non e' il render
         degrade.note("typography", exc)
@@ -8284,6 +8739,43 @@ def _run_locked(
         (typography_section.get("font") or {}).get("fonts_dir") or ""
     )
     _declare_text_params(recipe_section, typography_section, plan)
+    # La risposta sull'hook: o e' stata scritta (e si vede in `texts`), o non
+    # aveva una frase da scrivere. In nessun caso si dichiara applicata per
+    # cortesia.
+    hook_texts = [
+        item
+        for item in (typography_section.get("texts") or ())
+        if str(item.get("kind") or "") == "hook"
+    ]
+    if hook_answer == "nessuno":
+        _mark_applied(
+            questions,
+            "hook",
+            "card dell'apertura non richiesta: nessun ASS scritto",
+            value="nessuno",
+        )
+    elif hook_answer == "testo":
+        if hook_texts:
+            _mark_applied(
+                questions,
+                "hook",
+                "card dell'apertura scritta: testo dal brief o dalla trascrizione",
+                value="testo",
+            )
+        else:
+            _mark_applied(
+                questions,
+                "hook",
+                "testo chiesto ma nessuna frase disponibile: nessun ASS scritto",
+                value="testo",
+                applied=False,
+            )
+    unapplied = declare_question_answers(questions)
+    if unapplied:
+        _say(
+            "Risposte registrate ma senza interruttore nella pipeline: "
+            + ", ".join(unapplied)
+        )
 
     exemptions = grammar.camera_exemptions(plan)
     try:
@@ -8624,6 +9116,9 @@ def _run_locked(
         "contrast_at": typography_section.get("contrast_at"),
         "keyframes_gate": key_section,
         "questions": questions,
+        # Chi ha deciso: flag, richiesta, vista o default. Una riga sola, e
+        # dice anche quante domande NON sono state poste.
+        "presence": presence,
         "gates": gates_block,
         "decisions": decision_log,
         "bridge": bridge_summary,

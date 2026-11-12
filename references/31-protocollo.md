@@ -39,13 +39,29 @@ restano disponibili come strumenti di livello più basso.
 
 ## 2. La vista
 
-- La vista **parte da sola**: `vx auto`, `vx reel` e il tool MCP `vx_auto`
-  chiamano `auto.autostart_view` → `cli.ensure_view`, che accende il daemon (o
-  riusa quello vivo) e apre la pagina prima di toccare il girato. Dopo
+- La vista **parte da sola e sta dentro OpenCode**: `vx auto`, `vx reel` e il
+  tool MCP `vx_auto` chiamano `auto.autostart_view` → `cli.ensure_view`, che
+  accende il daemon (o riusa quello vivo) prima di toccare il girato. La pagina
+  si mostra nel **browser interno** (`browser.tabs.open`), non in una finestra
+  esterna; il browser di sistema è l'azione «Apri fuori» dentro la pagina. Dopo
   l'apertura si aspetta qualche secondo il primo giro di `/api/state`, così i
-  cancelli non usano i default mentre la pagina sta caricando. `vx up` resta per
-  aprirla a mano, `vx down` la ferma; `--no-view` / `VX_NO_VIEW=1` è l'unico modo
-  per non accenderla (CI, macchine senza browser).
+  cancelli non usano i default mentre la pagina sta caricando. `vx up` accende a
+  mano, `vx down` ferma; `--no-view` / `VX_NO_VIEW=1` è l'unico modo per non
+  accenderla (CI, macchine senza browser).
+- Prima di tutto si stabilisce **chi decide**: `--present` / «voglio scegliere
+  io» / risposta nella vista tengono aperti i cancelli; `--auto-choices` /
+  «fai tutto tu» non chiedono niente e dichiarano ogni scelta in
+  `report["presence"]` (fonte: flag, prompt, vista o default).
+- Le risposte cambiano il lavoro, non solo il report: `target_format` entra in
+  `decide` (canvas, triage, EDL, render, sottotitoli), `hook` scrive o non
+  scrive la card dell'apertura (`testo` usa il brief o la prima riga della
+  trascrizione, mai frasi inventate), `subtitles` sceglie acceso/spento **e** lo
+  stile karaoke/clean. Se una risposta non produce niente, `applied: false` col
+  motivo.
+- Con «fai tutto tu» (flag, prompt o vista) e nessuna piattaforma nel prompt, il
+  canvas segue il materiale misurato (`_material_aspect`: 2 asset orizzontali su
+  2 → 16:9) e la ragione sta in `questions[target_format].why`. Il default
+  implicito resta quello della pipeline, dichiarato.
 - `vx serve DIR` serve un singolo lavoro; `--watch` aggancia la corsa al daemon.
 - Il comando OpenCode `/reel` apre la vista **prima** di ogni altra cosa.
 - I cancelli (font, fotogrammi, piano) aspettano una risposta **solo se c'è un

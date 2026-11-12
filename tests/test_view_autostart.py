@@ -18,6 +18,7 @@ import os
 import sys
 import tempfile
 import urllib.request
+import webbrowser
 from argparse import Namespace
 from pathlib import Path
 
@@ -98,11 +99,27 @@ def main() -> int:
         )
 
         print("\n-- automatico: la funzione che chiamano auto, reel e l'MCP")
-        launched = auto.autostart_view()
+        opened: list = []
+        original = webbrowser.open
+
+        def spy(url: str, *args: object, **kwargs: object) -> bool:
+            opened.append(str(url))
+            return True
+
+        webbrowser.open = spy  # type: ignore[assignment]
+        try:
+            launched = auto.autostart_view()
+        finally:
+            webbrowser.open = original
         check(
             "V3 senza flag accende (e riusa) la stessa vista",
             launched == url,
             launched,
+        )
+        check(
+            "V3 e non apre una finestra esterna: la pagina la mostra OpenCode",
+            opened == [],
+            opened,
         )
         check(
             "V3 e non e' un secondo processo",

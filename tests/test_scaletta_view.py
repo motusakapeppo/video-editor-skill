@@ -109,6 +109,16 @@ def report_block() -> dict:
         "master": "master.mp4",
         "composition": composition(),
         "movements": movements(),
+        "presence": {
+            "id": "presence",
+            "question": "Vuoi scegliere tu, o faccio tutto io?",
+            "value": "automatico",
+            "source": "prompt",
+            "answered_by": "prompt",
+            "asked": False,
+            "waited_sec": 0.0,
+            "why": "detto nella richiesta («fai tutto tu»)",
+        },
         # Quello che il lavoro ha scartato: il report lo porta e la pagina deve
         # mostrarlo nel blocco FUORI, non lasciarlo nel file.
         "warnings": ["coda non raggiunta: 0,4 s"],
@@ -321,6 +331,15 @@ def main() -> int:
                                 "V6 e il battito con i suoi numeri",
                                 "120" in misure_text and "bpm" in misure_text.lower(),
                                 misure_text[:200],
+                            )
+                            riga = page.locator("#presenceLine").first
+                            check(
+                                "V7 la modalità è in pagina, con la sua fonte",
+                                riga.count() > 0
+                                and riga.is_visible()
+                                and "fai tutto tu" in riga.inner_text()
+                                and "prompt" in riga.inner_text(),
+                                riga.inner_text() if riga.count() else "",
                             )
                             browser.close()
                 except Exception as exc:  # noqa: BLE001 - il browser non è il soggetto

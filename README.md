@@ -217,14 +217,37 @@ non era disponibile, quindi non c'è silenzio misurato e nulla viene tagliato.
 
 ## Cosa la vista mostra, e cosa resta nel report
 
-**La vista non si chiede: parte da sola.** `vx reel`, `vx auto` e il tool MCP
-`vx_auto` chiamano `auto.autostart_view` → `cli.ensure_view`: il daemon si
-accende (o si riusa, se già vivo) e la pagina si apre **prima** che il girato
-venga toccato. `vx up` resta per aprirla a mano, `vx down` per chiuderla;
-`--no-view` o `VX_NO_VIEW=1` è l'unico modo per non accenderla (CI, macchine
-senza browser). Dopo l'apertura il lavoro aspetta qualche secondo il primo
-giro di `/api/state`: senza quell'attesa i cancelli userebbero i default mentre
-l'utente sta ancora caricando la pagina.
+**La vista non si chiede: parte da sola e sta dentro OpenCode.** `vx reel`,
+`vx auto` e il tool MCP `vx_auto` chiamano `auto.autostart_view` →
+`cli.ensure_view`: il daemon si accende (o si riusa, se già vivo) **prima** che
+il girato venga toccato, e la pagina si mostra nel browser interno di OpenCode
+(`browser.tabs.open`), non in una finestra separata. Il browser di sistema resta
+un'azione dentro la pagina («Apri fuori»). `vx up` accende a mano, `vx down`
+ferma; `--no-view` o `VX_NO_VIEW=1` è l'unico modo per non accenderla (CI,
+macchine senza browser). Dopo l'apertura il lavoro aspetta qualche secondo il
+primo giro di `/api/state`: senza quell'attesa i cancelli userebbero i default
+mentre l'utente sta ancora caricando la pagina.
+
+Il primo passo non è un dettaglio tecnico: **chi decide**. `--present` (o «voglio
+scegliere io» nella richiesta, o la risposta nella vista) tiene aperti i cancelli
+su formato, hook, sottotitoli, font e fotogrammi; `--auto-choices` (o «fai tutto
+tu») non chiede niente, decide con le misure e dichiara ogni scelta in
+`report["presence"]` e `report["questions"]`.
+
+### Le risposte hanno una conseguenza
+
+| risposta | cosa cambia davvero |
+|---|---|
+| `presence` = automatico | le tre domande successive non vengono poste: `asked: false` e il perché nel report |
+| `target_format` | il **canvas**: `decide` nasce con quell'aspetto, quindi triage, EDL, render e sottotitoli sono coerenti. In «fai tutto tu» senza piattaforma nel prompt, l'aspetto segue il materiale misurato (`3 asset su 3 orizzontali` → 16:9) |
+| `hook` = `nessuno` | la card dell'apertura non si scrive, e non viene dichiarata come mancanza |
+| `hook` = `testo` | la card si forza, con le parole del brief o la prima riga dei sottotitoli — mai una frase inventata; se non c'è testo, lo dice |
+| `subtitles` | acceso/spento **e** stile `karaoke`/`clean`, passato al ponte |
+| `font` | `font_choice.json` vince: il master usa quella famiglia |
+| fotogrammi | l'approvazione decide la consegna |
+
+Se una risposta non ha prodotto niente, il report lo dice (`applied: false` con
+il motivo): non esiste una risposta "registrata" che sembri applicata.
 
 La pagina non è un riassunto a sentimento: legge `/api/state` e disegna quello che
 il lavoro ha misurato. Accanto alla SCALETTA (hook, clip, b-roll, movimenti) e al

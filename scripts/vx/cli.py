@@ -4579,6 +4579,20 @@ def build_parser() -> argparse.ArgumentParser:
         "(per CI e macchine senza browser; vale anche VX_NO_VIEW=1)",
     )
     p.add_argument(
+        "--present",
+        dest="presence",
+        action="store_const",
+        const="presente",
+        help="scegli tu: la vista ti ferma su formato, hook, sottotitoli, font e fotogrammi",
+    )
+    p.add_argument(
+        "--auto-choices",
+        dest="presence",
+        action="store_const",
+        const="automatico",
+        help="fai tutto tu: nessuna attesa, ogni scelta misurata e dichiarata nel report",
+    )
+    p.add_argument(
         "--watch",
         action="store_true",
         help="apre la vista del lavoro e stampa l'indirizzo PRIMA del render: "
@@ -4739,6 +4753,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-view",
         action="store_true",
         help="non accendere la vista (la pagina parte da sola; vale anche VX_NO_VIEW=1)",
+    )
+    p.add_argument(
+        "--present",
+        dest="presence",
+        action="store_const",
+        const="presente",
+        help="scegli tu: ti fermo su formato, hook, sottotitoli, font e fotogrammi",
+    )
+    p.add_argument(
+        "--auto-choices",
+        dest="presence",
+        action="store_const",
+        const="automatico",
+        help="fai tutto tu: nessuna attesa, ogni scelta misurata e dichiarata",
     )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_reel)
