@@ -85,16 +85,34 @@ def silence_allowance(report: Any, expected: Any) -> Tuple[float, str]:
     cuts = bridge.get("cuts")
     # Nel report il riepilogo del ponte porta il **numero** di tagli, non la
     # lista (quella vive in bridge_report.json): valgono entrambe le forme.
-    if isinstance(cuts, (int, float)) and not isinstance(cuts, bool):
+    numeric_count = isinstance(cuts, (int, float)) and not isinstance(cuts, bool)
+    rows = [] if numeric_count else (cuts if isinstance(cuts, list) else [])
+    count = int(cuts) if numeric_count else len(rows)
+
+    # I secondi veri, quando il report li porta: `cuts_removed_sec` (somma) o
+    # `removed_sec` per taglio. Il conteggio dice "ho tagliato", i secondi
+    # dicono "quanto": la tolleranza deve parlare di secondi.
+    seconds: Optional[float] = None
+    raw = bridge.get("cuts_removed_sec")
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        seconds = round(float(raw), 3)
+    elif rows:
+        measured = [
+            float(item.get("removed_sec") or 0.0)
+            for item in rows
+            if isinstance(item, Mapping)
+        ]
+        if any(value > 0.0 for value in measured):
+            seconds = round(sum(measured), 3)
+    if seconds is not None:
+        removed = seconds > 0.0
+    elif numeric_count:
         removed = float(cuts) > 0
-        count = int(cuts)
     else:
-        rows = cuts if isinstance(cuts, list) else []
         removed = any(
             isinstance(item, Mapping) and item.get("reason") == "dead_air"
             for item in rows
         )
-        count = len(rows)
     if not removed:
         return 0.0, ""
     try:
@@ -105,10 +123,13 @@ def silence_allowance(report: Any, expected: Any) -> Tuple[float, str]:
         return 0.0, ""
     if allowance <= 0:
         return 0.0, ""
+    cut_detail = f"{count} tagli"
+    if seconds:
+        cut_detail += f", {seconds:.2f}s tolti"
     return (
         round(allowance, 3),
         f"tollerati fino a {allowance:.2f}s: i secondi mancanti sono silenzi rimossi "
-        f"({count} tagli)",
+        f"({cut_detail})",
     )
 LOUDNESS_TOLERANCE_LU = 1.5
 TRUE_PEAK_MARGIN_DB = 0.1

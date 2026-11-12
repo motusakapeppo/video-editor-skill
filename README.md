@@ -215,6 +215,38 @@ dHash a 192 bit su tre frame con soglia 0.06; il loop della musica usa `acrossfa
 con copie limitate a 256. Limiti dichiarati: su alcune clip del caso studio il VAD
 non era disponibile, quindi non c'è silenzio misurato e nulla viene tagliato.
 
+## Cosa la vista mostra, e cosa resta nel report
+
+La pagina non è un riassunto a sentimento: legge `/api/state` e disegna quello che
+il lavoro ha misurato. Accanto alla SCALETTA (hook, clip, b-roll, movimenti) e al
+CONTRATTO (gli otto stadi con valore e soglia), c'è il blocco **FUORI**, che
+dichiara quello che è stato scartato:
+
+| voce (`out_of_frame`) | cosa dice |
+|---|---|
+| `warnings[]` | gli avvisi del giro, uno per riga |
+| `ignored[]` | file nella cartella che non sono media, con l'estensione |
+| `rejected[]` | asset scartati dal triage, col motivo e i numeri del motivo |
+| `not_applied{}` | b-roll e sottotitoli non applicati, per motivo, con secondi e parole |
+| `tail` · `shortfall` | coda della timeline e secondi mancanti rispetto alla richiesta |
+| `excluded[]` | clip escluse dal piano, con il perché |
+| `gaps[]` | sezioni rimaste senza materiale |
+| `cuts` · `cuts_removed_sec` | quanti tagli di silenzio e quanti secondi hanno tolto |
+| `resources` | modo di calcolo, worker, thread ffmpeg, whisper, GPU, sovrapposizione |
+
+Se il blocco è vuoto non si disegna: niente cornici senza contenuto.
+
+Uno stadio saltato (per `--no-bridge`, cache o guardia non richiesta) è uno stadio
+**saltato**, con il suo motivo: il log lo scriveva e la pagina lo chiamava
+"mancante". Le tre domande della vista dichiarano se la risposta è stata applicata:
+i sottotitoli hanno un interruttore, formato e hook no, e il report lo scrive in
+`questions[].applied` e `questions[].why` invece di lasciar credere di essere stati
+ascoltati.
+
+Il resto — tempi per stadio, risorse, punteggi dei b-roll, ogni singolo
+`not_applied`, ogni intervallo rimosso — resta in `auto_report.json` e
+`bridge_report.json`: la pagina è la superficie, il report è il registro.
+
 ## Cosa misura
 
 Stabilità (optical flow), esposizione (istogrammi luma, clipping), dominante colore

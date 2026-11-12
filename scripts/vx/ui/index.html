@@ -130,26 +130,6 @@
           </div>
         </section>
 
-        <!-- Il contratto del lavoro: otto stadi, ognuno con la sua misura.
-             Non è una percentuale: è quello che il log `.vx/run.jsonl` firma. -->
-        <section class="contract" id="contract" aria-labelledby="contractTitle" hidden>
-          <div class="contract-head">
-            <div class="contract-titles">
-              <h2 id="contractTitle">Contratto</h2>
-              <p class="contract-sub" id="contractSub">otto stadi, ognuno con la sua misura</p>
-            </div>
-            <p class="contract-score">
-              <span class="num" id="contractScore">—</span>
-              <span class="contract-score-word" id="contractScoreWord">firmati</span>
-            </p>
-          </div>
-          <div class="contract-strip" id="contractStrip" aria-hidden="true"></div>
-          <p class="contract-log num" id="contractLog"></p>
-          <p class="contract-note" id="contractNote" hidden></p>
-          <div class="contract-corrupt" id="contractCorrupt" role="alert" hidden></div>
-          <ol class="contract-list" id="contractList" aria-label="Gli otto stadi del contratto"></ol>
-        </section>
-
         <!-- La scaletta: le tre leve della composizione, con la proposta e il
              fatto tenuti separati. Quello che la misura voleva e quello che il
              piano ha davvero montato non sono la stessa riga; le voci scartate
@@ -175,6 +155,87 @@
             <p class="zone-label">Non composte</p>
             <ul class="scal-declined-list" id="scalettaDeclinedList"></ul>
           </div>
+        </section>
+
+        <!-- Cosa è rimasto fuori: quello che il report sapeva e il video non
+             mostra. Avvisi, file ignorati, asset scartati col motivo, b-roll non
+             applicati, coda e secondi mancanti, clip escluse, sezioni vuote.
+             Se il server dice `out_of_frame.empty`, il blocco non si disegna. -->
+        <section class="fuori" id="fuori" aria-labelledby="fuoriTitle" hidden>
+          <div class="fuori-head">
+            <div class="fuori-titles">
+              <h2 id="fuoriTitle">Cosa è rimasto fuori</h2>
+              <p class="fuori-sub">quello che il lavoro ha scartato, col suo motivo</p>
+            </div>
+            <p class="fuori-tally num" id="fuoriTally" hidden></p>
+          </div>
+
+          <div class="fuori-groups" id="fuoriGroups">
+            <section class="fuori-group" data-of="warnings" hidden>
+              <p class="fuori-label">Avvisi</p>
+              <ul class="fuori-list" id="fuoriWarnings"></ul>
+            </section>
+
+            <section class="fuori-group" data-of="rejected" hidden>
+              <p class="fuori-label">Scartati dal triage</p>
+              <ul class="fuori-list" id="fuoriRejected"></ul>
+            </section>
+
+            <section class="fuori-group" data-of="ignored" hidden>
+              <p class="fuori-label">Non sono media</p>
+              <ul class="fuori-list" id="fuoriIgnored"></ul>
+            </section>
+
+            <section class="fuori-group" data-of="not_applied" hidden>
+              <p class="fuori-label">Non applicato</p>
+              <ul class="fuori-list" id="fuoriNotApplied"></ul>
+            </section>
+
+            <section class="fuori-group" data-of="tail" hidden>
+              <p class="fuori-label">Coda della timeline</p>
+              <p class="fuori-line num" id="fuoriTail"></p>
+            </section>
+
+            <section class="fuori-group" data-of="shortfall" hidden>
+              <p class="fuori-label">Durata</p>
+              <p class="fuori-line num" id="fuoriShortfall"></p>
+            </section>
+
+            <section class="fuori-group" data-of="excluded" hidden>
+              <p class="fuori-label">Clip escluse</p>
+              <ul class="fuori-list" id="fuoriExcluded"></ul>
+            </section>
+
+            <section class="fuori-group" data-of="gaps" hidden>
+              <p class="fuori-label">Sezioni senza materiale</p>
+              <ul class="fuori-list" id="fuoriGaps"></ul>
+            </section>
+
+            <section class="fuori-group" data-of="resources" hidden>
+              <p class="fuori-label">Risorse</p>
+              <p class="fuori-line fuori-resources num" id="fuoriResources"></p>
+            </section>
+          </div>
+        </section>
+
+        <!-- Il contratto del lavoro: otto stadi, ognuno con la sua misura.
+             Non è una percentuale: è quello che il log `.vx/run.jsonl` firma. -->
+        <section class="contract" id="contract" aria-labelledby="contractTitle" hidden>
+          <div class="contract-head">
+            <div class="contract-titles">
+              <h2 id="contractTitle">Contratto</h2>
+              <p class="contract-sub" id="contractSub">otto stadi, ognuno con la sua misura</p>
+            </div>
+            <p class="contract-score">
+              <span class="num" id="contractScore">—</span>
+              <span class="contract-score-word" id="contractScoreWord">firmati</span>
+            </p>
+          </div>
+          <div class="contract-strip" id="contractStrip" aria-hidden="true"></div>
+          <p class="contract-log num" id="contractLog"></p>
+          <p class="contract-note" id="contractNote" hidden></p>
+          <div class="contract-corrupt" id="contractCorrupt" role="alert" hidden></div>
+          <ol class="contract-list" id="contractList" aria-label="Gli otto stadi del contratto"></ol>
         </section>
 
         <!-- Il motore: i fotogrammi che Chromium pubblica mentre costruisce la

@@ -58,6 +58,19 @@ restano disponibili come strumenti di livello più basso.
   leve non applicate stanno sotto `NON COMPOSTE` col loro motivo. Arriva da
   `/api/state` (`composition`, `sections`), cioè dal report: niente endpoint
   nuovi. Se il blocco manca, la sezione non compare.
+- Una leva non applicata non è l'unica cosa che si perde: file non-media nella
+  cartella, asset scartati, b-roll rifiutati, coda non raggiunta, sezioni senza
+  materiale. Ora stanno tutti in `/api/state` → `out_of_frame`
+  (`warnings`, `ignored`, `rejected`, `not_applied`, `tail`, `shortfall`,
+  `excluded`, `gaps`, `cuts`, `cuts_removed_sec`, `resources`) e la pagina li
+  disegna nel blocco **FUORI**; se è vuoto, il blocco non compare.
+- Uno stadio saltato (`event: skip`: `--no-bridge`, cache, guardia non
+  richiesta) vale `saltato` con il suo `why`, non `mancante`: la forma di
+  `run.stages` non cambia, cambia il valore che la pagina legge.
+- Le risposte delle tre domande dichiarano se sono state applicate
+  (`questions[].applied`, `questions[].why`): i sottotitoli hanno un
+  interruttore, formato e hook no, e la risposta senza effetto viene anche
+  stampata.
 
 ## 3. Ingest e triage (livello basso)
 

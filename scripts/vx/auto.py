@@ -164,6 +164,54 @@ TRIAGE_QUESTIONS: List[Dict[str, Any]] = [
 ]
 
 
+#: Che cosa fa davvero ogni risposta. Le tre domande del triage non hanno lo
+#: stesso peso nella pipeline: solo i sottotitoli hanno un interruttore, e
+#: dirlo e' l'unico modo per non far credere che "16:9" sia stato ascoltato.
+ANSWER_EFFECTS: Dict[str, str] = {
+    "subtitles": "la risposta accende o spegne i sottotitoli (--subs)",
+    "target_format": (
+        "il formato lo deduce `decide` dal prompt (piattaforma, 9:16 di default): "
+        "la risposta resta registrata e non cambia il canvas"
+    ),
+    "hook": (
+        "l'hook lo compone la scaletta dal girato: la risposta resta registrata "
+        "e non cambia i primi secondi"
+    ),
+}
+
+
+def declare_question_answers(questions: Sequence[Mapping[str, Any]]) -> List[str]:
+    """Marca ogni risposta con ``applied`` e ``why``; torna gli id senza effetto.
+
+    Il difetto che chiude: la vista chiedeva formato e hook, il report li
+    registrava sotto ``questions``, e il montaggio usava soltanto i sottotitoli.
+    Chi rispondeva "16:9" riceveva un 9:16 senza una riga che lo spiegasse.
+    Adesso la risposta dice se e' stata applicata e con quale limite, e chi
+    legge il report (o guarda la vista) non deve indovinare.
+    """
+    unapplied: List[str] = []
+    for item in questions:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("id") or "")
+        answered = item.get("answered_by") == "user"
+        if qid == "subtitles":
+            item["applied"] = answered
+            item["why"] = (
+                ANSWER_EFFECTS["subtitles"]
+                if answered
+                else "nessuna risposta: valgono i sottotitoli chiesti a riga di comando"
+            )
+        else:
+            item["applied"] = False
+            item["why"] = ANSWER_EFFECTS.get(
+                qid, "domanda senza interruttore nella pipeline"
+            )
+        if answered and not item.get("applied"):
+            unapplied.append(qid)
+    return unapplied
+
+
 def view_client_recent(
     workdir: Any,
     *,
@@ -1246,11 +1294,13 @@ def _music_plan(args: Any) -> Dict[str, Any]:
 
 
 def _discover(
-    args: Any, music: Optional[Mapping[str, Any]] = None
+    args: Any,
+    music: Optional[Mapping[str, Any]] = None,
+    skipped: Optional[List[Dict[str, Any]]] = None,
 ) -> List[asset_triage.AssetInfo]:
     try:
         assets = asset_triage.discover_assets(
-            args.assets, manifest=getattr(args, "manifest", None)
+            args.assets, manifest=getattr(args, "manifest", None), skipped=skipped
         )
     except ValueError as exc:
         raise contract.VxError(f"--assets: {exc}") from exc
@@ -7547,6 +7597,18 @@ def _run_locked(
         # ha scelto, non si finge che il default sia una scelta.
         args.subs = str(subtitles_answer.get("value") or "") != "nessuno"
 
+    # Ogni risposta registrata dichiara se ha cambiato qualcosa. Prima solo i
+    # sottotitoli avevano un interruttore: chi rispondeva "16:9" o "testo"
+    # vedeva la scelta nel report e poi un master 9:16 senza card, senza che
+    # niente lo dicesse. Ora il report porta `applied` e `why` per ogni
+    # domanda, e le risposte senza effetto vengono anche dette in console.
+    unapplied = declare_question_answers(questions)
+    if unapplied:
+        _say(
+            "Risposte registrate ma senza interruttore nella pipeline: "
+            + ", ".join(unapplied)
+        )
+
     with clock.time("music"):
         # La traccia si legge prima del triage: il suo BPM decide la griglia, e
         # il file inesistente deve fermare il lavoro prima di scrivere un master.
@@ -7566,7 +7628,8 @@ def _run_locked(
         _say(f"Musica: {music_section['note']}")
 
     with clock.time("triage"):
-        assets = _discover(args, music_section)
+        ignored_assets: List[Dict[str, Any]] = []
+        assets = _discover(args, music_section, skipped=ignored_assets)
         assets_by_id = {asset.asset_id: asset for asset in assets}
         fill_mode = _fill_mode(fill)
         montage_mode = bool(montage)
@@ -7928,11 +7991,31 @@ def _run_locked(
             captions_srt = str(sidecar) if sidecar is not None else None
         report_path = (workdir / "bridge_report.json").resolve()
         bridge_report.write(report_path)
+        # Il dettaglio per motivo: ``not_applied`` come numero dice "12 cose non
+        # applicate" e niente altro. Aggregato per motivo (con secondi e parole)
+        # sta in pochi byte nel report, cosi' la vista puo' dirlo senza rileggere
+        # bridge_report.json.
+        not_applied_reasons: Dict[str, Dict[str, Any]] = {}
+        for item in bridge_report.not_applied:
+            reason = str(item.get("reason") or "")
+            row = not_applied_reasons.setdefault(
+                reason, {"count": 0, "seconds": 0.0, "words": 0}
+            )
+            row["count"] += 1
+            row["seconds"] = round(row["seconds"] + float(item.get("seconds") or 0.0), 3)
+            row["words"] += int(item.get("words_dropped") or 0)
         bridge_summary = {
             "enabled": True,
             "cuts": len(bridge_report.cuts),
+            # I secondi tolti coi silenzi, sommati: la somma serve alla
+            # tolleranza di durata, che prima conosceva solo il conteggio.
+            "cuts_removed_sec": round(
+                sum(float(item.get("removed_sec") or 0.0) for item in bridge_report.cuts),
+                3,
+            ),
             "gained_clips": len(bridge_report.audio),
             "not_applied": len(bridge_report.not_applied),
+            "not_applied_reasons": not_applied_reasons,
             "captions": len(bridge_report.captions),
             "reframe": sum(
                 1 for item in bridge_report.reframe if item.get("keyframes")
@@ -8475,6 +8558,9 @@ def _run_locked(
             "total": len(assets),
             "selected": len(selected),
             "rejected": len(rejected),
+            # I file che non sono media per estensione: prima sparivano con un
+            # `continue` nudo e il report non poteva dire che esistevano.
+            "ignored": ignored_assets,
         },
         "montage": {
             "mode": "montage" if montage_mode else "single",

@@ -509,11 +509,17 @@ def discover_assets(
     *,
     manifest: Any = None,
     measure: Optional[Callable[[AssetInfo], Mapping[str, Any]]] = None,
+    skipped: Optional[List[Dict[str, Any]]] = None,
 ) -> List[AssetInfo]:
     """Scan the TOP LEVEL of ``directory`` and probe every recognised media file.
 
     Non-recursive on purpose: a nested tree hides its own duplicates and makes
     the report impossible to map back to a folder the user can point at.
+
+    ``skipped`` collects the files that are **not** media by extension. Prima
+    sparivano con un ``continue`` nudo: una cartella con dentro il progetto
+    Premiere e i suoi file di appoggio sembrava identica a una cartella pulita,
+    e chi guardava il report non poteva sapere che qualcosa era stato ignorato.
     """
     root = Path(directory)
     if not root.is_dir():
@@ -536,10 +542,18 @@ def discover_assets(
 
     assets: List[AssetInfo] = []
     for path in files:
+        rel = path.relative_to(root).as_posix()
         kind = _kind_from_suffix(path)
         if kind is None:
+            if skipped is not None:
+                skipped.append(
+                    {
+                        "asset_id": rel,
+                        "reason": "unknown_extension",
+                        "suffix": path.suffix.lower(),
+                    }
+                )
             continue
-        rel = path.relative_to(root).as_posix()
         try:
             size = path.stat().st_size
         except OSError:

@@ -57,6 +57,34 @@ def main() -> int:
     broken, _ = verify.silence_allowance({"bridge": {"cuts": "due"}}, 15.0)
     check("S7 un valore assurdo non inventa secondi", broken == 0.0, broken)
 
+    # I secondi veri, quando il report li porta: la tolleranza è la stessa, ma
+    # la frase dice quanto è stato tolto.
+    measured_report = {"bridge": {"cuts": 2, "cuts_removed_sec": 1.5}}
+    measured, measured_note = verify.silence_allowance(measured_report, 15.0)
+    check(
+        "S8 i secondi tolti arrivano nella frase",
+        measured == 3.0 and "1.50s tolti" in measured_note and "2 tagli" in measured_note,
+        measured_note,
+    )
+    per_cut = {
+        "bridge": {
+            "cuts": [{"reason": "dead_air", "removed_sec": 0.6}, {"reason": "dead_air", "removed_sec": 0.4}]
+        }
+    }
+    summed, summed_note = verify.silence_allowance(per_cut, 15.0)
+    check(
+        "S9 la lista dei tagli somma i secondi",
+        summed == 3.0 and "1.00s tolti" in summed_note,
+        summed_note,
+    )
+    none_removed = {"bridge": {"cuts": 2, "cuts_removed_sec": 0.0}}
+    no_allowance, _ = verify.silence_allowance(none_removed, 15.0)
+    check(
+        "S10 zero secondi tolti: nessuna agevolazione anche con due tagli",
+        no_allowance == 0.0,
+        no_allowance,
+    )
+
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1
 

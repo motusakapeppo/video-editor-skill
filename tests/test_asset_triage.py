@@ -375,6 +375,24 @@ def main() -> int:
         )
         after = hashlib.sha256(ghost.read_bytes()).hexdigest()
         check("discovery: sorgente intatta", before == after, before[:12])
+        # Un file che non e' un media per estensione non e' "niente": e' una
+        # cosa ignorata, e va dichiarata con il suo nome.
+        (work / "notes.txt").write_text("note di montaggio\n", encoding="utf-8")
+        (work / "project.prproj").write_bytes(b"<PremiereData/>")
+        skipped: list = []
+        again = at.discover_assets(work, skipped=skipped)
+        check(
+            "discovery: le estensioni ignote finiscono in skipped",
+            sorted(item["asset_id"] for item in skipped)
+            == ["notes.txt", "project.prproj"]
+            and all(item["reason"] == "unknown_extension" for item in skipped),
+            skipped,
+        )
+        check(
+            "discovery: e non entrano nel pool",
+            [item.asset_id for item in again] == ["broken.mp4"],
+            [item.asset_id for item in again],
+        )
         for bad_manifest in (
             {"assets": [{"path": Path.cwd().drive + "/escape.mp4"}]},
             {"assets": [{"path": "../escape.mp4"}]},

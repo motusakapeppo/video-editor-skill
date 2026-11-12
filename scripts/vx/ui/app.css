@@ -455,9 +455,10 @@ body.is-stamped .brand-dot {
 
 .col-work > .stage { order: 1; }
 .col-work > .contract { order: 2; }
-/* La scaletta sta sotto il contratto: la prova del lavoro, poi le scelte del
-   montaggio, poi la scena che entra. */
+/* La scaletta, poi quello che è rimasto fuori, poi il contratto: prima le
+   scelte del montaggio, poi ciò che non ci è entrato, poi la prova del lavoro. */
 .col-work > .scaletta { order: 2; }
+.col-work > .fuori { order: 2; }
 /* Il motore sta sotto il contratto: la prova del lavoro, poi la scena che entra. */
 .col-work > .motore-slot { order: 2; }
 .col-work > .vote-card { order: 3; }
@@ -721,6 +722,12 @@ body.is-offline .eyebrow { color: var(--warn); }
   );
 }
 
+/* Saltato: non è un buco né rosso. La barra resta neutra, come lo stadio. */
+.contract-strip i.is-skipped {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .24), rgba(255, 255, 255, .08));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
+
 @keyframes contract-flag {
   0%, 100% { opacity: 1; }
   50% { opacity: .55; }
@@ -865,6 +872,21 @@ body.is-offline .eyebrow { color: var(--warn); }
 .cstage.is-missing .cstage-name { color: var(--ink-3); }
 .cstage.is-missing .cstage-contract { color: var(--ink-3); }
 .cstage.is-missing .cstate { border-style: dashed; }
+
+/* Saltato: lo stadio non doveva girare. Riga neutra, motivo in chiaro. */
+.cstage.is-skipped .cstage-name { color: var(--ink-2); }
+.cstage.is-skipped .cstage-contract { color: var(--ink-3); }
+.cstage.is-skipped .cstate {
+  border-style: dashed;
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, .035);
+}
+
+.cstage-say.is-skipped {
+  border-left-color: rgba(255, 255, 255, .18);
+  font: 400 12.5px/1.55 var(--sans);
+  color: var(--ink-2);
+}
 
 .cstage-say {
   grid-column: 1 / -1;
@@ -1104,6 +1126,17 @@ body.is-offline .eyebrow { color: var(--warn); }
   color: var(--warn);
 }
 
+.scal-status.is-ok {
+  border-color: rgba(111, 224, 164, .3);
+  background: rgba(111, 224, 164, .06);
+  color: var(--ok);
+}
+
+.scal-status.is-quiet {
+  border-style: dashed;
+  color: var(--ink-3);
+}
+
 .scal-value {
   grid-area: value;
   display: flex;
@@ -1257,6 +1290,299 @@ body.is-offline .eyebrow { color: var(--warn); }
   .scal-value { justify-content: flex-start; text-align: left; }
   .scal-chain { justify-content: flex-start; }
   .scal-declined-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ------------------------------------------------------------ cosa resta fuori */
+
+/* Non è un errore: è il conto di quello che il lavoro ha scartato. L'accento è
+   caldo e la riga è neutra, perché un esclusione dichiarata è un fatto, non un
+   guasto. I gruppi si mostrano solo quando hanno qualcosa da dire. */
+.fuori {
+  position: relative;
+  padding: 18px 22px 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background:
+    radial-gradient(520px 210px at 96% -20%, rgba(255, 196, 107, .07), transparent 70%),
+    linear-gradient(180deg, #11141a 0%, #0a0d11 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, .045) inset,
+    0 20px 44px -34px rgba(0, 0, 0, .9);
+  overflow: hidden;
+  animation: rise 560ms var(--ease-out) 60ms backwards;
+}
+
+.fuori::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(255, 196, 107, .62), rgba(255, 196, 107, .03) 74%);
+}
+
+.fuori-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fuori-titles { min-width: 0; }
+
+.fuori-head h2 {
+  margin: 0;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.fuori-sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.fuori-tally {
+  flex: 0 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px 6px;
+  max-width: 54%;
+  margin: 0;
+  text-align: right;
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: .015em;
+  color: var(--ink-2);
+}
+
+.fuori-tally-part {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 2px 7px 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .022);
+  white-space: nowrap;
+}
+
+.fuori-tally-part b { font-weight: 600; color: var(--ink); }
+
+.fuori-tally-part.is-cut {
+  border-color: rgba(255, 196, 107, .26);
+  background: rgba(255, 196, 107, .055);
+  color: #e6c893;
+}
+
+.fuori-tally-part.is-cut b { color: var(--warn); }
+
+.fuori-groups {
+  display: flex;
+  flex-direction: column;
+  margin-top: 2px;
+}
+
+.fuori-group {
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 14px;
+  padding: 10px 0 11px;
+}
+
+.fuori-group + .fuori-group { box-shadow: 0 -1px 0 rgba(255, 255, 255, .045); }
+
+.fuori-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font: 600 9px/1.7 var(--mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.fuori-label::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(255, 196, 107, .55);
+}
+
+.fuori-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.fuori-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.fuori-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 7px;
+  min-width: 0;
+  margin: 0;
+}
+
+.fuori-id {
+  font: 500 11.5px/1.4 var(--mono);
+  letter-spacing: .01em;
+  color: #dbe6f2;
+  overflow-wrap: anywhere;
+}
+
+.fuori-tag {
+  padding: 1px 6px 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .03);
+  font: 600 9.5px/1.3 var(--mono);
+  letter-spacing: .02em;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.fuori-slug {
+  padding: 1px 6px 2px;
+  border: 1px solid rgba(255, 196, 107, .28);
+  border-radius: 4px;
+  background: rgba(255, 196, 107, .06);
+  font: 500 9.5px/1.3 var(--mono);
+  letter-spacing: .01em;
+  color: #e6c893;
+  overflow-wrap: anywhere;
+}
+
+.fuori-say {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.fuori-facts {
+  margin: 0;
+  font: 500 10.5px/1.45 var(--mono);
+  letter-spacing: .02em;
+  color: var(--ink-3);
+}
+
+.fuori-why {
+  margin: 0;
+  max-width: 68ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.fuori-warn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #ecd6b3;
+}
+
+.fuori-mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: rgba(255, 196, 107, .14);
+  font: 700 9px/1 var(--mono);
+  color: var(--warn);
+}
+
+.fuori-name {
+  font: 600 10.5px/1.5 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.fuori-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font: 600 8.5px/1 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.fuori-state.is-ok {
+  border-color: rgba(111, 224, 164, .3);
+  background: rgba(111, 224, 164, .06);
+  color: var(--ok);
+}
+
+.fuori-state.is-warn {
+  border-color: rgba(255, 196, 107, .34);
+  background: rgba(255, 196, 107, .07);
+  color: var(--warn);
+}
+
+.fuori-state.is-quiet { border-style: dashed; }
+
+.fuori-line {
+  margin: 0;
+  max-width: 82ch;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.fuori-resources {
+  font: 500 10.5px/1.55 var(--mono);
+  letter-spacing: .02em;
+  color: var(--ink-3);
+}
+
+@media (max-width: 760px) {
+  .fuori-head {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .fuori-tally {
+    max-width: none;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .fuori-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
 }
 
 /* ------------------------------------------------------------- stato vuoto */

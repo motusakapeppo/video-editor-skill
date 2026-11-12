@@ -133,6 +133,15 @@ def main() -> int:
         and len(report.cuts) == 2,
         report.cuts,
     )
+    # Ogni taglio porta i secondi che toglie: la tolleranza di durata deve
+    # parlare di secondi, non solo di "qualche taglio".
+    removed = [float(cut.get("removed_sec") or 0.0) for cut in report.cuts]
+    check(
+        "ogni taglio dichiara i secondi tolti",
+        all(value > 0.0 for value in removed)
+        and abs(sum(removed) - 0.92) <= 0.35,
+        (removed, round(sum(removed), 3)),
+    )
     check(
         "dst contigui da 0",
         all(

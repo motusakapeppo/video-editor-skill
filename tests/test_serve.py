@@ -1049,6 +1049,55 @@ def check_render_workdir() -> None:
             server.stop()
 
 
+def check_skipped_stage() -> None:
+    """Uno stadio saltato si dichiara saltato, con il suo motivo.
+
+    Prima la vista non aveva un ramo per ``event: skip``: lo stadio finiva in
+    "mancante", cioè sembrava un buco, e il motivo scritto nel log non arrivava
+    mai a schermo.
+    """
+    from vx import runlog
+
+    with tempfile.TemporaryDirectory(prefix="vx-runskip-") as raw:
+        work = Path(raw)
+        for stage in runlog.STAGES:
+            if stage == "analyze":
+                runlog.append(
+                    work,
+                    stage=stage,
+                    event="skip",
+                    contract="analisi richiesta",
+                    value=None,
+                    ok=True,
+                    why="--no-analysis: il girato ha già i metadati",
+                )
+                continue
+            runlog.append(
+                work,
+                stage=stage,
+                event="sign",
+                contract=f"{stage} fatto",
+                value=1,
+                threshold=1,
+                ok=True,
+            )
+        state = serve.run_state(work)
+        stages = state["stages"]
+        check(
+            "S14 lo stadio saltato non è 'mancante'",
+            stages["analyze"]["state"] == "saltato"
+            and "analyze" in state["skipped"]
+            and "analyze" not in state["missing"]
+            and bool(stages["analyze"]["why"]),
+            (stages["analyze"], state["skipped"], state["missing"]),
+        )
+        check(
+            "S14 il lavoro con uno stadio saltato non è completo",
+            state["complete"] is False and state["count"] == 7,
+            (state["complete"], state["count"]),
+        )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="vx-serve-") as raw:
         job = Path(raw) / "lavoro"
@@ -1096,6 +1145,37 @@ def main() -> int:
                         "sections": [{"id": f"s{index}"} for index in range(6)],
                     },
                     "movements": MOVEMENTS,
+                    # Quello che è rimasto fuori: il report lo diceva, la
+                    # pagina non lo mostrava. Lo stato deve portarlo.
+                    "warnings": ["coda non raggiunta: 0,4 s"],
+                    "assets": {
+                        "total": 5,
+                        "selected": 3,
+                        "rejected": 2,
+                        "ignored": [
+                            {"asset_id": "notes.txt", "reason": "unknown_extension", "suffix": ".txt"}
+                        ],
+                    },
+                    "rejected": [
+                        {
+                            "asset_id": "buio.mp4",
+                            "rejection_reason": "TOO_DARK",
+                            "details": {"luma": 0.03},
+                        }
+                    ],
+                    "bridge": {
+                        "enabled": True,
+                        "cuts": 2,
+                        "cuts_removed_sec": 1.4,
+                        "not_applied": 2,
+                        "not_applied_reasons": {
+                            "broll_below_threshold": {"count": 2, "seconds": 0.0, "words": 0}
+                        },
+                    },
+                    "timeline": {
+                        "tail": {"requested": 20.0, "actual": 19.6, "reachable": False}
+                    },
+                    "plan": {"excluded": [{"clip_id": "c9", "why": "sotto la soglia"}]},
                 }
             ),
             encoding="utf-8",
@@ -1145,6 +1225,20 @@ def main() -> int:
                 and len((data.get("sections") or {}).get("sections") or []) == 6
                 and data.get("movements") == MOVEMENTS,
                 ((data.get("composition") or {}).get("schema"), data.get("movements")),
+            )
+            out = data.get("out_of_frame") or {}
+            check(
+                "S1d lo stato porta quello che è rimasto fuori",
+                out.get("empty") is False
+                and out.get("warnings") == ["coda non raggiunta: 0,4 s"]
+                and [row["asset_id"] for row in out.get("ignored") or []] == ["notes.txt"]
+                and [row["reason"] for row in out.get("rejected") or []] == ["TOO_DARK"]
+                and (out.get("not_applied") or {}).get("broll_below_threshold", {}).get("count") == 2
+                and (out.get("tail") or {}).get("requested") == 20.0
+                and [row["clip_id"] for row in out.get("excluded") or []] == ["c9"]
+                and out.get("cuts") == 2
+                and out.get("cuts_removed_sec") == 1.4,
+                out,
             )
 
             journal = data.get("journal")
@@ -1518,6 +1612,7 @@ def main() -> int:
     check_activity()
     check_artifact_verdict()
     check_render_workdir()
+    check_skipped_stage()
 
     print(f"\n{PASS} PASS / {FAIL} FAIL")
     return 0 if FAIL == 0 else 1

@@ -228,6 +228,41 @@ def test_triage_with_client() -> None:
         )
 
 
+def test_answer_effects() -> None:
+    print("\n-- risposte: ognuna dice se ha cambiato qualcosa")
+    answered = [
+        {"id": "target_format", "value": "16:9", "answered_by": "user"},
+        {"id": "hook", "value": "testo", "answered_by": "user"},
+        {"id": "subtitles", "value": "nessuno", "answered_by": "user"},
+    ]
+    unapplied = auto.declare_question_answers(answered)
+    check(
+        "solo i sottotitoli hanno un interruttore",
+        unapplied == ["target_format", "hook"],
+        unapplied,
+    )
+    check(
+        "il sottotitoli risulta applicato",
+        answered[2].get("applied") is True,
+        answered[2],
+    )
+    check(
+        "ogni risposta porta il suo perche'",
+        all(item.get("why") for item in answered),
+        [item.get("why") for item in answered],
+    )
+    defaults = [
+        {"id": "target_format", "value": "9:16", "answered_by": "default"},
+        {"id": "subtitles", "value": "karaoke", "answered_by": "default"},
+    ]
+    none = auto.declare_question_answers(defaults)
+    check(
+        "un default non e' una scelta applicata e non accusa nessuno",
+        none == [] and defaults[1]["applied"] is False,
+        (none, defaults[1]),
+    )
+
+
 def test_font_gate() -> None:
     print("\n-- font: proposta senza attesa, e scadenza dichiarata")
     with tempfile.TemporaryDirectory() as tmp:
@@ -499,6 +534,7 @@ def main() -> int:
     test_triage_without_view()
     test_triage_explicit_wait_wins()
     test_triage_with_client()
+    test_answer_effects()
     test_font_gate()
     test_font_wait_flag_wins()
     test_key_gate()

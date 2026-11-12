@@ -1391,9 +1391,17 @@ def _run_state_uncached(workdir: Path, log: Path) -> Dict[str, Any]:
         ok = record.get("ok") is True
         signed = kind == "sign" and ok
         failed = not signed and (kind == "fail" or (kind == "sign" and not ok))
+        # Uno stadio saltato (``--no-bridge``, cache, guardia non richiesta) ha
+        # un motivo scritto nel log: mostrarlo come "mancante" lo faceva
+        # sembrare un buco, e il perche' non arrivava mai a schermo.
+        skipped = not signed and not failed and kind == "skip"
         stages[name] = {
             "stage": name,
-            "state": "firmato" if signed else ("fallito" if failed else "mancante"),
+            "state": (
+                "firmato"
+                if signed
+                else ("fallito" if failed else ("saltato" if skipped else "mancante"))
+            ),
             "event": kind,
             "ok": ok,
             "contract": str(record.get("contract") or ""),
@@ -1406,11 +1414,13 @@ def _run_state_uncached(workdir: Path, log: Path) -> Dict[str, Any]:
 
     signed_names = [name for name in RUN_STAGES if stages[name]["state"] == "firmato"]
     failed_names = [name for name in RUN_STAGES if stages[name]["state"] == "fallito"]
+    skipped_names = [name for name in RUN_STAGES if stages[name]["state"] == "saltato"]
     return {
         "present": True,
         "stages": stages,
         "signed": signed_names,
         "failed": failed_names,
+        "skipped": skipped_names,
         "missing": [name for name in RUN_STAGES if stages[name]["state"] == "mancante"],
         "count": len(signed_names),
         "total": len(RUN_STAGES),
@@ -2386,6 +2396,94 @@ def _render_section(
     return render_state(data_dir, plan)
 
 
+def _out_of_frame(report: Mapping[str, Any]) -> Dict[str, Any]:
+    """Quello che il lavoro ha lasciato fuori, in un blocco solo.
+
+    Il report lo sapeva gia': avvisi, file ignorati per estensione, asset
+    rifiutati col motivo e coi numeri, b-roll non applicati, coda non
+    raggiunta, secondi persi, sezioni senza materiale. La pagina no: mostrava
+    il master e taceva sul resto, quindi "non perde nulla" non era verificabile
+    guardando. Questo blocco e' la proiezione per la vista, non una nuova
+    verita': ogni voce viene da un campo che esiste gia'.
+    """
+    data = report if isinstance(report, Mapping) else {}
+    warnings = [str(item) for item in (data.get("warnings") or ()) if str(item).strip()]
+    resources = data.get("resources")
+    assets = data.get("assets") if isinstance(data.get("assets"), Mapping) else {}
+    ignored = [
+        {
+            "asset_id": str(item.get("asset_id") or ""),
+            "reason": str(item.get("reason") or ""),
+            "suffix": str(item.get("suffix") or ""),
+        }
+        for item in (assets.get("ignored") or ())
+        if isinstance(item, Mapping)
+    ]
+    rejected = [
+        {
+            "asset_id": str(item.get("asset_id") or ""),
+            "reason": str(item.get("rejection_reason") or ""),
+            "details": dict(item.get("details") or {}),
+        }
+        for item in (data.get("rejected") or ())
+        if isinstance(item, Mapping)
+    ]
+    bridge = data.get("bridge") if isinstance(data.get("bridge"), Mapping) else {}
+    not_applied = {}
+    for reason, row in (bridge.get("not_applied_reasons") or {}).items():
+        if isinstance(row, Mapping):
+            not_applied[str(reason)] = {
+                "count": int(row.get("count") or 0),
+                "seconds": float(row.get("seconds") or 0.0),
+                "words": int(row.get("words") or 0),
+            }
+    timeline = data.get("timeline") if isinstance(data.get("timeline"), Mapping) else {}
+    tail = timeline.get("tail") if isinstance(timeline.get("tail"), Mapping) else None
+    shortfall = (
+        dict(data["duration_shortfall"])
+        if isinstance(data.get("duration_shortfall"), Mapping)
+        else None
+    )
+    plan = data.get("plan") if isinstance(data.get("plan"), Mapping) else {}
+    excluded = [
+        dict(item) for item in (plan.get("excluded") or ()) if isinstance(item, Mapping)
+    ]
+    sections = (
+        data.get("sections") if isinstance(data.get("sections"), Mapping) else {}
+    )
+    gaps = [dict(item) for item in (sections.get("gaps") or ()) if isinstance(item, Mapping)]
+    timings = data.get("timings") if isinstance(data.get("timings"), Mapping) else {}
+    block = {
+        "warnings": warnings,
+        "ignored": ignored,
+        "rejected": rejected,
+        "not_applied": not_applied,
+        "tail": dict(tail) if tail else None,
+        "shortfall": shortfall,
+        "excluded": excluded,
+        "gaps": gaps,
+        "resources": dict(resources) if isinstance(resources, Mapping) else None,
+        "timings": dict(timings) if isinstance(timings, Mapping) else None,
+        "cuts": int(bridge.get("cuts") or 0),
+        "cuts_removed_sec": float(bridge.get("cuts_removed_sec") or 0.0),
+    }
+    # Vuoto solo se non c'e' davvero niente da dire: la pagina lo usa per
+    # decidere se disegnare il blocco.
+    block["empty"] = not any(
+        (
+            block["warnings"],
+            block["ignored"],
+            block["rejected"],
+            block["not_applied"],
+            block["tail"],
+            block["shortfall"],
+            block["excluded"],
+            block["gaps"],
+        )
+    )
+    return block
+
+
 def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Lo stato del lavoro: pubblicato se c'e' il panel, altrimenti dedotto.
 
@@ -2518,6 +2616,10 @@ def _job_state(directory: Path, brief: Optional[Mapping[str, Any]] = None) -> Di
             if isinstance(report.get("sections"), Mapping)
             else None
         ),
+        # Quello che il lavoro ha scartato, in un blocco solo: avvisi, file
+        # ignorati, asset rifiutati col motivo, b-roll non applicati, secondi
+        # persi. Il report lo sapeva, la pagina no.
+        "out_of_frame": _out_of_frame(report),
         # I movimenti del corpo: la lettura della struttura (1-3 gruppi), accanto
         # alle sezioni. La pagina li mostra nella riga CLIP.
         "movements": (

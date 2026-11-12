@@ -109,6 +109,36 @@ def report_block() -> dict:
         "master": "master.mp4",
         "composition": composition(),
         "movements": movements(),
+        # Quello che il lavoro ha scartato: il report lo porta e la pagina deve
+        # mostrarlo nel blocco FUORI, non lasciarlo nel file.
+        "warnings": ["coda non raggiunta: 0,4 s"],
+        "assets": {
+            "total": 4,
+            "selected": 2,
+            "rejected": 1,
+            "ignored": [
+                {"asset_id": "notes.txt", "reason": "unknown_extension", "suffix": ".txt"}
+            ],
+        },
+        "rejected": [
+            {
+                "asset_id": "buio.mp4",
+                "rejection_reason": "TOO_DARK",
+                "details": {"luma": 0.03},
+            }
+        ],
+        "bridge": {
+            "enabled": True,
+            "cuts": 2,
+            "cuts_removed_sec": 1.4,
+            "not_applied": 2,
+            "not_applied_reasons": {
+                "broll_below_threshold": {"count": 2, "seconds": 0.0, "words": 0}
+            },
+        },
+        "timeline": {"tail": {"requested": 12.0, "actual": 11.6, "reachable": False}},
+        "plan": {"excluded": [{"clip_id": "c9", "why": "sotto la soglia di nitidezza"}]},
+        "resources": {"mode": "balanced", "workers": 4, "ffmpeg_threads": 8},
         "sections": {
             "ok": True,
             "total": 6,
@@ -183,6 +213,12 @@ def main() -> int:
                 state.get("movements") == movements(),
                 state.get("movements"),
             )
+            check(
+                "V1 e quello che è rimasto fuori",
+                (state.get("out_of_frame") or {}).get("empty") is False
+                and (state.get("out_of_frame") or {}).get("cuts") == 2,
+                (state.get("out_of_frame") or {}).get("empty"),
+            )
 
             try:
                 from playwright.sync_api import sync_playwright
@@ -231,6 +267,21 @@ def main() -> int:
                                 "NON COMPOSTE" in text.upper() and "nitidezza" in text,
                                 text[-160:],
                             )
+                            fuori = page.locator("#fuori").first
+                            check("V5 il blocco FUORI è in pagina", fuori.count() > 0 and fuori.is_visible())
+                            fuori_text = fuori.inner_text() if fuori.count() else ""
+                            check(
+                                "V5 nomina i file ignorati e gli asset scartati",
+                                "notes.txt" in fuori_text
+                                and "buio.mp4" in fuori_text
+                                and "TOO_DARK" in fuori_text,
+                                fuori_text[:200],
+                            )
+                            check(
+                                "V5 dice i tagli e i secondi tolti",
+                                "1,4" in fuori_text or "1.4" in fuori_text,
+                                fuori_text[:200],
+                            )
                             browser.close()
                 except Exception as exc:  # noqa: BLE001 - il browser non è il soggetto
                     check("V2/V3 la pagina si apre", False, f"{type(exc).__name__}: {exc}")
@@ -246,6 +297,11 @@ def main() -> int:
                     empty_state.get("composition") is None
                     and empty_state.get("movements") is None,
                     (empty_state.get("composition"), empty_state.get("movements")),
+                )
+                check(
+                    "V4 senza report: niente da mettere in FUORI",
+                    (empty_state.get("out_of_frame") or {}).get("empty") is True,
+                    empty_state.get("out_of_frame"),
                 )
             finally:
                 empty_server.stop()

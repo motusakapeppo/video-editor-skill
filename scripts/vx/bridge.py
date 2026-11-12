@@ -781,6 +781,20 @@ def _caption_anchors(
                 dst_in = dst0 + max(0.0, float(head.t0) - src0)
                 dst_out = dst0 + min(src1 - src0, tail_end - src0)
                 if dst_out - dst_in <= _EPS:
+                    # Un pezzo che non occupa nemmeno un frame non entra nei
+                    # sottotitoli, ma le sue parole sono state assegnate: si
+                    # dichiara invece di sparire (era un `continue` nudo).
+                    report.not_applied.append(
+                        {
+                            "anchor_id": None,
+                            "source_id": source_id,
+                            "caption_id": f"cap_{caption_seq:04d}",
+                            "reason": "caption_zero_length",
+                            "text": " ".join(anchor.text for anchor in words).strip(),
+                            "words_dropped": len(words),
+                        }
+                    )
+                    caption_seq += 1
                     continue
                 report.captions.append(
                     {
@@ -1721,6 +1735,11 @@ def build(
                         "t": round(float(removal["start"]), 3),
                         "anchor_id": removal["anchor_id"],
                         "reason": "dead_air",
+                        # Quanto dura il buco tolto: senza questo numero il
+                        # report sapeva solo quanti tagli, non quanti secondi.
+                        "removed_sec": round(
+                            float(removal["end"]) - float(removal["start"]), 3
+                        ),
                     }
                 )
             if not fragments:  # pragma: no cover - _apply_min_fragment keeps one

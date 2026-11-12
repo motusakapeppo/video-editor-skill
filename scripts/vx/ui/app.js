@@ -59,6 +59,18 @@
     scalettaList: $('scalettaList'),
     scalettaDeclined: $('scalettaDeclined'),
     scalettaDeclinedList: $('scalettaDeclinedList'),
+    fuori: $('fuori'),
+    fuoriTally: $('fuoriTally'),
+    fuoriGroups: $('fuoriGroups'),
+    fuoriWarnings: $('fuoriWarnings'),
+    fuoriRejected: $('fuoriRejected'),
+    fuoriIgnored: $('fuoriIgnored'),
+    fuoriNotApplied: $('fuoriNotApplied'),
+    fuoriTail: $('fuoriTail'),
+    fuoriShortfall: $('fuoriShortfall'),
+    fuoriExcluded: $('fuoriExcluded'),
+    fuoriGaps: $('fuoriGaps'),
+    fuoriResources: $('fuoriResources'),
     motore: $('motore'),
     motoreSentinel: $('motoreSentinel'),
     motoreImg: $('motoreImg'),
@@ -835,7 +847,12 @@
 
   // Il server dice lo stato in italiano, il foglio di stile ha una classe per
   // ognuno: questa tabella è l'unico punto in cui le due lingue si toccano.
-  const STATE_CLASS = { firmato: 'signed', fallito: 'failed', mancante: 'missing' };
+  const STATE_CLASS = {
+    firmato: 'signed',
+    fallito: 'failed',
+    mancante: 'missing',
+    saltato: 'skipped',
+  };
 
   function stateClass(state) {
     return STATE_CLASS[String(state || 'mancante')] || 'missing';
@@ -870,6 +887,9 @@
       measure.textContent = stage.event
         ? 'in corso · nessuna firma'
         : 'non misurato · nessuna firma';
+    } else if (state === 'saltato') {
+      // Non è un buco: lo stadio non doveva girare. Dirlo "mancante" era falso.
+      measure.textContent = 'non eseguito · nessuna misura';
     } else {
       measure.append(document.createTextNode('misurato '));
       const value = document.createElement('b');
@@ -925,6 +945,17 @@
         wrap.append(caption, list);
         item.append(wrap);
       }
+    }
+
+    if (state === 'saltato') {
+      // Il motivo del salto è un fatto del registro: sta nella riga, non in un
+      // "mancante" generico che lo farebbe sembrare un guasto.
+      const say = document.createElement('p');
+      say.className = 'cstage-say is-skipped';
+      say.textContent =
+        String(stage.why || '').trim() ||
+        'Stadio saltato senza motivo dichiarato nel registro.';
+      item.append(say);
     }
     return item;
   }
@@ -1063,6 +1094,22 @@
     proof: 'Prova',
   };
 
+  // Lo stato di una sezione arriva dal server in inglese; la pill dice la
+  // stessa cosa in italiano. `dropped` è una scelta, non un errore: resta
+  // neutra come `absent`, non rossa.
+  const SECTION_STATE = {
+    filled: { label: 'fatto', tone: 'ok' },
+    missing: { label: 'manca', tone: 'warn' },
+    absent: { label: 'assente', tone: 'quiet' },
+    dropped: { label: 'scartata', tone: 'warn' },
+  };
+
+  function sectionStateOf(value) {
+    const key = String(value || '').trim();
+    if (!key) return null;
+    return SECTION_STATE[key] || { label: key.replace(/_/g, ' '), tone: 'quiet' };
+  }
+
   let scalJob = null;
   const scalRows = new Map();
 
@@ -1097,14 +1144,33 @@
       : [];
   }
 
+  // Le sezioni compilate dal server: `state.sections.sections`, con il ripiego
+  // sull'array nudo per i payload di una versione precedente. Una sola lettura,
+  // così movimenti e stati non si contraddicono.
+  function sectionRowsOf(state) {
+    const block = state && state.sections;
+    const rows = Array.isArray(block) ? block : objectOf(block).sections;
+    return Array.isArray(rows)
+      ? rows.filter((row) => row && typeof row === 'object')
+      : [];
+  }
+
+  function sectionsById(state) {
+    const out = {};
+    sectionRowsOf(state).forEach((row) => {
+      const id = String(row.id || '').trim();
+      if (id) out[id] = row;
+    });
+    return out;
+  }
+
   function movementsOf(state) {
     const direct = movementRows(state && state.movements);
     if (direct.length) return direct;
 
-    const block = state && state.sections;
-    const rows = Array.isArray(block) ? block : objectOf(block).sections;
-    const list = Array.isArray(rows) ? rows : [];
-    const beat = list.find((row) => row && String(row.id || '') === 'beat');
+    const beat = sectionRowsOf(state).find(
+      (row) => String(row.id || '') === 'beat'
+    );
     return movementRows(objectOf(beat && beat.binding).movements);
   }
 
@@ -1113,9 +1179,19 @@
       const n = numberOrNull(value);
       return n === null || n === 0 ? '—' : String(Math.round(n));
     });
+    const seconds = movements.seconds.map((value) => {
+      const n = numberOrNull(value);
+      return n === null ? '—' : num(n, 1) + 's';
+    });
     const count = movements.count;
     const head = count === 1 ? '1 movimento' : String(count) + ' movimenti';
-    return head + ' · ' + shots.join('/') + ' inquadrature';
+    return (
+      head +
+      ' · ' +
+      shots.join('/') +
+      ' inquadrature · ' +
+      seconds.join('/')
+    );
   }
 
   function scalettaModel(state) {
@@ -1201,6 +1277,7 @@
       ? {
           count: moves.length,
           shots: moves.map((item) => item.shots),
+          seconds: moves.map((item) => item.seconds),
         }
       : null;
 
@@ -1209,6 +1286,7 @@
       shots,
       broll,
       movements,
+      sections: sectionsById(state),
       declined,
       // La creatività può spostare il blocco: è un fatto da dire, non un guasto.
       warn: applied.survived === false && appliedFlag === true,
@@ -1417,6 +1495,8 @@
     if (model.hook) {
       const nodes = scalRows.get('hook');
       const hook = model.hook;
+      const section = model.sections.hook;
+      const state = sectionStateOf(section && section.state);
       scalSeconds(nodes.value, hook.value);
       const sub = [];
       if (hook.baseline !== null) sub.push('prima ' + secText(hook.baseline));
@@ -1428,30 +1508,40 @@
         sub.push('proposta ' + secText(hook.proposal));
       }
       setScalLine(nodes.sub, sub.join(' · '));
-      setScalLine(nodes.note, hook.note);
+      const notes = [];
+      if (hook.note) notes.push(hook.note);
+      if (hook.applied === false) notes.push('composizione non applicata');
+      if (section && String(section.why || '').trim()) {
+        notes.push(String(section.why).trim());
+      }
+      setScalLine(nodes.note, notes.join(' · '));
       setScalStatus(
         nodes.status,
-        hook.applied === false ? 'non applicato' : '',
-        hook.applied === false ? 'warn' : ''
+        state ? state.label : hook.applied === false ? 'non applicato' : '',
+        state ? state.tone : hook.applied === false ? 'warn' : ''
       );
     }
 
     if (model.shots || model.movements) {
       const nodes = scalRows.get('shots');
+      const section = model.sections.beat;
+      const state = sectionStateOf(section && section.state);
       if (model.shots) {
         scalShots(nodes.value, model.shots);
       } else {
         scalEmpty(nodes.value);
       }
-      // Sotto il valore, i movimenti del corpo: quanti sono e quante
-      // inquadrature contengono. Il delta resta nel distintivo accanto.
+      // Sotto il valore, i movimenti del corpo: quanti sono, quante
+      // inquadrature e quanti secondi contengono. Il delta resta nel distintivo.
       setScalLine(nodes.sub, model.movements ? movementShotsText(model.movements) : '');
-      setScalLine(nodes.note, '');
-      setScalStatus(nodes.status, '', '');
+      setScalLine(nodes.note, section ? String(section.why || '').trim() : '');
+      setScalStatus(nodes.status, state ? state.label : '', state ? state.tone : '');
     }
 
     if (model.broll) {
       const nodes = scalRows.get('broll');
+      const section = model.sections.broll;
+      const state = sectionStateOf(section && section.state);
       scalBroll(nodes.value, model.broll);
       const parts = [];
       if (model.broll.orderChanged === true) parts.push('ordine cambiato');
@@ -1466,8 +1556,8 @@
         parts.push('coda ' + num(model.broll.tail, 2) + ' s libera');
       }
       setScalLine(nodes.sub, parts.join(' · '));
-      setScalLine(nodes.note, '');
-      setScalStatus(nodes.status, '', '');
+      setScalLine(nodes.note, section ? String(section.why || '').trim() : '');
+      setScalStatus(nodes.status, state ? state.label : '', state ? state.tone : '');
       nodes.row.classList.toggle('is-declined', declinedIds.has('broll'));
     }
 
@@ -1496,6 +1586,499 @@
         el.scalettaDeclinedList.append(row);
       });
     }
+  }
+
+  /* ------------------------------------------------------- cosa è rimasto fuori */
+
+  // I motivi arrivano dal lavoro come slug: la forma esatta resta visibile, e
+  // accanto sta una frase breve che la spiega. Se uno slug non è in tabella non
+  // si inventa niente: resta lo slug, che è già la dichiarazione del server.
+  const OF_REJECT_WHY = {
+    UNREADABLE: 'il file non si apre o non si decodifica',
+    DUPLICATE_ASSET: 'è un duplicato di un altro asset',
+    TOO_SHORT: 'la durata utile è sotto la soglia',
+    RESOLUTION_TOO_LOW: 'la risoluzione è sotto il canvas chiesto',
+    NO_SEMANTIC_ANCHOR: 'nessun appiglio nel parlato per il b-roll',
+    REDUNDANT_BROLL: 'b-roll ridondante rispetto al resto',
+    REDUNDANT_MUSIC: 'musica ridondante rispetto al resto',
+    VIDEO_TOO_DARK: 'il video è troppo scuro',
+    TOO_DARK: 'il video è troppo scuro',
+    AUDIO_TOO_NOISY: "l'audio è troppo rumoroso",
+    MUSIC_INCOHERENT: 'la musica non è coerente col montaggio',
+  };
+
+  const OF_IGNORED_WHY = {
+    unknown_extension: 'estensione non riconosciuta come media',
+  };
+
+  const OF_NOT_APPLIED_WHY = {
+    audio_clip_dropped: 'clip audio scartata',
+    audio_track_retimed: 'traccia audio riallineata',
+    broll_below_threshold: 'b-roll sotto la soglia misurata',
+    broll_fade_clamped: 'dissolvenza ridotta per stare nella clip',
+    broll_outside_timeline: 'b-roll fuori dalla timeline',
+    broll_overlap_after_cut: 'b-roll in conflitto con un altro sullo stesso taglio',
+    broll_score_unavailable: 'punteggio del b-roll non disponibile',
+    broll_shifted_to_speech: 'b-roll spostato sul parlato',
+    broll_without_anchor: 'b-roll senza appiglio nel parlato',
+    camera_absent: 'nessuna camera da seguire',
+    camera_op_clamped: 'movimento di camera limitato',
+    camera_op_dropped: 'movimento di camera non applicato',
+    caption_in_silence: 'didascalia caduta nel silenzio',
+    caption_zero_length: 'didascalia di durata zero',
+    captions_disabled: 'sottotitoli spenti',
+    captions_tail_uncovered: 'coda senza didascalia',
+    compress_declined: 'compressione rifiutata',
+    compress_unmeasured: 'compressione non misurata',
+    dead_air: 'silenzio non tagliato',
+    denoise_not_justified: 'riduzione del rumore non giustificata',
+    dialogue_not_mirrored: 'dialogo non replicato',
+    fragment_below_min: 'frammento sotto la durata minima',
+    gain_beyond_limit: 'guadagno oltre il limite',
+    gain_limited_by_peak: 'guadagno limitato dal picco',
+    measurement_invalid: 'misura non valida',
+    music_clip_dropped: 'clip musicale scartata',
+    music_loop_refused: 'ripetizione della musica rifiutata',
+    music_outside_timeline: 'musica fuori dalla timeline',
+    no_a_roll_layer0: 'nessun clip sul livello principale',
+    peak_headroom_unknown: 'headroom di picco non misurato',
+    reframe_keyframes_in_silence: 'keyframe di reframe nel silenzio',
+    tail_filled_after_cut: 'coda riempita dopo il taglio',
+    tail_filled_with_speech: 'coda riempita col parlato',
+    track_empty: 'traccia vuota',
+    transition_dropped: 'transizione non applicata',
+    transition_out_dropped: "transizione d'uscita non applicata",
+    word_below_min_confidence: 'parola sotto la confidenza minima',
+    word_outside_timeline: 'parola fuori dalla timeline',
+  };
+
+  const OF_EXCLUDED_WHY = {
+    unusable: 'nessun istante utilizzabile',
+  };
+
+  const OF_FACT_LABEL = {
+    value: 'valore',
+    threshold: 'soglia',
+    confidence: 'confidenza',
+    effective_duration_sec: 'durata effettiva',
+    upscale: 'ingrandimento',
+    max_upscale: 'ingrandimento max',
+    src_w: 'larghezza',
+    src_h: 'altezza',
+    target_w: 'larghezza target',
+    target_h: 'altezza target',
+    mean_luma: 'luminanza',
+    luma: 'luminanza',
+    snr_db: 'segnale/rumore',
+    music_ratio: 'quota musica',
+    p75: '75° percentile',
+    samples: 'campioni',
+    threshold_absolute: 'soglia assoluta',
+    threshold_relative: 'soglia relativa',
+    threshold_preferred: 'soglia preferita',
+    sharpness: 'nitidezza',
+  };
+
+  let fuoriJob = null;
+
+  function ofGroup(key) {
+    return el.fuoriGroups
+      ? el.fuoriGroups.querySelector('[data-of="' + key + '"]')
+      : null;
+  }
+
+  function ofSetGroup(key, visible) {
+    const group = ofGroup(key);
+    if (group) group.hidden = !visible;
+  }
+
+  function ofHead(assetId, slug, phrase, tag) {
+    const head = document.createElement('p');
+    head.className = 'fuori-item-head';
+
+    if (assetId) {
+      const id = document.createElement('span');
+      id.className = 'fuori-id num';
+      id.textContent = assetId;
+      head.append(id);
+    }
+    if (tag) {
+      const chip = document.createElement('span');
+      chip.className = 'fuori-tag';
+      chip.textContent = tag;
+      head.append(chip);
+    }
+    if (slug) {
+      const chip = document.createElement('span');
+      chip.className = 'fuori-slug';
+      chip.textContent = slug;
+      head.append(chip);
+    }
+    if (phrase) {
+      const say = document.createElement('span');
+      say.className = 'fuori-say';
+      say.textContent = phrase;
+      head.append(say);
+    }
+    return head;
+  }
+
+  function ofFacts(details) {
+    const data = objectOf(details);
+    const parts = [];
+    Object.keys(data).forEach((key) => {
+      const value = data[key];
+      if (value === null || value === undefined || value === '') return;
+      const label = OF_FACT_LABEL[key] || key.replace(/_/g, ' ');
+      let text = '';
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        text = measureValue(value);
+      } else if (typeof value === 'boolean') {
+        text = value ? 'sì' : 'no';
+      } else if (typeof value === 'string') {
+        text = value;
+      } else if (
+        Array.isArray(value) &&
+        value.every((item) => typeof item === 'number' || typeof item === 'string')
+      ) {
+        text = value.join('/');
+      }
+      if (text) parts.push(label + ' ' + text);
+    });
+    if (!parts.length) return null;
+    const line = document.createElement('p');
+    line.className = 'fuori-facts num';
+    line.textContent = parts.join(' · ');
+    return line;
+  }
+
+  function ofItem(parts) {
+    const item = document.createElement('li');
+    item.className = 'fuori-item';
+    parts.filter(Boolean).forEach((node) => item.append(node));
+    return item;
+  }
+
+  function ofWarningItem(text) {
+    const line = document.createElement('p');
+    line.className = 'fuori-warn';
+    const mark = document.createElement('span');
+    mark.className = 'fuori-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    mark.textContent = '!';
+    const say = document.createElement('span');
+    say.textContent = tidyReason(text);
+    line.append(mark, say);
+    return ofItem([line]);
+  }
+
+  function ofRejectedItem(item) {
+    const slug = String(item.reason || '').trim();
+    return ofItem([
+      ofHead(String(item.asset_id || ''), slug, OF_REJECT_WHY[slug] || ''),
+      ofFacts(item.details),
+    ]);
+  }
+
+  function ofIgnoredItem(item) {
+    const slug = String(item.reason || '').trim();
+    return ofItem([
+      ofHead(
+        String(item.asset_id || ''),
+        slug,
+        OF_IGNORED_WHY[slug] || '',
+        String(item.suffix || '').trim() || '—'
+      ),
+    ]);
+  }
+
+  function ofNotAppliedItem(reason, row) {
+    const slug = String(reason || '').trim();
+    const count = Math.max(0, Number(row.count) || 0);
+    const words = Math.max(0, Number(row.words) || 0);
+    const facts = document.createElement('p');
+    facts.className = 'fuori-facts num';
+    facts.textContent =
+      (count === 1 ? '1 caso' : count + ' casi') +
+      ' · ' +
+      secText(row.seconds) +
+      ' · ' +
+      (words === 1 ? '1 parola' : words + ' parole');
+    return ofItem([ofHead('', slug, OF_NOT_APPLIED_WHY[slug] || ''), facts]);
+  }
+
+  function ofExcludedItem(item) {
+    const slug = String(item.reason || '').trim();
+    const why = String(item.why || '').trim();
+    const say = document.createElement('p');
+    say.className = 'fuori-why';
+    say.textContent = tidyReason(why) || '—';
+    const id = String(item.asset_id || item.clip_id || item.id || '').trim();
+    return ofItem([ofHead(id, slug, OF_EXCLUDED_WHY[slug] || ''), say]);
+  }
+
+  function ofGapItem(item) {
+    const section = String(item.section || '').trim();
+    const label =
+      SCAL_DECLINED_LABEL[section] ||
+      (section ? section.replace(/_/g, ' ') : 'sezione');
+    const state = sectionStateOf(item.state);
+
+    const head = document.createElement('p');
+    head.className = 'fuori-item-head';
+    const name = document.createElement('span');
+    name.className = 'fuori-name';
+    name.textContent = label;
+    head.append(name);
+    if (state) {
+      const pill = document.createElement('span');
+      pill.className = 'fuori-state is-' + state.tone;
+      pill.textContent = state.label;
+      head.append(pill);
+    }
+
+    const why = document.createElement('p');
+    why.className = 'fuori-why';
+    why.textContent = tidyReason(item.why) || '—';
+    return ofItem([head, why]);
+  }
+
+  function ofTailBits(tail) {
+    const bits = [];
+    const requested = numberOrNull(tail.requested);
+    const actual = numberOrNull(tail.actual);
+    if (requested !== null) bits.push('chiesti ' + secText(requested));
+    if (actual !== null) bits.push('resi ' + secText(actual));
+    if (typeof tail.reachable === 'boolean') {
+      bits.push('raggiungibile: ' + (tail.reachable ? 'sì' : 'no'));
+    } else {
+      const reachable = numberOrNull(tail.reachable);
+      if (reachable !== null) bits.push('raggiungibile ' + secText(reachable));
+    }
+    const note = String(tail.note || '').trim();
+    if (note) bits.push(tidyReason(note));
+    return bits;
+  }
+
+  function ofShortfallBits(shortfall) {
+    const bits = [];
+    const missing = numberOrNull(shortfall.shortfall_sec ?? shortfall.missing_sec);
+    if (missing !== null) bits.push('mancano ' + secText(missing));
+    const requested = numberOrNull(shortfall.requested_sec ?? shortfall.requested);
+    if (requested !== null) bits.push('chiesti ' + secText(requested));
+    const delivered = numberOrNull(shortfall.delivered_sec ?? shortfall.delivered);
+    if (delivered !== null) bits.push('resi ' + secText(delivered));
+    return bits;
+  }
+
+  function ofResourceBits(resources) {
+    if (!resources || typeof resources !== 'object') return [];
+    const bits = [];
+    const mode = String(resources.mode || '').trim();
+    if (mode) bits.push('modo ' + mode);
+
+    const workers = numberOrNull(resources.workers);
+    if (workers !== null) bits.push(workers + ' worker');
+
+    const threads = resources.ffmpeg_threads;
+    if (typeof threads === 'number' && Number.isFinite(threads)) {
+      bits.push('ffmpeg ' + threads + ' thread');
+    } else {
+      const block = objectOf(threads);
+      const analysis = numberOrNull(block.analysis);
+      if (analysis !== null) bits.push('ffmpeg ' + analysis + ' thread in analisi');
+      const render = numberOrNull(block.render);
+      if (render !== null) bits.push('ffmpeg ' + render + ' thread in render');
+    }
+
+    const whisper = objectOf(resources.whisper);
+    if (Object.keys(whisper).length) {
+      if (whisper.used === true) {
+        const device = String(whisper.device || '').trim();
+        bits.push('whisper sì' + (device ? ' · ' + device : ''));
+      } else {
+        const reason = String(whisper.reason || '').trim();
+        bits.push('whisper no' + (reason ? ' · ' + reason : ''));
+      }
+    }
+
+    const gpu = objectOf(resources.gpu);
+    if (Object.keys(gpu).length) {
+      if (gpu.available === true) {
+        const name = String(gpu.name || '').trim() || 'gpu';
+        const memory = numberOrNull(gpu.memory_mb);
+        bits.push(
+          'gpu ' + name + (memory !== null ? ' · ' + Math.round(memory) + ' MB' : '')
+        );
+      } else {
+        bits.push('gpu assente');
+      }
+    }
+
+    const overlap = String(resources.overlap || '').trim();
+    if (overlap) bits.push('overlap ' + overlap);
+    return bits;
+  }
+
+  function clearFuori() {
+    if (!el.fuori) return;
+    el.fuori.hidden = true;
+    el.fuoriTally.hidden = true;
+    el.fuoriTally.textContent = '';
+    [
+      el.fuoriWarnings,
+      el.fuoriRejected,
+      el.fuoriIgnored,
+      el.fuoriNotApplied,
+      el.fuoriExcluded,
+      el.fuoriGaps,
+    ].forEach((node) => {
+      if (node) node.textContent = '';
+    });
+    if (el.fuoriTail) el.fuoriTail.textContent = '';
+    if (el.fuoriShortfall) el.fuoriShortfall.textContent = '';
+    if (el.fuoriResources) el.fuoriResources.textContent = '';
+    [
+      'warnings',
+      'rejected',
+      'ignored',
+      'not_applied',
+      'tail',
+      'shortfall',
+      'excluded',
+      'gaps',
+      'resources',
+    ].forEach((key) => ofSetGroup(key, false));
+    el.fuori.dataset.signature = '';
+    fuoriJob = null;
+  }
+
+  function paintFuori(state) {
+    if (!el.fuori || !el.fuoriGroups) return;
+    const block = state && state.out_of_frame;
+    if (!block || typeof block !== 'object' || block.empty === true) {
+      // Niente da dichiarare: il blocco non esiste, non resta un guscio vuoto.
+      clearFuori();
+      return;
+    }
+
+    if (fuoriJob !== jobIndex) {
+      clearFuori();
+      fuoriJob = jobIndex;
+    }
+
+    const warnings = (Array.isArray(block.warnings) ? block.warnings : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    const ignored = (Array.isArray(block.ignored) ? block.ignored : []).filter(
+      (item) => item && typeof item === 'object'
+    );
+    const rejected = (Array.isArray(block.rejected) ? block.rejected : []).filter(
+      (item) => item && typeof item === 'object'
+    );
+    const notApplied = objectOf(block.not_applied);
+    const notAppliedRows = Object.keys(notApplied)
+      .sort((a, b) => a.localeCompare(b))
+      .map((reason) => ({ reason, row: objectOf(notApplied[reason]) }));
+    const notAppliedTotal = notAppliedRows.reduce(
+      (sum, item) => sum + Math.max(0, Number(item.row.count) || 0),
+      0
+    );
+    const tail = block.tail && typeof block.tail === 'object' ? block.tail : null;
+    const shortfall =
+      block.shortfall && typeof block.shortfall === 'object' ? block.shortfall : null;
+    const excluded = (Array.isArray(block.excluded) ? block.excluded : []).filter(
+      (item) => item && typeof item === 'object'
+    );
+    const gaps = (Array.isArray(block.gaps) ? block.gaps : []).filter(
+      (item) => item && typeof item === 'object'
+    );
+    const resources =
+      block.resources && typeof block.resources === 'object' ? block.resources : null;
+
+    const signature = JSON.stringify({
+      warnings,
+      ignored,
+      rejected,
+      notApplied,
+      tail,
+      shortfall,
+      excluded,
+      gaps,
+      resources,
+      cuts: Number(block.cuts) || 0,
+      removed: numberOrNull(block.cuts_removed_sec),
+    });
+    if (el.fuori.dataset.signature === signature) return;
+    el.fuori.dataset.signature = signature;
+    el.fuori.hidden = false;
+
+    // La riga di sintesi: solo i conteggi che esistono, più i tagli dei silenzi.
+    const tally = [];
+    const tallyPart = (count, one, many) => {
+      if (count <= 0) return;
+      const span = document.createElement('span');
+      span.className = 'fuori-tally-part';
+      const value = document.createElement('b');
+      value.className = 'num';
+      value.textContent = String(count);
+      span.append(value, document.createTextNode(' ' + (count === 1 ? one : many)));
+      tally.push(span);
+    };
+    tallyPart(warnings.length, 'avviso', 'avvisi');
+    tallyPart(ignored.length, 'file ignorato', 'file ignorati');
+    tallyPart(rejected.length, 'asset scartato', 'asset scartati');
+    tallyPart(notAppliedTotal, 'non applicato', 'non applicati');
+    const cuts = Math.max(0, Number(block.cuts) || 0);
+    if (cuts > 0) {
+      const span = document.createElement('span');
+      span.className = 'fuori-tally-part is-cut';
+      const count = document.createElement('b');
+      count.className = 'num';
+      count.textContent = String(cuts);
+      const removed = document.createElement('b');
+      removed.className = 'num';
+      removed.textContent = num(numberOrNull(block.cuts_removed_sec) || 0, 2);
+      span.append(
+        count,
+        document.createTextNode(' ' + (cuts === 1 ? 'taglio' : 'tagli') + ' · '),
+        removed,
+        document.createTextNode(' s tolti')
+      );
+      tally.push(span);
+    }
+    el.fuoriTally.textContent = '';
+    tally.forEach((node) => el.fuoriTally.append(node));
+    el.fuoriTally.hidden = tally.length === 0;
+
+    // I gruppi: ognuno si mostra solo se ha qualcosa da dire.
+    function fill(key, list, items, make) {
+      if (!list) return;
+      list.textContent = '';
+      items.forEach((item) => list.append(make(item)));
+      ofSetGroup(key, items.length > 0);
+    }
+
+    fill('warnings', el.fuoriWarnings, warnings, ofWarningItem);
+    fill('rejected', el.fuoriRejected, rejected, ofRejectedItem);
+    fill('ignored', el.fuoriIgnored, ignored, ofIgnoredItem);
+    fill('not_applied', el.fuoriNotApplied, notAppliedRows, (item) =>
+      ofNotAppliedItem(item.reason, item.row)
+    );
+    fill('excluded', el.fuoriExcluded, excluded, ofExcludedItem);
+    fill('gaps', el.fuoriGaps, gaps, ofGapItem);
+
+    const tailBits = tail ? ofTailBits(tail) : [];
+    el.fuoriTail.textContent = tailBits.join(' · ');
+    ofSetGroup('tail', tailBits.length > 0);
+
+    const shortfallBits = shortfall ? ofShortfallBits(shortfall) : [];
+    el.fuoriShortfall.textContent = shortfallBits.join(' · ');
+    ofSetGroup('shortfall', shortfallBits.length > 0);
+
+    const resourceBits = ofResourceBits(resources);
+    el.fuoriResources.textContent = resourceBits.join(' · ');
+    ofSetGroup('resources', resourceBits.length > 0);
   }
 
   // Il timbro in testata: se il master si chiama NON-PUBBLICABILE-* la pagina
@@ -4340,6 +4923,7 @@
     // Senza un lavoro non c'è un contratto da mostrare né un timbro da esibire.
     el.contract.hidden = true;
     el.scaletta.hidden = true;
+    clearFuori();
     el.jobStamp.hidden = true;
   }
 
@@ -4402,6 +4986,7 @@
     paintStamp(state);
     paintContract(state);
     paintScaletta(state);
+    paintFuori(state);
 
     const finished = !state.current && percent >= 99.9;
     const ready = state.master_ready === true;
