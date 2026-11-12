@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,14 @@ def check(label: str, ok: object, detail: object = "") -> None:
 def ffprobe_path() -> Path:
     """ffprobe next to the configured ffmpeg binary, never a second install."""
     declared = os.environ.get("VX_FFMPEG")
-    base = Path(declared) if declared else Path(ffmpeg())
+    if declared:
+        # Un nome ("ffmpeg") non e' un percorso: senza risolverlo `with_name`
+        # costruisce un parente relativo che non esiste (su un runner il
+        # binario sta in una cartella di sistema).
+        found = shutil.which(declared)
+        base = Path(found or declared)
+    else:
+        base = Path(ffmpeg())
     return base.with_name("ffprobe.exe" if base.suffix.lower() == ".exe" else "ffprobe")
 
 
@@ -304,5 +312,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
