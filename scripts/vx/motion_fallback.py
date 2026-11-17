@@ -44,7 +44,7 @@ import hashlib
 import io
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -474,6 +474,7 @@ def capture(
     capture_timeout_s: Optional[float] = None,
     skip_lint: bool = False,
     workdir: Optional[str | Path] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     """Render the card sequence with Pillow, honouring :func:`vx.motion.capture`.
 
@@ -588,6 +589,8 @@ def capture(
             path.write_bytes(png)
             paths.append(str(path))
             digests.append(hashlib.sha256(png).hexdigest())
+            if progress is not None:
+                progress(len(paths), count)
     finally:
         if cache.enabled:
             try:

@@ -267,6 +267,34 @@ def case_b(work: Path) -> None:
         reg.get("remote-one") is None and "remote-one" not in reg.describe(),
     )
 
+    # Un template di lavoro (marchiato `.project`) non e' nel catalogo: non
+    # chiede una golden e non sporca `blocked()`, ma non sparisce senza traccia.
+    project = write_template(
+        root, "project-one", html=COPY_HTML, meta=manifest_text(name="probe-project")
+    )
+    (project / ".project").write_text("", encoding="utf-8")
+    reg.refresh()
+    check(
+        "un template .project non entra in names()",
+        reg.names() == ["probe-good"],
+        str(reg.names()),
+    )
+    check(
+        "un template .project si dichiara in projects()",
+        list(reg.projects()) == ["project-one"],
+        str(list(reg.projects())),
+    )
+    check(
+        "un template .project non e' 'blocked'",
+        sorted(reg.blocked()) == ["broken-one", "remote-one"],
+        str(sorted(reg.blocked())),
+    )
+    check(
+        "un template .project resta caricabile per nome",
+        motion.load_template(project)["name"] == "probe-project",
+        motion.load_template(project)["name"],
+    )
+
     refused = None
     try:
         reg.validate_call("broken-one", {})

@@ -2984,15 +2984,39 @@ def edl3_versions() -> tuple:
 
 
 #: Le fasi vere di un render EDL3: quelle che il pannello pubblica e che
-#: ``vx serve`` legge da ``progress.json``.
+#: ``vx serve`` legge da ``progress.json``. Le fasi che non accadranno non si
+#: elencano: :func:`_edl3_phases` le sceglie dal documento e dai flag.
 _EDL3_PHASES: tuple = (
-    ("compile", "Compilo il documento EDL3."),
-    ("render", "Renderizzo la timeline."),
+    ("compile", "Leggo il documento EDL3."),
+    ("nested", "Preparo le sequenze annidate."),
+    ("generator", "Disegno i fotogrammi del template."),
+    ("chunk", "Renderizzo i pezzi."),
+    ("graph", "Compilo il grafo."),
+    ("encode", "Encode del master."),
     ("master", "Il master e' scritto."),
 )
 
 
-def _edl3_panel(work: Path, name: str, clips: int):
+def _edl3_phases(timeline: object, args: argparse.Namespace) -> tuple:
+    """Le fasi che questo documento attraversera' davvero, nell'ordine."""
+    clips = list(getattr(timeline, "clips", ()) or ())
+    has_generators = any(
+        getattr(clip, "generator_declaration", None) is not None for clip in clips
+    )
+    chunked = bool(getattr(args, "live", False)) or int(getattr(args, "chunks", 0) or 0) > 1
+    wanted = {"compile", "master"}
+    if chunked:
+        # Il percorso a blocchi compila e encodea un pezzo alla volta: le fasi
+        # del grafo unico non accadono e non si elencano.
+        wanted.add("chunk")
+    else:
+        wanted.update({"nested", "graph", "encode"})
+        if has_generators:
+            wanted.add("generator")
+    return tuple(item for item in _EDL3_PHASES if item[0] in wanted)
+
+
+def _edl3_panel(work: Path, name: str, clips: int, phases: tuple = _EDL3_PHASES):
     """Il pannello del lavoro EDL3, o ``None`` se la vista non si scrive."""
     from . import panel as panel_mod
 
@@ -3001,7 +3025,7 @@ def _edl3_panel(work: Path, name: str, clips: int):
             Path(work) / "progress.html",
             prompt=f"EDL3 - {name}",
             clips=int(clips),
-            phases=_EDL3_PHASES,
+            phases=phases,
         )
         panel.write()
         return panel
@@ -3053,10 +3077,31 @@ def cmd_edl3(args: argparse.Namespace) -> int:
     # progress.html/progress.json; il report minimo arriva a lavoro concluso.
     work.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    panel = _edl3_panel(work, Path(args.plan).name, len(timeline.clips))
+    panel = _edl3_panel(work, Path(args.plan).name, len(timeline.clips), _edl3_phases(timeline, args))
     if panel is not None:
-        panel.record(5.0, "compile", elapsed=0.0)
-        panel.record(10.0, "render", elapsed=time.monotonic() - started)
+        panel.record(0.0, "compile", elapsed=0.0)
+
+    #: Un render EDL3 e' un processo solo che puo' durare dieci minuti: la vista
+    #: deve vedere i confini veri (fotogrammi del template, pezzo n/N, encode),
+    #: non una riga sola. I riscontri si limitano a un punto percentuale di
+    #: differenza o a una nota nuova, cosi' 1272 fotogrammi non diventano 1272
+    #: riscritture del pannello.
+    seen = {"stage": "", "percent": -1.0, "note": "", "note_at": 0.0}
+
+    def on_progress(percent: float, stage: str, note: str = "") -> None:
+        if panel is None:
+            return
+        value = max(0.0, min(95.0, float(percent)))
+        now = time.monotonic()
+        advanced = stage != seen["stage"] or value - seen["percent"] >= 1.0
+        fresh_note = bool(note) and note != seen["note"] and now - seen["note_at"] >= 2.0
+        if not advanced and not fresh_note:
+            return
+        seen["stage"], seen["percent"] = stage, value
+        panel.record(value, stage, elapsed=now - started)
+        if fresh_note:
+            seen["note"], seen["note_at"] = note, now
+            panel.say(note, phase=stage)
     if getattr(args, "watch", False) and panel is not None:
         from . import watch as watch_mod
 
@@ -3079,6 +3124,7 @@ def cmd_edl3(args: argparse.Namespace) -> int:
             jobs=args.jobs,
             live=bool(args.live),
             effect_budget=int(budget),
+            progress=on_progress,
         )
     except BaseException as exc:  # noqa: BLE001 - the panel must hear the truth
         if panel is not None:

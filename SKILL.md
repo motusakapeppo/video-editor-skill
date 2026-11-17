@@ -8,7 +8,7 @@ description: |-
   dichiara se il risultato è pubblicabile. Il file sorgente non viene mai toccato.
 
   Attivazione automatica: "monta/edita/taglia questo video", "togli i silenzi",
-  "sottotitoli", "verticale per TikTok", "reel/shorts/tiktok", "auto-framing",
+  "sottotitoli", "liriche", "testo a tempo", "karaoke", "verticale per TikTok", "reel/shorts/tiktok", "auto-framing",
   "inquadra il volto", "hook", "prepara per i social", "color correction",
   "stabilizza", "normalizza l'audio", "analizza il video", "qc", "consegna",
   "deliverables". Si attiva anche su qualsiasi file .mp4 .mov .mkv .avi .webm
@@ -56,16 +56,12 @@ dichiara). La vista parte da sola anche da `vx reel`, `vx auto`, `vx scene` e
 `VX_NO_VIEW=1`. L'URL si dà in una riga; il browser di sistema è il pulsante
 nella pagina.
 
-La pagina **si aggiorna mentre il lavoro gira**: `progress.json` si pubblica a ogni stadio anche con `--json`.
-
-La pagina mostra tutto: **contratto**, **scaletta** (proposta e fatto separati,
-declini), **cosa è rimasto fuori** (avvisi, file non-media, scarti col motivo,
-coda, clip escluse, sezioni vuote, secondi tolti) e **cosa ha misurato**
-(verifiche, policy, guardia, battito, varietà, coerenza, audio, stima, tempi).
-Blocco vuoto non si disegna; il resto è nel report (§2 di `31-protocollo.md`).
-
-Due lavori sulla stessa cartella non convivono: `<workdir>/.vx/lock` è un lease
-con battito, chi arriva secondo esce `2`; cartelle diverse girano in parallelo.
+La pagina **si aggiorna mentre il lavoro gira** (`progress.json` a ogni stadio,
+anche con `--json`) e mostra contratto, scaletta (proposta e fatto, declini), cosa
+è rimasto fuori e cosa ha misurato. Blocco vuoto non si disegna; il resto è nel
+report (§2 di `31-protocollo.md`). Due lavori sulla stessa cartella non convivono:
+`<workdir>/.vx/lock` è un lease con battito, chi arriva secondo esce `2`; cartelle
+diverse girano in parallelo.
 
 ## Protocollo
 
@@ -138,15 +134,18 @@ Le composizioni che un grafo di filtri non sa dire — split screen, confronto,
 sottopancia — le rende **Chromium** (`vx scene`), un fotogramma alla volta,
 pubblicate in `live/`; la grafica al browser, i flussi video a ffmpeg.
 
-I sottotitoli si chiedono col flag **o a parole** («con sottotitoli»). Se il
-parlato non c'è il report dice `no speech`; se nessuno li aveva chiesti dice
-`sottotitoli non richiesti` — due cose diverse. Se il reel accorcia per i
-silenzi tolti, si tollera il **20% (max 3 s)** col numero nel report; oltre no.
+Quando il materiale è **testo cantato a tempo** — liriche, karaoke, un ritornello — il
+percorso cambia: prima la partitura (BPM, battute, sezioni), poi la voce allineata al
+testo scritto, poi una **spec del testo** (eventi e colpi sul beat) che la grafica rende.
+`references/32-montaggio-lirico.md`.
+
+I sottotitoli si chiedono col flag **o a parole** («con sottotitoli»): senza parlato il
+report dice `no speech`, senza richiesta dice `sottotitoli non richiesti` — due cose
+diverse. Se il reel accorcia per i silenzi tolti, si tollera il **20% (max 3 s)** nel report.
 
 ## Come si giudica
 
-I numeri dicono se il lavoro è **corretto**, non se è **buono**. Queste sono le
-soglie che decidono; sotto, il lavoro non è pubblicabile:
+I numeri dicono se il lavoro è **corretto**, non se è **buono**: le soglie che seguono decidono, e sotto il lavoro non è pubblicabile:
 
 - **titolo leggibile**: contrasto ≥ 4.5 sul fotogramma che sta sotto, misurato —
   se serve si aggiunge contorno, ombra o placca, e si dichiara quale;
@@ -197,4 +196,4 @@ errori su stderr.
 ## Riferimenti
 
 - `references/01-ambiente.md` ambiente e GPU; `references/02-metriche-analisi.md` metriche; `references/03-matrice-decisionale.md` finding e gate; `references/04-specifiche-social.md` safe zone e hook; `references/05-auto-framing.md` volti e crop; `references/06-sottotitoli-ass.md` whisper e ASS; `references/07-render.md` stadi e loudnorm; `references/08-qc-e-consegna.md` codici QC; `references/09-accelerazione-e-vad.md` hardware e VAD; `references/10-grammatica-del-montaggio.md` ritmo; `references/11-retention-e-piattaforme.md` retention; `references/12-lezioni-dal-campo.md` lezioni misurate
-- `references/13-lezioni-impresse.md` le 15 regole; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno; `references/16-doppio-regime.md` STRICT/AUTONOMOUS; `references/17-ingest.md` stage 00; `references/18-clip-lunghi-checkpoint.md` clip lunghe; `references/19-edl-multisorgente.md` EDL 2.1; `references/20-render-multisorgente.md` render N sorgenti; `references/21-regia-semantica-keyword.md` B-roll; `references/22-grammatica-e-mixer-audio.md` mixer A/B; `references/23-triage-e-auto.md` triage e auto; `references/24-api-e-mcp.md` API e MCP; `references/25-job-engine.md` job asincroni; `references/26-edl3-e-ponte.md` EDL 3; `references/27-studio-higgsfield.md` studio documentale; `references/28-font-proposta-e-cancello.md` font; `references/29-vedere-il-lavoro.md` vista; `references/30-trattamenti.md` trattamenti; `references/31-protocollo.md` comandi, flag, percorsi, eccezioni
+- `references/13-lezioni-impresse.md` le 15 regole; `references/14-direzione-visiva-adattiva.md` i sei assi; `references/15-open-montage-rnd.md` studio esterno; `references/16-doppio-regime.md` STRICT/AUTONOMOUS; `references/17-ingest.md` stage 00; `references/18-clip-lunghi-checkpoint.md` clip lunghe; `references/19-edl-multisorgente.md` EDL 2.1; `references/20-render-multisorgente.md` render N sorgenti; `references/21-regia-semantica-keyword.md` B-roll; `references/22-grammatica-e-mixer-audio.md` mixer A/B; `references/23-triage-e-auto.md` triage e auto; `references/24-api-e-mcp.md` API e MCP; `references/25-job-engine.md` job asincroni; `references/26-edl3-e-ponte.md` EDL 3; `references/27-studio-higgsfield.md` studio documentale; `references/28-font-proposta-e-cancello.md` font; `references/29-vedere-il-lavoro.md` vista; `references/30-trattamenti.md` trattamenti; `references/31-protocollo.md` comandi, flag, percorsi, eccezioni; `references/32-montaggio-lirico.md` testo a tempo e loop

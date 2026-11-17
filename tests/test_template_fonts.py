@@ -110,7 +110,14 @@ def skip(label: str, reason: str) -> None:
 
 
 def template_dirs() -> List[Path]:
-    return sorted(path for path in TEMPLATES.iterdir() if path.is_dir())
+    # Un template di progetto (`.project`) non e' nel catalogo e non promette
+    # quello che promette la libreria: si esclude e si dichiara, come fa
+    # `vx.motion_registry`.
+    return sorted(
+        path
+        for path in TEMPLATES.iterdir()
+        if path.is_dir() and not (path / ".project").is_file()
+    )
 
 
 def expected_default(name: str) -> str:

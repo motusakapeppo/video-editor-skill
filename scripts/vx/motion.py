@@ -35,7 +35,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -1413,6 +1413,7 @@ def capture(
     capture_timeout_s: Optional[float] = None,
     skip_lint: bool = False,
     workdir: Optional[str | Path] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     """Render one frame per 1/fps of virtual time and write RGBA PNGs.
 
@@ -1424,6 +1425,12 @@ def capture(
     `<workdir>/.motion-cache`. Without it the cache is off, nothing extra is
     written, and the result declares `cache: {"status": "disabled", ...}` --
     there is no global cache to fall back to.
+
+    `progress` is called as `progress(done, total)` after every frame written
+    (and once with 0 before the page opens). A capture of a 1272-frame overlay
+    is minutes of work, and the caller is usually the only thing that can tell
+    the user it is moving: without this hook the viewer sees a still bar for the
+    whole of it.
 
     The `font` parameter is resolved by :mod:`vx.fontresolve` before the page is
     touched: a bundled id is handed over unchanged; a resolved non-bundled file
@@ -1498,6 +1505,8 @@ def capture(
 
     duration = template["duration"]
     count = max(1, int(round(duration * rate)))
+    if progress is not None:
+        progress(0, count)
     destination = Path(out_dir)
     destination.mkdir(parents=True, exist_ok=True)
     for stale in destination.glob("frame_*.png"):
@@ -1639,6 +1648,8 @@ def capture(
             paths.append(str(path))
             digests.append(hashlib.sha256(png).hexdigest())
             keys.append(frame_key)
+            if progress is not None:
+                progress(len(paths), count)
     finally:
         _close_quietly(page, context, browser, pw)
         if cache.enabled:

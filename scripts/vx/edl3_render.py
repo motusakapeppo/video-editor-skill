@@ -75,7 +75,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from . import ffmpeg
 class _EmptyTrack:
@@ -2889,12 +2889,23 @@ def _encode(
     timeout: Optional[int],
     *,
     benchmark: bool = False,
+    progress_file: Optional[Path] = None,
 ) -> Tuple[ffmpeg.Proc, Path]:
     script_path = script_dir / "filter_complex.txt"
     script_path.write_text(plan["filter_script"], encoding="utf-8", newline="\n")
 
     colour = plan["color"]
     args = ["-benchmark"] if benchmark else []
+    if progress_file is not None:
+        # ``-progress`` e' un'opzione **globale**: va prima dell'output, come fa
+        # il percorso a blocchi. La vista di ``vx serve`` legge gia' questo file
+        # (``render/ffmpeg-progress.txt``) e ne ricava la testina: senza, l'encode
+        # di un grafo unico resta una barra ferma.
+        try:
+            Path(progress_file).parent.mkdir(parents=True, exist_ok=True)
+            args.extend(["-progress", str(progress_file)])
+        except OSError:
+            progress_file = None
     args.extend(plan["input_args"])
     args.extend(["-filter_complex_script", str(script_path), "-map", plan["map"]])
     if plan["audio_map"]:
@@ -2999,6 +3010,7 @@ def _materialize_generators(
     timeline: Timeline3,
     script_dir: Path,
     probe: Mapping[str, Any],
+    progress: Optional[Callable[[int, int, int, int, str], None]] = None,
 ) -> Dict[str, str]:
     """Capture each generator clip once and write the record compile then verifies.
 
@@ -3007,12 +3019,17 @@ def _materialize_generators(
     `motion_fallback.resolve_engine` from the declared engine and the real probe;
     when it answers `unavailable` the document is refused with BACKEND_UNAVAILABLE
     rather than rendered with a raster that cannot honour the effect.
+
+    `progress(order, clips, done, total, clip_id)` is forwarded to the capture as
+    it writes frames: an overlay of a thousand frames is minutes of browser work,
+    and it is the only part of a render that can say so while it happens.
     """
     from . import motion, motion_cache, motion_fallback  # noqa: PLC0415 - render only
 
     clips = [clip for clip in timeline.clips if clip.generator_declaration is not None]
     if not clips:
         return {}
+    order_of = {id(clip): position for position, clip in enumerate(clips)}
     required: set = set()
     for clip in clips:
         for effect in clip.effects or ():
@@ -3050,12 +3067,21 @@ def _materialize_generators(
             capture = motion_fallback.capture
         else:
             capture = motion.capture
+        on_frame = None
+        if progress is not None:
+            order = order_of[id(clip)]
+            clip_id = str(clip.id)
+
+            def on_frame(done, total, _order=order, _count=len(clips), _id=clip_id):
+                progress(_order, _count, done, total, _id)
+
         result = capture(
             meta["dir"],
             resolved,
             out_dir,
             fps=timeline.fps,
             size=(timeline.width, timeline.height),
+            progress=on_frame,
         )
         record = {
             "template": result["template"],
@@ -3197,6 +3223,7 @@ def render(
     font_files: Optional[Mapping[str, Any]] = None,
     effect_budget: Optional[int] = None,
     live: bool = False,
+    progress: Optional[Callable[[float, str, str], None]] = None,
 ) -> Dict[str, Any]:
     """Render ``timeline`` to ``output`` and return the compile/run report.
 
@@ -3219,6 +3246,12 @@ def render(
     refuses it instead of dropping the per-clip specs. ``font_files`` is
     forwarded the same way.
 
+    ``progress(percent, stage, note)`` is called at every real boundary the work
+    crosses -- nested sequences, generator frames, each chunk, the encode, the
+    master -- with a percentage that only moves forward. A render used to publish
+    one line ("Renderizzo la timeline") and then say nothing for ten minutes: the
+    viewer could not tell a working render from a hung one.
+
     A document with ``text_layers`` keeps the single graph: a chunk's
     sub-document carries no text layers, so the chunk path would paint the
     picture without them. An explicit ``chunks``/``live`` request is refused
@@ -3230,6 +3263,26 @@ def render(
     script_dir = Path(workdir) if workdir is not None else destination.parent
     script_dir.mkdir(parents=True, exist_ok=True)
     from . import motion  # noqa: PLC0415 - render only
+
+    #: L'ultimo valore pubblicato: la vista non deve vedere la barra tornare
+    #: indietro quando una fase finisce e la successiva comincia piu' in basso.
+    published = {"percent": 0.0}
+
+    def emit(percent: float, stage: str, note: str = "") -> None:
+        """Dichiara un confine alla vista, senza mai poter fermare il render."""
+        if progress is None:
+            return
+        value = max(published["percent"], float(percent))
+        published["percent"] = value
+        try:
+            progress(round(value, 1), str(stage), str(note))
+        except Exception:  # noqa: BLE001 - la vista non e' un cancello
+            pass
+
+    has_generators = any(
+        getattr(clip, "generator_declaration", None) is not None
+        for clip in (getattr(timeline, "clips", None) or ())
+    )
 
     probe = motion.available()
     if settings is None:
@@ -3272,6 +3325,11 @@ def render(
             )
         from . import edl3_chunks  # noqa: PLC0415 - the resumable path only
 
+        def on_chunk(done: int, total: int) -> None:
+            share = float(done) / float(max(1, total))
+            emit(3.0 + 89.0 * share, "chunk", f"pezzo {done}/{total}")
+
+        emit(3.0, "chunk", f"{int(chunks)} pezzi da unire")
         report = edl3_chunks.render_chunked(
             timeline,
             destination,
@@ -3284,7 +3342,9 @@ def render(
             jobs=int(jobs),
             live=bool(live),
             effect_budget=effect_budget,
+            progress=on_chunk if progress is not None else None,
         )
+        emit(92.0, "master", "I pezzi sono uniti.")
         report["settings_source"] = settings_source
         report["chunks_auto"] = auto_chunked
         report["jobs"] = max(1, int(jobs))
@@ -3298,8 +3358,27 @@ def render(
                 "loudness gate failed: " + audit["detail"]
             )
         return report
+    emit(3.0, "nested", "Preparo le sequenze annidate.")
     nested = _render_nested(timeline, script_dir, timeout, audio, settings, font_files)
-    generators = _materialize_generators(timeline, script_dir, probe)
+    gen_start, gen_end = (9.0, 54.0) if has_generators else (9.0, 12.0)
+    emit(gen_start, "nested", "Le sequenze annidate sono pronte.")
+
+    def on_capture(order: int, total_clips: int, done: int, total: int, clip_id: str) -> None:
+        share = (order + (float(done) / float(total) if total else 1.0)) / max(
+            1, int(total_clips)
+        )
+        emit(
+            gen_start + (gen_end - gen_start) * min(1.0, share),
+            "generator",
+            f"{clip_id}: fotogramma {done}/{total}",
+        )
+
+    generators = _materialize_generators(
+        timeline, script_dir, probe, progress=on_capture if progress is not None else None
+    )
+    compile_end = gen_end + 6.0
+    if has_generators:
+        emit(gen_end, "generator", "I fotogrammi del template sono pronti.")
     plan = compile_timeline(
         timeline,
         audio=audio,
@@ -3310,9 +3389,16 @@ def render(
         font_files=font_files,
         effect_budget=effect_budget,
     )
+    emit(compile_end, "graph", "Il grafo e' compilato; parte l'encode.")
     proc, script_path = _encode(
-        plan, destination, script_dir, timeout, benchmark=benchmark
+        plan,
+        destination,
+        script_dir,
+        timeout,
+        benchmark=benchmark,
+        progress_file=script_dir / "render" / "ffmpeg-progress.txt",
     )
+    emit(95.0, "encode", "Il master e' scritto.")
 
     report: Dict[str, Any] = {
         "version": plan["version"],

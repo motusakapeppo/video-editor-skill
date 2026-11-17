@@ -176,6 +176,12 @@ lo dice in `resources.overlap`). `VX_NO_PREFETCH=1` torna alla via in fila.
 piano `vx.edl/2.2` di `auto` in `vx.edl3/1.2` **dichiarando le perdite** ed esce 2
 se non riesce a migrare senza (piani con layer ≥ 1 restano fuori).
 
+`render` pubblica nel pannello i confini che attraversa davvero — `nested`,
+`generator` coi fotogrammi del template, `chunk` coi pezzi, `graph`, `encode`,
+`master` — e scrive `-progress` in `<workdir>/render/ffmpeg-progress.txt`: la
+testina della vista segue l'encode anche con un grafo unico. Le fasi che non
+accadranno non si elencano.
+
 ## 7. Ricette
 
 Un file JSON (`vx.recipe/1`) in `recipes/` o in `~/.vx/recipes/`:
@@ -243,6 +249,11 @@ motore grafico la costruisce:
 - `BrowserRenderer` prova il **Chrome di sistema** (`channel="chrome"`) e solo
   dopo il Chromium di Playwright: senza `channel` il motore moriva con
   "Executable doesn't exist" quando il browser bundle non era installato.
+- **Template di progetto**: una cartella sotto `assets/templates/` che contiene un
+  file `.project` non entra nel catalogo (niente golden, niente promessa di
+  libreria), resta caricabile per nome e si dichiara in `Registry.projects()`.
+  Serve quando un lavoro inventa il proprio look: il catalogo resta una promessa
+  verificata, e il template del lavoro non la falsifica.
 
 Confine dichiarato: il browser fa **grafica sopra il video** (testo impaginato,
 sottopancia, card, maschere). La composizione di **flussi video** (split screen

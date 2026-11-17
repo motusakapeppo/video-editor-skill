@@ -22,7 +22,9 @@ player del master su `/result` (attivo solo se il file esiste: `master_ready`) e
 
 * `render`: `out_time_sec`, `duration_sec`, `percent`, `speed` letti dal file
   `-progress` di ffmpeg (`<workdir>/render/ffmpeg-progress.txt`). E' la
-  posizione **reale** dell'encode, non una stima.
+  posizione **reale** dell'encode, non una stima. Da `edl3 render` il file si
+  scrive anche quando il documento usa un grafo unico, quindi la testina si
+  muove anche senza blocchi.
 * `timeline`: gli shot del piano (`index`, `t_in`, `t_out`, `dur`).
 * `shots`: gli stessi shot con `source`, `effects` (con i valori: `zoom 1.15`,
   `lut warm`, `fade in 0.3s`) e `thumb` (`/shots/<i>`, `thumb_ready`). Con
@@ -52,3 +54,13 @@ mostrare. L'unica eccezione sono i lavori lunghi, spezzati in chunk
 Se l'utente chiede di vedere il montaggio che si compone, va detto che non
 esiste, invece di improvvisarlo: quello che esiste e' il playhead che avanza
 sulla timeline secondo il progresso vero di ffmpeg.
+
+## Le fasi di un render EDL3
+
+Un `edl3 render` pubblica i confini che attraversa davvero — `nested`,
+`generator` (con i fotogrammi del template: `812/1272`), `chunk` (`pezzo 3/8`),
+`graph`, `encode`, `master` — e la percentuale non torna mai indietro. Le fasi
+che non accadranno non si elencano: un documento senza generator non mostra
+"generator", un grafo unico non mostra "chunk". La cattura del template e'
+l'unica parte che puo' durare minuti senza scrivere un file video, ed e' quella
+che prima lasciava la barra ferma al 10%.

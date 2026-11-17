@@ -626,6 +626,7 @@ def render_chunked(
     jobs: int = 1,
     live: bool = False,
     effect_budget: Optional[int] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     """Render ``timeline`` as ``chunks`` resumable pieces, then join them.
 
@@ -685,19 +686,34 @@ def render_chunked(
         publisher.publish if publisher is not None else None
     )
 
+    #: Ogni pezzo finito e' un fatto che la vista puo' mostrare: ``progress(done,
+    #: total)`` arriva al confine di ogni chunk, cosi' un render di venti pezzi
+    #: non resta una barra ferma al primo.
+    finished = {"count": 0}
+
+    def _piece_done(record: Mapping[str, Any]) -> None:
+        finished["count"] += 1
+        if progress is not None:
+            try:
+                progress(int(finished["count"]), len(windows))
+            except Exception:  # noqa: BLE001 - la vista non e' un cancello
+                pass
+        if on_ready is not None:
+            on_ready(record)
+
     # A chunk is an independent ffmpeg process writing into its own folder, and
     # the stage cache records each chunk atomically (temp file, then os.replace),
     # so the windows can overlap without touching each other. `map` keeps the
     # order of `windows`, which is what the join and the report depend on.
     workers = max(1, min(int(jobs), len(windows)))
     if workers == 1:
-        records = [_render_one(run, window, on_ready) for window in windows]
+        records = [_render_one(run, window, _piece_done) for window in windows]
     else:
         from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415 - only here
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             records = list(
-                pool.map(lambda window: _render_one(run, window, on_ready), windows)
+                pool.map(lambda window: _render_one(run, window, _piece_done), windows)
             )
     proc = _join(run, [Path(record["artifact"]) for record in records])
 

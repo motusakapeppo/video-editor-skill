@@ -47,6 +47,21 @@ e una provenienza, e una confidenza fra 0.2 e 0.8 produce inazione. Il brief è
 `hook_distinct`, che certificano solo la divergenza di superficie e dell'hook,
 non la differenza di montaggio.
 
+## Testo cantato
+
+Quando il video è una canzone — liriche animate, karaoke, un ritornello che deve
+girare in loop — il metodo è in `references/32-montaggio-lirico.md`: prima la
+partitura (BPM, battute, sezioni), poi la voce allineata al **testo scritto**,
+poi una **spec del testo** (eventi con stile e righe, più i colpi sul beat) che la
+grafica rende. Il testo è un documento verificabile, non HTML: tempi, copertura,
+colpi e parole si controllano senza guardare, e il disegno si può rifare senza
+spostare un tempo.
+
+Il loop si tratta come una **ripresa**, non come un taglio: testa e coda su
+battute intere, il salto su un downbeat, e due misure prima di dire fatto — ultimo
+fotogramma contro il primo (`≤ 2/255`) e salto audio contro il movimento normale
+del segnale (`≤ 1x`, altrimenti sei millisecondi di dissolvenza ai bordi).
+
 ## Requisiti
 
 | Componente | Versione | Note |
@@ -259,6 +274,12 @@ a ogni fase. L'autostart vale per **ogni** comando che fa un lavoro (`auto`,
 `reel`, `scene`, `render`, `subs`, `edl3`, `ingest`), non solo per i due
 principali, e la pagina va tenuta in **una scheda sola** (`browser.tabs.list` →
 naviga quella, non aprirne un'altra).
+
+Un `edl3 render` non è più una riga sola: pubblica `nested`, `generator` (con i
+fotogrammi del template, `812/1272`), `chunk` (`pezzo 3/8`), `graph`, `encode`,
+`master`, e scrive `-progress` di ffmpeg in `<workdir>/render/ffmpeg-progress.txt`
+anche quando il documento usa un grafo unico — la testina segue l'encode reale.
+La percentuale non torna indietro, e le fasi che non accadranno non si elencano.
 
 ### Velocità del motore motion (Chromium)
 

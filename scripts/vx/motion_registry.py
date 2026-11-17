@@ -26,6 +26,11 @@ Four decisions, each with its reason:
 * **Rescan without a new process.** `add(root)` registers another templates
   root, `refresh()` rescans the roots already known; both replace the catalogue
   in place.
+* **A project template is not a catalogue template.** A directory holding a
+  `.project` file is a look one job invented: it stays loadable by name (the EDL
+  names it) but it is not admitted, promises no golden and appears under
+  `projects()` with its reason. The catalogue stays a promise that can be
+  audited; a job's own template does not falsify it.
 
 `validate_call` delegates to `motion.validate_params`, which already merges
 defaults and raises `PARAM_UNKNOWN` / `PARAM_RANGE` / `PARAM_TYPE` naming the
@@ -139,6 +144,10 @@ class Registry:
         ]
         self._entries: Dict[str, TemplateEntry] = {}
         self._blocked: Dict[str, Dict[str, Any]] = {}
+        #: Le cartelle marchiate ``.project``: template di un lavoro, non del
+        #: catalogo. Si tengono in un elenco a parte, cosi' non spariscono senza
+        #: traccia, ma non chiedono una golden che non devono avere.
+        self._projects: Dict[str, Dict[str, Any]] = {}
         self._loaded = False
 
     # -- roots -----------------------------------------------------------
@@ -219,8 +228,18 @@ class Registry:
     def _scan(self) -> None:
         entries: Dict[str, TemplateEntry] = {}
         blocked: Dict[str, Dict[str, Any]] = {}
+        projects: Dict[str, Dict[str, Any]] = {}
         for root in self._roots:
             for child in self._children(root):
+                if (child / ".project").is_file():
+                    # Un template di progetto vive qui per comodita' (il EDL lo
+                    # nomina), ma non e' nel catalogo: nessuna golden, nessuna
+                    # promessa di libreria. Lo si dichiara invece di scartarlo.
+                    projects[child.name] = {
+                        "dir": str(child),
+                        "reason": "template di progetto (.project): fuori catalogo",
+                    }
+                    continue
                 report = self._lint(child)
                 if not report["ok"]:
                     self._record_blocked(
@@ -270,6 +289,7 @@ class Registry:
                 entries[entry.name] = entry
         self._entries = entries
         self._blocked = blocked
+        self._projects = projects
         self._loaded = True
 
     # -- read surface ----------------------------------------------------
@@ -304,6 +324,11 @@ class Registry:
             }
             for key, item in sorted(self._blocked.items())
         }
+
+    def projects(self) -> Dict[str, Dict[str, Any]]:
+        """I template di progetto marchiati ``.project``: fuori catalogo, dichiarati."""
+        self._ensure()
+        return {key: dict(item) for key, item in sorted(self._projects.items())}
 
     # -- calls -----------------------------------------------------------
 
