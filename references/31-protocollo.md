@@ -182,6 +182,18 @@ se non riesce a migrare senza (piani con layer ≥ 1 restano fuori).
 testina della vista segue l'encode anche con un grafo unico. Le fasi che non
 accadranno non si elencano.
 
+`--lyrics SPEC [--lyrics-text FILE]` mette il cancello del testo davanti e dopo:
+
+- **prima** del render girano i controlli della spec (§14); se uno fallisce esce
+  **5** e **nessun master viene scritto** — il render non paga un errore che si
+  leggeva in un JSON;
+- **dopo**, sul master, girano quelli che hanno bisogno dei pixel e dell'audio
+  (durata e fotogrammi, loudness, primo vs ultimo fotogramma): se uno fallisce il
+  file resta sul disco per guardarlo ma il report dice `deliverable: false` e il
+  comando esce **5**;
+- il report porta `render.lyrics` con i conteggi `pre`/`post` e i controlli
+  falliti, così la decisione non sta solo nella console.
+
 ## 7. Ricette
 
 Un file JSON (`vx.recipe/1`) in `recipes/` o in `~/.vx/recipes/`:
@@ -369,6 +381,10 @@ dai, il testo scritto e il master. Quindici controlli, ognuno con un id:
 
 Un controllo che non si può fare è `skip` col motivo, mai `ok`. Esce **5** se
 almeno uno è `fail`; `--json` dà il referto intero.
+
+Lo stesso cancello si mette **davanti al render**: `vx edl3 render --lyrics SPEC
+--lyrics-text FILE` (vedi §6). Così non è una cosa che ci si ricorda di fare, e
+un errore che si legge in un JSON non costa un render.
 
 `audio slice` taglia campione-accurato (`atrim`, non il contenitore), applica le
 dissolvenze **dopo** il taglio e misura il punto di giunzione leggendo il WAV

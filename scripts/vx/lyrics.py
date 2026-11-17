@@ -588,15 +588,16 @@ def _check_master(
     level = float(measured.get("input_i") or 0.0)
     peak = float(measured.get("input_tp") or 0.0)
     problems = []
-    if abs(level - TARGET_LUFS) > LUFS_TOLERANCE:
-        problems.append(f"{level:.2f} LUFS (target {TARGET_LUFS:g} +/- {LUFS_TOLERANCE:g})")
-    if peak > TRUE_PEAK_CEILING:
-        problems.append(f"true peak {peak:.2f} dBTP oltre {TRUE_PEAK_CEILING:g}")
-    rows.append(
-        _ok("L13", "l'audio e' al target", f"{level:.2f} LUFS / {peak:.2f} dBTP")
-        if not problems
-        else _fail("L13", "l'audio e' al target", "; ".join(problems))
-    )
+    if not info.get("has_audio"):
+        rows.append(_skip("L13", "l'audio e' al target", "il master non ha audio"))
+    elif abs(level - TARGET_LUFS) > LUFS_TOLERANCE or peak > TRUE_PEAK_CEILING:
+        if abs(level - TARGET_LUFS) > LUFS_TOLERANCE:
+            problems.append(f"{level:.2f} LUFS (target {TARGET_LUFS:g} +/- {LUFS_TOLERANCE:g})")
+        if peak > TRUE_PEAK_CEILING:
+            problems.append(f"true peak {peak:.2f} dBTP oltre {TRUE_PEAK_CEILING:g}")
+        rows.append(_fail("L13", "l'audio e' al target", "; ".join(problems)))
+    else:
+        rows.append(_ok("L13", "l'audio e' al target", f"{level:.2f} LUFS / {peak:.2f} dBTP"))
 
     # Il loop: ultimo fotogramma contro il primo.
     if fps <= 0 or duration <= 0:
@@ -714,6 +715,16 @@ def check(
     else:
         rows.extend(_check_master(spec, Path(master)))
     return rows
+
+
+def verify_master(spec: Mapping[str, Any], master: str | Path) -> List[Dict[str, Any]]:
+    """I soli controlli che hanno bisogno del master (L12-L14).
+
+    Serve dopo il render: la spec e' gia' passata prima, e ripeterla non
+    aggiunge niente. Se il documento non dichiara un loop, L14 resta un numero
+    (chi legge decide), non un cancello.
+    """
+    return _check_master(spec, Path(master))
 
 
 def summarise(rows: Iterable[Mapping[str, Any]]) -> Dict[str, Any]:

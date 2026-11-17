@@ -71,6 +71,11 @@ campione-accurata e misura il salto di giunzione, così il clic si scopre prima 
 consegnare. I template che un lavoro inventa non stanno nel catalogo: si marcano
 `.project` e si cercano in `<cartella del piano>/templates` (o `--templates`).
 
+Il cancello si può mettere **davanti al render**: `vx edl3 render --lyrics
+"<spec.json>" --lyrics-text "<testo.txt>"`. Se la spec non torna non viene
+scritto nessun master (exit 5); se il master non rispetta durata, loudness o
+loop, resta sul disco ma il report dice `deliverable: false`.
+
 ## Requisiti
 
 | Componente | Versione | Note |

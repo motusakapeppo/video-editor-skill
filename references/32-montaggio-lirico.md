@@ -186,6 +186,12 @@ fuori due cose: l'**offset** dell'allineamento, che si misura sulla trascrizione
 volti. Il comando non finge di averli fatti: senza gli strumenti li dichiara
 `skip`.
 
+Il cancello non va lasciato alla memoria: `vx edl3 render --lyrics "<spec.json>"
+--lyrics-text "<testo.txt>"` lo esegue **prima** di renderizzare (un `fail` =
+exit 5, nessun master) e ripete sul master quelli che hanno bisogno dei pixel
+(durata, loudness, loop). Un master che non torna resta sul disco ma il report
+dice `deliverable: false`.
+
 ## 6. Chi fa cosa
 
 - **Chi misura non disegna.** L'orchestratore misura il master (fotogrammi,

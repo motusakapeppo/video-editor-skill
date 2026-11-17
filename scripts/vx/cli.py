@@ -3141,6 +3141,52 @@ def cmd_edl3(args: argparse.Namespace) -> int:
         elif not args.json:
             print("La vista non si e' aperta; il lavoro prosegue.", flush=True)
 
+    # Il cancello del testo: se la spec non torna, il render non comincia. Sette
+    # versioni del caso Scendi sono state pagate per una parola sbagliata e un
+    # conteggio di colpi: sono due cose che si leggono in un JSON.
+    spec = None
+    source_text = None
+    text_note = ""
+    pre_counts: Dict[str, int] = {}
+    if getattr(args, "lyrics", None):
+        from . import lyrics as lyrics_mod
+
+        try:
+            spec = lyrics_mod.load(args.lyrics)
+            if getattr(args, "lyrics_text", None):
+                source_text, text_note = lyrics_mod.load_text(args.lyrics_text)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            if panel is not None:
+                panel.stop(f"spec del testo illeggibile: {exc}")
+            if args.json:
+                _out({"ok": False, "stage": "lyrics", "error": str(exc), "checks": []})
+            else:
+                _log(f"[error] {exc}")
+            return EXIT_USAGE
+        pre_rows = lyrics_mod.check(
+            spec,
+            text=source_text,
+            text_note=text_note,
+            canvas=(timeline.width, timeline.height),
+        )
+        pre = lyrics_mod.summarise(pre_rows)
+        pre_counts = pre["counts"]
+        if panel is not None:
+            panel.say(
+                f"spec del testo: {pre_counts['ok']} ok, {pre_counts['warn']} avvisi, "
+                f"{pre_counts['fail']} falliti, {pre_counts['skip']} saltati",
+                phase="compile",
+            )
+        if not pre["ok"]:
+            if panel is not None:
+                panel.stop("spec del testo: il render non comincia")
+            if args.json:
+                _out({"ok": False, "stage": "lyrics", "checks": pre_rows, "counts": pre_counts})
+            else:
+                print("spec del testo: non si renderizza", file=sys.stderr)
+                _print_checks(pre_rows)
+            return EXIT_QC_FAIL
+
     try:
         report = edl3_render.render(
             timeline,
@@ -3160,9 +3206,41 @@ def cmd_edl3(args: argparse.Namespace) -> int:
 
     master = Path(report.get("output") or output)
     elapsed = time.monotonic() - started
+    lyrics_failed = False
+    if spec is not None:
+        from . import lyrics as lyrics_mod
+
+        post_rows = lyrics_mod.verify_master(spec, master)
+        post = lyrics_mod.summarise(post_rows)
+        lyrics_failed = not post["ok"]
+        if panel is not None:
+            panel.say(
+                "master: " + ", ".join(f"{row['id']} {row['status']}" for row in post_rows),
+                phase="master",
+            )
+        if lyrics_failed:
+            reasons = "; ".join(
+                row["detail"] for row in post_rows if row["status"] == "fail"
+            )
+            report["deliverable"] = False
+            report["warnings"] = list(report.get("warnings") or []) + [f"lyrics: {reasons}"]
+            if not args.json:
+                print("la verifica del testo dice che il master non e' pubblicabile", file=sys.stderr)
+                _print_checks(post_rows)
+        report["lyrics"] = {
+            "spec": str(args.lyrics),
+            "text": str(getattr(args, "lyrics_text", "") or ""),
+            "pre": pre_counts,
+            "post": post["counts"],
+            "failed": post["failed"],
+        }
     if panel is not None:
         panel.record(95.0, "master", elapsed=elapsed)
-        panel.finish("Render completato", elapsed=elapsed, master=str(master))
+        panel.finish(
+            "Render completato" + (" — testo non verificato" if lyrics_failed else ""),
+            elapsed=elapsed,
+            master=str(master),
+        )
     report_io.write(
         {
             "schema": SCHEMA,
@@ -3193,7 +3271,7 @@ def cmd_edl3(args: argparse.Namespace) -> int:
         if report.get("live"):
             live = report["live"]
             print(f"Live: {live['ready']}/{live['total']} in {live['directory']}")
-    return EXIT_OK
+    return EXIT_QC_FAIL if lyrics_failed else EXIT_OK
 
 
 def _auto_panel_dir(args: argparse.Namespace, workdir: Path) -> Path:
@@ -4313,6 +4391,16 @@ def cmd_learn(args: argparse.Namespace) -> int:
     return EXIT_USAGE
 
 
+def _print_checks(rows: Sequence[Mapping[str, Any]]) -> None:
+    """Il referto dei controlli del testo, in colonna (stdout)."""
+    for row in rows:
+        mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL", "skip": "skip"}.get(
+            str(row.get("status")), str(row.get("status"))
+        )
+        detail = str(row.get("detail") or "")
+        print(f"  [{mark}] {row['id']:<3} {row['label']:<52} {detail}")
+
+
 def _parse_canvas(value: Optional[str]) -> Optional[tuple]:
     """``1080x1440`` (o ``1080:1440``) in una coppia di interi, o ``None``."""
     if not value:
@@ -4372,12 +4460,7 @@ def cmd_lyrics_check(args: argparse.Namespace) -> int:
         return EXIT_OK if report["ok"] else EXIT_QC_FAIL
 
     print(f"spec: {path.name} — {len(rows)} controlli")
-    for row in rows:
-        mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL", "skip": "skip"}.get(
-            str(row.get("status")), str(row.get("status"))
-        )
-        detail = str(row.get("detail") or "")
-        print(f"  [{mark}] {row['id']:<3} {row['label']:<52} {detail}")
+    _print_checks(rows)
     counts = report["counts"]
     print(
         f"\n{counts['ok']} ok / {counts['warn']} warn / {counts['fail']} fail / "
@@ -5032,6 +5115,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="DIR",
         help="cartella dei template di progetto (oltre a <piano>/templates)",
+    )
+    e3.add_argument(
+        "--lyrics",
+        default=None,
+        metavar="SPEC",
+        help="spec del testo: se non torna, il render non comincia (exit 5)",
+    )
+    e3.add_argument(
+        "--lyrics-text",
+        default=None,
+        metavar="FILE",
+        help="il testo scritto per il confronto parola per parola",
     )
     e3.add_argument(
         "--audio",
