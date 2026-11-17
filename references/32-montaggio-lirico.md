@@ -136,7 +136,9 @@ chi lo guarda non deve accorgersene.
 - **Testa e coda su battute intere.** La testa e' la seconda meta' del primo
   ritornello (battute 5-8), la coda e' il secondo ritornello intero (1-8), oppure
   meta' e meta'. La scelta si dichiara, e la simmetria non e' obbligatoria: nel
-  caso la versione buona e' 4 + 8.
+  caso la versione buona e' 4 + 8. Una **pick-up** (l'anacrusi prima del battere
+  1) e' musica, non un errore: la finestra puo' essere mezza battuta piu' lunga
+  del conteggio, e il controllo lo tollera.
 - **Il salto cade su un downbeat.** Ultimo fotogramma e primo devono essere lo
   stesso istante musicale: se il salto cade a meta' battuta si sente un "vai"
   che non c'e'.
@@ -145,31 +147,44 @@ chi lo guarda non deve accorgersene.
   giro, che nessun flash copre. Sei millisecondi di dissolvenza ai due bordi,
   lontani da qualsiasi sillaba cantata, lo portano a `0,0`.
 - **Il salto immagine e' zero o dichiarato.** Ultimo fotogramma contro il primo:
-  `<= 2/255` e' continuita'; un flash che li copre e' una scelta, e va dichiarata
-  come scelta.
+  entro `8/255` e lo 0,02% dei pixel e' continuita' (la tolleranza dei golden); nel
+  caso il master finale misurava `2/255`, e un re-render `3/255`. Un flash che li
+  copre e' una scelta, e va dichiarata come scelta.
 - **La fine non e' vuota e l'inizio non e' vuoto.** Un secondo di nero in testa o
   in coda rompe il loop piu' di un errore di colore.
 
 ## 5. La batteria di controlli
 
-Prima di dire "fatto" si misurano tutte. Nessuna e' un'opinione.
+Prima di dire "fatto" si misurano tutte. Nessuna e' un'opinione. Da questa
+passata i controlli che leggono solo documenti e numeri sono un comando:
+`vx lyrics check` (`31-protocollo.md` §14) esegue L1-L15 e, se non tornano, esce
+5. Quelli che richiedono gli occhi restano dichiarati.
 
 | controllo | soglia | se fallisce |
 |---|---|---|
 | durata / fotogrammi | quella dichiarata, un frame | si rifa' il piano, non si arrotonda |
 | offset audio | uno solo, con 9-10 sonde a copertura | si riallinea; due offset = due esecuzioni |
 | colpi | colpi eseguiti / colpi dichiarati = N/N | si corregge la spec, non il render |
-| loop immagine | ultimo vs primo `<= 2/255` | si sposta il taglio sulla battuta |
+| loop immagine | ultimo vs primo `<= 8/255` sullo 0,02% dei pixel | si sposta il taglio sulla battuta |
 | loop audio | salto campione `<= 1x` il movimento normale | dissolvenza 6 ms ai bordi |
 | loudness / true peak | `-14 LUFS ± 1,5` / sotto il tetto | si rifa' la catena audio |
 | testo vs sorgente | diff parola per parola, zero differenze | si corregge il testo, poi la spec |
-| leggibilita' | si legge a 1/3 di larghezza | si riduce la taglia o si spezza la riga |
+| leggibilita' | si legge a 1/3 di larghezza (stima sui caratteri: avviso) | si riduce la taglia o si spezza la riga |
 | volto | dentro il canvas e non coperto | si rifa' l'inquadratura o si sposta il testo |
 | elementi | niente fuori dal canvas | si ridimensiona il dispositivo |
 
 Nel caso, la tabella finale della v7 leggeva: `50,88 s / 1272 frame`;
 `-14,02 LUFS / -1,64 dBTP`; loop `2/255`; `9 sonde, offset 0,000 s`; colpi
 `24/24`. Sono i numeri che rendono "fatto" una parola verificabile.
+
+Cosa copre il comando e cosa richiede ancora gli occhi: `vx lyrics check` misura
+durata e fotogrammi (L12), colpi (L7-L8), loop immagine (L14), loudness (L13),
+testo contro sorgente (L10), leggibilita' stimata (L11) e la matematica delle
+battute (L9). Il **loop audio** lo misura `vx audio slice --loop-safe`. Restano
+fuori due cose: l'**offset** dell'allineamento, che si misura sulla trascrizione
+(`§2`), e il **volto**, che non e' nella spec: si guarda, o si passa dall'analisi
+volti. Il comando non finge di averli fatti: senza gli strumenti li dichiara
+`skip`.
 
 ## 6. Chi fa cosa
 

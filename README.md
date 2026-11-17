@@ -59,8 +59,17 @@ spostare un tempo.
 
 Il loop si tratta come una **ripresa**, non come un taglio: testa e coda su
 battute intere, il salto su un downbeat, e due misure prima di dire fatto — ultimo
-fotogramma contro il primo (`≤ 2/255`) e salto audio contro il movimento normale
-del segnale (`≤ 1x`, altrimenti sei millisecondi di dissolvenza ai bordi).
+fotogramma contro il primo (delta `≤ 8/255`, la tolleranza dei golden) e salto
+audio contro il movimento normale del segnale (`≤ 1x`, altrimenti sei millisecondi
+di dissolvenza ai bordi).
+
+Due comandi chiudono il giro **prima** del render: `vx lyrics check` esegue i
+quindici controlli sulla spec (finestre, colpi, battute, testo contro il file
+scritto, e se gli dai il master anche durata, loudness e loop) ed esce 5 se
+qualcosa non torna; `vx audio slice --loop-safe` taglia la fetta continua
+campione-accurata e misura il salto di giunzione, così il clic si scopre prima di
+consegnare. I template che un lavoro inventa non stanno nel catalogo: si marcano
+`.project` e si cercano in `<cartella del piano>/templates` (o `--templates`).
 
 ## Requisiti
 

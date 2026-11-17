@@ -2693,6 +2693,7 @@ def cmd_edl3_validate(args: argparse.Namespace) -> int:
     from . import edl3
 
     path = Path(args.file)
+    _project_template_roots(path, extra=getattr(args, "templates", None))
     try:
         raw = _load_json(path)
     except VxError as exc:
@@ -2983,6 +2984,27 @@ def edl3_versions() -> tuple:
     return edl3.EDL3_VERSIONS
 
 
+def _project_template_roots(
+    plan: Path, work: Path | None = None, extra: str | None = None
+) -> tuple:
+    """Le cartelle dove un documento cerca i template che non sono del catalogo.
+
+    Il catalogo resta primo (``motion.templates_root()``), quindi un nome non
+    puo' essere dirottato da un progetto; qui si aggiungono ``<cartella del
+    piano>/templates`` e quelle della workdir, piu' un ``--templates`` esplicito.
+    """
+    from . import motion
+
+    candidates: list = []
+    if extra:
+        candidates.append(Path(extra))
+    candidates.append(Path(plan).resolve().parent / "templates")
+    if work is not None:
+        candidates.append(Path(work) / "templates")
+        candidates.append(Path(work).resolve().parent / "templates")
+    return motion.set_extra_roots(candidates)
+
+
 #: Le fasi vere di un render EDL3: quelle che il pannello pubblica e che
 #: ``vx serve`` legge da ``progress.json``. Le fasi che non accadranno non si
 #: elencano: :func:`_edl3_phases` le sceglie dal documento e dai flag.
@@ -3039,6 +3061,11 @@ def cmd_edl3(args: argparse.Namespace) -> int:
     from . import edl3, edl3_render, report as report_io
 
     session = _session_of(args)
+    _project_template_roots(
+        Path(args.plan),
+        Path(args.workdir) if args.workdir else None,
+        extra=getattr(args, "templates", None),
+    )
     try:
         timeline = edl3.Timeline3.from_dict(_load_json(args.plan))
     except edl3.EDLError as exc:
@@ -4286,6 +4313,122 @@ def cmd_learn(args: argparse.Namespace) -> int:
     return EXIT_USAGE
 
 
+def _parse_canvas(value: Optional[str]) -> Optional[tuple]:
+    """``1080x1440`` (o ``1080:1440``) in una coppia di interi, o ``None``."""
+    if not value:
+        return None
+    cleaned = str(value).lower().replace("×", "x").replace(":", "x")
+    parts = [item.strip() for item in cleaned.split("x")]
+    if len(parts) != 2 or not all(item.isdigit() for item in parts):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def cmd_lyrics_check(args: argparse.Namespace) -> int:
+    """La spec del testo animato, verificata prima di renderizzare."""
+    from . import lyrics
+
+    path = Path(args.spec)
+    try:
+        spec = lyrics.load(path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        if args.json:
+            _out({"ok": False, "spec": str(path), "error": str(exc), "checks": []})
+        else:
+            _log(f"[error] {exc}")
+        return EXIT_USAGE
+
+    source_text = None
+    text_note = ""
+    if args.text:
+        try:
+            source_text, text_note = lyrics.load_text(args.text)
+        except OSError as exc:
+            if args.json:
+                _out({"ok": False, "spec": str(path), "error": str(exc), "checks": []})
+            else:
+                _log(f"[error] testo non leggibile: {exc}")
+            return EXIT_USAGE
+
+    canvas = _parse_canvas(args.canvas)
+    if args.canvas and canvas is None:
+        _log(f"[error] --canvas non riconosciuto: {args.canvas!r} (es. 1080x1440)")
+        return EXIT_USAGE
+
+    rows = lyrics.check(
+        spec, text=source_text, text_note=text_note, master=args.master, canvas=canvas
+    )
+    report = lyrics.summarise(rows)
+    report.update(
+        {
+            "spec": str(path),
+            "text": str(args.text or ""),
+            "master": str(args.master or ""),
+            "canvas": list(canvas) if canvas else [],
+        }
+    )
+    if args.json:
+        _out(report)
+        return EXIT_OK if report["ok"] else EXIT_QC_FAIL
+
+    print(f"spec: {path.name} — {len(rows)} controlli")
+    for row in rows:
+        mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL", "skip": "skip"}.get(
+            str(row.get("status")), str(row.get("status"))
+        )
+        detail = str(row.get("detail") or "")
+        print(f"  [{mark}] {row['id']:<3} {row['label']:<52} {detail}")
+    counts = report["counts"]
+    print(
+        f"\n{counts['ok']} ok / {counts['warn']} warn / {counts['fail']} fail / "
+        f"{counts['skip']} skip"
+    )
+    return EXIT_OK if report["ok"] else EXIT_QC_FAIL
+
+
+def cmd_audio_slice(args: argparse.Namespace) -> int:
+    """Taglia una fetta continua e misura il punto di giunzione."""
+    from . import audio_slice
+
+    try:
+        report = audio_slice.slice_audio(
+            args.source,
+            float(args.start),
+            float(args.end),
+            args.out,
+            fade_in=float(args.fade_in),
+            fade_out=float(args.fade_out),
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        if args.json:
+            _out({"ok": False, "error": str(exc)})
+        else:
+            _log(f"[error] {exc}")
+        return EXIT_USAGE
+
+    seam = report["seam"]
+    if args.json:
+        _out(report)
+    else:
+        print(
+            f"{report['out']} — {report['duration']:.3f} s da {report['start']:.3f} "
+            f"a {report['end']:.3f}, {seam['sample_rate']} Hz, {seam['channels']} canali"
+        )
+        print(
+            f"giunzione: salto {seam['jump']:.6f} vs movimento normale "
+            f"{seam['typical_step']:.6f} → {seam['ratio']:.3f}x "
+            f"({'continua' if seam['continuous'] else 'si sente'})"
+        )
+    if args.loop_safe and not seam["continuous"]:
+        if not args.json:
+            _log(
+                "[error] il giro non e' continuo: aggiungi una dissolvenza "
+                "(--fade-in/--fade-out) o sposta il taglio"
+            )
+        return EXIT_QC_FAIL
+    return EXIT_OK
+
+
 def _apply_settings(args: argparse.Namespace) -> None:
     """Load the cascade before any analysis: defaults -> config -> --settings -> --override."""
     from . import features, settings
@@ -4860,6 +5003,12 @@ def build_parser() -> argparse.ArgumentParser:
         "validate", help=f"valida un documento {version} senza renderizzare"
     )
     e3v.add_argument("file", help=f"documento {version} (JSON)")
+    e3v.add_argument(
+        "--templates",
+        default=None,
+        metavar="DIR",
+        help="cartella dei template di progetto (oltre a <piano>/templates)",
+    )
     e3v.add_argument("--json", action="store_true")
     e3v.set_defaults(func=cmd_edl3_validate)
     e3m = edl3_sub.add_parser(
@@ -4878,6 +5027,12 @@ def build_parser() -> argparse.ArgumentParser:
     e3.add_argument("--plan", required=True, help=f"documento {version} (JSON)")
     e3.add_argument("--out", required=True, help="file master da scrivere")
     e3.add_argument("--workdir", default=None, help="cartella di lavoro (chunk, live)")
+    e3.add_argument(
+        "--templates",
+        default=None,
+        metavar="DIR",
+        help="cartella dei template di progetto (oltre a <piano>/templates)",
+    )
     e3.add_argument(
         "--audio",
         default="refuse",
@@ -4987,6 +5142,60 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="server MCP su stdio (JSON-RPC per agenti)")
     p.set_defaults(func=cmd_mcp)
+
+    p = add(
+        "lyrics",
+        "la spec del testo animato: la verifica prima di renderizzare (exit 5 se non torna)",
+    )
+    lyrics_sub = p.add_subparsers(dest="lyrics_cmd", required=True)
+    lc = lyrics_sub.add_parser(
+        "check", help="controlla la spec: finestre, colpi, battute, testo, loop"
+    )
+    lc.add_argument("spec", help="il documento della spec (JSON)")
+    lc.add_argument(
+        "--text",
+        default=None,
+        help="il testo scritto della canzone: confronto parola per parola",
+    )
+    lc.add_argument(
+        "--master",
+        default=None,
+        help="il master da misurare: durata, loudness, punto di loop",
+    )
+    lc.add_argument(
+        "--canvas",
+        default=None,
+        metavar="LxH",
+        help="il quadro su cui il testo e' impaginato (es. 1080x1440)",
+    )
+    lc.add_argument("--json", action="store_true", help="referto macchina")
+    lc.set_defaults(func=cmd_lyrics_check)
+
+    p = add(
+        "audio",
+        "la fetta continua di un brano e il suo punto di giunzione (loop)",
+    )
+    audio_sub = p.add_subparsers(dest="audio_cmd", required=True)
+    cut = audio_sub.add_parser(
+        "slice", help="taglia [start, end) in un WAV e misura se il giro si sente"
+    )
+    cut.add_argument("--source", required=True, help="il brano da cui tagliare")
+    cut.add_argument("--start", type=float, required=True, help="secondi di ingresso")
+    cut.add_argument("--end", type=float, required=True, help="secondi di uscita")
+    cut.add_argument("--out", required=True, help="il WAV da scrivere")
+    cut.add_argument(
+        "--fade-in", type=float, default=0.0, help="dissolvenza in ingresso (s)"
+    )
+    cut.add_argument(
+        "--fade-out", type=float, default=0.0, help="dissolvenza in uscita (s)"
+    )
+    cut.add_argument(
+        "--loop-safe",
+        action="store_true",
+        help="esce 5 se la giunzione non e' continua",
+    )
+    cut.add_argument("--json", action="store_true", help="referto macchina")
+    cut.set_defaults(func=cmd_audio_slice)
 
     p = add(
         "stack",

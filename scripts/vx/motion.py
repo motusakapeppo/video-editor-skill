@@ -948,6 +948,34 @@ def templates_root() -> Path:
     return Path(__file__).resolve().parents[2] / "assets" / "templates"
 
 
+#: Cartelle cercate **dopo** il catalogo, quando un documento nomina un template
+#: che non e' della skill. Le imposta chi sa dove sta il lavoro (il comando:
+#: `<cartella del piano>/templates`, `<workdir>/templates`, `--templates`); il
+#: catalogo resta primo, cosi' un nome non puo' essere dirottato da un progetto.
+_EXTRA_ROOTS: List[Path] = []
+
+
+def set_extra_roots(roots: Iterable[str | Path] | None) -> Tuple[Path, ...]:
+    """Sostituisce le cartelle di progetto; ritorna quelle in vigore.
+
+    Sostituisce, non accumula: un processo che esegue due comandi (o una suite
+    in-process) non deve ereditare le cartelle del comando precedente.
+    """
+    global _EXTRA_ROOTS
+    found: List[Path] = []
+    for item in roots or ():
+        candidate = Path(item)
+        if candidate.is_dir() and candidate not in found:
+            found.append(candidate)
+    _EXTRA_ROOTS = found
+    return tuple(_EXTRA_ROOTS)
+
+
+def extra_roots() -> Tuple[Path, ...]:
+    """Le cartelle di progetto in vigore, nell'ordine di ricerca."""
+    return tuple(_EXTRA_ROOTS)
+
+
 def _engine_installed(engine: str) -> bool:
     for env_name, relative in _ENGINE_LOCATIONS.get(engine, ()):
         if not env_name.startswith("/"):
@@ -1000,12 +1028,16 @@ def _resolve_template_dir(template_dir: str | Path) -> Path:
     given = Path(template_dir)
     if given.is_dir():
         return given.resolve()
-    named = templates_root() / str(template_dir)
-    if named.is_dir():
-        return named.resolve()
+    for root in (templates_root(), *extra_roots()):
+        named = Path(root) / str(template_dir)
+        if named.is_dir():
+            return named.resolve()
+    where = ", ".join(
+        str(root) for root in (templates_root(), *extra_roots())
+    )
     raise MotionError(
         "TEMPLATE_MISSING",
-        f"no template directory at {given} nor under {templates_root()}",
+        f"no template directory at {given} nor under {where}",
         template=str(template_dir),
     )
 

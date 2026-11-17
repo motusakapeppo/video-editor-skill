@@ -341,4 +341,40 @@ oggi, non promesse future:
   è l'unico modo di eseguirle; i test di crash misurano la velocità della
   macchina e sotto carico danno falsi negativi, dichiarati come tali.
 
+## 14. Testo a tempo e loop: i due cancelli
+
+Un video con il testo cantato ha due cose che si sbagliano sempre e si vedono
+sempre: la parola scritta e il punto di giunzione del giro. Si controllano prima
+del render, con due comandi che non disegnano niente.
+
+```powershell
+& $PY $VX lyrics check "<spec.json>" --text "<testo.txt>" --master "<master.mp4>" --canvas 1080x1440
+& $PY $VX audio slice --source "<mix.wav>" --start 7.92 --end 58.80 --out "<loop.wav>" `
+      --fade-in 0.006 --fade-out 0.006 --loop-safe
+```
+
+`lyrics check` legge la spec del testo (`32-montaggio-lirico.md` §3) e, se glieli
+dai, il testo scritto e il master. Quindici controlli, ognuno con un id:
+
+| id | cosa | senza |
+|---|---|---|
+| L1-L2 | documento, fotogrammi dichiarati | — |
+| L3-L4 | finestre ordinate e dentro la durata; testa e coda che chiudono il loop | — |
+| L5-L6 | stile, righe, e ogni `em` dentro la sua riga | — |
+| L7-L8 | colpi in ordine e dentro la finestra; una parola scritta ↔ un colpo | — |
+| L9 | `bars x barLen` = durata (mezza battuta di tolleranza per la pick-up) e `hitsPerBar` per battuta | — |
+| L10-L11 | il testo combacia con quello scritto (parole in ordine, salti ammessi); le righe stanno nel quadro | `--text`, `--canvas` |
+| L12-L14 | durata/frame del master, loudness e true peak, ultimo fotogramma contro il primo | `--master` |
+| L15 | il testo scritto si legge (ripristina il doppio UTF-8) | `--text` |
+
+Un controllo che non si può fare è `skip` col motivo, mai `ok`. Esce **5** se
+almeno uno è `fail`; `--json` dà il referto intero.
+
+`audio slice` taglia campione-accurato (`atrim`, non il contenitore), applica le
+dissolvenze **dopo** il taglio e misura il punto di giunzione leggendo il WAV
+scritto: `ratio = salto / movimento normale del segnale` (95esimo percentile
+delle differenze). Sotto `1,0` il giro non si sente. Con `--loop-safe` esce 5 se
+non lo è: il clic si scopre prima di consegnare, non dopo il primo giro
+dell'utente.
+
 
